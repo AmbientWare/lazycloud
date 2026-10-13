@@ -1127,31 +1127,40 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	return best, bestTaken
 }
 
-// ready reports whether reserve h can resume now: stopped and prepared
-// on the target agent build, or for work, stopped on an older build or
-// stopping, when it serves sooner than a purchase. A stopping reserve's
-// quota is counted already.
+// ready reports whether reserve h can resume now: one whose own start
+// EC2 refused waits out the refusal; one stopped on the target agent
+// build resumes for anything; for work, one stopped on an older build or
+// stopping resumes when it serves sooner than a purchase. A stopping
+// reserve's quota is counted already.
 func (ps *pass) ready(h FleetHost, work bool) bool {
-	switch {
-	case h.Protected:
+	stopping := h.State == FleetStopping && h.StoppedAt != nil && !ps.stalled(h)
+	startable := h.resumable() && ps.startable(h) || stopping
+	if h.Protected || ps.startRefused(h) || !startable {
 		return false
-	case h.resumable() && h.Current:
-		return ps.startable(h)
-	case !work, h.resumable() && !ps.startable(h), !h.resumable() && (h.State != FleetStopping || h.StoppedAt == nil || ps.stalled(h)):
-		return false
+	}
+	if h.resumable() && h.Current {
+		return true
 	}
 	st := ps.p.Starts
 	launch, serves := st.Launch, st.Resume
 	if h.GPU != "" {
 		launch, serves = st.GPULaunch, st.GPUResume
 	}
-	if h.State == FleetStopping {
+	if stopping {
 		serves += max(0, h.StoppedAt.Add(st.SpotDisable).Sub(ps.s.Now))
 	}
 	if !h.Current {
 		serves += st.Update
 	}
-	return serves < launch
+	return work && serves < launch
+}
+
+// startRefused reports a reserve whose start EC2 refused while the
+// refusal cools.
+func (ps *pass) startRefused(h FleetHost) bool {
+	return slices.ContainsFunc(ps.s.Offers.Cooldowns, func(c OfferCooldown) bool {
+		return c.RefusedBy != nil && *c.RefusedBy == h.ID && c.Until.After(ps.s.Now)
+	})
 }
 
 // stale reports a reserve stopped on an agent build other than the

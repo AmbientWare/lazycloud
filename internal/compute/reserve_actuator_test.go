@@ -391,7 +391,9 @@ func TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated(t *testin
 	}
 }
 
-func TestResumeStartsTheReserveOnceAndARefusedSpotStartRetiresItsRequest(t *testing.T) {
+// A resumed reserve starts once, and a start EC2 refuses for capacity
+// leaves it stopped in the reserve with its zone cooled for it.
+func TestResumeStartsTheReserveOnceAndARefusedStartKeepsIt(t *testing.T) {
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000d001")
 	ec2.add(fakeInstance{ID: "i-0000000000000d001", State: "stopped", Hibernation: true}, host.String())
@@ -418,37 +420,19 @@ func TestResumeStartsTheReserveOnceAndARefusedSpotStartRetiresItsRequest(t *test
 			call.Action == "StartInstances" && call.Form.Get("InstanceId.1") == "i-0000000000000d002"
 	}
 	actuate(t, o)
-	if phase, _ := hostPhase(t, o.pool, spot); phase != string(compute.PhaseTerminating) {
-		t.Fatalf("refused reserve is %s, want terminating", phase)
+	if f := stopOf(t, o, spot); f.Phase != "stopped" {
+		t.Fatalf("reserve whose start EC2 refused %+v, want stopped in the reserve", f)
 	}
-	cooled := scan[string](t, o.pool, `select region || '/' || instance_type || '/' || market from capacity_cooldowns
-where until > now()`)
-	if cooled != "us-east-2/m7i.large/spot" {
-		t.Fatalf("cooldown %q, want the refused offer", cooled)
+	cooled := scan[string](t, o.pool, `select region || '/' || availability_zone_id || '/' || instance_type || '/' || market || '/' || refused_by
+from capacity_cooldowns where until > now()`)
+	want := scan[string](t, o.pool, `select region || '/' || coalesce(availability_zone_id, '') || '/' || instance_type || '/' || market || '/' || id
+from hosts where id = $1`, uuid.UUID(spot))
+	if cooled != want {
+		t.Fatalf("cooldown %q, want %q: the refused zone, held for the reserve", cooled, want)
 	}
-	actuate(t, o)
-	if r := ec2.request("sir-0000d002"); r.State != "cancelled" {
-		t.Fatalf("spot request %s, want cancelled", r.State)
+	if n := len(emulator.calls("TerminateInstances")); n != 0 {
+		t.Fatalf("%d terminations after a refused start, want none", n)
 	}
-	if s := ec2.get("i-0000000000000d002").State; s != "shutting-down" {
-		t.Fatalf("refused reserve instance %s, want shutting down", s)
-	}
-	actions := emulator.actions()
-	cancelled, terminated := slices.Index(actions, "CancelSpotInstanceRequests"), slices.Index(actions, "TerminateInstances")
-	if cancelled < 0 || terminated < cancelled {
-		t.Fatalf("calls %v, want the persistent request cancelled before its instance terminates", actions)
-	}
-}
-
-// actions lists every call's action in arrival order.
-func (a *awsEmulator) actions() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]string, len(a.log))
-	for n, c := range a.log {
-		out[n] = c.Action
-	}
-	return out
 }
 
 // A persistent request whose instance was replaced while the fleet was not

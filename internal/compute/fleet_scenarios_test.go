@@ -265,9 +265,6 @@ type sim struct {
 	disableGap time.Duration
 	// startsFill has EC2 start stopped reserves in pools refuses names.
 	startsFill bool
-	// checkRetire records a stale reserve retired before its replacement
-	// was ready as a violation.
-	checkRetire bool
 }
 
 // simDeploy is a deploy at at: a new agent release, of a new build when
@@ -803,6 +800,9 @@ func (s *sim) offers() OfferInputs {
 	for key, c := range s.cools {
 		if c.until.After(s.now) {
 			key.Until, key.Quota = c.until, c.quota
+			if c.walk != nil {
+				key.RefusedBy = &c.walk.ID
+			}
 			in.Cooldowns = append(in.Cooldowns, key)
 		}
 	}
@@ -969,9 +969,7 @@ func (s *sim) record(w *simWalk) {
 // records the walk, then AlignWalk cools every pool of the walk until the
 // latest of their ends.
 func (s *sim) walkCool(h *simHost, c OfferCooldown) {
-	s.cool(c)
-	key := OfferCooldown{Region: c.Region, ZoneID: c.ZoneID, InstanceType: c.InstanceType, Market: c.Market}
-	s.cools[key].walk = h
+	key := s.cool(c, h)
 	h.walk.refused = append(h.walk.refused, key)
 	var end time.Time
 	for _, c := range s.cools {
@@ -986,10 +984,11 @@ func (s *sim) walkCool(h *simHost, c OfferCooldown) {
 	}
 }
 
-// cool cools c's pool as InsertCooldown does: for simCooldown, at least
-// that long from now while it cools, and after its cooldown ended twice as
-// long as that one lasted, up to cooldownGrowth cooldowns.
-func (s *sim) cool(c OfferCooldown) {
+// cool cools c's pool as InsertCooldown does, refused by by: for
+// simCooldown, keeping its end and the host that refused it first while it
+// cools, and after its cooldown ended twice as long as that one lasted, up
+// to cooldownGrowth cooldowns. It returns the pool's key.
+func (s *sim) cool(c OfferCooldown, by *simHost) OfferCooldown {
 	if s.cools == nil {
 		s.cools = map[OfferCooldown]*simCool{}
 	}
@@ -997,13 +996,17 @@ func (s *sim) cool(c OfferCooldown) {
 	last, ok := s.cools[key]
 	switch {
 	case !ok:
-		s.cools[key] = &simCool{lasted: simCooldown, until: s.now.Add(simCooldown), quota: c.Quota}
+		s.cools[key] = &simCool{lasted: simCooldown, until: s.now.Add(simCooldown), quota: c.Quota, walk: by}
 	case last.until.After(s.now):
-		last.until, last.quota, last.walk = maxTime(last.until, s.now.Add(simCooldown)), c.Quota, nil
+		last.quota = c.Quota
+		if last.walk == nil {
+			last.walk = by
+		}
 	default:
 		last.lasted = min(max(2*last.lasted, simCooldown), cooldownGrowth*simCooldown)
-		last.until, last.quota, last.walk = s.now.Add(last.lasted), c.Quota, nil
+		last.until, last.quota, last.walk = s.now.Add(last.lasted), c.Quota, by
 	}
+	return key
 }
 
 // simCool is a pool's cooldown: how long it lasted and when it ends, and
@@ -1012,7 +1015,7 @@ type simCool struct {
 	lasted time.Duration
 	until  time.Time
 	quota  bool
-	// walk is the host whose launch walk refused the pool last.
+	// walk is the host whose launch walk or start refused the pool.
 	walk *simHost
 }
 
@@ -1047,21 +1050,24 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionResume:
 			h := s.host(*a.Host)
 			if s.refuses != nil && !s.startsFill && s.refuses(h.Region, h.ZoneID, h.InstanceType, h.Market) {
-				// EC2 refusing the start retires the reserve and cools its
-				// zone, as the actuator does.
+				// EC2 refusing the start leaves the reserve stopped and cools
+				// its zone for it, as the actuator does.
 				s.r.refusals++
 				s.r.refused = append(s.r.refused, s.now)
-				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market})
-				s.hosts = slices.DeleteFunc(s.hosts, func(r *simHost) bool { return r == h })
+				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market}, h)
 				continue
 			}
 			// EC2 starts a stopping Spot reserve once it disables the
-			// request.
+			// request, and the actuator records the start a tick after it
+			// does; until then a stopping one keeps its stop's record, as
+			// ResumeReserves does.
 			from := s.now
 			if h.State == FleetStopping {
 				from = maxTime(from, h.until)
+			} else {
+				h.StoppedAt = nil
 			}
-			h.startAt = from
+			h.startAt = from.Add(launchTick)
 			// A reserve stopped on an older agent build updates it
 			// before it takes work.
 			stale := !s.current(h)
@@ -1091,9 +1097,6 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
 		case ActionRetireReserve:
-			if s.checkRetire {
-				s.retireViolation(s.host(*a.Host))
-			}
 			if h := s.host(*a.Host); h.walk != nil {
 				s.record(h.walk)
 			} else if h.State == FleetPreparing {

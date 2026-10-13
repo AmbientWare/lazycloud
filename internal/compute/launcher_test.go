@@ -203,6 +203,29 @@ func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
 	}
 }
 
+// Walks that run at once share their pools' cooldowns without losing one
+// end each: a pool both refuse stays with the walk that refused it first,
+// and every walk's pools end together.
+func TestConcurrentWalksEachCoolUntilOneEnd(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	for range 3 {
+		run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
+			int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes)
+	}
+	launchAll(t, o)
+	if n := scan[int](t, o.pool, "select count(*)::int from hosts where phase = 'failed'"); n != 3 {
+		t.Fatalf("%d of 3 walks ended", n)
+	}
+	if apart := scan[int](t, o.pool, `select count(*)::int from (
+    select refused_by from capacity_cooldowns group by refused_by having count(distinct until) > 1) w`); apart != 0 {
+		t.Fatalf("%d walks' pools cool until more than one end", apart)
+	}
+}
+
 // Refusals of a pool while it cools keep its cooldown: two hosts refused in
 // one pass leave each pool they tried cooling ten minutes.
 func TestRefusalsWhileAPoolCoolsDoNotLengthenIt(t *testing.T) {

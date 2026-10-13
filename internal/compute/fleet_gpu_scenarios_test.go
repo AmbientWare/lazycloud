@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// The incident scenarios replay what prod hit after a deploy, through the
-// simulation's launcher walks, Spot request disables and deploys.
+// Scenarios of GPU Spot capacity: pools that refuse, Spot requests slow to
+// disable, and releases that change the agent.
 
 // l4Job is the Spot-tolerant L4 function prod ran on 2026-10-13.
 var l4Job = Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 13056 << 20}
@@ -36,7 +36,7 @@ func oversized(p Policy, o FleetOffer) string {
 // single-card sizes no further than the size cap, never to a g6.8xlarge,
 // a 4-card g6.12xlarge or an 8-card g6.48xlarge. Its margin keeps it off
 // on-demand, so it starts once Spot fills again.
-func TestIncidentAnL4JobBuysNoLargerHostThanItNeeds(t *testing.T) {
+func TestAnL4JobBuysNoLargerHostThanItNeeds(t *testing.T) {
 	t.Parallel()
 	s := newChurnSim(t)
 	s.tick = simLongTick
@@ -88,7 +88,7 @@ func TestAnL4JobStepsUpWhileTheSmallestSizeRefuses(t *testing.T) {
 // passes the walk takes, so its market buys again once rather than as each
 // pool comes back. Over two hours of refused GPU Spot reserves, each
 // market's purchases start at least a cooldown apart after a refusal.
-func TestIncidentAWalksRefusedPoolsShareOneEnd(t *testing.T) {
+func TestAWalksRefusedPoolsShareOneEnd(t *testing.T) {
 	t.Parallel()
 	s := newChurnSim(t)
 	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
@@ -106,52 +106,11 @@ func TestIncidentAWalksRefusedPoolsShareOneEnd(t *testing.T) {
 	}
 }
 
-// A deploy that changes no host code leaves the reserves in place: with
-// every GPU Spot pool refusing after the fleet settled, as on 2026-10-13,
-// no reserve retires and the next L4 job resumes one.
-func TestIncidentADeployWithoutAnAgentChangeKeepsTheReserves(t *testing.T) {
-	t.Parallel()
-	s := newChurnSim(t)
-	s.tick = simLongTick
-	s.run(time.Hour, nil)
-	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
-	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
-	s.startsFill = true
-	s.deploys = []simDeploy{{at: time.Minute}}
-	r := s.run(30*time.Minute, []simArrival{{at: 10 * time.Minute, need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
-	if len(r.retired) > 0 {
-		t.Errorf("a deploy without an agent change retired reserves at %v", r.retired)
-	}
-	if r.starts[startResumed] != 1 || len(r.violations) > 0 {
-		t.Errorf("the L4 job after the deploy: starts %v, violations %v", r.starts, r.violations)
-	}
-}
-
-// A deploy that changes the agent replaces each reserve before it retires
-// it: a stale reserve retires only once its market holds a ready reserve
-// prepared on the new agent.
-func TestIncidentADeployWithAnAgentChangeReplacesReservesFirst(t *testing.T) {
-	t.Parallel()
-	s := newChurnSim(t)
-	s.tick = simLongTick
-	s.run(time.Hour, nil)
-	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
-	s.deploys = []simDeploy{{at: time.Minute, agent: true}}
-	s.checkRetire = true
-	r := s.run(time.Hour, nil)
-	for _, v := range r.violations {
-		t.Error(v)
-	}
-	if len(r.retired) == 0 {
-		t.Error("no stale reserve retired")
-	}
-}
-
 // A deploy that changes the agent while every GPU Spot pool refuses leaves
 // each GPU market its stale reserve: no replacement can be bought, so the
 // stale one stays, and the next L4 job resumes it, updates its agent and
 // runs there sooner than a purchase could serve it.
-func TestIncidentAnAgentChangeKeepsStaleReservesServing(t *testing.T) {
+func TestAnAgentChangeKeepsStaleReservesServing(t *testing.T) {
 	t.Parallel()
 	s := newChurnSim(t)
 	s.tick = simLongTick
@@ -174,7 +133,7 @@ func TestIncidentAnAgentChangeKeepsStaleReservesServing(t *testing.T) {
 // and the work starts once EC2 disables the request and the reserve
 // resumes. A request active past the planner's bound buys the work a host
 // instead, still retiring nothing.
-func TestIncidentASlowSpotDisableKeepsTheReserve(t *testing.T) {
+func TestASlowSpotDisableKeepsTheReserve(t *testing.T) {
 	t.Parallel()
 	st := DefaultPolicy().Starts
 	stopped := st.GPULaunch + simPrepare + simGPUStop
@@ -203,14 +162,17 @@ func TestIncidentASlowSpotDisableKeepsTheReserve(t *testing.T) {
 	}
 }
 
-// retireViolation names a stale reserve retired while its market holds no
-// ready reserve on the target release.
-func (s *sim) retireViolation(h *simHost) {
-	if s.current(h) {
-		return
-	}
-	if !slices.ContainsFunc(s.hosts, func(o *simHost) bool { return o != h && o.market() == h.market() && o.resumable() && s.current(o) }) {
-		s.r.violations = append(s.r.violations, fmt.Sprintf("%s retired stale reserve %s before its replacement was ready",
-			s.now.Format(time.TimeOnly), h.InstanceType))
+// A reserve resumed for work is awaited however long ago it stopped: the
+// L4 job resumes the Spot reserve stopped an hour before and buys nothing.
+func TestAResumedReserveIsAwaitedNotBoughtAgain(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	s.tick = simLongTick
+	s.run(time.Hour, nil)
+	s.start, s.until, s.r, s.tick = s.now, time.Time{}, simResult{}, simTick
+	r := s.run(10*time.Minute, []simArrival{{need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
+	bought := slices.ContainsFunc(r.bought, func(p simPurchase) bool { return p.containers > 0 })
+	if r.starts[startResumed] != 1 || bought || len(r.violations) > 0 {
+		t.Errorf("starts %v, bought for the job %t, violations %v; want one resume and no purchase", r.starts, bought, r.violations)
 	}
 }

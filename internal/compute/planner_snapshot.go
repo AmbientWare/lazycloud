@@ -10,21 +10,91 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
+// offerRead is what offers rank from, read with a fixed number of
+// statements, each bounded by live rows or a sample.
+type offerRead struct {
+	now       time.Time
+	hosts     []PlannerHostsRow
+	recent    []RecentShapesRow
+	cooldowns []PlannerCooldownsRow
+	spot      []SpotQuote
+	zoneTypes map[string]map[string][]string
+	quotas    []QuotaRoom
+	rates     []billing.ComputeRate
+	// reported is the memory hosts of each type advertise, once one has
+	// reported.
+	reported map[string]int64
+}
+
+func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time) (offerRead, error) {
+	r := offerRead{now: now, reported: map[string]int64{}}
+	var err error
+	if r.hosts, err = q.PlannerHosts(ctx); err != nil {
+		return r, fmt.Errorf("read fleet hosts: %w", err)
+	}
+	for _, h := range r.hosts {
+		if seen, ok := r.reported[h.InstanceType]; h.SessionEpoch > 0 && h.InstanceType != "" && (!ok || h.MemoryBytes < seen) {
+			r.reported[h.InstanceType] = h.MemoryBytes
+		}
+	}
+	if r.recent, err = q.RecentShapes(ctx, recentShapesParams(p)); err != nil {
+		return r, fmt.Errorf("read recent container shapes: %w", err)
+	}
+	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
+		return r, fmt.Errorf("read cooldowns: %w", err)
+	}
+	if r.spot, err = readSpotPrices(ctx, q); err != nil {
+		return r, err
+	}
+	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
+		return r, err
+	}
+	if r.zoneTypes, err = readZoneOfferings(ctx, q); err != nil {
+		return r, err
+	}
+	if r.rates, err = billing.FleetComputeRates(now); err != nil {
+		return r, fmt.Errorf("read the fleet's compute rates: %w", err)
+	}
+	return r, nil
+}
+
+// inputs are what an owner's offers rank from in networks with hosts: the
+// platform's, with its rates, quotas and market reads, or a connection's,
+// which pays its own hosts.
+func (r offerRead) inputs(storageRegion string, networks map[string]Network, connection *uuid.UUID, hosts []FleetHost) OfferInputs {
+	zones := map[string]int{}
+	for _, h := range hosts {
+		if h.State != FleetTerminating && h.ZoneID != "" {
+			zones[h.ZoneID]++
+		}
+	}
+	in := OfferInputs{
+		Now: r.now, Catalog: FleetCatalog(), Networks: networks, Spot: r.spot, Cooldowns: offerCooldowns(r.cooldowns, ownerPlatform),
+		ReportedMemory: r.reported, ZoneHosts: zones, ZoneTypes: r.zoneTypes, StorageRegion: storageRegion,
+	}
+	if connection != nil {
+		in.Cooldowns, in.OwnerPays = offerCooldowns(r.cooldowns, connection.String()), true
+	} else {
+		in.Rates, in.Quotas, in.ReadBytes = r.rates, vcpuQuotas(r.quotas), readsByMarket(r.recent)
+	}
+	return in
+}
+
+// ownedBy reports a host of connection's, or of the platform for none.
+func ownedBy(h PlannerHostsRow, connection *uuid.UUID) bool {
+	return connection == nil && h.ConnectionID == nil || connection != nil && h.ConnectionID != nil && *connection == *h.ConnectionID
+}
+
 // fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
-	now         time.Time
-	hosts       []PlannerHostsRow
+	offerRead
 	pending     []PendingDemandRow
-	recent      []RecentShapesRow
-	cooldowns   []PlannerCooldownsRow
 	markets     map[string]FleetMarketsRow
 	connections []HostingConnectionsRow
-	spot        []SpotQuote
-	zoneTypes   map[string]map[string][]string
-	quotas      []QuotaRoom
 	// batchWait is how long the platform's arrival batch stays open, and
 	// connectionWaits each connection's.
 	batchWait       time.Duration
@@ -34,16 +104,13 @@ type fleetRead struct {
 // readFleet reads one pass's snapshot with a fixed number of statements,
 // each bounded by live rows or the pending batch.
 func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
-	r := fleetRead{now: now, markets: map[string]FleetMarketsRow{}}
-	var err error
-	if r.hosts, err = q.PlannerHosts(ctx); err != nil {
-		return r, fmt.Errorf("read fleet hosts: %w", err)
+	offers, err := readOffers(ctx, q, p, now)
+	if err != nil {
+		return fleetRead{}, err
 	}
+	r := fleetRead{offerRead: offers, markets: map[string]FleetMarketsRow{}}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
-	}
-	if r.recent, err = q.RecentShapes(ctx, recentShapesParams(p)); err != nil {
-		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
@@ -61,9 +128,6 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		}
 		r.connectionWaits[*w.ConnectionID] = wait
 	}
-	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
-		return r, fmt.Errorf("read cooldowns: %w", err)
-	}
 	markets, err := q.FleetMarkets(ctx)
 	if err != nil {
 		return r, fmt.Errorf("read fleet markets: %w", err)
@@ -76,15 +140,6 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		if r.connections, err = q.HostingConnections(ctx); err != nil {
 			return r, fmt.Errorf("read connections: %w", err)
 		}
-	}
-	if r.spot, err = readSpotPrices(ctx, q); err != nil {
-		return r, err
-	}
-	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
-		return r, err
-	}
-	if r.zoneTypes, err = readZoneOfferings(ctx, q); err != nil {
-		return r, err
 	}
 	return r, nil
 }
@@ -316,7 +371,10 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 		if r.ConnectionKey != owner {
 			continue
 		}
-		out = append(out, OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until})
+		out = append(out, OfferCooldown{
+			Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until,
+			RefusedBy: (*HostID)(r.RefusedBy),
+		})
 	}
 	return out
 }

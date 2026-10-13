@@ -57,7 +57,7 @@ func (p Phase) CanBecome(next Phase) bool {
 	case PhaseStopped:
 		return next == PhaseResuming || next == PhaseTerminating
 	case PhaseResuming:
-		return next == PhaseJoining || next == PhaseTerminating
+		return next == PhaseJoining || next == PhaseStopped || next == PhaseTerminating
 	case PhaseFailed:
 		return next == PhaseRequested
 	case PhaseTerminating, PhaseDeleted:

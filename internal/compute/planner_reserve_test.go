@@ -181,6 +181,11 @@ func TestPendingWorkResumesAReadyReserveBeforeBuying(t *testing.T) {
 	if got := scan[uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", container); got != uuid.UUID(reserve) {
 		t.Fatalf("container waits for %s, want the resumed reserve", got)
 	}
+	// The reserve stopped ten minutes ago, so its start is no Spot disable
+	// to wait out: the container keeps waiting for it.
+	if r := planCapacity(t, o); r.Resumed != 0 || r.Requested != 0 {
+		t.Fatalf("pass after the resume %+v, want the container waiting for the reserve", r)
+	}
 }
 
 // Spot work resumes an on-demand reserve only while no Spot offer can host
@@ -901,8 +906,6 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 	}
 }
 
-// After an agent release every reserve prepared for the older release
-// retires instead of resuming, and the reserves the targets need are bought
 // A release of the reserves' agent build leaves them in place. A release
 // of another build buys their replacements first and retires none of them
 // before those are ready.

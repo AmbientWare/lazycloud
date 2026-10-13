@@ -64,7 +64,7 @@ for arch in "${arch_list[@]}"; do
     files+=(geesefs)
   fi
   archive="$out/$version/lazycloud-agent-linux-$arch.tar.gz"
-  tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" "${files[@]}"
+  tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" "${files[@]}"
   mv "$archive.tmp" "$archive"
   echo "$arch $(sha256sum "$archive" | cut -d' ' -f1)"
 done

@@ -72,29 +72,33 @@ update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id
 
 -- name: InsertCooldown :exec
 -- Cools an offer in one zone, or in its whole region for the zone '', for
--- seconds, and records the walk that refused it, if any. Refused again
--- while it cools, it cools at least that long from now; refused after its
--- cooldown ended, twice as long as that cooldown lasted, up to max_seconds.
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, walk)
+-- seconds, and records the host whose launch walk or start refused it, if
+-- any. Refused again while it cools, it keeps its end and the host that
+-- refused it first, so no walk moves another walk's end; refused after its
+-- cooldown ended, it cools twice as long as that cooldown lasted, up to
+-- max_seconds.
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, refused_by)
 values (@connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => @seconds::float8),
-        make_interval(secs => @seconds::float8), @reason, sqlc.narg('walk'))
+        make_interval(secs => @seconds::float8), @reason, sqlc.narg('refused_by'))
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set
     cooled_for = case when capacity_cooldowns.until > now() then capacity_cooldowns.cooled_for
                       else least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
-    until = case when capacity_cooldowns.until > now() then greatest(capacity_cooldowns.until, excluded.until)
+    until = case when capacity_cooldowns.until > now() then capacity_cooldowns.until
                  else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
-    reason = excluded.reason, walk = excluded.walk;
+    reason = excluded.reason,
+    refused_by = case when capacity_cooldowns.until > now() then coalesce(capacity_cooldowns.refused_by, excluded.refused_by)
+                      else excluded.refused_by end;
 
 -- name: AlignWalk :exec
 -- Every pool one launch walk refused, in this pass or an earlier one,
 -- cools until the latest of their ends, so the planner buys for them again
--- once. The rows lock in key order, so concurrent walks never deadlock
--- here.
+-- once. The rows lock in key order; a deadlock with another walk fails
+-- this move, and the walk goes on next pass.
 with walked as (
     select connection_key, region, availability_zone_id, instance_type, market, until
     from capacity_cooldowns
-    where capacity_cooldowns.walk = @walk::uuid
+    where capacity_cooldowns.refused_by = @walk::uuid
     order by connection_key, region, availability_zone_id, instance_type, market
     for update
 )

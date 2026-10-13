@@ -221,7 +221,7 @@ order by connection_id;
 
 -- name: PlannerCooldowns :many
 -- Offers cooling now.
-select connection_key, region, availability_zone_id, instance_type, market, until
+select connection_key, region, availability_zone_id, instance_type, market, until, refused_by
 from capacity_cooldowns
 where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market;
@@ -263,11 +263,12 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
 
 -- name: ResumeReserves :many
 -- Starts stopped reserves to serve, their reserve mode cleared; a stopping
--- one whose instance stopped starts once EC2 disables its Spot request.
--- Only a requested resume serves.
+-- one whose instance stopped starts once EC2 disables its Spot request, and
+-- keeps when it stopped, which bounds that wait. Only a requested resume
+-- serves.
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = null, idle_since = null, updated_at = now()
+    reserve_mode = null, idle_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
 where id = any(@ids::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id;
 

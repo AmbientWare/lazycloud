@@ -68,13 +68,22 @@ set stop_requested_at = null, force_stop_at = null, hibernate_refused_at = null,
     updated_at = now()
 where id = @id and phase = 'resuming';
 
+-- name: ReturnStartToReserve :execrows
+-- EC2 refused to start a resuming host for capacity: it stops in the
+-- reserve again, hibernated where its image may be saved.
+update hosts
+set phase = 'stopped', phase_message = @message, phase_at = now(),
+    reserve_mode = case when image_evidence in ('saved', 'unknown') then 'hibernate' else 'stop' end,
+    launch_lease_until = null, updated_at = now()
+where id = @id and phase = 'resuming';
+
 -- name: RetireReserve :execrows
--- EC2 refused to start a resuming host or to stop a stopping one: it
--- retires, and a purchase replaces it.
+-- A stopping host that cannot stop, as when EC2 refused the stop, retires,
+-- and a purchase replaces it.
 update hosts
 set phase = 'terminating', phase_message = @message, phase_at = now(), state = 'retired', token_hash = null,
     launch_lease_until = null, updated_at = now()
-where id = @id and phase = @from_phase and phase in ('stopping', 'resuming');
+where id = @id and phase = 'stopping';
 
 -- name: SpotRequestOfInstance :one
 -- The persistent Spot request that launched an instance, if any.

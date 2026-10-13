@@ -443,7 +443,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 }
 
 const plannerCooldowns = `-- name: PlannerCooldowns :many
-select connection_key, region, availability_zone_id, instance_type, market, until
+select connection_key, region, availability_zone_id, instance_type, market, until, refused_by
 from capacity_cooldowns
 where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market
@@ -456,6 +456,7 @@ type PlannerCooldownsRow struct {
 	InstanceType       string
 	Market             string
 	Until              time.Time
+	RefusedBy          *uuid.UUID
 }
 
 // Offers cooling now.
@@ -475,6 +476,7 @@ func (q *Queries) PlannerCooldowns(ctx context.Context) ([]PlannerCooldownsRow, 
 			&i.InstanceType,
 			&i.Market,
 			&i.Until,
+			&i.RefusedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -808,14 +810,15 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = null, idle_since = null, updated_at = now()
+    reserve_mode = null, idle_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
 where id = any($1::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id
 `
 
 // Starts stopped reserves to serve, their reserve mode cleared; a stopping
-// one whose instance stopped starts once EC2 disables its Spot request.
-// Only a requested resume serves.
+// one whose instance stopped starts once EC2 disables its Spot request, and
+// keeps when it stopped, which bounds that wait. Only a requested resume
+// serves.
 func (q *Queries) ResumeReserves(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, resumeReserves, ids)
 	if err != nil {

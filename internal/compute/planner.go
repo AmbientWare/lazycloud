@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -88,9 +87,7 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 		if err != nil {
 			return err
 		}
-		if pass, err = newFleetPass(c, p, read); err != nil {
-			return err
-		}
+		pass = newFleetPass(c, p, read)
 		if err := pass.decide(); err != nil {
 			return err
 		}
@@ -133,14 +130,11 @@ func connectionPolicy(p Policy) Policy {
 // fleetPass is one planning pass: its snapshot, its decisions and the
 // writes they make.
 type fleetPass struct {
-	c        *Compute
-	p        Policy
-	r        fleetRead
-	rows     map[HostID]PlannerHostsRow
-	catalog  []CatalogType
-	rates    []billing.ComputeRate
-	reported map[string]int64
-	waits    map[uuid.UUID]waitRow
+	c     *Compute
+	p     Policy
+	r     fleetRead
+	rows  map[HostID]PlannerHostsRow
+	waits map[uuid.UUID]waitRow
 	// traces holds the pending containers' traces and earlier waits.
 	traces map[uuid.UUID]pendingTrace
 	w      fleetWrites
@@ -221,29 +215,17 @@ type coolRow struct {
 	Market        Market `json:"market"`
 }
 
-func newFleetPass(c *Compute, p Policy, r fleetRead) (*fleetPass, error) {
-	rates, err := billing.FleetComputeRates(r.now)
-	if err != nil {
-		return nil, fmt.Errorf("read the fleet's compute rates: %w", err)
-	}
-	ps := &fleetPass{
-		c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, catalog: FleetCatalog(), rates: rates,
-		reported: map[string]int64{}, waits: map[uuid.UUID]waitRow{},
-	}
+func newFleetPass(c *Compute, p Policy, r fleetRead) *fleetPass {
+	ps := &fleetPass{c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, waits: map[uuid.UUID]waitRow{}}
 	for _, h := range r.hosts {
 		ps.rows[HostID(h.ID)] = h
-		if h.SessionEpoch > 0 && h.InstanceType != "" {
-			if seen, ok := ps.reported[h.InstanceType]; !ok || h.MemoryBytes < seen {
-				ps.reported[h.InstanceType] = h.MemoryBytes
-			}
-		}
 	}
 	for _, g := range r.pending {
 		for _, id := range g.Ids {
 			ps.waits[id] = waitRow{}
 		}
 	}
-	return ps, nil
+	return ps
 }
 
 // decide plans the platform fleet, then each connected account.
@@ -266,28 +248,6 @@ func (ps *fleetPass) decide() error {
 	return ps.connections(groups)
 }
 
-// offerInputs are what an owner's offers rank from: the platform's, with
-// its rates, quotas and market reads, or a connection's, which pays its own
-// hosts, in networks with hosts.
-func (ps *fleetPass) offerInputs(networks map[string]Network, connection *uuid.UUID, hosts []FleetHost) OfferInputs {
-	zones := map[string]int{}
-	for _, h := range hosts {
-		if h.State != FleetTerminating && h.ZoneID != "" {
-			zones[h.ZoneID]++
-		}
-	}
-	in := OfferInputs{
-		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, ownerPlatform),
-		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes, StorageRegion: ps.c.fleet.StorageRegion,
-	}
-	if connection != nil {
-		in.Cooldowns, in.OwnerPays = offerCooldowns(ps.r.cooldowns, connection.String()), true
-	} else {
-		in.Rates, in.Quotas, in.ReadBytes = ps.rates, vcpuQuotas(ps.r.quotas), readsByMarket(ps.r.recent)
-	}
-	return in
-}
-
 // platform plans the platform fleet and publishes its plan.
 func (ps *fleetPass) platform(groups []pendingGroup) error {
 	now := ps.r.now
@@ -295,7 +255,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	// failed are hosts that could not prove a stop into the reserve.
 	var failed []PlannerHostsRow
 	for _, row := range ps.r.hosts {
-		if HostKind(row.Kind) != KindPlatform {
+		if !ownedBy(row, nil) {
 			continue
 		}
 		if stuckPreparing(row, now) {
@@ -314,7 +274,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			pending = append(pending, g.group)
 		}
 	}
-	in := ps.offerInputs(ps.c.fleet.Networks, nil, hosts)
+	in := ps.r.inputs(ps.c.fleet.StorageRegion, ps.c.fleet.Networks, nil, hosts)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
@@ -363,7 +323,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 	for _, conn := range ps.r.connections {
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
-			if row.ConnectionID != nil && *row.ConnectionID == conn.ID {
+			if ownedBy(row, &conn.ID) {
 				hosts = append(hosts, fleetHostOf(row, ps.r.now))
 			}
 		}
@@ -380,7 +340,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
 			return fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
 		}
-		in := ps.offerInputs(networks, &conn.ID, hosts)
+		in := ps.r.inputs(ps.c.fleet.StorageRegion, networks, &conn.ID, hosts)
 		held := 0
 		for _, h := range hosts {
 			if !h.reserve() {
@@ -402,8 +362,8 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 }
 
 // planOwner runs PlanFleet with the offers cooled whose bought host serves
-// and still cannot take the container bought for it: the offer did not
-// hold what it predicted, so buying it again would not help.
+// and is too small ever to take the container bought for it: the offer did
+// not hold what it predicted, so buying it again would not help.
 func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []OfferCooldown) {
 	var cools []OfferCooldown
 	for _, g := range s.Pending {
@@ -413,10 +373,8 @@ func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []
 				continue
 			}
 			h := s.Hosts[i]
-			// A resumed reserve updating its agent takes the work once it has.
-			h.UpdateDue = false
 			missed := OfferCooldown{Region: h.Region, InstanceType: h.InstanceType, Market: h.Market, Until: s.Now.Add(cooldown)}
-			if !h.capacity().Fits(g.Need) && !slices.ContainsFunc(cools, func(o OfferCooldown) bool { return o == missed }) {
+			if !h.Usable.Covers(reservedShape(g.Need)) && !slices.ContainsFunc(cools, func(o OfferCooldown) bool { return o == missed }) {
 				cools = append(cools, missed)
 			}
 		}

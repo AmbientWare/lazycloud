@@ -218,18 +218,13 @@ func ownerKey(h ClaimLaunchesRow) string {
 // them: cooldowns, quotas and the vCPUs live hosts count against them, and
 // the memory each type reported.
 func (c *Compute) poolInputs(ctx context.Context, h ClaimLaunchesRow) (*OfferInputs, error) {
-	p := c.policy()
-	r, err := readFleet(ctx, c.queries, p, time.Now())
-	if err != nil {
-		return nil, err
-	}
-	ps, err := newFleetPass(c, p, r)
+	r, err := readOffers(ctx, c.queries, c.policy(), time.Now())
 	if err != nil {
 		return nil, err
 	}
 	var hosts []FleetHost
 	for _, row := range r.hosts {
-		if row.ConnectionID == nil && h.ConnectionID == nil || row.ConnectionID != nil && h.ConnectionID != nil && *row.ConnectionID == *h.ConnectionID {
+		if ownedBy(row, h.ConnectionID) {
 			hosts = append(hosts, fleetHostOf(row, r.now))
 		}
 	}
@@ -243,14 +238,15 @@ func (c *Compute) poolInputs(ctx context.Context, h ClaimLaunchesRow) (*OfferInp
 			return nil, fmt.Errorf("decode networks: %w", err)
 		}
 	}
-	in := ps.offerInputs(networks, h.ConnectionID, hosts)
+	in := r.inputs(c.fleet.StorageRegion, networks, h.ConnectionID, hosts)
 	in.QuotaUsed = QuotaUse(hosts, in.Catalog)
 	return &in, nil
 }
 
-// nextPool records the refusal of h's pool in in as coolPool records it
-// in the database, frees the vCPUs h counted against the pool's quota, and
-// picks the pool h tries next as fallbackPool picks it.
+// nextPool reads the cooldowns now, so concurrent walks skip the pools
+// each other refused, adds the refusal of h's pool as coolPool will record
+// it, frees the vCPUs h counted against the pool's quota, and picks the
+// pool h tries next as fallbackPool picks it.
 func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, in *OfferInputs, cool poolCooldown) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
@@ -259,8 +255,12 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, in *OfferInp
 	if err != nil {
 		return FleetOffer{}, false, fmt.Errorf("read the containers waiting for the host: %w", err)
 	}
+	cooldowns, err := c.queries.PlannerCooldowns(ctx)
+	if err != nil {
+		return FleetOffer{}, false, fmt.Errorf("read cooldowns: %w", err)
+	}
 	market := Market(*h.Market)
-	in.Cooldowns = append(in.Cooldowns, OfferCooldown{
+	in.Cooldowns = append(offerCooldowns(cooldowns, ownerKey(h)), OfferCooldown{
 		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market,
 		Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota && h.ConnectionID == nil,
 	})
@@ -659,7 +659,7 @@ func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimLaunchesRow, 
 	params := InsertCooldownParams{
 		ConnectionKey: ownerKey(h), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-		Reason: truncate(message), Walk: &h.ID,
+		Reason: truncate(message), RefusedBy: &h.ID,
 	}
 	if err := q.InsertCooldown(ctx, params); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)
