@@ -32,7 +32,8 @@ const (
 	hibernateAfterStart = 2 * time.Minute
 	// providerDeadline is how long hibernation refusals are retried before
 	// a plain stop, and how long a stop may stay pending before it is
-	// forced. A g4dn on the GPU image takes 7.5-8 minutes to stop plainly.
+	// forced. EC2 keeps a GPU instance stopping 5-7 minutes after its
+	// guest powers off.
 	providerDeadline = 10 * time.Minute
 	// stopSettle is how long EC2 may still list a stopped instance as
 	// running after it accepted the stop.

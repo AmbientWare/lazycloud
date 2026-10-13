@@ -38,9 +38,11 @@ const (
 	simResume  = 12 * time.Second
 	simPrepare = 147 * time.Second
 	simStop    = time.Minute
-	// A GPU host's stop, from the real EC2 check, takes 6 m 46 s, which EC2
-	// bills as stopped.
-	simGPUStop = 406 * time.Second
+	// A GPU host's stop takes 392 s, the median of prod's GPU hosts and
+	// the 2026-10-13 EC2 trace (305-410 s), which EC2 bills as stopped. The
+	// guest powers off within 15 s; EC2 holds a GPU instance in stopping
+	// for the rest, on any image and when forced.
+	simGPUStop = 392 * time.Second
 	// simCooldown is how long a refusal cools its pool, the fleet's
 	// default CapacityCooldown.
 	simCooldown = 10 * time.Minute
