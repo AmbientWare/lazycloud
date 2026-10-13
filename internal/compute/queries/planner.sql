@@ -261,9 +261,9 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
     holds_memory_bytes bigint, holds_disks smallint);
 
 -- name: ResumeReserves :many
--- Starts stopped reserves to serve, their reserve mode cleared, and
--- stopping ones whose instance stopped, which start once EC2 allows. Only
--- a requested resume serves.
+-- Starts stopped reserves to serve, their reserve mode cleared; a stopping
+-- one whose instance stopped starts once EC2 disables its Spot request.
+-- Only a requested resume serves.
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
     reserve_mode = null, idle_since = null, updated_at = now()

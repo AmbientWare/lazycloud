@@ -42,10 +42,9 @@ set hibernate_refused_at = coalesce(hibernate_refused_at, now()), updated_at = n
 where id = @id and phase = 'stopping';
 
 -- name: RecordInstanceStopped :exec
--- EC2 reports a stopping Spot host's instance stopped while it holds the
--- persistent request active, which it must disable before the host can
--- start. A hibernation still unproven takes the evidence EC2's stop reason
--- gives.
+-- EC2 reports a stopping Spot host's instance stopped but holds its
+-- persistent request active, so the host cannot start yet. A hibernation
+-- still unproven takes the evidence EC2's stop reason gives.
 update hosts
 set stopped_at = now(),
     image_evidence = case when image_evidence = 'unknown' then @hibernation_evidence::text else image_evidence end,
