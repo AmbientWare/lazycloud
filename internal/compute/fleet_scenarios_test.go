@@ -1529,7 +1529,7 @@ func (r simResult) packRow(name string) string {
 // work, and arriving GPU work evicts it. Against the same load without
 // packing, profit rises, GPU starts wait no longer, GPU hosts run no
 // longer than placement's tie-breaks move them, and no retry is evicted
-// again. GPU work of prod's L4 shape fills its host and packs nothing.
+// again.
 func TestGPUHostsPackCPUWork(t *testing.T) {
 	t.Parallel()
 	t4 := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}

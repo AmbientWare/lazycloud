@@ -46,9 +46,10 @@ where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at i
 -- name: StoppedMeteredContainers :many
 -- Containers that stopped since the look-back began and still owe their
 -- last entries, with when the first of their replacements was ready, when
--- the first of their attempts that ended by preemption started, and the
--- spans of their other attempts that ended after it. Mirror builds'
--- containers bill no one.
+-- the first of their attempts that ended by preemption on the platform's
+-- fleet started, and the spans of their other attempts that ended after
+-- it. A connected account's lost host is not the platform's preemption.
+-- Mirror builds' containers bill no one.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
@@ -65,7 +66,9 @@ left join lateral (
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join attempts preempted on preempted.id = (
-    select a.id from attempts a where a.container_id = c.id and a.preempted order by a.started_at limit 1
+    select a.id from attempts a
+    where a.container_id = c.id and a.preempted and c.billing_owner = 'platform_fleet'
+    order by a.started_at limit 1
 )
 left join lateral (
     select array_agg(a.started_at order by a.started_at) as starts, array_agg(a.finished_at order by a.started_at) as ends

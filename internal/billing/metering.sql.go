@@ -726,7 +726,9 @@ left join lateral (
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
 left join attempts preempted on preempted.id = (
-    select a.id from attempts a where a.container_id = c.id and a.preempted order by a.started_at limit 1
+    select a.id from attempts a
+    where a.container_id = c.id and a.preempted and c.billing_owner = 'platform_fleet'
+    order by a.started_at limit 1
 )
 left join lateral (
     select array_agg(a.started_at order by a.started_at) as starts, array_agg(a.finished_at order by a.started_at) as ends
@@ -768,9 +770,10 @@ type StoppedMeteredContainersRow struct {
 
 // Containers that stopped since the look-back began and still owe their
 // last entries, with when the first of their replacements was ready, when
-// the first of their attempts that ended by preemption started, and the
-// spans of their other attempts that ended after it. Mirror builds'
-// containers bill no one.
+// the first of their attempts that ended by preemption on the platform's
+// fleet started, and the spans of their other attempts that ended after
+// it. A connected account's lost host is not the platform's preemption.
+// Mirror builds' containers bill no one.
 func (q *Queries) StoppedMeteredContainers(ctx context.Context, since *time.Time) ([]StoppedMeteredContainersRow, error) {
 	rows, err := q.db.Query(ctx, stoppedMeteredContainers, since)
 	if err != nil {

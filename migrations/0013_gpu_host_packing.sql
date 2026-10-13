@@ -14,3 +14,5 @@ return provider = 'aws' and host_gpus > 0 and container_gpus = 0;
 -- The attempt ended by preemption: its host was lost or reclaimed, or GPU
 -- work evicted its container. Billing charges none of its time.
 alter table attempts add column preempted boolean not null default false;
+
+create index attempts_preempted on attempts (container_id, started_at) where preempted;

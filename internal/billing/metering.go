@@ -107,8 +107,8 @@ type meteredContainer struct {
 	// billing ends.
 	replacedAt *time.Time
 	// heldFrom is when its oldest running attempt started, which
-	// preemption may yet end; preemptedFrom when the first of its attempts
-	// that preemption ended started, and kept the spans of its other
+	// preemption may yet void; preemptedFrom when the first of its attempts
+	// that preemption voided started, and kept the spans of its other
 	// attempts that ended after it.
 	heldFrom, preemptedFrom *time.Time
 	kept                    []span
@@ -355,23 +355,31 @@ func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (so
 	if c.replacedAt != nil && !c.replacedAt.After(end) {
 		end, ended = *c.replacedAt, true
 	}
+	if c.heldFrom != nil {
+		measured = minTime(measured, *c.heldFrom)
+	}
+	billed := billedSpans(start, end, c.preemptedFrom, c.kept)
 	if ended && !measured.Before(end) {
-		var entries []entry
-		for _, s := range billedSpans(start, end, c.preemptedFrom, c.kept) {
-			e, err := b.entries(src, s.start, s.end)
-			if err != nil {
-				return sourcePlan{}, err
-			}
-			entries = append(entries, e...)
+		entries, err := b.spanEntries(src, billed)
+		if err != nil {
+			return sourcePlan{}, err
 		}
 		return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
 	}
-	for _, at := range []*time.Time{c.heldFrom, c.preemptedFrom} {
-		if at != nil {
-			measured = minTime(measured, *at)
+	return b.planOpen(src, start, end, billed, measured)
+}
+
+// spanEntries are src's entries over spans.
+func (b *Billing) spanEntries(src source, spans []span) ([]entry, error) {
+	var out []entry
+	for _, s := range spans {
+		e, err := b.entries(src, s.start, s.end)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, e...)
 	}
-	return b.planOpen(src, start, end, measured)
+	return out, nil
 }
 
 // billedSpans are what a container bills of [start, end): all of it before
@@ -405,26 +413,33 @@ func spans(starts, ends []time.Time) []span {
 	return out
 }
 
-// planOpen writes the periods of [start, horizon) whose use is complete at
-// measured and accrues the rest.
-func (b *Billing) planOpen(src source, start, horizon, measured time.Time) (sourcePlan, error) {
+// planOpen writes what billed holds of the periods of [start, horizon)
+// whose use is complete at measured and accrues the rest.
+func (b *Billing) planOpen(src source, start, horizon time.Time, billed []span, measured time.Time) (sourcePlan, error) {
 	closed := minTime(horizon, measured).Truncate(MeteringPeriod)
+	var written, open []span
+	for _, s := range billed {
+		if closed.After(s.start) {
+			written = append(written, span{s.start, minTime(s.end, closed)})
+		}
+		if s.end.After(closed) {
+			open = append(open, span{maxTime(s.start, closed), s.end})
+		}
+	}
 	plan := sourcePlan{src: src, through: start}
 	if closed.After(start) {
-		entries, err := b.entries(src, start, closed)
+		entries, err := b.spanEntries(src, written)
 		if err != nil {
 			return sourcePlan{}, err
 		}
 		plan.entries, plan.through, plan.advance = entries, closed, true
 	}
-	if horizon.After(plan.through) {
-		open, err := b.entries(src, plan.through, horizon)
-		if err != nil {
-			return sourcePlan{}, err
-		}
-		for _, e := range open {
-			plan.accrued += e.charge.Total()
-		}
+	accrued, err := b.spanEntries(src, open)
+	if err != nil {
+		return sourcePlan{}, err
+	}
+	for _, e := range accrued {
+		plan.accrued += e.charge.Total()
 	}
 	return plan, nil
 }
