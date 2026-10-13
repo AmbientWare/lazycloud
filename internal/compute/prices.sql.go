@@ -91,6 +91,20 @@ func (q *Queries) ScoreSpotPools(ctx context.Context, arg ScoreSpotPoolsParams) 
 	return err
 }
 
+const spotPricesStale = `-- name: SpotPricesStale :one
+select (exists (select 1 from spot_prices)
+        and not exists (select 1 from spot_prices where observed_at > now() - make_interval(secs => $1::float8)))::bool
+`
+
+// Whether Spot prices were refreshed once but none is fresh now, as after
+// the scheduler was down longer than max_age_seconds.
+func (q *Queries) SpotPricesStale(ctx context.Context, maxAgeSeconds float64) (bool, error) {
+	row := q.db.QueryRow(ctx, spotPricesStale, maxAgeSeconds)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const upsertSpotPrices = `-- name: UpsertSpotPrices :exec
 insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
 select $1::text, unnest($2::text[]), unnest($3::text[]), unnest($4::bigint[]),

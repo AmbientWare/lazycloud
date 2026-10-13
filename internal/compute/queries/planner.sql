@@ -310,15 +310,15 @@ where id = any(@back_ids::uuid[] || @lend_ids::uuid[]) and phase = 'ready' and m
 returning id;
 
 -- name: RetireReserves :many
--- Stopped reserves terminate; a reserve not launched yet is removed.
+-- Stopped reserves terminate; a host not launched yet, a reserve or one
+-- nothing waits for, is removed unless a launcher holds it.
 update hosts h
 set phase = case when h.phase = 'requested' then 'deleted' else 'terminating' end,
     phase_message = case when h.phase = 'requested' then 'Removed' else 'Shutting down' end,
     phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
 where h.id = any(@ids::uuid[])
   and (h.phase = 'stopped'
-       or (h.phase = 'requested' and h.reserve_mode is not null
-           and (h.launch_lease_until is null or h.launch_lease_until < now())))
+       or (h.phase = 'requested' and (h.launch_lease_until is null or h.launch_lease_until < now())))
 returning h.id;
 
 -- name: SetIdleSince :exec

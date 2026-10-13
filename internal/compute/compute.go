@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
@@ -100,6 +101,9 @@ type Compute struct {
 	http *http.Client
 	// sts assumes roles with the platform's own credentials.
 	sts *sts.Client
+	// staleRefresh is when planning last refreshed stale Spot prices, in
+	// Unix nanoseconds.
+	staleRefresh atomic.Int64
 }
 
 // NewCompute returns the compute owner over pool. sqlc's generated New
