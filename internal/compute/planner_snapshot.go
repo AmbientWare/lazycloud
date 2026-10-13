@@ -15,7 +15,8 @@ import (
 )
 
 // offerRead is what offers rank from, read with a fixed number of
-// statements, each bounded by live rows or a sample.
+// statements, each bounded by live rows or a sample. A reserve whose start
+// EC2 refused within cooldown reads as refused.
 type offerRead struct {
 	now       time.Time
 	hosts     []PlannerHostsRow
@@ -30,10 +31,10 @@ type offerRead struct {
 	reported map[string]int64
 }
 
-func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time) (offerRead, error) {
+func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time, cooldown time.Duration) (offerRead, error) {
 	r := offerRead{now: now, reported: map[string]int64{}}
 	var err error
-	if r.hosts, err = q.PlannerHosts(ctx); err != nil {
+	if r.hosts, err = q.PlannerHosts(ctx, cooldown.Seconds()); err != nil {
 		return r, fmt.Errorf("read fleet hosts: %w", err)
 	}
 	for _, h := range r.hosts {
@@ -103,8 +104,8 @@ type fleetRead struct {
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
 // each bounded by live rows or the pending batch.
-func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
-	offers, err := readOffers(ctx, q, p, now)
+func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time, cooldown time.Duration) (fleetRead, error) {
+	offers, err := readOffers(ctx, q, p, now, cooldown)
 	if err != nil {
 		return fleetRead{}, err
 	}
@@ -233,7 +234,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
-		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		StartRefused: h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays, StoppedAt: h.StoppedAt,
 		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},
 	}
@@ -371,10 +372,7 @@ func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 		if r.ConnectionKey != owner {
 			continue
 		}
-		out = append(out, OfferCooldown{
-			Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until,
-			RefusedBy: (*HostID)(r.RefusedBy),
-		})
+		out = append(out, OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until})
 	}
 	return out
 }

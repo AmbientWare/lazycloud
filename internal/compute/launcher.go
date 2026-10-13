@@ -218,7 +218,7 @@ func ownerKey(h ClaimLaunchesRow) string {
 // them: cooldowns, quotas and the vCPUs live hosts count against them, and
 // the memory each type reported.
 func (c *Compute) poolInputs(ctx context.Context, h ClaimLaunchesRow) (*OfferInputs, error) {
-	r, err := readOffers(ctx, c.queries, c.policy(), time.Now())
+	r, err := readOffers(ctx, c.queries, c.policy(), time.Now(), c.fleet.CapacityCooldown)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +659,7 @@ func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimLaunchesRow, 
 	params := InsertCooldownParams{
 		ConnectionKey: ownerKey(h), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-		Reason: truncate(message), RefusedBy: &h.ID,
+		Reason: truncate(message), Walk: &h.ID,
 	}
 	if err := q.InsertCooldown(ctx, params); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)

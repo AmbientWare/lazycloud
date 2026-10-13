@@ -1,9 +1,12 @@
--- The host whose launch walk or start refused the pool while it cools:
--- every pool of one walk cools until the latest of their ends, and a
--- reserve whose start was refused waits out its own refusal.
-alter table capacity_cooldowns add column refused_by uuid;
-create index capacity_cooldowns_refused_by on capacity_cooldowns (refused_by) where refused_by is not null;
+-- The requested host whose launch walk refused the pool first while it
+-- cools; every pool of one walk cools until the latest of their ends.
+alter table capacity_cooldowns add column walk uuid;
+create index capacity_cooldowns_walk on capacity_cooldowns (walk) where walk is not null;
 alter table hosts drop column walk_cooled_until;
+
+-- When EC2 last refused to start the reserve for capacity; it does not
+-- resume again within the capacity cooldown.
+alter table hosts add column start_refused_at timestamptz;
 
 -- The digest of a release's archives but their VERSION files: releases of
 -- one build run the same host code.

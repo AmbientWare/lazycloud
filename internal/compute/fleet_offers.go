@@ -21,8 +21,6 @@ type OfferCooldown struct {
 	Market       Market
 	Until        time.Time
 	Quota        bool
-	// RefusedBy is the host whose launch walk or start EC2 refused there.
-	RefusedBy *HostID
 }
 
 // QuotaKey names one EC2 vCPU quota: a class of types in a region and

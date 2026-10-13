@@ -70,9 +70,10 @@ where id = @id and phase = 'resuming';
 
 -- name: ReturnStartToReserve :execrows
 -- EC2 refused to start a resuming host for capacity: it stops in the
--- reserve again, hibernated where its image may be saved.
+-- reserve again, hibernated where its image may be saved, and records the
+-- refusal.
 update hosts
-set phase = 'stopped', phase_message = @message, phase_at = now(),
+set phase = 'stopped', phase_message = @message, phase_at = now(), start_refused_at = now(),
     reserve_mode = case when image_evidence in ('saved', 'unknown') then 'hibernate' else 'stop' end,
     launch_lease_until = null, updated_at = now()
 where id = @id and phase = 'resuming';

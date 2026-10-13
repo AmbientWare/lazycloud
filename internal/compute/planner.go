@@ -83,7 +83,7 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 			return nil
 		}
 		p := c.policy()
-		read, err := readFleet(ctx, q, p, lock.Now)
+		read, err := readFleet(ctx, q, p, lock.Now, c.fleet.CapacityCooldown)
 		if err != nil {
 			return err
 		}

@@ -44,6 +44,9 @@ type FleetHost struct {
 	UsedDisks int
 	// Protected is an interruption's source or replacement.
 	Protected bool
+	// StartRefused is set on a reserve whose start EC2 refused for capacity
+	// within the capacity cooldown.
+	StartRefused bool
 	// Requested is set on a host EC2 has not launched yet, which its
 	// launch's walk through refused pools may still move.
 	Requested bool
@@ -1127,15 +1130,15 @@ func (ps *pass) bestReserve(items []coverItem, work bool) (*FleetHost, []int) {
 	return best, bestTaken
 }
 
-// ready reports whether reserve h can resume now: one whose own start
-// EC2 refused waits out the refusal; one stopped on the target agent
+// ready reports whether reserve h can resume now: one whose start EC2
+// refused waits out the capacity cooldown; one stopped on the target agent
 // build resumes for anything; for work, one stopped on an older build or
 // stopping resumes when it serves sooner than a purchase. A stopping
 // reserve's quota is counted already.
 func (ps *pass) ready(h FleetHost, work bool) bool {
 	stopping := h.State == FleetStopping && h.StoppedAt != nil && !ps.stalled(h)
 	startable := h.resumable() && ps.startable(h) || stopping
-	if h.Protected || ps.startRefused(h) || !startable {
+	if h.Protected || h.StartRefused || !startable {
 		return false
 	}
 	if h.resumable() && h.Current {
@@ -1153,14 +1156,6 @@ func (ps *pass) ready(h FleetHost, work bool) bool {
 		serves += st.Update
 	}
 	return work && serves < launch
-}
-
-// startRefused reports a reserve whose start EC2 refused while the
-// refusal cools.
-func (ps *pass) startRefused(h FleetHost) bool {
-	return slices.ContainsFunc(ps.s.Offers.Cooldowns, func(c OfferCooldown) bool {
-		return c.RefusedBy != nil && *c.RefusedBy == h.ID && c.Until.After(ps.s.Now)
-	})
 }
 
 // stale reports a reserve stopped on an agent build other than the

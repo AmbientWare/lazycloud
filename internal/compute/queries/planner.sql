@@ -12,8 +12,9 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 -- Every cloud host the fleet holds or is buying, with what its live
 -- containers reserve, what those that could run on Spot reserve, what each
 -- of those that could move to a Spot host needs, whether one of them could
--- not, and whether its agent must move to the target release first.
--- Packed CPU work counts apart: the containers and the newest placement
+-- not, whether its agent must move to the target release first, and
+-- whether EC2 refused its start within cooldown_seconds. Packed CPU work
+-- counts apart: the containers and the newest placement
 -- that keep a GPU host up are its GPU work.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
@@ -22,6 +23,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
+       coalesce(h.start_refused_at > now() - make_interval(secs => @cooldown_seconds::float8), false)::bool as start_refused,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
@@ -221,7 +223,7 @@ order by connection_id;
 
 -- name: PlannerCooldowns :many
 -- Offers cooling now.
-select connection_key, region, availability_zone_id, instance_type, market, until, refused_by
+select connection_key, region, availability_zone_id, instance_type, market, until
 from capacity_cooldowns
 where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market;

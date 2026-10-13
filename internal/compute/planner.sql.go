@@ -443,7 +443,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 }
 
 const plannerCooldowns = `-- name: PlannerCooldowns :many
-select connection_key, region, availability_zone_id, instance_type, market, until, refused_by
+select connection_key, region, availability_zone_id, instance_type, market, until
 from capacity_cooldowns
 where until > now()
 order by connection_key, region, availability_zone_id, instance_type, market
@@ -456,7 +456,6 @@ type PlannerCooldownsRow struct {
 	InstanceType       string
 	Market             string
 	Until              time.Time
-	RefusedBy          *uuid.UUID
 }
 
 // Offers cooling now.
@@ -476,7 +475,6 @@ func (q *Queries) PlannerCooldowns(ctx context.Context) ([]PlannerCooldownsRow, 
 			&i.InstanceType,
 			&i.Market,
 			&i.Until,
-			&i.RefusedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -496,6 +494,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
+       coalesce(h.start_refused_at > now() - make_interval(secs => $1::float8), false)::bool as start_refused,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
@@ -574,6 +573,7 @@ type PlannerHostsRow struct {
 	HandsBackAt           *time.Time
 	StoppedAt             *time.Time
 	PreparedCurrent       bool
+	StartRefused          bool
 	UsedCpu               int64
 	UsedMemory            int64
 	UsedGpus              int32
@@ -598,11 +598,12 @@ type PlannerHostsRow struct {
 // Every cloud host the fleet holds or is buying, with what its live
 // containers reserve, what those that could run on Spot reserve, what each
 // of those that could move to a Spot host needs, whether one of them could
-// not, and whether its agent must move to the target release first.
-// Packed CPU work counts apart: the containers and the newest placement
+// not, whether its agent must move to the target release first, and
+// whether EC2 refused its start within cooldown_seconds. Packed CPU work
+// counts apart: the containers and the newest placement
 // that keep a GPU host up are its GPU work.
-func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
-	rows, err := q.db.Query(ctx, plannerHosts)
+func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]PlannerHostsRow, error) {
+	rows, err := q.db.Query(ctx, plannerHosts, cooldownSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -644,6 +645,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.HandsBackAt,
 			&i.StoppedAt,
 			&i.PreparedCurrent,
+			&i.StartRefused,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,

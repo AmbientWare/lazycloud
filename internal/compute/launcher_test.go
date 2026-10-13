@@ -203,26 +203,80 @@ func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
 	}
 }
 
-// Walks that run at once share their pools' cooldowns without losing one
-// end each: a pool both refuse stays with the walk that refused it first,
-// and every walk's pools end together.
-func TestConcurrentWalksEachCoolUntilOneEnd(t *testing.T) {
+// requestedSmall inserts a requested on-demand m7i.large host.
+func requestedSmall(t *testing.T, o owners) compute.HostID {
+	t.Helper()
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	return compute.HostID(scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')
+returning id`, int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes))
+}
+
+// callPool names the pool a RunInstances call tries.
+func callPool(call awsCall) string {
+	return call.Form.Get("InstanceType") + " " + call.Form.Get("SubnetId") + " " + call.Form.Get("InstanceMarketOptions.MarketType")
+}
+
+// A walk's pools keep their one end when another walk is refused in one of
+// them while it cools.
+func TestAWalkKeepsItsEndWhenAnotherWalkIsRefusedInItsPools(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseCapacity)
-	small, _ := compute.CatalogTypeNamed("m7i.large")
-	for range 3 {
-		run(t, o.pool, `
-insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
-values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
-			int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes)
-	}
+	first := requestedSmall(t, o)
 	launchAll(t, o)
-	if n := scan[int](t, o.pool, "select count(*)::int from hosts where phase = 'failed'"); n != 3 {
-		t.Fatalf("%d of 3 walks ended", n)
+	pools := scan[[]string](t, o.pool, "select array_agg(region || '/' || availability_zone_id || '/' || instance_type || '/' || market) from capacity_cooldowns where walk = $1", uuid.UUID(first))
+	requestedSmall(t, o)
+	launchAll(t, o)
+	ends := scan[int](t, o.pool, `select count(distinct until)::int from capacity_cooldowns
+where region || '/' || availability_zone_id || '/' || instance_type || '/' || market = any($1)`, pools)
+	if len(pools) < 2 || ends != 1 {
+		t.Fatalf("the first walk's %d pools cool until %d ends after a second walk was refused in them, want one", len(pools), ends)
 	}
-	if apart := scan[int](t, o.pool, `select count(*)::int from (
-    select refused_by from capacity_cooldowns group by refused_by having count(distinct until) > 1) w`); apart != 0 {
-		t.Fatalf("%d walks' pools cool until more than one end", apart)
+}
+
+// Walks that run at once skip the pools each other refused: a walk that
+// read its offers before another walk refused four pools tries none of
+// them after.
+func TestConcurrentWalksSkipEachOthersRefusedPools(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	first, second := requestedSmall(t, o), requestedSmall(t, o)
+	var mu sync.Mutex
+	tried := map[string][]string{}
+	emulator.on("RunInstances", func(call awsCall) awsReply {
+		host := call.Form.Get("ClientToken")[:36]
+		mu.Lock()
+		tried[host] = append(tried[host], callPool(call))
+		n := len(tried[host])
+		mu.Unlock()
+		// The first walk starts once the second has read its offers and
+		// moved on, and the second goes on once the first refused four
+		// pools.
+		wait := func(done func() bool) {
+			for deadline := time.Now().Add(10 * time.Second); !done() && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			}
+		}
+		switch {
+		case host == uuid.UUID(first).String() && n == 1:
+			wait(func() bool { mu.Lock(); defer mu.Unlock(); return len(tried[uuid.UUID(second).String()]) >= 2 })
+		case host == uuid.UUID(second).String() && n == 2:
+			wait(func() bool {
+				return scan[int](t, o.pool, "select launch_pools from hosts where id = $1", uuid.UUID(first)) >= 4
+			})
+		}
+		return refuseCapacity(call)
+	})
+	launch(t, o)
+	mu.Lock()
+	defer mu.Unlock()
+	refused := map[string]bool{}
+	for _, pool := range tried[uuid.UUID(first).String()][:4] {
+		refused[pool] = true
+	}
+	for _, pool := range tried[uuid.UUID(second).String()][2:] {
+		if refused[pool] {
+			t.Fatalf("the second walk tried %s after the first walk refused it; tried %v and %v", pool, tried[uuid.UUID(first).String()], tried[uuid.UUID(second).String()])
+		}
 	}
 }
 

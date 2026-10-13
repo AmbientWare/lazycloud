@@ -245,7 +245,7 @@ func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h Clai
 		if n == 0 {
 			return nil
 		}
-		if err := c.coolRefusal(ctx, q, h, refusal, nil); err != nil {
+		if err := c.coolRefusal(ctx, q, h, refusal); err != nil {
 			return err
 		}
 		return notifyMachines(ctx, tx, h.ID)
@@ -253,8 +253,8 @@ func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h Clai
 }
 
 // refuseStart returns a resuming host whose start EC2 refused for capacity
-// to the reserve. The refusal cools its zone's pool, and the reserve waits
-// out its own refusal before it resumes again.
+// to the reserve, which waits out the capacity cooldown before it resumes
+// again. The refusal cools its zone's pool.
 func (c *Compute) refuseStart(ctx context.Context, logger *slog.Logger, h ClaimProviderActionsRow, refusal error) error {
 	if err := transition(PhaseResuming, PhaseStopped); err != nil {
 		return err
@@ -269,7 +269,7 @@ func (c *Compute) refuseStart(ctx context.Context, logger *slog.Logger, h ClaimP
 		if n == 0 {
 			return nil
 		}
-		if err := c.coolRefusal(ctx, q, h, refusal, &h.ID); err != nil {
+		if err := c.coolRefusal(ctx, q, h, refusal); err != nil {
 			return err
 		}
 		return notifyMachines(ctx, tx, h.ID)
@@ -278,8 +278,8 @@ func (c *Compute) refuseStart(ctx context.Context, logger *slog.Logger, h ClaimP
 
 // coolRefusal cools the offer of a host EC2 refused, if it did: its zone
 // for capacity, its region and quota class for quota, which also records
-// the quota full. refusedBy names the host the refusal holds back.
-func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimProviderActionsRow, refusal error, refusedBy *uuid.UUID) error {
+// the quota full.
+func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimProviderActionsRow, refusal error) error {
 	if refusal == nil || h.Market == nil {
 		return nil
 	}
@@ -291,7 +291,7 @@ func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimProviderAc
 	if err := q.InsertCooldown(ctx, InsertCooldownParams{
 		ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-		Reason: truncate(describeAWSError(refusal)), RefusedBy: refusedBy,
+		Reason: truncate(describeAWSError(refusal)),
 	}); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)
 	}

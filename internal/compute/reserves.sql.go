@@ -236,7 +236,7 @@ func (q *Queries) RetireReserve(ctx context.Context, arg RetireReserveParams) (i
 
 const returnStartToReserve = `-- name: ReturnStartToReserve :execrows
 update hosts
-set phase = 'stopped', phase_message = $1, phase_at = now(),
+set phase = 'stopped', phase_message = $1, phase_at = now(), start_refused_at = now(),
     reserve_mode = case when image_evidence in ('saved', 'unknown') then 'hibernate' else 'stop' end,
     launch_lease_until = null, updated_at = now()
 where id = $2 and phase = 'resuming'
@@ -248,7 +248,8 @@ type ReturnStartToReserveParams struct {
 }
 
 // EC2 refused to start a resuming host for capacity: it stops in the
-// reserve again, hibernated where its image may be saved.
+// reserve again, hibernated where its image may be saved, and records the
+// refusal.
 func (q *Queries) ReturnStartToReserve(ctx context.Context, arg ReturnStartToReserveParams) (int64, error) {
 	result, err := q.db.Exec(ctx, returnStartToReserve, arg.Message, arg.ID)
 	if err != nil {

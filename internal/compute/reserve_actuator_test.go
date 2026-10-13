@@ -392,7 +392,7 @@ func TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated(t *testin
 }
 
 // A resumed reserve starts once, and a start EC2 refuses for capacity
-// leaves it stopped in the reserve with its zone cooled for it.
+// leaves it stopped in the reserve with its zone cooled.
 func TestResumeStartsTheReserveOnceAndARefusedStartKeepsIt(t *testing.T) {
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000d001")
@@ -423,12 +423,12 @@ func TestResumeStartsTheReserveOnceAndARefusedStartKeepsIt(t *testing.T) {
 	if f := stopOf(t, o, spot); f.Phase != "stopped" {
 		t.Fatalf("reserve whose start EC2 refused %+v, want stopped in the reserve", f)
 	}
-	cooled := scan[string](t, o.pool, `select region || '/' || availability_zone_id || '/' || instance_type || '/' || market || '/' || refused_by
+	cooled := scan[string](t, o.pool, `select region || '/' || availability_zone_id || '/' || instance_type || '/' || market
 from capacity_cooldowns where until > now()`)
-	want := scan[string](t, o.pool, `select region || '/' || coalesce(availability_zone_id, '') || '/' || instance_type || '/' || market || '/' || id
+	want := scan[string](t, o.pool, `select region || '/' || coalesce(availability_zone_id, '') || '/' || instance_type || '/' || market
 from hosts where id = $1`, uuid.UUID(spot))
 	if cooled != want {
-		t.Fatalf("cooldown %q, want %q: the refused zone, held for the reserve", cooled, want)
+		t.Fatalf("cooldown %q, want the refused zone %q", cooled, want)
 	}
 	if n := len(emulator.calls("TerminateInstances")); n != 0 {
 		t.Fatalf("%d terminations after a refused start, want none", n)
@@ -643,5 +643,33 @@ func TestReconcileLeavesAHostThatMovedSinceItsSnapshot(t *testing.T) {
 		if s := ec2.get(id).State; s != want {
 			t.Errorf("instance %s is %s, want %s", id, s, want)
 		}
+	}
+}
+
+// A reserve whose start EC2 refused waits out the capacity cooldown, even
+// in a pool a launch walk refused first, so the work it was resumed for
+// buys a host on the next pass rather than resuming it again.
+func TestARefusedStartLetsItsWorkBuy(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	host := stoppedReserve(t, o, "m7i.xlarge", "i-0000000000000d101")
+	ec2.add(fakeInstance{ID: "i-0000000000000d101", State: "stopped", Type: "m7i.xlarge"}, host.String())
+	run(t, o.pool, `insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, walk)
+values ('platform', 'us-east-2', 'use2-az1', 'm7i.xlarge', 'on_demand', now() + interval '10 minutes', interval '10 minutes', 'refused', gen_random_uuid())`)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, gib)
+	if r := planCapacity(t, o); r.Resumed != 1 {
+		t.Fatalf("plan %+v, want the reserve resumed", r)
+	}
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "We currently do not have sufficient m7i.xlarge capacity"),
+			call.Action == "StartInstances"
+	}
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseStopped) {
+		t.Fatalf("refused reserve is %s, want stopped", phase)
+	}
+	if r := planCapacity(t, o); r.Resumed != 0 || r.Requested != 1 {
+		t.Fatalf("plan after the refused start %+v, want a host bought and no resume", r)
 	}
 }

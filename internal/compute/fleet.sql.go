@@ -17,7 +17,7 @@ const alignWalk = `-- name: AlignWalk :exec
 with walked as (
     select connection_key, region, availability_zone_id, instance_type, market, until
     from capacity_cooldowns
-    where capacity_cooldowns.refused_by = $1::uuid
+    where capacity_cooldowns.walk = $1::uuid
     order by connection_key, region, availability_zone_id, instance_type, market
     for update
 )
@@ -445,7 +445,7 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, refused_by)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason, walk)
 values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
         make_interval(secs => $6::float8), $7, $8)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
@@ -455,8 +455,7 @@ do update set
     until = case when capacity_cooldowns.until > now() then capacity_cooldowns.until
                  else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => $9::float8)) end,
     reason = excluded.reason,
-    refused_by = case when capacity_cooldowns.until > now() then coalesce(capacity_cooldowns.refused_by, excluded.refused_by)
-                      else excluded.refused_by end
+    walk = case when capacity_cooldowns.until > now() then coalesce(capacity_cooldowns.walk, excluded.walk) else excluded.walk end
 `
 
 type InsertCooldownParams struct {
@@ -467,16 +466,15 @@ type InsertCooldownParams struct {
 	Market             string
 	Seconds            float64
 	Reason             string
-	RefusedBy          *uuid.UUID
+	Walk               *uuid.UUID
 	MaxSeconds         float64
 }
 
 // Cools an offer in one zone, or in its whole region for the zone ”, for
-// seconds, and records the host whose launch walk or start refused it, if
-// any. Refused again while it cools, it keeps its end and the host that
-// refused it first, so no walk moves another walk's end; refused after its
-// cooldown ended, it cools twice as long as that cooldown lasted, up to
-// max_seconds.
+// seconds, and records the launch walk that refused it, if any. Refused
+// again while it cools, it keeps its end and the walk that refused it
+// first, so no walk moves another walk's end; refused after its cooldown
+// ended, it cools twice as long as that cooldown lasted, up to max_seconds.
 func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) error {
 	_, err := q.db.Exec(ctx, insertCooldown,
 		arg.ConnectionKey,
@@ -486,7 +484,7 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 		arg.Market,
 		arg.Seconds,
 		arg.Reason,
-		arg.RefusedBy,
+		arg.Walk,
 		arg.MaxSeconds,
 	)
 	return err

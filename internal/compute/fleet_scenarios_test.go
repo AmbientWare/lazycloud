@@ -71,6 +71,8 @@ type simHost struct {
 	// stop's record holds until then. updateUntil is when a stale one's
 	// agent update ends; placement gives it no work before.
 	startAt, updateUntil time.Time
+	// startRefusedAt is when EC2 last refused to start the reserve.
+	startRefusedAt time.Time
 }
 
 // simRelease is an agent release: its version and the build of its
@@ -577,6 +579,7 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 		fh.StoppedAt = nil
 	}
 	fh.UpdateDue = s.now.Before(h.updateUntil)
+	fh.StartRefused = !h.startRefusedAt.IsZero() && s.now.Sub(h.startRefusedAt) < simCooldown
 	fh.Load, fh.Lent, fh.Packed, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, FleetCapacity{}, 0, nil, 0
 	var tolerant FleetCapacity
 	for _, c := range h.containers {
@@ -800,9 +803,6 @@ func (s *sim) offers() OfferInputs {
 	for key, c := range s.cools {
 		if c.until.After(s.now) {
 			key.Until, key.Quota = c.until, c.quota
-			if c.walk != nil {
-				key.RefusedBy = &c.walk.ID
-			}
 			in.Cooldowns = append(in.Cooldowns, key)
 		}
 	}
@@ -1015,7 +1015,7 @@ type simCool struct {
 	lasted time.Duration
 	until  time.Time
 	quota  bool
-	// walk is the host whose launch walk or start refused the pool.
+	// walk is the host whose launch walk refused the pool first.
 	walk *simHost
 }
 
@@ -1050,11 +1050,12 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionResume:
 			h := s.host(*a.Host)
 			if s.refuses != nil && !s.startsFill && s.refuses(h.Region, h.ZoneID, h.InstanceType, h.Market) {
-				// EC2 refusing the start leaves the reserve stopped and cools
-				// its zone for it, as the actuator does.
+				// EC2 refusing the start leaves the reserve stopped with the
+				// refusal recorded and cools its zone, as the actuator does.
 				s.r.refusals++
 				s.r.refused = append(s.r.refused, s.now)
-				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market}, h)
+				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market}, nil)
+				h.startRefusedAt = s.now
 				continue
 			}
 			// EC2 starts a stopping Spot reserve once it disables the

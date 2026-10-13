@@ -1034,3 +1034,22 @@ func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
 		}
 	}
 }
+
+// An offer cools only when the host bought from it is too small ever to
+// take its container: a full host whose container a starting host covers
+// cools nothing, a host of a type smaller than its container does.
+func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
+	full := planHost(1, planLarge, FleetServing)
+	full.Load, full.Containers = full.Usable, 1
+	coming := planHost(2, planLarge, FleetStarting)
+	tiny := planHost(3, planSmall, FleetServing)
+	s := planSnapshot(t, full, coming, tiny)
+	s.Pending = []DemandGroup{
+		{Need: Requirement{CPUMillis: 4000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &full.ID}}},
+		{Need: Requirement{CPUMillis: 16000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &tiny.ID}}},
+	}
+	_, cools := planOwner(planPolicy(FleetCapacity{}, FleetCapacity{}), s, time.Minute)
+	if len(cools) != 1 || cools[0].InstanceType != planSmall.Name {
+		t.Fatalf("cooled %+v, want only the offer of the host too small for its container", cools)
+	}
+}
