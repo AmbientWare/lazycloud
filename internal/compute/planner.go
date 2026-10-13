@@ -206,6 +206,7 @@ type requestedHost struct {
 	Replaces           *uuid.UUID   `json:"replaces"`
 	HoldsCPUMillis     *cpu.Millis  `json:"holds_cpu_millis"`
 	HoldsMemoryBytes   *int64       `json:"holds_memory_bytes"`
+	HoldsDisks         *int         `json:"holds_disks"`
 }
 
 type idleRow struct {
@@ -500,7 +501,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 	}
 	switch a.Kind {
 	case ActionBuyReserve:
-		h.ReserveMode = a.Mode
+		h.ReserveMode, h.HoldsDisks = a.Mode, ptr(o.Type.DiskSlots())
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
 	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionHandBack, ActionLend:

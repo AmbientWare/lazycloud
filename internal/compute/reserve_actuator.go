@@ -248,7 +248,8 @@ func (c *Compute) retireReserve(ctx context.Context, logger *slog.Logger, h Clai
 			}
 			if err := q.InsertCooldown(ctx, InsertCooldownParams{
 				ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
-				Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(describeAWSError(refusal)),
+				Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
+				Reason: truncate(describeAWSError(refusal)),
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
 			}

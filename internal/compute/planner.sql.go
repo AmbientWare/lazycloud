@@ -286,16 +286,16 @@ func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsR
 const insertRequestedHosts = `-- name: InsertRequestedHosts :exec
 insert into hosts (id, name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
                    gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
-                   hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes)
+                   hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes, holds_disks)
 select v.id, 'lazycloud-' || split_part(v.id::text, '-', 5), 'offline', v.kind, 'aws', v.connection_id, 'requested',
        'Waiting for the machine to be launched', v.cpu_millis, v.memory_bytes, v.gpu_type, v.gpu_count, v.region,
        v.availability_zone, v.availability_zone_id, v.instance_type, v.market, v.hourly_micros, v.reserve_mode,
-       v.replaces, v.holds_cpu_millis, v.holds_memory_bytes
+       v.replaces, v.holds_cpu_millis, v.holds_memory_bytes, v.holds_disks
 from jsonb_to_recordset($1::jsonb) as v(
     id uuid, kind text, connection_id uuid, cpu_millis bigint, memory_bytes bigint, gpu_type text, gpu_count integer,
     region text, availability_zone text, availability_zone_id text, instance_type text, market text,
     hourly_micros bigint, reserve_mode text, replaces uuid, holds_cpu_millis bigint,
-    holds_memory_bytes bigint)
+    holds_memory_bytes bigint, holds_disks smallint)
 `
 
 // Hosts to buy, for the launcher. The planner names each id, so container

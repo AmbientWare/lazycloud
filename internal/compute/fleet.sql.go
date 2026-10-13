@@ -41,8 +41,7 @@ where h.id in (
 )
 returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes,
-          (select r.hourly_micros from hosts r where r.id = h.replaces) as replaces_hourly_micros
+          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks
 `
 
 type ClaimLaunchesParams struct {
@@ -51,31 +50,30 @@ type ClaimLaunchesParams struct {
 }
 
 type ClaimLaunchesRow struct {
-	ID                   uuid.UUID
-	Name                 string
-	Kind                 string
-	ConnectionID         *uuid.UUID
-	Region               string
-	AvailabilityZone     string
-	InstanceType         string
-	Market               *string
-	GpuType              string
-	GpuCount             int32
-	CpuMillis            cpu.Millis
-	MemoryBytes          int64
-	LaunchAttempts       int32
-	LaunchPools          int16
-	ReserveMode          *string
-	Replaces             *uuid.UUID
-	HoldsCpuMillis       *cpu.Millis
-	HoldsMemoryBytes     *int64
-	ReplacesHourlyMicros *int64
+	ID               uuid.UUID
+	Name             string
+	Kind             string
+	ConnectionID     *uuid.UUID
+	Region           string
+	AvailabilityZone string
+	InstanceType     string
+	Market           *string
+	GpuType          string
+	GpuCount         int32
+	CpuMillis        cpu.Millis
+	MemoryBytes      int64
+	LaunchAttempts   int32
+	LaunchPools      int16
+	ReserveMode      *string
+	Replaces         *uuid.UUID
+	HoldsCpuMillis   *cpu.Millis
+	HoldsMemoryBytes *int64
+	HoldsDisks       *int16
 }
 
-// Requested hosts whose launch is not held by another launcher, a
-// rightsize with what the host it replaces costs. The lease outlasts one
-// pool's RunInstances call and each move to a next pool renews it; a
-// launcher that dies leaves it to expire.
+// Requested hosts whose launch is not held by another launcher. The lease
+// outlasts one pool's RunInstances call and each move to a next pool
+// renews it; a launcher that dies leaves it to expire.
 func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([]ClaimLaunchesRow, error) {
 	rows, err := q.db.Query(ctx, claimLaunches, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -104,7 +102,7 @@ func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([
 			&i.Replaces,
 			&i.HoldsCpuMillis,
 			&i.HoldsMemoryBytes,
-			&i.ReplacesHourlyMicros,
+			&i.HoldsDisks,
 		); err != nil {
 			return nil, err
 		}
@@ -160,6 +158,32 @@ func (q *Queries) ClaimTerminations(ctx context.Context, reclaimGraceSeconds flo
 		return nil, err
 	}
 	return items, nil
+}
+
+const clearCooldown = `-- name: ClearCooldown :exec
+delete from capacity_cooldowns
+where connection_key = $1 and region = $2 and availability_zone_id in ($3, '')
+  and instance_type = $4 and market = $5
+`
+
+type ClearCooldownParams struct {
+	ConnectionKey      string
+	Region             string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             string
+}
+
+// A launch in a zone ends the refusals of its pool there and in its region.
+func (q *Queries) ClearCooldown(ctx context.Context, arg ClearCooldownParams) error {
+	_, err := q.db.Exec(ctx, clearCooldown,
+		arg.ConnectionKey,
+		arg.Region,
+		arg.AvailabilityZoneID,
+		arg.InstanceType,
+		arg.Market,
+	)
+	return err
 }
 
 const connectionScope = `-- name: ConnectionScope :one
@@ -398,11 +422,16 @@ func (q *Queries) HostWaiters(ctx context.Context, hostID *uuid.UUID) ([]HostWai
 }
 
 const insertCooldown = `-- name: InsertCooldown :exec
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
-values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::float8),
-        $7)
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason)
+values ($1, $2, $3, $4, $5,
+        now() + make_interval(secs => $6::float8), make_interval(secs => $6::float8), $7)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason
+do update set
+    cooled_for = case when capacity_cooldowns.until > now() then capacity_cooldowns.cooled_for
+                      else least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => $8::float8)) end,
+    until = case when capacity_cooldowns.until > now() then greatest(capacity_cooldowns.until, excluded.until)
+                 else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => $8::float8)) end,
+    reason = excluded.reason
 `
 
 type InsertCooldownParams struct {
@@ -413,9 +442,13 @@ type InsertCooldownParams struct {
 	Market             string
 	Seconds            float64
 	Reason             string
+	MaxSeconds         float64
 }
 
-// Cools an offer in one zone, or in its whole region for the zone ”.
+// Cools an offer in one zone, or in its whole region for the zone ”, for
+// seconds. Refused again while it cools, it cools at least that long from
+// now; refused after its cooldown ended, twice as long as that cooldown
+// lasted, up to max_seconds.
 func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) error {
 	_, err := q.db.Exec(ctx, insertCooldown,
 		arg.ConnectionKey,
@@ -425,6 +458,7 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 		arg.Market,
 		arg.Seconds,
 		arg.Reason,
+		arg.MaxSeconds,
 	)
 	return err
 }
@@ -512,7 +546,7 @@ const moveLaunchPool = `-- name: MoveLaunchPool :execrows
 update hosts
 set instance_type = $1, region = $2, availability_zone = $3,
     availability_zone_id = $4, hourly_micros = $5,
-    cpu_millis = $6, memory_bytes = $7, launch_pools = launch_pools + 1,
+    cpu_millis = $6, memory_bytes = $7, launch_pools = launch_pools + 1, launch_attempts = 0,
     launch_lease_until = now() + make_interval(secs => $8::float8), updated_at = now()
 where id = $9 and phase = 'requested' and launch_pools = $10
 `
@@ -531,9 +565,10 @@ type MoveLaunchPoolParams struct {
 }
 
 // Moves a requested host whose pool EC2 refused to the next pool at that
-// pool's cost and capacity, and renews the launcher's lease. Every pool it
-// moves to holds what it was bought to hold. A host another launcher moved
-// on since it was claimed stays where that one put it.
+// pool's cost and capacity, with its attempts counted afresh there, and
+// renews the launcher's lease for lease_seconds, which 0 releases. Every
+// pool it moves to holds what it was bought to hold. A host another
+// launcher moved on since it was claimed stays where that one put it.
 func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveLaunchPool,
 		arg.InstanceType,

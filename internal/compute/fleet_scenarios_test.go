@@ -152,11 +152,12 @@ type simResult struct {
 }
 
 // simPurchase is one reserve purchase: its market and each pool its launch
-// tried.
+// tried, and whether it launched.
 type simPurchase struct {
-	at     time.Time
-	market ReserveMarket
-	tried  []FleetOffer
+	at       time.Time
+	market   ReserveMarket
+	tried    []FleetOffer
+	launched bool
 }
 
 type sim struct {
@@ -200,7 +201,9 @@ type sim struct {
 	// placedLog every container placed.
 	builds    []simBuild
 	placedLog []*simContainer
-	next      int
+	// cools are the runs of refusals by pool.
+	cools map[OfferCooldown]simCool
+	next  int
 }
 
 type simBuild struct {
@@ -492,13 +495,7 @@ func (s *sim) plan() time.Duration {
 	if s.prices != nil {
 		s.in.Spot = s.prices(s.now)
 	}
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Builds: builds, Arrived: arrived, Offers: s.in, BatchWait: s.batchWait()}
-	snapshot.Offers.Now = s.now
-	// The scheduler refreshes Spot quotes far more often than they age out.
-	snapshot.Offers.Spot = slices.Clone(s.in.Spot)
-	for i := range snapshot.Offers.Spot {
-		snapshot.Offers.Spot[i].ObservedAt = s.now
-	}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, RecentDisks: s.recentDisks, Builds: builds, Arrived: arrived, Offers: s.offers(), BatchWait: s.batchWait()}
 	if s.knowQuota {
 		for key, vcpus := range s.quotas {
 			snapshot.Offers.Quotas = append(snapshot.Offers.Quotas, VCPUQuota{Key: key, VCPUs: vcpus})
@@ -612,6 +609,17 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 	}
 }
 
+// offers are the offer inputs at now. The scheduler refreshes Spot quotes
+// far more often than they age out.
+func (s *sim) offers() OfferInputs {
+	in := s.in
+	in.Now, in.Spot = s.now, slices.Clone(s.in.Spot)
+	for i := range in.Spot {
+		in.Spot[i].ObservedAt = s.now
+	}
+	return in
+}
+
 func (s *sim) host(id HostID) *simHost {
 	i := slices.IndexFunc(s.hosts, func(h *simHost) bool { return h.ID == id })
 	if i < 0 {
@@ -623,7 +631,7 @@ func (s *sim) host(id HostID) *simHost {
 // launch starts a host for a purchase. EC2 refuses it when it would exceed
 // its vCPU quota, cooling the offer or with quotas known its whole class,
 // or when refuses names its pool, cooling the pool's zone; a refused launch
-// moves on to the pool fallbackPool picks, up to maxLaunchPools.
+// moves on to the pool fallbackPool picks.
 func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (HostID, bool) {
 	o := *a.Offer
 	row := ClaimLaunchesRow{
@@ -633,16 +641,16 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		InstanceType: o.Type.Name, Region: o.Region, AvailabilityZone: o.Zone,
 	}
 	if a.Kind == ActionRightsize {
-		row.Replaces, row.ReplacesHourlyMicros = ptr(uuid.UUID(*a.Host)), ptr(s.host(*a.Host).offer.HourlyMicros)
+		row.Replaces = ptr(uuid.UUID(*a.Host))
 	}
 	purchase := simPurchase{at: s.now, market: a.Market}
 	if reserve {
-		row.ReserveMode = ptr(string(*a.Mode))
+		row.ReserveMode, row.HoldsDisks = ptr(string(*a.Mode)), ptr(int16(o.Type.DiskSlots()))
 		defer func() { s.r.purchases = append(s.r.purchases, purchase) }()
 	}
-	for pools := 0; ; pools++ {
+	for {
 		purchase.tried = append(purchase.tried, o)
-		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market, Until: s.now.Add(simCooldown)}
+		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
 		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
 			cool.Quota = s.knowQuota
 		} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
@@ -652,12 +660,10 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 		}
 		s.r.refusals++
 		s.r.refused = append(s.r.refused, s.now)
-		s.in.Cooldowns = append(s.in.Cooldowns, cool)
+		s.cool(cool)
 		next, ok := FleetOffer{}, false
-		if pools+1 < maxLaunchPools {
-			in := s.in
-			in.Now = s.now
-			next, ok = fallbackPool(s.p, row, waiters, in, func(string, bool) bool { return true })
+		if row.Replaces == nil {
+			next, ok = fallbackPool(s.p, row, waiters, s.offers(), func(string, bool) bool { return true })
 		}
 		if !ok {
 			if row.Replaces != nil {
@@ -666,7 +672,6 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 			return HostID{}, false
 		}
 		o = next
-		row.InstanceType, row.Region, row.AvailabilityZone = o.Type.Name, o.Region, o.Zone
 	}
 	if a.Kind == ActionRightsize {
 		if replaced := s.host(*a.Host); o.running() >= replaced.offer.running() {
@@ -700,10 +705,47 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 	if !reserve && o.Market == MarketOnDemand {
 		s.r.onDemand++
 	}
+	purchase.launched = true
+	for _, zone := range []string{o.ZoneID, ""} {
+		delete(s.cools, OfferCooldown{Region: o.Region, ZoneID: zone, InstanceType: o.Type.Name, Market: o.Market})
+	}
 	s.hosts = append(s.hosts, h)
 	s.r.launches++
 	s.r.launched = append(s.r.launched, s.now)
 	return h.ID, true
+}
+
+// cool cools c's pool as InsertCooldown does: for simCooldown, at least
+// that long from now while it cools, and after its cooldown ended twice as
+// long as that one lasted, up to cooldownGrowth cooldowns.
+func (s *sim) cool(c OfferCooldown) {
+	if s.cools == nil {
+		s.cools = map[OfferCooldown]simCool{}
+	}
+	key := OfferCooldown{Region: c.Region, ZoneID: c.ZoneID, InstanceType: c.InstanceType, Market: c.Market}
+	run := simCool{lasted: simCooldown, until: s.now.Add(simCooldown)}
+	if last, ok := s.cools[key]; ok && last.until.After(s.now) {
+		run = simCool{lasted: last.lasted, until: maxTime(last.until, run.until)}
+	} else if ok {
+		run.lasted = min(max(2*last.lasted, simCooldown), cooldownGrowth*simCooldown)
+		run.until = s.now.Add(run.lasted)
+	}
+	s.cools[key] = run
+	c.Until = run.until
+	s.in.Cooldowns = append(s.in.Cooldowns, c)
+}
+
+// simCool is a pool's cooldown: how long it lasted and when it ends.
+type simCool struct {
+	lasted time.Duration
+	until  time.Time
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 func (s *sim) quotaUse() map[QuotaKey]int64 {
@@ -736,9 +778,7 @@ func (s *sim) apply(plan FleetPlan) {
 				// zone, as the actuator does.
 				s.r.refusals++
 				s.r.refused = append(s.r.refused, s.now)
-				s.in.Cooldowns = append(s.in.Cooldowns, OfferCooldown{
-					Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market, Until: s.now.Add(simCooldown),
-				})
+				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market})
 				s.hosts = slices.DeleteFunc(s.hosts, func(r *simHost) bool { return r == h })
 				continue
 			}
@@ -1361,12 +1401,14 @@ func newChurnSim(t *testing.T) *sim {
 	return s
 }
 
-// An empty fleet buys its reserves, with EC2 refusing every GPU Spot pool,
-// or every one in the eastern regions. No reserve is larger than the
-// policy's LargestShape.Cap, a refused pool is not tried again before its
-// cooldown ends, no market buys more than eight reserves in a minute, and
-// no reserve is cancelled before it stops; where pools fill, every market
-// ends with its reserve.
+// An empty fleet buys its reserves over two hours, with EC2 refusing every
+// GPU Spot pool, or every one in the eastern regions. A refused purchase
+// tries every pool its reserve fits, so its market buys again only once
+// those pools' cooldowns end, and a pool refused three times running is
+// tried at most every cooldownGrowth cooldowns. No reserve is larger than
+// the policy's LargestShape.Cap, a refused pool is not tried again before
+// its cooldown ends, and no reserve is cancelled before it stops; where
+// pools fill, every market ends with its reserve.
 func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 	t.Parallel()
 	gpuSpot := func(typ string, market Market) bool {
@@ -1381,21 +1423,25 @@ func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 		s.refuses = func(region, _, typ string, market Market) bool {
 			return gpuSpot(typ, market) && (c.all || region == "us-east-1" || region == "us-east-2")
 		}
-		const window = 30 * time.Minute
-		r := s.run(window, nil)
+		s.tick = simLongTick
+		r := s.run(2*time.Hour, nil)
 		byMarket := map[ReserveMarket][]simPurchase{}
 		for _, p := range r.purchases {
 			byMarket[p.market] = append(byMarket[p.market], p)
 		}
 		for m, purchases := range byMarket {
-			tried, perMinute, largest := map[string]time.Time{}, 0, CatalogType{}
+			tried, tries, largest := map[string]time.Time{}, map[string]int{}, CatalogType{}
 			for i, p := range purchases {
-				perMinute = max(perMinute, len(slices.DeleteFunc(slices.Clone(purchases[i:]), func(q simPurchase) bool { return q.at.Sub(p.at) >= time.Minute })))
+				if i > 0 && !purchases[i-1].launched && p.at.Sub(purchases[i-1].at) < simCooldown {
+					t.Errorf("%s, %s: bought again %s after a refused purchase", c.name, m, p.at.Sub(purchases[i-1].at))
+				}
 				for _, o := range p.tried {
-					if at, ok := tried[o.Key()]; ok && p.at.Sub(at) < simCooldown {
-						t.Errorf("%s, %s: tried %s again %s after it refused", c.name, m, o.Key(), p.at.Sub(at))
+					at, ok := tried[o.Key()]
+					if ok && p.at.Sub(at) < simCooldown || tries[o.Key()] >= 3 && p.at.Sub(at) < cooldownGrowth*simCooldown {
+						t.Errorf("%s, %s: tried %s a %dth time %s after it refused", c.name, m, o.Key(), tries[o.Key()]+1, p.at.Sub(at))
 					}
 					tried[o.Key()] = p.at
+					tries[o.Key()]++
 					if !s.p.LargestShape.Cap.Covers(o.Usable) {
 						t.Errorf("%s, %s: tried %s, larger than the cap", c.name, m, o.Key())
 					}
@@ -1404,11 +1450,7 @@ func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("%s, %s: %d purchases (%.1f a minute, at most %d in one), largest %s",
-				c.name, m, len(purchases), float64(len(purchases))/window.Minutes(), perMinute, largest.Name)
-			if perMinute > 8 {
-				t.Errorf("%s, %s: %d reserve purchases within a minute", c.name, m, perMinute)
-			}
+			t.Logf("%s, %s: %d purchases, largest %s", c.name, m, len(purchases), largest.Name)
 		}
 		if r.cancelled > 0 {
 			t.Errorf("%s: %d reserves cancelled before they stopped", c.name, r.cancelled)
