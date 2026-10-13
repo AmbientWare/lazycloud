@@ -37,11 +37,8 @@ const (
 	// volumesPrefix holds every key the endpoint reaches; a workspace's
 	// grant reaches its disks too.
 	volumesPrefix = "volumes/"
-	// volumeFrame is the part of an object one fetch reads and the cache
-	// keeps as one frame.
-	volumeFrame = 8 << 20
-	// minCachedObject is the smallest object reads take from the cache;
-	// smaller ones are forwarded.
+	volumeFrame   = 8 << 20
+	// minCachedObject is the smallest object reads take from the cache.
 	minCachedObject = 1 << 20
 	// observationLife is how long a HEAD's answer names an object's
 	// version, as GeeseFS's --stat-cache-ttl.
@@ -67,8 +64,7 @@ type volumes struct {
 	// heads makes concurrent reads of one object share one HEAD.
 	heads singleflight.Group
 
-	mu sync.Mutex
-	// buckets holds each granted bucket by name.
+	mu      sync.Mutex
 	buckets map[string]*bucket
 	// filling names the versions being fetched whole.
 	filling map[string]bool
@@ -86,8 +82,6 @@ type bucket struct {
 	cleared time.Time
 }
 
-// volumeGrant is where a bucket's store is and the credential requests to
-// it are signed with.
 type volumeGrant struct {
 	workspace, name string
 	endpoint        *url.URL
@@ -163,14 +157,12 @@ func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) erro
 	return nil
 }
 
-// grantBucket reads the objects g grants, one attempt per call: the cache
-// retries.
+// grantBucket reads g's objects, one attempt per call: the cache retries.
 func grantBucket(client *http.Client, g *imagefsproto.BucketGrant, creds aws.Credentials) imagefs.Bucket {
 	return imagefs.NewBucket(g.GetEndpoint(), g.GetRegion(), g.GetBucket(), g.GetForcePathStyle(), credentials.StaticCredentialsProvider{Value: creds},
 		func(o *s3.Options) { o.HTTPClient, o.RetryMaxAttempts = client, 1 })
 }
 
-// grantCredentials checks a bucket grant and returns its credential.
 func grantCredentials(g *imagefsproto.BucketGrant) (aws.Credentials, error) {
 	if g.GetEndpoint() == "" || g.GetRegion() == "" || g.GetBucket() == "" || g.GetAccessKeyId() == "" || g.GetExpiresAt() == nil {
 		return aws.Credentials{}, status.Error(codes.InvalidArgument, "a bucket grant needs an endpoint, a region, a bucket, a key and an expiry")
@@ -181,8 +173,7 @@ func grantCredentials(g *imagefsproto.BucketGrant) (aws.Credentials, error) {
 	}, nil
 }
 
-// granted returns the bucket's grant while it lasts and the request names
-// its key as its signature's access key.
+// granted returns the bucket's live grant if r signs with its key.
 func (v *volumes) granted(name string, r *http.Request) (volumeGrant, bool) {
 	_, credential, _ := strings.Cut(r.Header.Get("Authorization"), "Credential=")
 	key, _, _ := strings.Cut(credential, "/")
@@ -195,18 +186,17 @@ func (v *volumes) granted(name string, r *http.Request) (volumeGrant, bool) {
 	return b.grant, true
 }
 
-// forwarded is what a forwarded request carries to rewrite and observe.
+// forwarded is what a forwarded request carries to rewrite and observe;
+// key is empty for a bucket's request.
 type forwarded struct {
 	grant volumeGrant
-	// key is the object's, empty for a bucket request.
-	key  string
-	sent time.Time
+	key   string
+	sent  time.Time
 }
 
 type forwardedKey struct{}
 
-// ServeHTTP answers a path-style S3 request for a granted bucket that
-// names its key.
+// ServeHTTP answers a path-style request signed with its bucket's key.
 func (v *volumes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name, path, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/")
 	g, ok := v.granted(name, r)
@@ -286,7 +276,6 @@ func plainGet(h http.Header) bool {
 	return ok
 }
 
-// rewrite points a forwarded request at its bucket's store and signs it.
 func (v *volumes) rewrite(pr *httputil.ProxyRequest) {
 	f := pr.In.Context().Value(forwardedKey{}).(forwarded) //nolint:forcetypeassert // ServeHTTP sets it
 	pr.Out.URL = f.grant.url(f.key, pr.In.URL.RawQuery)
@@ -311,8 +300,7 @@ func s3Escape(key string) string {
 	return b.String()
 }
 
-// url is where key is in the grant's store, its path escaped as the
-// signature's.
+// url is where key is in the grant's store.
 func (g volumeGrant) url(key, query string) *url.URL {
 	u := *g.endpoint
 	raw := strings.TrimSuffix(u.EscapedPath(), "/")
@@ -513,16 +501,15 @@ func s3Error(w http.ResponseWriter, code int, s3Code string) {
 }
 
 // fill fetches the frames of a version the cache lacks, behind reads,
-// until ctx ends, unless another fill of it runs, and reports whether it
-// ran.
-func (v *volumes) fill(ctx context.Context, ver objectVersion) bool {
+// until ctx ends, unless another fill of it runs.
+func (v *volumes) fill(ctx context.Context, ver objectVersion) {
 	name := ver.key(0).object
 	v.mu.Lock()
 	running := v.filling[name]
 	v.filling[name] = true
 	v.mu.Unlock()
 	if running {
-		return false
+		return
 	}
 	defer func() {
 		v.mu.Lock()
@@ -533,7 +520,6 @@ func (v *volumes) fill(ctx context.Context, ver objectVersion) bool {
 	fetched := v.cache.loadEach(ctx, ver.frames())
 	v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
 		"seconds", time.Since(began).Seconds(), "error", ctx.Err())
-	return true
 }
 
 // warm fills the objects of 1 MiB or more under prefixes of the
@@ -559,16 +545,13 @@ func (v *volumes) warm(ctx context.Context, g volumeGrant, prefixes []string) {
 	slices.SortFunc(objects, func(a, b imagefs.StoredObject) int {
 		return cmp.Or(cmp.Compare(a.Size, b.Size), strings.Compare(a.Key, b.Key))
 	})
-	filled := 0
 	for _, o := range objects {
 		if budget -= o.Size; budget < 0 {
 			break
 		}
-		if v.fill(ctx, objectVersion{v: v, workspace: g.workspace, bucket: g.name, name: o.Key, etag: o.ETag, size: o.Size}) {
-			filled++
-		}
+		v.fill(ctx, objectVersion{v: v, workspace: g.workspace, bucket: g.name, name: o.Key, etag: o.ETag, size: o.Size})
 	}
-	v.log.Info("volume warm ended", "bucket", g.name, "objects", filled, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
+	v.log.Info("volume warm ended", "bucket", g.name, "seconds", time.Since(began).Seconds(), "error", ctx.Err())
 }
 
 // objectVersion is one version of a volume object, read by frames of
@@ -615,7 +598,6 @@ func (o objectVersion) fetch(ctx context.Context, frame int) ([]byte, error) {
 	return p, nil
 }
 
-// volumeSources serves VolumeSources on the snapshotter's socket.
 type volumeSources struct {
 	imagefsproto.UnimplementedVolumeSourcesServer
 	volumes *volumes

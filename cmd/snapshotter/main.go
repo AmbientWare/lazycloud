@@ -30,6 +30,11 @@ const (
 	// fill a volume object at the store's full speed.
 	fetches       = 16
 	volumeFetches = 64
+	// minCacheVolume is the smallest instance store that caches volumes:
+	// a cold read through the cache writes every byte it reads, and EC2's
+	// instance stores below a 4xlarge's 600 GB sustain 130-190 MB/s of
+	// writes, slower than reading from S3; a 600 GB one sustains 500.
+	minCacheVolume = 500e9
 	// instanceStore is the model EC2 gives NVMe instance store volumes.
 	instanceStore = "Amazon EC2 NVMe Instance Storage"
 	// fillBytes is the largest layer, uncompressed, fetched whole in the
@@ -99,7 +104,7 @@ func run(args []string) int {
 		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
-	if cachesVolumes(layersource.CacheDir) {
+	if cachesVolumes(layersource.CacheDir, volume) {
 		cfg.Fetches, cfg.VolumeAddr = volumeFetches, "127.0.0.1:0"
 	}
 	transport.MaxIdleConnsPerHost = cfg.Fetches
@@ -116,16 +121,15 @@ func run(args []string) int {
 	return 0
 }
 
-// cachesVolumes reports whether the snapshotter caches platform volumes: on
-// a data volume of instance store, which holds the cache at local NVMe
-// speed, or where LAZYCLOUD_VOLUME_CACHE is true, as on the local stack's
-// hosts.
-func cachesVolumes(dir string) bool {
+// cachesVolumes reports whether the snapshotter caches platform volumes:
+// on an instance store of minCacheVolume, or where LAZYCLOUD_VOLUME_CACHE
+// is true, as on the local stack's hosts.
+func cachesVolumes(dir string, volume unix.Statfs_t) bool {
 	if os.Getenv("LAZYCLOUD_VOLUME_CACHE") == "true" {
 		return true
 	}
 	var st unix.Stat_t
-	if unix.Stat(dir, &st) != nil {
+	if unix.Stat(dir, &st) != nil || float64(volume.Blocks)*float64(volume.Bsize) < minCacheVolume {
 		return false
 	}
 	model, err := os.ReadFile(fmt.Sprintf("/sys/dev/block/%d:%d/device/model", unix.Major(st.Dev), unix.Minor(st.Dev)))

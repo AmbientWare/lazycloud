@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/moby/moby/client"
@@ -57,21 +58,9 @@ func (a *Agent) replaceSnapshotter(ctx context.Context) error {
 	if err := writeFileAtomic(layersource.Binary, release, 0o755); err != nil { //nolint:gosec // An executable.
 		return fmt.Errorf("install the snapshotter: %w", err)
 	}
-	conn, err := a.volumes.systemd(ctx)
-	if err != nil {
-		return err
-	}
-	done := make(chan string, 1)
-	if _, err := conn.RestartUnitContext(ctx, layersource.Unit, "replace", done); err != nil {
-		return fmt.Errorf("restart the snapshotter: %w", err)
-	}
-	select {
-	case result := <-done:
-		if result != "done" {
-			return fmt.Errorf("restart the snapshotter: %s", result)
-		}
-	case <-ctx.Done():
-		return fmt.Errorf("restart the snapshotter: %w", ctx.Err())
+	// The unit is Type=notify, so the restart returns once it serves.
+	if out, err := exec.CommandContext(ctx, "systemctl", "restart", layersource.Unit).CombinedOutput(); err != nil { //nolint:gosec // A fixed unit name.
+		return fmt.Errorf("restart the snapshotter: %w: %s", err, out)
 	}
 	a.log.Info("replaced the snapshotter with the release's")
 	return nil

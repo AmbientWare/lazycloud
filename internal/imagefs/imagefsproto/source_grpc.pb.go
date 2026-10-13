@@ -566,27 +566,21 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // VolumeSources serves workspaces' platform volumes through the frame cache
-// on a host whose data volume is instance store. The snapshotter answers S3
-// requests on a loopback address for keys under volumes/ of the buckets
-// granted to it, addressed path-style and signed with the bucket's key as
-// access key. It signs each request it forwards to the bucket's store with
-// the bucket's grant. A GET with no query string or condition of an object
-// of 1 MiB or more is served from the cache, by the object's version: its
-// ETag, as a HEAD answered at most a second earlier reported it. Every frame
-// of a version is fetched with If-Match on that ETag, so a cached version
-// never mixes bytes of two. Any other request is forwarded unchanged, and a
-// write of an object makes its next read ask the store for its version
-// again.
+// on a host whose data volume is a large instance store. The snapshotter
+// answers path-style S3 requests on loopback for keys under volumes/ of the
+// granted buckets, signed with a bucket's key as access key, and forwards
+// them to the store signed with the bucket's grant. A plain GET of an object
+// of 1 MiB or more is served from the cache by the ETag a HEAD reported at
+// most a second earlier, every frame fetched with If-Match on it; a write of
+// an object makes its next read ask the store again.
 type VolumeSourcesClient interface {
-	// GrantVolumes records the read-write credential of a workspace's bucket
-	// and the key its requests name, replacing the bucket's current grant
-	// unless that expires later with the same key. A request naming no
-	// workspace records nothing. The answer names the endpoint, empty on a
-	// host that does not cache volumes.
+	// GrantVolumes records a workspace bucket's read-write grant and key,
+	// unless the current grant expires later with the same key. A request
+	// naming no workspace records nothing. The answer names the endpoint,
+	// empty on a host that does not cache volumes.
 	GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error)
-	// WarmVolumes fills the objects under prefixes of the workspace's granted
-	// bucket into the cache in the background, behind containers' reads,
-	// within a share of the cache.
+	// WarmVolumes fills the objects under prefixes of the workspace's bucket
+	// in the background, behind reads, within a share of the cache.
 	WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error)
 }
 
@@ -623,27 +617,21 @@ func (c *volumeSourcesClient) WarmVolumes(ctx context.Context, in *WarmVolumesRe
 // for forward compatibility.
 //
 // VolumeSources serves workspaces' platform volumes through the frame cache
-// on a host whose data volume is instance store. The snapshotter answers S3
-// requests on a loopback address for keys under volumes/ of the buckets
-// granted to it, addressed path-style and signed with the bucket's key as
-// access key. It signs each request it forwards to the bucket's store with
-// the bucket's grant. A GET with no query string or condition of an object
-// of 1 MiB or more is served from the cache, by the object's version: its
-// ETag, as a HEAD answered at most a second earlier reported it. Every frame
-// of a version is fetched with If-Match on that ETag, so a cached version
-// never mixes bytes of two. Any other request is forwarded unchanged, and a
-// write of an object makes its next read ask the store for its version
-// again.
+// on a host whose data volume is a large instance store. The snapshotter
+// answers path-style S3 requests on loopback for keys under volumes/ of the
+// granted buckets, signed with a bucket's key as access key, and forwards
+// them to the store signed with the bucket's grant. A plain GET of an object
+// of 1 MiB or more is served from the cache by the ETag a HEAD reported at
+// most a second earlier, every frame fetched with If-Match on it; a write of
+// an object makes its next read ask the store again.
 type VolumeSourcesServer interface {
-	// GrantVolumes records the read-write credential of a workspace's bucket
-	// and the key its requests name, replacing the bucket's current grant
-	// unless that expires later with the same key. A request naming no
-	// workspace records nothing. The answer names the endpoint, empty on a
-	// host that does not cache volumes.
+	// GrantVolumes records a workspace bucket's read-write grant and key,
+	// unless the current grant expires later with the same key. A request
+	// naming no workspace records nothing. The answer names the endpoint,
+	// empty on a host that does not cache volumes.
 	GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error)
-	// WarmVolumes fills the objects under prefixes of the workspace's granted
-	// bucket into the cache in the background, behind containers' reads,
-	// within a share of the cache.
+	// WarmVolumes fills the objects under prefixes of the workspace's bucket
+	// in the background, behind reads, within a share of the cache.
 	WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error)
 	mustEmbedUnimplementedVolumeSourcesServer()
 }

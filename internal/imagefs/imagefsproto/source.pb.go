@@ -1189,7 +1189,7 @@ func (x *GrantVolumesRequest) GetKey() string {
 
 type GrantVolumesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The endpoint's host:port.
+	// host:port
 	Endpoint      string `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
