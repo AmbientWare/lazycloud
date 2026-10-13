@@ -25,3 +25,9 @@ select region, availability_zone_id, instance_type, hourly_micros, effective_at,
 from spot_prices
 where observed_at > now() - make_interval(secs => @max_age_seconds::float8)
 order by region, availability_zone_id, instance_type;
+
+-- name: SpotPricesStale :one
+-- Whether Spot prices were refreshed once but none is fresh now, as after
+-- the scheduler was down longer than max_age_seconds.
+select (exists (select 1 from spot_prices)
+        and not exists (select 1 from spot_prices where observed_at > now() - make_interval(secs => @max_age_seconds::float8)))::bool;

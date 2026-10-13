@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -71,8 +72,20 @@ type PlanResult struct {
 // launcher, the reserve actuator and host sessions carry out, the container
 // waits and the published plan. EC2 calls run outside it.
 func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
+	// After the scheduler was down past their age, Spot prices are refreshed
+	// before the pass prices a purchase from them, at most once a refresh
+	// interval while EC2 fails to answer.
+	stale, err := c.queries.SpotPricesStale(ctx, spotPriceFresh.Seconds())
+	if err != nil {
+		return PlanResult{}, fmt.Errorf("read spot price freshness: %w", err)
+	}
+	if last := c.staleRefresh.Load(); stale && time.Since(time.Unix(0, last)) >= SpotPriceInterval && c.staleRefresh.CompareAndSwap(last, time.Now().UnixNano()) {
+		if _, _, failed, err := c.refreshPrices(ctx, logger); err != nil || failed != nil {
+			logger.WarnContext(ctx, "spot prices stale for planning", "error", errors.Join(err, failed))
+		}
+	}
 	var pass *fleetPass
-	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		pass = nil
 		q := c.queries.WithTx(tx)
 		lock, err := q.LockFleet(ctx)
@@ -418,6 +431,8 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			ps.w.handBacks = append(ps.w.handBacks, uuid.UUID(*a.Host))
 		case ActionLend:
 			ps.w.lends = append(ps.w.lends, uuid.UUID(*a.Host))
+		case ActionCancel:
+			ps.w.retires = append(ps.w.retires, uuid.UUID(*a.Host))
 		case ActionRetireReserve:
 			switch Phase(ps.rows[*a.Host].Phase) {
 			case PhaseStopped, PhaseRequested:
@@ -452,7 +467,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 		h.ReserveMode, h.HoldsDisks = a.Mode, ptr(o.Type.DiskSlots())
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
-	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionHandBack, ActionLend:
+	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionHandBack, ActionLend:
 	}
 	return h
 }

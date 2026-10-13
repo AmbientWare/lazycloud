@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -53,28 +54,63 @@ type SpotQuote struct {
 
 // RefreshSpotPrices reads the current Spot price of every catalog type in
 // every zone of the platform's networks and stores the latest per zone and
-// type, one region per statement, then each priced pool's placement score.
-// A region whose read fails keeps its last prices or scores. It reports how
-// many prices it stored.
+// type, every region in one transaction, so planning never prices from
+// some regions' fresh quotes beside others' stale ones; then each priced
+// pool's placement score. A region whose read fails keeps its last prices
+// or scores. It reports how many prices it stored.
 func (c *Compute) RefreshSpotPrices(ctx context.Context, logger *slog.Logger) (int, error) {
-	stored := 0
-	var failed error
-	for _, region := range slices.Sorted(maps.Keys(c.fleet.Networks)) {
-		types := spotTypes(region)
-		zones := map[string]bool{}
-		for _, s := range c.fleet.Networks[region].Subnets {
-			if s.ZoneID != "" {
-				zones[s.ZoneID] = true
-			}
-		}
-		if len(types) == 0 || len(zones) == 0 {
-			continue
-		}
-		client := c.aws().ec2(awsScope{key: string(KindPlatform)}, region)
-		prices, err := spotQuotes(ctx, client, slices.Sorted(maps.Keys(zones)), types, time.Now())
+	stored, regions, failed, err := c.refreshPrices(ctx, logger)
+	if err != nil {
+		return stored, err
+	}
+	for _, r := range regions {
+		scores, err := placementScores(ctx, r.client, r.name, r.zones, r.types)
 		if err != nil {
 			if ctx.Err() != nil {
 				return stored, err
+			}
+			logger.WarnContext(ctx, "spot placement scores incomplete", "region", r.name, "error", err)
+			failed = errors.Join(failed, fmt.Errorf("%s placement scores: %w", r.name, err))
+		}
+		if len(scores.Scores) > 0 {
+			if err := c.queries.ScoreSpotPools(ctx, scores); err != nil {
+				return stored, fmt.Errorf("store spot placement scores: %w", err)
+			}
+		}
+	}
+	return stored, failed
+}
+
+// priceRegion is a region whose Spot prices a refresh read.
+type priceRegion struct {
+	name   string
+	client *ec2.Client
+	zones  map[string]bool
+	types  []string
+}
+
+// refreshPrices reads every region's Spot prices, then stores them in one
+// transaction. It returns the regions it read and the reads that failed
+// apart from err, which stopped it.
+func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, []priceRegion, error, error) {
+	var regions []priceRegion
+	var updates []UpsertSpotPricesParams
+	var failed error
+	for _, region := range slices.Sorted(maps.Keys(c.fleet.Networks)) {
+		r := priceRegion{name: region, types: spotTypes(region), zones: map[string]bool{}}
+		for _, s := range c.fleet.Networks[region].Subnets {
+			if s.ZoneID != "" {
+				r.zones[s.ZoneID] = true
+			}
+		}
+		if len(r.types) == 0 || len(r.zones) == 0 {
+			continue
+		}
+		r.client = c.aws().ec2(awsScope{key: string(KindPlatform)}, region)
+		prices, err := spotQuotes(ctx, r.client, slices.Sorted(maps.Keys(r.zones)), r.types, time.Now())
+		if err != nil {
+			if ctx.Err() != nil {
+				return 0, nil, nil, err
 			}
 			logger.WarnContext(ctx, "spot prices unavailable", "region", region, "error", err)
 			failed = errors.Join(failed, fmt.Errorf("%s: %w", region, err))
@@ -87,25 +123,23 @@ func (c *Compute) RefreshSpotPrices(ctx context.Context, logger *slog.Logger) (i
 			params.HourlyMicros = append(params.HourlyMicros, p.HourlyMicros)
 			params.EffectiveAt = append(params.EffectiveAt, p.EffectiveAt)
 		}
-		if err := c.queries.UpsertSpotPrices(ctx, params); err != nil {
-			return stored, fmt.Errorf("store spot prices: %w", err)
-		}
-		stored += len(prices)
-		scores, err := placementScores(ctx, client, region, zones, types)
-		if err != nil {
-			if ctx.Err() != nil {
-				return stored, err
-			}
-			logger.WarnContext(ctx, "spot placement scores incomplete", "region", region, "error", err)
-			failed = errors.Join(failed, fmt.Errorf("%s placement scores: %w", region, err))
-		}
-		if len(scores.Scores) > 0 {
-			if err := c.queries.ScoreSpotPools(ctx, scores); err != nil {
-				return stored, fmt.Errorf("store spot placement scores: %w", err)
-			}
-		}
+		regions, updates = append(regions, r), append(updates, params)
 	}
-	return stored, failed
+	stored := 0
+	err := inTx(ctx, c, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		for _, params := range updates {
+			if err := q.UpsertSpotPrices(ctx, params); err != nil {
+				return fmt.Errorf("store spot prices: %w", err)
+			}
+			stored += len(params.ZoneIds)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return stored, regions, failed, nil
 }
 
 // placementShape names the shape a type's pools are scored as: its vCPUs

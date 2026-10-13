@@ -134,6 +134,8 @@ type simContainer struct {
 	// retry is set on work an eviction returned to pending, and packed on
 	// CPU work placed on a GPU host.
 	retry, packed bool
+	// abandon, when set, is how long it waits before its demand ends.
+	abandon time.Duration
 }
 
 type simArrival struct {
@@ -145,6 +147,9 @@ type simArrival struct {
 	// its market for the policy's BuildWindow.
 	build bool
 	fn    string
+	// abandon, when set, is how long its containers wait before their
+	// demand ends unplaced.
+	abandon time.Duration
 }
 
 type simResult struct {
@@ -356,7 +361,7 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 		for _, a := range arrivals {
 			if at := s.start.Add(a.at); !at.Before(s.now) && at.Before(s.now.Add(s.tick)) {
 				for range a.count {
-					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs, build: a.build, fn: a.fn})
+					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs, build: a.build, fn: a.fn, abandon: a.abandon})
 				}
 			}
 		}
@@ -369,6 +374,7 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				s.outage = at.Add(simOutage)
 			}
 		}
+		s.pending = slices.DeleteFunc(s.pending, func(c *simContainer) bool { return c.abandon > 0 && s.now.Sub(c.arrived) >= c.abandon })
 		s.place()
 		if s.now.Before(s.outage) {
 			s.account()
@@ -863,7 +869,7 @@ func (s *sim) launchPass() {
 			continue
 		}
 		for tried := 1; ; tried++ {
-			done, moved := s.tryPool(h)
+			done, moved := s.tryPool(h, tried == 1)
 			if done || !moved || tried == passPools {
 				break
 			}
@@ -876,24 +882,34 @@ func (s *sim) launchPass() {
 // class, or when refuses names its pool, cooling the pool's zone. A
 // refused launch moves to the pool fallbackPool picks; without one the
 // host fails. It reports whether the walk ended and whether it moved.
-func (s *sim) tryPool(h *simHost) (bool, bool) {
+func (s *sim) tryPool(h *simHost, first bool) (bool, bool) {
 	w, o := h.walk, h.offer
-	w.purchase.tried = append(w.purchase.tried, o)
-	cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
-	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
-		cool.Quota = s.knowQuota
-	} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
-		cool.ZoneID = o.ZoneID
-	} else {
-		s.launched(h)
-		return true, false
+	all := func(string, bool) bool { return true }
+	// A GPU walk claimed in a pool the size rule no longer keeps moves on
+	// uncooled, as launchPools does.
+	stored := !first || o.Type.GPU == "" || w.row.Replaces != nil
+	if !stored {
+		_, keeps := walkPools(s.p, w.row, w.waiters, s.offers(), all)
+		stored = keeps(FleetOffer{Type: o.Type, Market: o.Market, Usable: o.Usable})
 	}
-	s.r.refusals++
-	s.r.refused = append(s.r.refused, s.now)
-	s.walkCool(h, cool)
+	if stored {
+		w.purchase.tried = append(w.purchase.tried, o)
+		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
+		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
+			cool.Quota = s.knowQuota
+		} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
+			cool.ZoneID = o.ZoneID
+		} else {
+			s.launched(h)
+			return true, false
+		}
+		s.r.refusals++
+		s.r.refused = append(s.r.refused, s.now)
+		s.walkCool(h, cool)
+	}
 	next, ok := FleetOffer{}, false
 	if w.row.Replaces == nil {
-		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), func(string, bool) bool { return true })
+		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), all)
 	}
 	if !ok {
 		if w.row.Replaces != nil {
@@ -961,7 +977,7 @@ func (s *sim) record(w *simWalk) {
 		s.r.purchases = append(s.r.purchases, *w.purchase)
 	case ActionBuy:
 		s.r.bought = append(s.r.bought, *w.purchase)
-	case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
+	case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionRightsize, ActionHandBack, ActionLend:
 	}
 }
 
@@ -1097,6 +1113,10 @@ func (s *sim) apply(plan FleetPlan) {
 			s.host(*a.Host).State, s.host(*a.Host).HandsBack = FleetDraining, false
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
+		case ActionCancel:
+			s.record(s.host(*a.Host).walk)
+			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
+			s.unwait(*a.Host)
 		case ActionRetireReserve:
 			if h := s.host(*a.Host); h.walk != nil {
 				s.record(h.walk)
@@ -1273,7 +1293,7 @@ func TestFleetSpendAtZeroLoadIsTheFloorsCost(t *testing.T) {
 			want += a.Offer.HourlyMicros
 		case ActionBuyReserve:
 			want += a.Offer.StoppedMicros
-		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
+		case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionRightsize, ActionHandBack, ActionLend:
 			t.Fatalf("an empty fleet's first pass %s", a.Kind)
 		}
 	}

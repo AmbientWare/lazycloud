@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Scenarios of GPU Spot capacity: pools that refuse, Spot requests slow to
@@ -174,5 +176,50 @@ func TestAResumedReserveIsAwaitedNotBoughtAgain(t *testing.T) {
 	bought := slices.ContainsFunc(r.bought, func(p simPurchase) bool { return p.containers > 0 })
 	if r.starts[startResumed] != 1 || bought || len(r.violations) > 0 {
 		t.Errorf("starts %v, bought for the job %t, violations %v; want one resume and no purchase", r.starts, bought, r.violations)
+	}
+}
+
+// A walk an older release left in a pool the size rule no longer keeps,
+// a g6.16xlarge for the L4 job, never tries that pool: it launches in a
+// g6.xlarge.
+func TestAWalkLeftInALargerPoolLandsOnTheSmallest(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	s.p.GPU = nil
+	need := l4Job
+	need.GPUs = []string{"L4"}
+	i := slices.IndexFunc(RankOffers(s.p, need, false, s.offers()), func(o FleetOffer) bool { return o.Type.Name == "g6.16xlarge" })
+	large := RankOffers(s.p, need, false, s.offers())[i]
+	job := &simContainer{id: uuid.New(), need: l4Job, arrived: s.now, runs: 5 * time.Minute, fn: "gpu"}
+	job.host = ptr(s.purchase(FleetAction{Kind: ActionBuy, Market: ReserveMarket{Preemptible: true, GPU: "L4"}, Offer: &large,
+		Holds: reservedShape(l4Job), Containers: []uuid.UUID{job.id}}, []HostWaitersRow{{Preemptible: true}}))
+	s.pending = append(s.pending, job)
+	r := s.run(10*time.Minute, nil)
+	i = slices.IndexFunc(r.bought, func(p simPurchase) bool { return p.containers > 0 })
+	if i < 0 || !r.bought[i].launched || slices.ContainsFunc(r.bought[i].tried, func(o FleetOffer) bool { return o.Type.Name != "g6.xlarge" }) {
+		t.Fatalf("the job's purchase %+v, want it launched on a g6.xlarge", r.bought)
+	}
+	if len(r.fnWaits["gpu"]) != 1 {
+		t.Fatalf("placed %d of 1", len(r.fnWaits["gpu"]))
+	}
+}
+
+// A walk whose work stopped waiting goes no further: with every L4 Spot
+// pool refusing, the L4 job's demand ends 30 s in and its purchase tries
+// no pool after the next launch pass.
+func TestAWalkWhoseDemandEndedStops(t *testing.T) {
+	t.Parallel()
+	s := newChurnSim(t)
+	s.p.GPU = nil
+	s.refuses = func(_, _, typ string, market Market) bool { return gpuSpot(typ, market) }
+	r := s.run(10*time.Minute, []simArrival{{at: time.Minute, need: l4Job, count: 1, runs: 5 * time.Minute, fn: "gpu", abandon: 30 * time.Second}})
+	ended := offerNow.Add(time.Minute + 30*time.Second)
+	for _, at := range r.refused {
+		if at.After(ended.Add(launchTick)) {
+			t.Fatalf("refused at %s, after the job's demand ended at %s", at.Format(time.TimeOnly), ended.Format(time.TimeOnly))
+		}
+	}
+	if len(r.refused) == 0 {
+		t.Fatal("the job bought nothing")
 	}
 }
