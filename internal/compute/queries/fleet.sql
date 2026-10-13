@@ -15,17 +15,18 @@ where h.id in (
 )
 returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
           h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes;
+          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks;
 
 -- name: MoveLaunchPool :execrows
 -- Moves a requested host whose pool EC2 refused to the next pool at that
--- pool's cost and capacity, and renews the launcher's lease. Every pool it
--- moves to holds what it was bought to hold. A host another launcher moved
--- on since it was claimed stays where that one put it.
+-- pool's cost and capacity, with its attempts counted afresh there, and
+-- renews the launcher's lease for lease_seconds, which 0 releases. Every
+-- pool it moves to holds what it was bought to hold. A host another
+-- launcher moved on since it was claimed stays where that one put it.
 update hosts
 set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
     availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros,
-    cpu_millis = @cpu_millis, memory_bytes = @memory_bytes, launch_pools = launch_pools + 1,
+    cpu_millis = @cpu_millis, memory_bytes = @memory_bytes, launch_pools = launch_pools + 1, launch_attempts = 0,
     launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), updated_at = now()
 where id = @id and phase = 'requested' and launch_pools = @launch_pools;
 
@@ -69,26 +70,25 @@ where id = @id and phase = @from_phase;
 update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id;
 
 -- name: InsertCooldown :exec
--- Cools an offer in one zone, or in its whole region for the zone ''. An
--- offer refused again within max_seconds of the end of its last cooldown
--- cools twice as long as that one did, up to max_seconds.
-with p as (select @seconds::float8 as seconds, @max_seconds::float8 as max_seconds)
-insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, reason)
-select @connection_key, @region, @availability_zone_id, @instance_type, @market, now() + make_interval(secs => p.seconds), @reason
-from p
+-- Cools an offer in one zone, or in its whole region for the zone '', for
+-- seconds. Refused again while it cools, it cools at least that long from
+-- now; refused after its cooldown ended, twice as long as that cooldown
+-- lasted, up to max_seconds.
+insert into capacity_cooldowns (connection_key, region, availability_zone_id, instance_type, market, until, cooled_for, reason)
+values (@connection_key, @region, @availability_zone_id, @instance_type, @market,
+        now() + make_interval(secs => @seconds::float8), make_interval(secs => @seconds::float8), @reason)
 on conflict (connection_key, region, availability_zone_id, instance_type, market)
 do update set
-    refusals = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
-                    then capacity_cooldowns.refusals + 1 else 1 end,
-    until = case when capacity_cooldowns.until > now() - make_interval(secs => (select max_seconds from p))
-                 then now() + make_interval(secs => (select least(seconds * 2 ^ capacity_cooldowns.refusals, max_seconds) from p))
-                 else excluded.until end,
+    cooled_for = case when capacity_cooldowns.until > now() then capacity_cooldowns.cooled_for
+                      else least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
+    until = case when capacity_cooldowns.until > now() then greatest(capacity_cooldowns.until, excluded.until)
+                 else now() + least(greatest(capacity_cooldowns.cooled_for * 2, excluded.cooled_for), make_interval(secs => @max_seconds::float8)) end,
     reason = excluded.reason;
 
 -- name: ClearCooldown :exec
--- A launch in a zone ends the run of refusals of its pool.
+-- A launch in a zone ends the refusals of its pool there and in its region.
 delete from capacity_cooldowns
-where connection_key = @connection_key and region = @region and availability_zone_id = @availability_zone_id
+where connection_key = @connection_key and region = @region and availability_zone_id in (@availability_zone_id, '')
   and instance_type = @instance_type and market = @market;
 
 -- name: DrainConnectionHosts :many

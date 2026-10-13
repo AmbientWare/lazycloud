@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,7 +21,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -32,6 +32,11 @@ const (
 	launchLease = 2 * time.Minute
 	// maxLaunchAttempts bounds launches that keep failing without an answer.
 	maxLaunchAttempts = 5
+	// passPools bounds the pools one host tries in a launch pass. EC2
+	// answers a refusal in about a second, so a pass ends well within
+	// PreemptLead and the actuator, retirement and preemption after it; a
+	// host with pools left stays requested and its walk goes on next pass.
+	passPools = 8
 	// cooldownGrowth bounds how long consecutive refusals cool a pool: each
 	// doubles its cooldown, up to this many times CapacityCooldown.
 	cooldownGrowth = 4
@@ -68,7 +73,8 @@ type launchTarget struct {
 // so a retry after a lost answer returns the same instance. A refusal for
 // capacity, quota or price cools the refused pool and moves the host to the
 // next pool that still holds what it was bought for, until one launches
-// or every such pool is cooling and the host fails.
+// or every such pool is cooling and the host fails. A rightsize tries only
+// its pool.
 func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) {
 	if c.config.ServedRelease != "" {
 		release, err := c.TargetRelease(ctx)
@@ -87,29 +93,25 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 	}
 	// Each claimed host launches on its own, so one host's walk through
 	// refused pools holds up no other.
-	pools := &poolInputs{by: map[string]*OfferInputs{}, trying: map[uuid.UUID]tryingPool{}}
-	started := make([]bool, len(claimed))
-	var group errgroup.Group
-	for i, h := range claimed {
-		group.Go(func() error {
-			var err error
-			if started[i], err = c.launch(ctx, logger, h, pools); err != nil && ctx.Err() == nil {
+	pools := &poolInputs{by: map[string]*OfferInputs{}}
+	var launched atomic.Int64
+	var wg sync.WaitGroup
+	for _, h := range claimed {
+		wg.Go(func() {
+			started, err := c.launch(ctx, logger, h, pools)
+			if err != nil && ctx.Err() == nil {
 				logger.ErrorContext(ctx, "launch host", "host_id", h.ID, "error", err)
 			}
-			return nil
+			if started {
+				launched.Add(1)
+			}
 		})
 	}
-	_ = group.Wait() // Each launch logs its own failure.
-	launched := 0
-	for _, ok := range started {
-		if ok {
-			launched++
-		}
-	}
+	wg.Wait()
 	if err := ctx.Err(); err != nil {
-		return launched, fmt.Errorf("launch pass: %w", err)
+		return int(launched.Load()), fmt.Errorf("launch pass: %w", err)
 	}
-	return launched, nil
+	return int(launched.Load()), nil
 }
 
 // launch launches h in the trace of the container it was bought for,
@@ -124,31 +126,41 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 }
 
 // launchPools launches h in its pool, then in each next pool that holds
-// what h was claimed to hold while EC2 refuses the last for capacity, quota
-// or price. Each refused pool cools before the next is picked, so the walk
-// ends.
+// what h was bought to hold while EC2 refuses the last for capacity, quota
+// or price, up to passPools pools this pass. Each refused pool cools before
+// the next is picked, so the walk ends.
 func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow, pools *poolInputs) (bool, error) {
-	bought := h
-	defer pools.done(h)
-	for {
+	for tried := 1; ; tried++ {
 		started, refusal, err := c.launchHost(ctx, logger, h)
 		if refusal == nil {
 			return started, err
 		}
 		cool := refusal.cooldown()
-		next, ok, err := c.nextPool(ctx, bought, h, pools, cool)
+		if h.Replaces != nil {
+			// A rightsize is optional: its refusal keeps the host it would
+			// replace.
+			return false, c.failLaunch(ctx, h, refusal.message(), &cool)
+		}
+		next, ok, err := c.nextPool(ctx, h, pools, cool)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
 			return false, c.failLaunch(ctx, h, refusal.message(), &cool)
 		}
-		moved, err := c.movePool(ctx, h, next, refusal.message(), cool)
+		lease := launchLease
+		if tried == passPools {
+			lease = 0
+		}
+		moved, err := c.movePool(ctx, h, next, refusal.message(), cool, lease)
 		if err != nil || !moved {
 			return false, err
 		}
 		logger.InfoContext(ctx, "launch moved to the next pool", "host_id", h.ID,
 			"refused", h.Region+"/"+refusal.zoneID+"/"+h.InstanceType, "next", next.Key(), "reason", refusal.message())
+		if lease == 0 {
+			return false, nil
+		}
 		pools.moved(h, next)
 		h.Region, h.AvailabilityZone, h.InstanceType = next.Region, next.Zone, next.Type.Name
 		h.LaunchPools++
@@ -183,18 +195,10 @@ type poolCooldown struct {
 
 // poolInputs are one launch pass's offer inputs by owner, read at the
 // owner's first refusal and kept current with each refusal and move after
-// it, and the pool each walking host tries, which no other launch of the
-// pass moves to meanwhile. The pass's launches share them under mu.
+// it. The pass's launches share them under mu.
 type poolInputs struct {
-	mu     sync.Mutex
-	by     map[string]*OfferInputs
-	trying map[uuid.UUID]tryingPool
-}
-
-// tryingPool is a pool a host of owner tries.
-type tryingPool struct {
-	owner string
-	pool  OfferCooldown
+	mu sync.Mutex
+	by map[string]*OfferInputs
 }
 
 // ownerKey names the owner of h's cooldowns: the platform or a connection.
@@ -228,13 +232,11 @@ func (p *poolInputs) read(ctx context.Context, c *Compute, h ClaimLaunchesRow) e
 
 // next records the refusal of h's pool in its owner's inputs as coolPool
 // records it in the database, frees the vCPUs h counted against the pool's
-// quota, and picks the pool h tries next as fallbackPool picks it for
-// bought, the row h was claimed as, past the pools other hosts try.
-func (p *poolInputs) next(c *Compute, bought, h ClaimLaunchesRow, waiters []HostWaitersRow, cool poolCooldown) (FleetOffer, bool) {
-	owner := ownerKey(h)
+// quota, and picks the pool h tries next as fallbackPool picks it.
+func (p *poolInputs) next(c *Compute, h ClaimLaunchesRow, waiters []HostWaitersRow, cool poolCooldown) (FleetOffer, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	in := p.by[owner]
+	in := p.by[ownerKey(h)]
 	market := Market(*h.Market)
 	in.Cooldowns = append(in.Cooldowns, OfferCooldown{
 		Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market,
@@ -244,31 +246,10 @@ func (p *poolInputs) next(c *Compute, bought, h ClaimLaunchesRow, waiters []Host
 		class, _ := QuotaClassOf(t.Name)
 		in.QuotaUsed[QuotaKey{Region: h.Region, Class: class, Market: market}] -= t.VCPUs()
 	}
-	delete(p.trying, h.ID)
-	view := *in
-	view.Cooldowns = slices.Clip(in.Cooldowns)
-	for _, t := range p.trying {
-		if t.owner == owner {
-			view.Cooldowns = append(view.Cooldowns, t.pool)
-		}
-	}
-	next, ok := fallbackPool(c.policy(), bought, waiters, view, func(region string, gpu bool) bool {
+	return fallbackPool(c.policy(), h, waiters, *in, func(region string, gpu bool) bool {
 		_, imaged := c.nodeImage(region, gpu)
 		return imaged
 	})
-	if ok {
-		p.trying[h.ID] = tryingPool{owner: owner, pool: OfferCooldown{
-			Region: next.Region, ZoneID: next.ZoneID, InstanceType: next.Type.Name, Market: next.Market, Until: in.Now.Add(c.fleet.CapacityCooldown),
-		}}
-	}
-	return next, ok
-}
-
-// done ends h's walk: other hosts may move to the pool it tried.
-func (p *poolInputs) done(h ClaimLaunchesRow) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.trying, h.ID)
 }
 
 // moved counts h, moved to next, against next's quota.
@@ -342,7 +323,7 @@ func (c *Compute) poolInputs(ctx context.Context, h ClaimLaunchesRow, owner stri
 
 // nextPool cools h's refused pool and returns the pool its launch moves
 // to, as poolInputs.next picks it.
-func (c *Compute) nextPool(ctx context.Context, bought, h ClaimLaunchesRow, pools *poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
+func (c *Compute) nextPool(ctx context.Context, h ClaimLaunchesRow, pools *poolInputs, cool poolCooldown) (FleetOffer, bool, error) {
 	if h.Market == nil {
 		return FleetOffer{}, false, nil
 	}
@@ -353,7 +334,7 @@ func (c *Compute) nextPool(ctx context.Context, bought, h ClaimLaunchesRow, pool
 	if err != nil {
 		return FleetOffer{}, false, fmt.Errorf("read the containers waiting for the host: %w", err)
 	}
-	next, ok := pools.next(c, bought, h, waiters, cool)
+	next, ok := pools.next(c, h, waiters, cool)
 	return next, ok, nil
 }
 
@@ -364,12 +345,8 @@ func (c *Compute) nextPool(ctx context.Context, bought, h ClaimLaunchesRow, pool
 // the containers waiting for it ask for. Their volume reads, or a
 // reserve's market's, weigh in its cost.
 // Pools are priced as the planner buys: a reserve by what it costs to keep
-// stopped, any other host by what it costs to serve. A rightsize has none:
-// it is an optional move, so its refusal keeps the host it would replace.
+// stopped, any other host by what it costs to serve.
 func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) (FleetOffer, bool) {
-	if h.Replaces != nil {
-		return FleetOffer{}, false
-	}
 	market := Market(*h.Market)
 	need := Requirement{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUCount: int(h.GpuCount), Preemptible: market == MarketSpot}
 	if h.HoldsCpuMillis != nil && h.HoldsMemoryBytes != nil {
@@ -378,8 +355,8 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 	if h.GpuType != "" {
 		need.GPUs = []string{h.GpuType}
 	}
-	if t, ok := CatalogTypeNamed(h.InstanceType); ok && h.ReserveMode != nil {
-		need.Disks = t.DiskSlots()
+	if h.HoldsDisks != nil {
+		need.Disks = int(*h.HoldsDisks)
 	}
 	// A reserve serves its market's next start, which reads what its recent
 	// work read.
@@ -410,9 +387,9 @@ func fallbackPool(p Policy, h ClaimLaunchesRow, waiters []HostWaitersRow, in Off
 }
 
 // movePool cools h's refused pool and moves h to next in one transaction,
-// renewing its lease. It reports false when h stopped being requested or
-// another launcher moved it on.
-func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOffer, message string, cool poolCooldown) (bool, error) {
+// leasing it for lease, which 0 releases to the next pass. It reports false
+// when h stopped being requested or another launcher moved it on.
+func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOffer, message string, cool poolCooldown, lease time.Duration) (bool, error) {
 	moved := false
 	err := inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -423,7 +400,7 @@ func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOf
 			ID: h.ID, LaunchPools: h.LaunchPools, InstanceType: next.Type.Name, Region: next.Region,
 			AvailabilityZone: next.Zone, AvailabilityZoneID: next.ZoneID, HourlyMicros: &next.HourlyMicros,
 			CpuMillis: next.Usable.CPUMillis, MemoryBytes: next.Usable.MemoryBytes,
-			LeaseSeconds: launchLease.Seconds(),
+			LeaseSeconds: lease.Seconds(),
 		})
 		if err != nil {
 			return fmt.Errorf("move launch pool: %w", err)

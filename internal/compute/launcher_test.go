@@ -132,23 +132,44 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 	}
 }
 
-// A host every pool refuses tries each pool that holds what it was bought
-// for once, cooling each, and fails; the next pass buys no replacement
-// while they cool.
+// launchAll runs launch passes until no host waits for one.
+func launchAll(t *testing.T, o owners) {
+	t.Helper()
+	for range 20 {
+		if scan[int64](t, o.pool, "select count(*) from hosts where phase = 'requested'") == 0 {
+			return
+		}
+		launch(t, o)
+	}
+	t.Fatal("hosts still requested after 20 launch passes")
+}
+
+// refuseCapacity refuses every launch for capacity.
+func refuseCapacity(awsCall) awsReply {
+	return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
+}
+
+// A host every pool refuses stays requested while it walks its pools a few
+// a pass, so no pass buys it a replacement; once it has tried each pool
+// that holds what it was bought for, cooling each, it fails, and the next
+// pass buys none while they cool.
 func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
-	emulator.on("RunInstances", func(call awsCall) awsReply {
-		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity",
-			"We currently do not have sufficient "+call.Form.Get("InstanceType")+" capacity in the Availability Zone you requested.")
-	})
+	emulator.on("RunInstances", refuseCapacity)
 	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	refused := requestedHost(t, o, dev, `{}`)
+	refused := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 	offer := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type || '/' || market from hosts where id = $1", uuid.UUID(refused))
 
 	if n := launch(t, o); n != 0 {
 		t.Fatalf("launched %d with no capacity", n)
 	}
+	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseRequested) {
+		t.Fatalf("host is %s after one pass, want its walk to go on", phase)
+	}
+	if result := planCapacity(t, o); result.Requested != 0 {
+		t.Fatalf("pass during the walk %+v, want no replacement", result)
+	}
+	launchAll(t, o)
 	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseFailed) {
 		t.Fatalf("refused host is %s, want failed", phase)
 	}
@@ -161,14 +182,29 @@ func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	}
 }
 
+// Refusals of a pool while it cools keep its cooldown: two hosts refused in
+// one pass leave each pool they tried cooling ten minutes.
+func TestRefusalsWhileAPoolCoolsDoNotLengthenIt(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	for range 2 {
+		run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
+			int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes)
+	}
+	launch(t, o)
+	if longest := scan[float64](t, o.pool, "select max(extract(epoch from until - now()))::float8 from capacity_cooldowns"); longest > 600 {
+		t.Fatalf("a pool cools %.0fs after refusals in one pass, want ten minutes", longest)
+	}
+}
+
 // A pool EC2 refuses again on the retry after its cooldown ends cools twice
 // as long, and a launch there ends the run.
 func TestARepeatedRefusalCoolsThePoolLongerUntilALaunchThere(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
-	refuse := func(awsCall) awsReply {
-		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
-	}
-	emulator.on("RunInstances", refuse)
+	emulator.on("RunInstances", refuseCapacity)
 	alice := newUser(t, o.pool, "alice@example.com")
 	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 	pool := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type from hosts where id = $1", uuid.UUID(host))
@@ -182,9 +218,9 @@ where region || '/' || availability_zone_id || '/' || instance_type = $1`, pool)
 		if result := planCapacity(t, o); result.Requested != 1 {
 			t.Fatalf("pass after the cooldowns %+v, want a host", result)
 		}
-		launch(t, o)
+		launchAll(t, o)
 	}
-	launch(t, o)
+	launchAll(t, o)
 	if first := cooling(); first < 590 || first > 600 {
 		t.Fatalf("first refusal cools %.0fs, want ten minutes", first)
 	}

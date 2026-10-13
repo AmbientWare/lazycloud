@@ -1,4 +1,7 @@
--- How many times in a row a pool was refused: each refusal on a retry soon
--- after its last cooldown ended cools the pool longer. A launch there
--- deletes the row.
-alter table capacity_cooldowns add column refusals smallint not null default 1;
+-- How long the pool's last cooldown lasted: a refusal after it ended cools
+-- the pool twice as long. A launch there deletes the row.
+alter table capacity_cooldowns add column cooled_for interval not null default interval '0';
+
+-- The disk slots a reserve was bought with, which every pool its launch
+-- moves to must offer.
+alter table hosts add column holds_disks smallint;
