@@ -352,7 +352,6 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			}
 		})
 	}
-	c.a.volumes.warm(spec)
 	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull")
 	pulled, err := c.a.images.ensure(pullCtx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))

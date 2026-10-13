@@ -279,33 +279,6 @@ func (v *volumes) endpointKey(workspace string) (string, error) {
 	return key, writeCredentials(v.endpointCreds(workspace), processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key})
 }
 
-// warm has the snapshotter fill the platform volumes a start mounts on a
-// host that caches volumes, once their workspace's grant is here, behind
-// the layer prefetch and while the start pulls its image.
-func (v *volumes) warm(spec *hostproto.StartContainer) {
-	if v.endpoint == "" {
-		return
-	}
-	prefixes := map[string][]string{}
-	for _, m := range spec.GetVolumes() {
-		if p := m.GetVolume(); p != nil {
-			prefixes[p.GetWorkspaceId()] = append(prefixes[p.GetWorkspaceId()], p.GetPrefix())
-		}
-	}
-	for workspace, list := range prefixes {
-		v.a.goOwned(func(ctx context.Context) {
-			if err := v.waitGrant(ctx, workspace); err != nil {
-				return
-			}
-			ctx, cancel := context.WithTimeout(ctx, grantTimeout)
-			defer cancel()
-			if _, err := v.sources.WarmVolumes(ctx, &imagefsproto.WarmVolumesRequest{WorkspaceId: workspace, Prefixes: list}); err != nil {
-				v.a.log.Warn("warming volumes failed", "workspace_id", workspace, "error", err)
-			}
-		})
-	}
-}
-
 // bucketLocation is where a workspace's bucket is, kept beside its
 // credentials so a restarted agent can remount.
 type bucketLocation struct {
@@ -541,6 +514,10 @@ func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount
 		pathStyle: loc.PathStyle,
 	}
 	if v.endpoint != "" {
+		// The snapshotter may have restarted since it last held the grant.
+		if err := v.grantCache(ctx, workspace); err != nil {
+			return mountSpec{}, nil, err
+		}
 		spec.creds, spec.endpoint, spec.pathStyle = v.endpointCreds(workspace), "http://"+v.endpoint, true
 	}
 	return spec, dirs, nil
@@ -704,13 +681,15 @@ exit 1`, target, strings.Join(quoted, " "))
 	labels := v.a.hostLabels()
 	labels[labelKind] = kindMount
 	labels[labelContainer] = m.container
-	pids := int64(mounterPidsLimit)
+	pids, flushSeconds := int64(mounterPidsLimit), mounterFlushSeconds
 	var err error
 	m.id, err = v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
 		Name: m.name,
 		Config: &containertypes.Config{
 			Image:      image,
 			Entrypoint: []string{"/bin/sh", "-c", script},
+			// Docker's own stops, as at its shutdown, wait as long as ours.
+			StopTimeout: &flushSeconds,
 			Env: []string{
 				"AWS_SDK_LOAD_CONFIG=1", "AWS_CONFIG_FILE=/creds/config",
 				"GOMEMLIMIT=" + strconv.Itoa(geesefsGoMemoryMiB) + "MiB",
@@ -934,32 +913,24 @@ func (v *volumes) removeAll(ctx context.Context) error {
 	return nil
 }
 
-// adoptGrants counts each stored grant as received while its key is valid,
-// on a host that caches volumes once the snapshotter holds it; otherwise
-// starts wait for the fresh one the server sends.
-func (v *volumes) adoptGrants(ctx context.Context) {
+// adoptGrants counts each stored grant as received while its key is valid;
+// otherwise starts wait for the fresh one the server sends.
+func (v *volumes) adoptGrants() {
 	entries, err := os.ReadDir(filepath.Join(v.a.cfg.StateDir, "storage"))
 	if err != nil {
 		return
 	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	for _, entry := range entries {
 		workspace := entry.Name()
 		if !isUUID(workspace) {
 			continue
 		}
 		c, err := v.credentials(workspace)
-		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err != nil || statErr != nil || time.Until(c.Expires) <= grantMargin {
-			continue
+		if _, statErr := os.Stat(filepath.Join(v.storageDir(workspace), "location.json")); err == nil && statErr == nil && time.Until(c.Expires) > grantMargin {
+			v.markGranted(workspace)
 		}
-		if v.endpoint != "" {
-			if err := v.grantCache(ctx, workspace); err != nil {
-				v.a.log.Warn("handing a stored grant to the snapshotter failed", "workspace_id", workspace, "error", err)
-			}
-			continue
-		}
-		v.mu.Lock()
-		v.markGranted(workspace)
-		v.mu.Unlock()
 	}
 }
 

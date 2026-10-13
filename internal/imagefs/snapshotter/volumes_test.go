@@ -9,7 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -105,16 +105,24 @@ type answer struct {
 	Header     http.Header
 }
 
-// send sends a request signed with key, as GeeseFS signs.
-func send(t *testing.T, method, url, byteRange, key string) (answer, []byte) {
+// send sends a request signed with key, as GeeseFS signs, with header's
+// pairs and body.
+func send(t *testing.T, method, url, byteRange, key string, header ...string) (answer, []byte) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), method, url, nil)
+	var payload io.Reader
+	if len(header)%2 == 1 {
+		payload, header = strings.NewReader(header[len(header)-1]), header[:len(header)-1]
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, url, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+key+"/20261013/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0")
 	if byteRange != "" {
 		req.Header.Set("Range", "bytes="+byteRange)
+	}
+	for i := 0; i < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -184,37 +192,6 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 	resp, body = get(t, base+key, fmt.Sprintf("%d-%d", volumeFrame, volumeFrame+99))
 	if resp.StatusCode != http.StatusPartialContent || !bytes.Equal(body, changed[volumeFrame:volumeFrame+100]) {
 		t.Fatalf("the read after the change: %s, new bytes %v", resp.Status, bytes.Equal(body, changed[volumeFrame:volumeFrame+100]))
-	}
-}
-
-// Warming fills a volume's objects, each within a quarter of the cache,
-// smallest first within half, so later reads of them reach no store.
-func TestWarmedVolumesReadWithoutTheStore(t *testing.T) {
-	ts := newTestStore(t)
-	up := &upstream{}
-	v, base := volumeEndpoint(t, ts, up)
-	// Smallest first, b and c fill half the cache, and a, listed first,
-	// does not.
-	objects := map[string][]byte{"a": randomBytes(3, 7<<20), "b": randomBytes(4, 5<<20), "c": randomBytes(5, 6<<20), "small": randomBytes(6, 1000)}
-	for name, body := range objects {
-		ts.put(t, "model/"+name, body)
-	}
-	g := v.buckets[ts.bucket].grant
-	v.warm(t.Context(), g, []string{ts.prefix + "model/"})
-	gets, _ := up.counts()
-	for _, name := range []string{"b", "c"} {
-		if resp, body := get(t, base+"model/"+name, ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, objects[name]) {
-			t.Fatalf("read of %s: %s", name, resp.Status)
-		}
-	}
-	if after, _ := up.counts(); after != gets {
-		t.Fatalf("reads of warmed objects made %d store GETs", after-gets)
-	}
-	if resp, body := get(t, base+"model/a", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, objects["a"]) {
-		t.Fatalf("read of a: %s", resp.Status)
-	}
-	if after, _ := up.counts(); after == gets {
-		t.Fatal("warming filled past half the cache")
 	}
 }
 
@@ -337,8 +314,17 @@ func TestVolumeKeysKeepTheirNames(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	escaped := url.PathEscape("dir with space") + "/" + url.PathEscape("a+b") + "/" + url.PathEscape("ünïcode.bin")
-	if resp, got := get(t, base+escaped, ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
+	// GeeseFS escapes keys as SigV4 does: every byte but unreserved ones
+	// and "/".
+	var escaped strings.Builder
+	for _, c := range []byte(name) {
+		if 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || strings.IndexByte("-_.~/", c) >= 0 {
+			escaped.WriteByte(c)
+		} else {
+			fmt.Fprintf(&escaped, "%%%02X", c)
+		}
+	}
+	if resp, got := get(t, base+escaped.String(), ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
 		t.Fatalf("read of %q: %s", name, resp.Status)
 	}
 }
@@ -372,40 +358,59 @@ func TestCachedReadsHitUnderSteadyWrites(t *testing.T) {
 			}
 		}
 	})
-	for range 10 {
+	const reads = 20
+	began := time.Now()
+	for range reads {
 		if resp, got := get(t, base+"weights", "0-1048575"); resp.StatusCode != http.StatusPartialContent || !bytes.Equal(got, body[:1<<20]) {
 			t.Errorf("read under writes: %s", resp.Status)
 		}
 	}
+	elapsed := time.Since(began)
 	close(stop)
 	writes.Wait()
 	up.mu.Lock()
 	defer up.mu.Unlock()
-	if up.heads != heads || up.gets != gets {
-		t.Fatalf("reads under writes of other keys asked the store %d HEADs and %d GETs", up.heads-heads, up.gets-gets)
+	// The version is asked again once a second, however slow the reads.
+	if asked := up.heads - heads; up.gets != gets || asked > int(elapsed/observationLife)+1 {
+		t.Fatalf("%d reads in %v under writes of other keys asked the store %d HEADs and %d GETs", reads, elapsed, asked, up.gets-gets)
 	}
 }
 
-// The endpoint answers only requests signed with the bucket's key, and
-// only for keys under volumes/: a workspace's grant reaches its disks too.
+// The endpoint answers only requests signed with the bucket's key, so one
+// workspace's mounts cannot reach another's bucket, and only for keys
+// under volumes/: a workspace's grant reaches its disks too.
 func TestTheVolumeEndpointRefusesOtherKeysAndPrefixes(t *testing.T) {
 	ts := newTestStore(t)
-	_, base := volumeEndpoint(t, ts, &upstream{})
+	v, base := volumeEndpoint(t, ts, &upstream{})
 	ts.put(t, "file", []byte("volume"))
 	bucket := base[:len(base)-len(ts.prefix)]
+	cfg := storagetest.Config(t)
+	if err := v.grant(uuid.NewString(), "other-workspace-key-0123", &imagefsproto.BucketGrant{
+		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: "other-workspace-bucket", ForcePathStyle: true,
+		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := bucket[:len(bucket)-len(ts.bucket)-1] + "other-workspace-bucket/"
+	deleteDisk := `<Delete><Object><Key>` + ts.prefix + `file</Key></Object><Object><Key>disks/x/index</Key></Object></Delete>`
 	for _, c := range []struct {
 		method, url, key string
 		code             int
+		header           []string
 	}{
-		{http.MethodGet, base + "file", testKey, http.StatusOK},
-		{http.MethodGet, base + "file", "another-key-0123456789", http.StatusForbidden},
-		{http.MethodGet, base + "file", "", http.StatusForbidden},
-		{http.MethodGet, bucket + "disks/" + uuid.NewString() + "/index", testKey, http.StatusForbidden},
-		{http.MethodPut, bucket + "disks/x", testKey, http.StatusForbidden},
-		{http.MethodGet, bucket + "?list-type=2&prefix=disks/", testKey, http.StatusForbidden},
-		{http.MethodGet, bucket + "?list-type=2&prefix=" + ts.prefix, testKey, http.StatusOK},
+		{http.MethodGet, base + "file", testKey, http.StatusOK, nil},
+		{http.MethodGet, base + "file", "another-key-0123456789", http.StatusForbidden, nil},
+		{http.MethodGet, base + "file", "", http.StatusForbidden, nil},
+		{http.MethodGet, bucket + "disks/" + uuid.NewString() + "/index", testKey, http.StatusForbidden, nil},
+		{http.MethodPut, bucket + "disks/x", testKey, http.StatusForbidden, nil},
+		{http.MethodGet, bucket + "?list-type=2&prefix=disks/", testKey, http.StatusForbidden, nil},
+		{http.MethodGet, bucket + "?list-type=2&prefix=" + ts.prefix, testKey, http.StatusOK, nil},
+		{http.MethodGet, bucket + "?list-type=2&prefix=" + ts.prefix + "&prefix=disks/", testKey, http.StatusForbidden, nil},
+		{http.MethodGet, other + "volumes/x", testKey, http.StatusForbidden, nil},
+		{http.MethodPut, base + "copied", testKey, http.StatusForbidden, []string{"X-Amz-Copy-Source", ts.bucket + "/disks/x/index"}},
+		{http.MethodPost, bucket + "?delete", testKey, http.StatusForbidden, []string{deleteDisk}},
 	} {
-		if resp, _ := send(t, c.method, c.url, "", c.key); resp.StatusCode != c.code {
+		if resp, _ := send(t, c.method, c.url, "", c.key, c.header...); resp.StatusCode != c.code {
 			t.Errorf("%s %s with key %q: %s, want %d", c.method, c.url, c.key, resp.Status, c.code)
 		}
 	}

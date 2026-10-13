@@ -199,9 +199,6 @@ service VolumeSources {
   // naming no workspace records nothing. The answer names the endpoint,
   // empty on a host that does not cache volumes.
   rpc GrantVolumes(GrantVolumesRequest) returns (GrantVolumesResponse);
-  // WarmVolumes fills the objects under prefixes of the workspace's bucket
-  // in the background, behind reads, within a share of the cache.
-  rpc WarmVolumes(WarmVolumesRequest) returns (WarmVolumesResponse);
 }
 
 message GrantVolumesRequest {
@@ -215,11 +212,3 @@ message GrantVolumesResponse {
   // host:port
   string endpoint = 1;
 }
-
-message WarmVolumesRequest {
-  string workspace_id = 1;
-  // Key prefixes, each a volume's, under volumes/.
-  repeated string prefixes = 2;
-}
-
-message WarmVolumesResponse {}

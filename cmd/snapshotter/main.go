@@ -1,7 +1,8 @@
 // Command lazycloud-snapshotter serves containerd's snapshotter API with
 // lazily read image layers, the disk engine its disks' published
-// generations, and volume mounts an S3 endpoint, on a host. It runs as root in its own systemd unit, which
-// the agent restarts only on a host that runs no container: the FUSE mounts it serves die with it.
+// generations, and volume mounts an S3 endpoint, on a host. It runs as root
+// in its own systemd unit, which the agent restarts only on a host that
+// runs no container: the FUSE mounts it serves die with it.
 //
 //	lazycloud-snapshotter
 package main
@@ -105,7 +106,7 @@ func run(args []string) int {
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	if cachesVolumes(layersource.CacheDir, volume) {
-		cfg.Fetches, cfg.VolumeAddr = volumeFetches, "127.0.0.1:0"
+		cfg.Fetches, cfg.VolumeAddr = volumeFetches, layersource.VolumeEndpoint
 	}
 	transport.MaxIdleConnsPerHost = cfg.Fetches
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

@@ -37,10 +37,8 @@ import (
 // to previous when the new release starts three times without opening a
 // session.
 const (
-	// AgentExecutable is the agent's name inside a release, and
-	// SnapshotterExecutable the snapshotter's.
-	AgentExecutable       = "lazycloud-agent"
-	SnapshotterExecutable = "lazycloud-snapshotter"
+	// AgentExecutable is the agent's name inside a release.
+	AgentExecutable = "lazycloud-agent"
 	// TrialFile in the state directory names a release on trial; the wrapper
 	// appends a line per start.
 	TrialFile = "update-trial"

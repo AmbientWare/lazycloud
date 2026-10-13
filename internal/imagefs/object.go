@@ -7,15 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"iter"
 	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/smithy-go"
-	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -138,61 +135,6 @@ func (b Bucket) Get(ctx context.Context, key string, limit int64) ([]byte, error
 		return nil, fmt.Errorf("%w: s3://%s/%s is larger than %d bytes", ErrInvalidIndex, b.name, key, limit)
 	}
 	return data, nil
-}
-
-// GetRange fills p with the bytes of the object at key from off, while its
-// ETag is etag. The store's refusal, as 412 once the object changed, is a
-// *StatusError.
-func (b Bucket) GetRange(ctx context.Context, key, etag string, off int64, p []byte) error {
-	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &b.name, Key: &key, IfMatch: &etag, Range: aws.String(fmt.Sprintf("bytes=%d-%d", off, off+int64(len(p))-1)),
-	})
-	var refused *smithyhttp.ResponseError
-	if errors.As(err, &refused) {
-		status := &StatusError{StatusCode: refused.HTTPStatusCode()}
-		var api smithy.APIError
-		if errors.As(err, &api) {
-			status.Code = api.ErrorCode()
-		}
-		return status
-	}
-	if err != nil {
-		return fmt.Errorf("get s3://%s/%s: %w", b.name, key, err)
-	}
-	defer func() { _ = out.Body.Close() }()
-	if aws.ToInt64(out.ContentLength) != int64(len(p)) {
-		return fmt.Errorf("s3://%s/%s answered %d bytes for a range of %d", b.name, key, aws.ToInt64(out.ContentLength), len(p))
-	}
-	if _, err := io.ReadFull(out.Body, p); err != nil {
-		return fmt.Errorf("read s3://%s/%s: %w", b.name, key, err)
-	}
-	return nil
-}
-
-// StoredObject is one object a listing names.
-type StoredObject struct {
-	Key, ETag string
-	Size      int64
-}
-
-// List yields the objects under prefix in key order, and an error that ends
-// the listing.
-func (b Bucket) List(ctx context.Context, prefix string) iter.Seq2[StoredObject, error] {
-	return func(yield func(StoredObject, error) bool) {
-		pages := s3.NewListObjectsV2Paginator(b.client, &s3.ListObjectsV2Input{Bucket: &b.name, Prefix: &prefix})
-		for pages.HasMorePages() {
-			page, err := pages.NextPage(ctx)
-			if err != nil {
-				yield(StoredObject{}, fmt.Errorf("list s3://%s/%s: %w", b.name, prefix, err))
-				return
-			}
-			for _, o := range page.Contents {
-				if !yield(StoredObject{Key: aws.ToString(o.Key), ETag: aws.ToString(o.ETag), Size: aws.ToInt64(o.Size)}, nil) {
-					return
-				}
-			}
-		}
-	}
 }
 
 // Put writes body to key.

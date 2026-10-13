@@ -7,8 +7,13 @@
 package layersource
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -35,16 +40,51 @@ const (
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
-	// Binary is the snapshotter the host runs, a copy outside the agent's
-	// releases, which updates prune; Unit is its systemd unit.
-	Binary = "/usr/local/lib/lazycloud/lazycloud-snapshotter"
-	Unit   = "lazycloud-snapshotter.service"
+	// Binary is the snapshotter the host runs, a copy of the Executable of
+	// an agent release outside the releases, which updates prune; Unit is
+	// its systemd unit.
+	Executable = "lazycloud-snapshotter"
+	Binary     = "/usr/local/lib/lazycloud/" + Executable
+	Unit       = "lazycloud-snapshotter.service"
+	// VolumeEndpoint is the loopback address of the snapshotter's S3
+	// endpoint for platform volumes.
+	VolumeEndpoint = "127.0.0.1:12121"
 	// LazyLabel marks a layer pulled lazily. The pull sets it on each layer
 	// descriptor; containerd passes it to the snapshotter's Prepare, which
 	// then mounts the layer from its grant and reports it present, so the
 	// layer is never downloaded. A layer without it unpacks as usual.
 	LazyLabel = "containerd.io/snapshot/lazycloud.lazy"
 )
+
+// Install copies the snapshotter of the agent release executable is in to
+// Binary unless Binary holds it, and reports whether it changed. An
+// executable with no snapshotter beside it installs nothing.
+func Install(executable string) (bool, error) {
+	exe, err := filepath.EvalSymlinks(executable)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("resolve the agent executable: %w", err)
+	}
+	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), Executable)) //nolint:gosec // The agent's own release.
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the release's snapshotter: %w", err)
+	}
+	if current, err := os.ReadFile(Binary); err == nil && bytes.Equal(current, release) {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(Binary), 0o755); err != nil { //nolint:gosec // Executables are world-readable.
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	if err := os.WriteFile(Binary+".new", release, 0o755); err != nil { //nolint:gosec // An executable.
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	if err := os.Rename(Binary+".new", Binary); err != nil {
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	return true, nil
+}
 
 // Client calls one snapshotter.
 type Client struct {

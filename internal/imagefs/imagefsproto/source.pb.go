@@ -1232,95 +1232,6 @@ func (x *GrantVolumesResponse) GetEndpoint() string {
 	return ""
 }
 
-type WarmVolumesRequest struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	// Key prefixes, each a volume's, under volumes/.
-	Prefixes      []string `protobuf:"bytes,2,rep,name=prefixes,proto3" json:"prefixes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WarmVolumesRequest) Reset() {
-	*x = WarmVolumesRequest{}
-	mi := &file_imagefs_v1_source_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WarmVolumesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WarmVolumesRequest) ProtoMessage() {}
-
-func (x *WarmVolumesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_imagefs_v1_source_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WarmVolumesRequest.ProtoReflect.Descriptor instead.
-func (*WarmVolumesRequest) Descriptor() ([]byte, []int) {
-	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{23}
-}
-
-func (x *WarmVolumesRequest) GetWorkspaceId() string {
-	if x != nil {
-		return x.WorkspaceId
-	}
-	return ""
-}
-
-func (x *WarmVolumesRequest) GetPrefixes() []string {
-	if x != nil {
-		return x.Prefixes
-	}
-	return nil
-}
-
-type WarmVolumesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WarmVolumesResponse) Reset() {
-	*x = WarmVolumesResponse{}
-	mi := &file_imagefs_v1_source_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WarmVolumesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WarmVolumesResponse) ProtoMessage() {}
-
-func (x *WarmVolumesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_imagefs_v1_source_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WarmVolumesResponse.ProtoReflect.Descriptor instead.
-func (*WarmVolumesResponse) Descriptor() ([]byte, []int) {
-	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{24}
-}
-
 var File_imagefs_v1_source_proto protoreflect.FileDescriptor
 
 const file_imagefs_v1_source_proto_rawDesc = "" +
@@ -1398,11 +1309,7 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\"2\n" +
 	"\x14GrantVolumesResponse\x12\x1a\n" +
-	"\bendpoint\x18\x01 \x01(\tR\bendpoint\"S\n" +
-	"\x12WarmVolumesRequest\x12!\n" +
-	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1a\n" +
-	"\bprefixes\x18\x02 \x03(\tR\bprefixes\"\x15\n" +
-	"\x13WarmVolumesResponse2\xde\x03\n" +
+	"\bendpoint\x18\x01 \x01(\tR\bendpoint2\xde\x03\n" +
 	"\fLayerSources\x12P\n" +
 	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponse\x12Y\n" +
 	"\bPrefetch\x12%.lazycloud.imagefs.v1.PrefetchRequest\x1a&.lazycloud.imagefs.v1.PrefetchResponse\x12e\n" +
@@ -1414,10 +1321,9 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\tGrantDisk\x12&.lazycloud.imagefs.v1.GrantDiskRequest\x1a'.lazycloud.imagefs.v1.GrantDiskResponse\x12\\\n" +
 	"\tServeDisk\x12&.lazycloud.imagefs.v1.ServeDiskRequest\x1a'.lazycloud.imagefs.v1.ServeDiskResponse\x12b\n" +
 	"\vReleaseDisk\x12(.lazycloud.imagefs.v1.ReleaseDiskRequest\x1a).lazycloud.imagefs.v1.ReleaseDiskResponse\x12\\\n" +
-	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponse2\xda\x01\n" +
+	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponse2v\n" +
 	"\rVolumeSources\x12e\n" +
-	"\fGrantVolumes\x12).lazycloud.imagefs.v1.GrantVolumesRequest\x1a*.lazycloud.imagefs.v1.GrantVolumesResponse\x12b\n" +
-	"\vWarmVolumes\x12(.lazycloud.imagefs.v1.WarmVolumesRequest\x1a).lazycloud.imagefs.v1.WarmVolumesResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
+	"\fGrantVolumes\x12).lazycloud.imagefs.v1.GrantVolumesRequest\x1a*.lazycloud.imagefs.v1.GrantVolumesResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_source_proto_rawDescOnce sync.Once
@@ -1431,7 +1337,7 @@ func file_imagefs_v1_source_proto_rawDescGZIP() []byte {
 	return file_imagefs_v1_source_proto_rawDescData
 }
 
-var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_imagefs_v1_source_proto_goTypes = []any{
 	(*LayerGrant)(nil),            // 0: lazycloud.imagefs.v1.LayerGrant
 	(*GrantRequest)(nil),          // 1: lazycloud.imagefs.v1.GrantRequest
@@ -1456,16 +1362,14 @@ var file_imagefs_v1_source_proto_goTypes = []any{
 	(*DiskReadsResponse)(nil),     // 20: lazycloud.imagefs.v1.DiskReadsResponse
 	(*GrantVolumesRequest)(nil),   // 21: lazycloud.imagefs.v1.GrantVolumesRequest
 	(*GrantVolumesResponse)(nil),  // 22: lazycloud.imagefs.v1.GrantVolumesResponse
-	(*WarmVolumesRequest)(nil),    // 23: lazycloud.imagefs.v1.WarmVolumesRequest
-	(*WarmVolumesResponse)(nil),   // 24: lazycloud.imagefs.v1.WarmVolumesResponse
-	(*timestamppb.Timestamp)(nil), // 25: google.protobuf.Timestamp
+	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
 }
 var file_imagefs_v1_source_proto_depIdxs = []int32{
-	25, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
+	23, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
 	3,  // 2: lazycloud.imagefs.v1.PrefetchRequest.reads:type_name -> lazycloud.imagefs.v1.FrameRead
 	3,  // 3: lazycloud.imagefs.v1.EndTraceResponse.reads:type_name -> lazycloud.imagefs.v1.FrameRead
-	25, // 4: lazycloud.imagefs.v1.BucketGrant.expires_at:type_name -> google.protobuf.Timestamp
+	23, // 4: lazycloud.imagefs.v1.BucketGrant.expires_at:type_name -> google.protobuf.Timestamp
 	12, // 5: lazycloud.imagefs.v1.GrantDiskRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
 	12, // 6: lazycloud.imagefs.v1.GrantVolumesRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
 	1,  // 7: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
@@ -1478,20 +1382,18 @@ var file_imagefs_v1_source_proto_depIdxs = []int32{
 	17, // 14: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
 	19, // 15: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
 	21, // 16: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:input_type -> lazycloud.imagefs.v1.GrantVolumesRequest
-	23, // 17: lazycloud.imagefs.v1.VolumeSources.WarmVolumes:input_type -> lazycloud.imagefs.v1.WarmVolumesRequest
-	2,  // 18: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
-	5,  // 19: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
-	7,  // 20: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
-	9,  // 21: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
-	11, // 22: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
-	14, // 23: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
-	16, // 24: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
-	18, // 25: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
-	20, // 26: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
-	22, // 27: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:output_type -> lazycloud.imagefs.v1.GrantVolumesResponse
-	24, // 28: lazycloud.imagefs.v1.VolumeSources.WarmVolumes:output_type -> lazycloud.imagefs.v1.WarmVolumesResponse
-	18, // [18:29] is the sub-list for method output_type
-	7,  // [7:18] is the sub-list for method input_type
+	2,  // 17: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
+	5,  // 18: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
+	7,  // 19: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
+	9,  // 20: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
+	11, // 21: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
+	14, // 22: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
+	16, // 23: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
+	18, // 24: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
+	20, // 25: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
+	22, // 26: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:output_type -> lazycloud.imagefs.v1.GrantVolumesResponse
+	17, // [17:27] is the sub-list for method output_type
+	7,  // [7:17] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
 	7,  // [7:7] is the sub-list for extension extendee
 	0,  // [0:7] is the sub-list for field type_name
@@ -1508,7 +1410,7 @@ func file_imagefs_v1_source_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_source_proto_rawDesc), len(file_imagefs_v1_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

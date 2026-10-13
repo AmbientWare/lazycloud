@@ -20,8 +20,9 @@
 // credentials in memory only: the read-only grants, scoped to
 // disks/<disk id>/, of the disks attached to its host, and the read-write
 // grants of the workspace buckets whose volumes its host mounts, which it
-// signs every request it forwards with. The endpoint answers any process
-// that reaches the host's loopback, as the mount containers do.
+// signs every request it forwards with. The endpoint answers a process on
+// the host's loopback, as the mount containers are, for a workspace's
+// bucket only when it signs with that workspace's key.
 package snapshotter
 
 import (

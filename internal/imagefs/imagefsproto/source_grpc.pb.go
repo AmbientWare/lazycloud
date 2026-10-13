@@ -558,7 +558,6 @@ var DiskSources_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	VolumeSources_GrantVolumes_FullMethodName = "/lazycloud.imagefs.v1.VolumeSources/GrantVolumes"
-	VolumeSources_WarmVolumes_FullMethodName  = "/lazycloud.imagefs.v1.VolumeSources/WarmVolumes"
 )
 
 // VolumeSourcesClient is the client API for VolumeSources service.
@@ -579,9 +578,6 @@ type VolumeSourcesClient interface {
 	// naming no workspace records nothing. The answer names the endpoint,
 	// empty on a host that does not cache volumes.
 	GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error)
-	// WarmVolumes fills the objects under prefixes of the workspace's bucket
-	// in the background, behind reads, within a share of the cache.
-	WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error)
 }
 
 type volumeSourcesClient struct {
@@ -596,16 +592,6 @@ func (c *volumeSourcesClient) GrantVolumes(ctx context.Context, in *GrantVolumes
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GrantVolumesResponse)
 	err := c.cc.Invoke(ctx, VolumeSources_GrantVolumes_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *volumeSourcesClient) WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WarmVolumesResponse)
-	err := c.cc.Invoke(ctx, VolumeSources_WarmVolumes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -630,9 +616,6 @@ type VolumeSourcesServer interface {
 	// naming no workspace records nothing. The answer names the endpoint,
 	// empty on a host that does not cache volumes.
 	GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error)
-	// WarmVolumes fills the objects under prefixes of the workspace's bucket
-	// in the background, behind reads, within a share of the cache.
-	WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error)
 	mustEmbedUnimplementedVolumeSourcesServer()
 }
 
@@ -645,9 +628,6 @@ type UnimplementedVolumeSourcesServer struct{}
 
 func (UnimplementedVolumeSourcesServer) GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GrantVolumes not implemented")
-}
-func (UnimplementedVolumeSourcesServer) WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method WarmVolumes not implemented")
 }
 func (UnimplementedVolumeSourcesServer) mustEmbedUnimplementedVolumeSourcesServer() {}
 func (UnimplementedVolumeSourcesServer) testEmbeddedByValue()                       {}
@@ -688,24 +668,6 @@ func _VolumeSources_GrantVolumes_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _VolumeSources_WarmVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WarmVolumesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VolumeSourcesServer).WarmVolumes(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VolumeSources_WarmVolumes_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VolumeSourcesServer).WarmVolumes(ctx, req.(*WarmVolumesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // VolumeSources_ServiceDesc is the grpc.ServiceDesc for VolumeSources service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -716,10 +678,6 @@ var VolumeSources_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GrantVolumes",
 			Handler:    _VolumeSources_GrantVolumes_Handler,
-		},
-		{
-			MethodName: "WarmVolumes",
-			Handler:    _VolumeSources_WarmVolumes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

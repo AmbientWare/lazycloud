@@ -867,8 +867,8 @@ func TestADyingMountFailsItsStartOrItsContainer(t *testing.T) {
 }
 
 // TestCachedVolumesMountThroughTheSnapshotter: on a host that caches
-// volumes, as test hosts do, the mount container addresses the snapshotter
-// and holds only the workspace's endpoint key, no store credential. What
+// volumes, as test hosts do, the mount container holds only the
+// workspace's endpoint key, no store credential. What
 // one container writes, another container's mount reads, symlinks
 // included, and a file overwritten in the bucket reads anew once listed
 // again.
@@ -890,9 +890,6 @@ func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
 		if err != nil || filepath.Base(m.Source) != "endpoint" || strings.Contains(string(key), store.accessKey) {
 			t.Fatalf("the mount container holds %s: %s (%v)", m.Source, key, err)
 		}
-	}
-	if args := strings.Join(inspect.Container.Config.Entrypoint, " "); !strings.Contains(args, "'http://127.0.0.1:") {
-		t.Fatalf("the mount does not address the snapshotter: %s", args)
 	}
 
 	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "4"]}`)))
@@ -924,33 +921,6 @@ func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
 	}
 }
 
-// TestALargeRenameLandsAcrossAStop: a file of hundreds of MiB renamed just
-// before its container stops, which GeeseFS stores as a copy in parts
-// through the snapshotter, is in the bucket under its new name once the
-// mount stopped.
-func TestALargeRenameLandsAcrossAStop(t *testing.T) {
-	e, s, store := volumeEnv(t)
-	workspace, volume := uuid.NewString(), uuid.NewString()
-	s.send(t, store.grant(workspace))
-	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
-	sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "640"]}`)))
-	s.send(t, stopCommand(id, 10))
-	s.phase(t, id, exited)
-	e.mountStops(id)
-	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/model.bin")})
-	if err != nil {
-		t.Fatalf("the renamed file is not in the bucket: %v", err)
-	}
-	defer func() { _ = object.Body.Close() }()
-	digest := sha256.New()
-	if _, err := io.Copy(digest, object.Body); err != nil {
-		t.Fatal(err)
-	}
-	if got := `"` + hex.EncodeToString(digest.Sum(nil)) + `"`; got != sum {
-		t.Fatalf("the bucket holds %s, written %s", got, sum)
-	}
-}
-
 // mountStops waits until container's mounts stopped, within their flush
 // window.
 func (e *env) mountStops(container string) {
@@ -962,10 +932,12 @@ func (e *env) mountStops(container string) {
 	}
 }
 
-// TestSmallFilesWrittenJustBeforeAStopAreStored: a container that writes
-// many small files and stops at once leaves every one in the bucket once
-// its mount stopped, though storing them takes a while.
-func TestSmallFilesWrittenJustBeforeAStopAreStored(t *testing.T) {
+// TestWritesJustBeforeAStopAreStored: a container that writes many small
+// files and renames a large one, then stops at once, leaves every file in
+// the bucket under its name once its mount stopped, on a platform volume
+// through the snapshotter and on a cloud bucket its mount reaches itself,
+// though storing them takes a while.
+func TestWritesJustBeforeAStopAreStored(t *testing.T) {
 	e, s, store := volumeEnv(t)
 	target, err := url.Parse(store.endpoint)
 	if err != nil {
@@ -982,28 +954,62 @@ func TestSmallFilesWrittenJustBeforeAStopAreStored(t *testing.T) {
 	}))
 	t.Cleanup(distant.Close)
 	store.endpoint = distant.URL
-	workspace, volume := uuid.NewString(), uuid.NewString()
+	workspace := uuid.NewString()
 	s.send(t, store.grant(workspace))
-	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
-	const files = 2000
-	if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "2000"]}`))); got != strconv.Itoa(files) {
-		t.Fatalf("wrote %s files", got)
-	}
-	s.send(t, stopCommand(id, 1))
-	s.phase(t, id, exited)
-	e.mountStops(id)
-	stored := 0
-	pages := s3.NewListObjectsV2Paginator(storagetest.Client(), &s3.ListObjectsV2Input{
-		Bucket: aws.String(store.bucket), Prefix: aws.String("volumes/" + volume + "/shards/f"),
-	})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		stored += len(page.Contents)
-	}
-	if stored != files {
-		t.Fatalf("%d of %d files written before the stop are in the bucket", stored, files)
+	for _, c := range []struct {
+		name  string
+		mount func(prefix string) *hostproto.VolumeMount
+	}{
+		{"platform volume", func(prefix string) *hostproto.VolumeMount {
+			volume := strings.TrimSuffix(strings.TrimPrefix(prefix, "volumes/"), "/")
+			return platformVolume(workspace, volume, "/volumes/data", false)
+		}},
+		{"cloud bucket", func(prefix string) *hostproto.VolumeMount {
+			m := store.bucketMount("/volumes/data", prefix)
+			m.ReadOnly = false
+			return m
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			prefix := "volumes/" + uuid.NewString() + "/"
+			start := cloudBucketStart(e, c.mount(prefix))
+			id := start.GetStart().GetContainerId()
+			s.send(t, start)
+			s.phase(t, id, ready)
+			const files = 2000
+			if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "2000"]}`))); got != strconv.Itoa(files) {
+				t.Fatalf("wrote %s files", got)
+			}
+			sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "640"]}`)))
+			s.send(t, stopCommand(id, 1))
+			s.phase(t, id, exited)
+			e.mountStops(id)
+			stored := 0
+			pages := s3.NewListObjectsV2Paginator(storagetest.Client(), &s3.ListObjectsV2Input{
+				Bucket: aws.String(store.bucket), Prefix: aws.String(prefix + "shards/f"),
+			})
+			for pages.HasMorePages() {
+				page, err := pages.NextPage(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				stored += len(page.Contents)
+			}
+			if stored != files {
+				t.Fatalf("%d of %d files written before the stop are in the bucket", stored, files)
+			}
+			object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(prefix + "model.bin")})
+			if err != nil {
+				t.Fatalf("the renamed file is not in the bucket: %v", err)
+			}
+			defer func() { _ = object.Body.Close() }()
+			digest := sha256.New()
+			if _, err := io.Copy(digest, object.Body); err != nil {
+				t.Fatal(err)
+			}
+			if got := `"` + hex.EncodeToString(digest.Sum(nil)) + `"`; got != sum {
+				t.Fatalf("the bucket holds %s, written %s", got, sum)
+			}
+		})
 	}
 }

@@ -1,14 +1,9 @@
 package agent
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc/codes"
@@ -19,24 +14,10 @@ import (
 )
 
 // replaceSnapshotter installs the release's snapshotter in place of the one
-// the host runs when they differ and nothing uses it: no container of the
-// host runs, mount containers still storing writes included, and no disk is
-// attached. Restarting it ends every FUSE mount it serves.
+// the host runs when nothing uses it: no container of the host runs, mount
+// containers still storing writes included, and no disk is attached.
+// Restarting it ends every FUSE mount it serves.
 func (a *Agent) replaceSnapshotter(ctx context.Context) error {
-	exe, err := filepath.EvalSymlinks(a.cfg.Executable)
-	if err != nil {
-		return nil //nolint:nilerr // An agent outside a release brings no snapshotter.
-	}
-	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), SnapshotterExecutable)) //nolint:gosec // The agent's own release.
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read the release's snapshotter: %w", err)
-	}
-	if running, err := os.ReadFile(layersource.Binary); err == nil && bytes.Equal(running, release) {
-		return nil
-	}
 	list, err := a.docker.ContainerList(ctx, client.ContainerListOptions{Filters: client.Filters{}.Add("label", labelHost+"="+a.identity.HostID)})
 	if err != nil {
 		return fmt.Errorf("list running containers: %w", err)
@@ -52,11 +33,10 @@ func (a *Agent) replaceSnapshotter(ctx context.Context) error {
 		}
 	}
 	if len(list.Items) > 0 || attached {
-		a.log.Info("the host keeps its snapshotter while containers or disks use it")
 		return nil
 	}
-	if err := writeFileAtomic(layersource.Binary, release, 0o755); err != nil { //nolint:gosec // An executable.
-		return fmt.Errorf("install the snapshotter: %w", err)
+	if changed, err := layersource.Install(a.cfg.Executable); err != nil || !changed {
+		return err //nolint:wrapcheck // It names the step.
 	}
 	// The unit is Type=notify, so the restart returns once it serves.
 	if out, err := exec.CommandContext(ctx, "systemctl", "restart", layersource.Unit).CombinedOutput(); err != nil { //nolint:gosec // A fixed unit name.

@@ -27,7 +27,7 @@ func TestTheSnapshotterIsReplacedOnlyWhenIdle(t *testing.T) {
 	})
 	release := t.TempDir()
 	newer := append(append([]byte{}, installed...), 0)
-	if err := os.WriteFile(filepath.Join(release, SnapshotterExecutable), newer, 0o755); err != nil { //nolint:gosec // An executable.
+	if err := os.WriteFile(filepath.Join(release, layersource.Executable), newer, 0o755); err != nil { //nolint:gosec // An executable.
 		t.Fatal(err)
 	}
 	executable := filepath.Join(release, AgentExecutable)

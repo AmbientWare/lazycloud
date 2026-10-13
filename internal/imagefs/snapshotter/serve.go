@@ -55,11 +55,12 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	volumes := &http.Server{Handler: s.volumes, ReadHeaderTimeout: stopGrace}
 	var endpoint net.Listener
 	if cfg.VolumeAddr != "" {
+		// A host whose port is taken mounts its volumes from their buckets.
 		if endpoint, err = lc.Listen(ctx, "tcp", cfg.VolumeAddr); err != nil {
-			_ = listener.Close()
-			return fmt.Errorf("listen on %s: %w", cfg.VolumeAddr, err)
+			cfg.Logger.Error("the volume endpoint cannot listen; volumes mount from their buckets", "error", err)
+		} else {
+			s.volumes.addr = cfg.VolumeAddr
 		}
-		s.volumes.addr = endpoint.Addr().String()
 	}
 	var serving sync.WaitGroup
 	served := make(chan error, 2)
@@ -77,7 +78,11 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	force := time.AfterFunc(stopGrace, server.Stop)
 	server.GracefulStop()
 	force.Stop()
-	_ = volumes.Close()
+	shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopGrace)
+	defer cancel()
+	if volumes.Shutdown(shutdown) != nil {
+		_ = volumes.Close()
+	}
 	serving.Wait()
 	return err
 }

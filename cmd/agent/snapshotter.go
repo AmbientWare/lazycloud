@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
@@ -74,18 +73,8 @@ func installSnapshotter(executable string, out io.Writer) error {
 	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", layersource.Unit).Run() == nil //nolint:gosec // a fixed unit name
 	if active {
 		_, _ = fmt.Fprintln(out, "lazycloud-snapshotter is running; the agent replaces it once the host runs no container")
-	} else {
-		exe, err := resolveAgent(executable)
-		if err != nil {
-			return err
-		}
-		binary, err := os.ReadFile(filepath.Join(filepath.Dir(exe), agent.SnapshotterExecutable)) //nolint:gosec // the snapshotter inside the agent's own release
-		if err != nil {
-			return fmt.Errorf("read the snapshotter from the agent release: %w", err)
-		}
-		if _, err := writeIfChanged(layersource.Binary, binary, 0o755); err != nil {
-			return err
-		}
+	} else if _, err := layersource.Install(executable); err != nil {
+		return err //nolint:wrapcheck // It names the step.
 	}
 	if _, err := writeIfChanged(filepath.Join(systemdUnits, layersource.Unit), []byte(snapshotterUnit), 0o644); err != nil {
 		return err
