@@ -122,7 +122,9 @@ update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
     idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id
 `
 
@@ -133,6 +135,7 @@ type DrainHostsParams struct {
 
 // Idle serving hosts, and reserves still preparing, drain toward
 // termination; a host that took a container since the snapshot stays.
+// Packed CPU work, which the planner evicts, holds none.
 func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, drainHosts, arg.Reason, arg.Ids)
 	if err != nil {
@@ -347,7 +350,8 @@ func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error 
 
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
-    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent
+    select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
+           c.purpose
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -362,6 +366,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
        sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
+       coalesce(b.purpose = 'serve' and release_packs(r.spec), false)::bool as packs,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -372,7 +377,7 @@ left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
 left join releases r on r.id = b.release_id
 cross join lateral (select volume_read_bytes(b.workspace_id, r.spec -> 'volumes') as bytes) vb
 left join workspace_buckets sb on sb.workspace_id = b.workspace_id and vb.bytes is not null
-group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
 order by 4, 5, 6, 2 desc, 3 desc
 `
 
@@ -389,6 +394,7 @@ type PendingDemandRow struct {
 	Disks        int32
 	ReadRegion   *string
 	ReadBytes    int64
+	Packs        bool
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
@@ -421,6 +427,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Disks,
 			&i.ReadRegion,
 			&i.ReadBytes,
+			&i.Packs,
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
@@ -492,6 +499,8 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
        coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
        coalesce(used.stays, false)::bool as stays,
+       coalesce(used.packed_cpu, 0)::bigint as packed_cpu, coalesce(used.packed_memory, 0)::bigint as packed_memory,
+       coalesce(used.packed_ids, '{}')::uuid[] as packed_ids,
        coalesce(used.move_cpu, '{}')::bigint[] as move_cpu, coalesce(used.move_memory, '{}')::bigint[] as move_memory,
        coalesce(used.move_gpu_count, '{}')::int[] as move_gpu_count, coalesce(used.move_gpus, '{}')::text[] as move_gpus,
        coalesce(used.move_region, '{}')::text[] as move_region,
@@ -500,9 +509,11 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_cpu,
-           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_memory,
+           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned') and not p.packed) as tolerant_cpu,
+           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned') and not p.packed) as tolerant_memory,
            sum(m.gpus) as gpus, sum(m.gpus) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
+           sum(c.cpu_millis) filter (where p.packed) as packed_cpu, sum(c.memory_bytes) filter (where p.packed) as packed_memory,
+           array_agg(c.id order by c.id) filter (where p.packed) as packed_ids,
            bool_or(not m.moves) as stays,
            array_agg(c.cpu_millis) filter (where m.moves) as move_cpu,
            array_agg(c.memory_bytes) filter (where m.moves) as move_memory,
@@ -512,13 +523,14 @@ left join lateral (
                filter (where m.moves) as move_gpus,
            array_agg(coalesce(r.spec -> 'placement' ->> 'region', '')) filter (where m.moves) as move_region,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
-           count(*) as containers, max(c.assigned_at) as busy_since
+           count(*) filter (where not p.packed) as containers, max(c.assigned_at) filter (where not p.packed) as busy_since
     from containers c
     left join releases r on r.id = c.release_id
     cross join lateral (
         select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
                case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
     ) m
+    cross join lateral (select packed(h.provider, h.gpu_count, c.gpu_count) as packed) p
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.provider = 'aws' and h.phase not in ('deleted', 'failed')
@@ -566,6 +578,9 @@ type PlannerHostsRow struct {
 	TolerantMemory        int64
 	TolerantGpus          int32
 	Stays                 bool
+	PackedCpu             int64
+	PackedMemory          int64
+	PackedIds             []uuid.UUID
 	MoveCpu               []int64
 	MoveMemory            []int64
 	MoveGpuCount          []int32
@@ -579,6 +594,8 @@ type PlannerHostsRow struct {
 // containers reserve, what those that could run on Spot reserve, what each
 // of those that could move to a Spot host needs, whether one of them could
 // not, and whether its agent must move to the target release first.
+// Packed CPU work counts apart: the containers and the newest placement
+// that keep a GPU host up are its GPU work.
 func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	rows, err := q.db.Query(ctx, plannerHosts)
 	if err != nil {
@@ -629,6 +646,9 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.TolerantMemory,
 			&i.TolerantGpus,
 			&i.Stays,
+			&i.PackedCpu,
+			&i.PackedMemory,
+			&i.PackedIds,
 			&i.MoveCpu,
 			&i.MoveMemory,
 			&i.MoveGpuCount,
@@ -849,7 +869,9 @@ set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', p
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
     idle_since = null, hands_back_at = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id
 `
 
@@ -860,7 +882,7 @@ type ReturnToReserveParams struct {
 
 // Idle serving hosts start proving they may stop into the reserve, each in
 // the mode the planner chose; a host that took a container since the
-// snapshot stays.
+// snapshot stays. Packed CPU work, which the planner evicts, holds none.
 func (q *Queries) ReturnToReserve(ctx context.Context, arg ReturnToReserveParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, returnToReserve, arg.HibernateIds, arg.Ids)
 	if err != nil {

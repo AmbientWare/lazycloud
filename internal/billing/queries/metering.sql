@@ -19,12 +19,13 @@ select now()::timestamptz as now,
 -- Ready and draining containers: the live set, read through its partial
 -- indexes rather than the container history. A mirror build's container
 -- is the platform's and bills no one. replaced_at is when the first of its
--- replacements was ready.
+-- replacements was ready, and held_from when its oldest running attempt
+-- started, which preemption may yet end.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at, held.started_at as held_from
 from containers c
 left join lateral (
     select rc.ready_at from containers rc
@@ -33,6 +34,9 @@ left join lateral (
 ) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
+left join attempts held on held.id = (
+    select a.id from attempts a where a.container_id = c.id and a.state = 'running' order by a.started_at limit 1
+)
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id
@@ -41,13 +45,18 @@ where c.state <> 'stopped' and c.state in ('ready', 'draining') and c.ready_at i
 
 -- name: StoppedMeteredContainers :many
 -- Containers that stopped since the look-back began and still owe their
--- last entries, with when the first of their replacements was ready.
+-- last entries, with when the first of their replacements was ready, when
+-- the first of their attempts that ended by preemption on the platform's
+-- fleet started, and the spans of their other attempts that ended after
+-- it. A connected account's lost host is not the platform's preemption.
 -- Mirror builds' containers bill no one.
 select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes,
        c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner,
        c.ready_at::timestamptz as ready_at, c.stopped_at, c.stop_reason, h.last_seen_at,
        w.id as workload_id, w.app_id, o.user_id as owner_id, u.billed_through,
-       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at
+       coalesce(u.complete, false)::bool as complete, replaced.ready_at as replaced_at,
+       preempted.started_at as preempted_from,
+       coalesce(kept.starts, '{}')::timestamptz[] as kept_starts, coalesce(kept.ends, '{}')::timestamptz[] as kept_ends
 from containers c
 left join lateral (
     select rc.ready_at from containers rc
@@ -56,6 +65,16 @@ left join lateral (
 ) replaced on true
 join workspace_members o on o.workspace_id = c.workspace_id and o.role = 'owner'
 left join hosts h on h.id = c.host_id
+left join attempts preempted on preempted.id = (
+    select a.id from attempts a
+    where a.container_id = c.id and a.preempted and c.billing_owner = 'platform_fleet'
+    order by a.started_at limit 1
+)
+left join lateral (
+    select array_agg(a.started_at order by a.started_at) as starts, array_agg(a.finished_at order by a.started_at) as ends
+    from attempts a
+    where a.container_id = c.id and not a.preempted and a.finished_at > preempted.started_at
+) kept on true
 left join releases r on r.id = c.release_id
 left join workloads w on w.id = r.workload_id
 left join usage_cursors u on u.source_kind = 'container' and u.source_id = c.id

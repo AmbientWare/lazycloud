@@ -1,8 +1,10 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -87,6 +89,20 @@ func (e *Execution) WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []
 		return fmt.Errorf("read releases on hosts: %w", err)
 	}
 	return database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases))
+}
+
+// EvictContainers stops CPU containers packed on a fleet GPU host in tx, so
+// GPU work takes their room at once. Their running attempts are preempted
+// and retried. It stops them in id order.
+func (e *Execution) EvictContainers(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error {
+	for _, id := range slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }) {
+		if err := e.containerExited(ctx, tx, ContainerID(id), ContainerExit{
+			Reason: StopRequested, Message: "evicted for GPU work", Preempted: true,
+		}); err != nil {
+			return fmt.Errorf("evict container %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // StoppedAmong returns the containers of ids that are stopped. A host

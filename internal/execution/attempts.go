@@ -120,6 +120,7 @@ func (e *Execution) finishAttempts(ctx context.Context, tx pgx.Tx, host *compute
 		}
 		set.Ids = append(set.Ids, id)
 		set.States = append(set.States, string(o.State))
+		set.Preempted = append(set.Preempted, o.Failure != nil && o.Failure.Kind == FailurePreempted)
 		wakeHost = wakeHost || (host != nil && ContainerState(attempt.ContainerState) == ContainerDraining)
 		// A task that moved on, for example through cancellation, keeps
 		// this outcome on the attempt row only.

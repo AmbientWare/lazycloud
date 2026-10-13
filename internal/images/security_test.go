@@ -176,7 +176,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 	if _, err := f.images.Build(t.Context(), b, other, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(t.Context(), host)

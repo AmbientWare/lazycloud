@@ -182,6 +182,22 @@ func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	}
 }
 
+// The pools one launch walk refuses, over as many passes as it takes, come
+// out of cooldown together, so the planner buys for them once when they
+// end rather than as each one's ends.
+func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	alice := newUser(t, o.pool, "alice@example.com")
+	requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+
+	launchAll(t, o)
+	ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns")
+	if tried := len(emulator.calls("RunInstances")); tried <= 8 || ends != 1 {
+		t.Fatalf("a walk refused %d pools, whose cooldowns end at %d times; want more than a pass's 8, ending at one", tried, ends)
+	}
+}
+
 // Refusals of a pool while it cools keep its cooldown: two hosts refused in
 // one pass leave each pool they tried cooling ten minutes.
 func TestRefusalsWhileAPoolCoolsDoNotLengthenIt(t *testing.T) {

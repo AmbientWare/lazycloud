@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -105,7 +106,16 @@ type meteredContainer struct {
 	// replacedAt is when the first of its replacements was ready, where its
 	// billing ends.
 	replacedAt *time.Time
+	// heldFrom is when its oldest running attempt started, which
+	// preemption may yet void; preemptedFrom when the first of its attempts
+	// that preemption voided started, and kept the spans of its other
+	// attempts that ended after it.
+	heldFrom, preemptedFrom *time.Time
+	kept                    []span
 }
+
+// span is an interval of time.
+type span struct{ start, end time.Time }
 
 // Meter advances every metered source's cursor: stopped containers get
 // their last entries, live ones the entries up to their host's last report
@@ -282,7 +292,7 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
-			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
+			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt, heldFrom: r.HeldFrom,
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -297,6 +307,7 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,
 			lastSeenAt: r.LastSeenAt, billedThrough: r.BilledThrough, replacedAt: r.ReplacedAt,
+			preemptedFrom: r.PreemptedFrom, kept: spans(r.KeptStarts, r.KeptEnds),
 			shape: Shape{
 				Owner: BillingOwner(r.BillingOwner), Class: RateClass(r.RateClass), GPU: GPUType(r.GpuType),
 				GPUCount: int(r.GpuCount), CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
@@ -310,10 +321,14 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 // accrued cost at now. A container is billed from ready to stopped; one on a
 // lost host ends at the host's last report, and a live one is never billed
 // past it. One a replacement took over from ends once the replacement was
-// ready, so the two never bill the same instant. Entries price measured
-// use, so a period is written only once its use is complete at measured,
-// observability's watermark; until then it is accrued. A build reserves at
-// most buildBilledMemoryBytes as billing sees it.
+// ready, so the two never bill the same instant. An attempt that ends by
+// preemption bills nothing: from the first such attempt's start a
+// container bills only the time its other attempts ran, and since any
+// running attempt may be preempted, no entry is written past the start of
+// one until it ends. Entries price measured use, so a period is written
+// only once its use is complete at measured, observability's watermark;
+// until then it is accrued. A build reserves at most
+// buildBilledMemoryBytes as billing sees it.
 func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (sourcePlan, error) {
 	shape, category := c.shape, ""
 	if c.build {
@@ -340,36 +355,91 @@ func (b *Billing) planContainer(c meteredContainer, now, measured time.Time) (so
 	if c.replacedAt != nil && !c.replacedAt.After(end) {
 		end, ended = *c.replacedAt, true
 	}
+	if c.heldFrom != nil {
+		measured = minTime(measured, *c.heldFrom)
+	}
+	billed := billedSpans(start, end, c.preemptedFrom, c.kept)
 	if ended && !measured.Before(end) {
-		entries, err := b.entries(src, start, end)
+		entries, err := b.spanEntries(src, billed)
 		if err != nil {
 			return sourcePlan{}, err
 		}
 		return sourcePlan{src: src, entries: entries, through: maxTime(start, end), complete: true, advance: true}, nil
 	}
-	return b.planOpen(src, start, end, measured)
+	return b.planOpen(src, start, end, billed, measured)
 }
 
-// planOpen writes the periods of [start, horizon) whose use is complete at
-// measured and accrues the rest.
-func (b *Billing) planOpen(src source, start, horizon, measured time.Time) (sourcePlan, error) {
+// spanEntries are src's entries over spans.
+func (b *Billing) spanEntries(src source, spans []span) ([]entry, error) {
+	var out []entry
+	for _, s := range spans {
+		e, err := b.entries(src, s.start, s.end)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e...)
+	}
+	return out, nil
+}
+
+// billedSpans are what a container bills of [start, end): all of it before
+// preempted, when the first of its attempts that preemption ended started,
+// and after that the spans its other attempts ran, kept, in start order.
+func billedSpans(start, end time.Time, preempted *time.Time, kept []span) []span {
+	if preempted == nil {
+		return []span{{start, end}}
+	}
+	out := []span{{start, maxTime(start, minTime(*preempted, end))}}
+	for _, k := range kept {
+		last := &out[len(out)-1]
+		k = span{maxTime(k.start, last.start), minTime(k.end, end)}
+		switch {
+		case !k.start.Before(k.end):
+		case !k.start.After(last.end):
+			last.end = maxTime(last.end, k.end)
+		default:
+			out = append(out, k)
+		}
+	}
+	return slices.DeleteFunc(out, func(s span) bool { return !s.start.Before(s.end) })
+}
+
+// spans pairs starts with ends.
+func spans(starts, ends []time.Time) []span {
+	out := make([]span, len(starts))
+	for n := range starts {
+		out[n] = span{starts[n], ends[n]}
+	}
+	return out
+}
+
+// planOpen writes what billed holds of the periods of [start, horizon)
+// whose use is complete at measured and accrues the rest.
+func (b *Billing) planOpen(src source, start, horizon time.Time, billed []span, measured time.Time) (sourcePlan, error) {
 	closed := minTime(horizon, measured).Truncate(MeteringPeriod)
+	var written, open []span
+	for _, s := range billed {
+		if closed.After(s.start) {
+			written = append(written, span{s.start, minTime(s.end, closed)})
+		}
+		if s.end.After(closed) {
+			open = append(open, span{maxTime(s.start, closed), s.end})
+		}
+	}
 	plan := sourcePlan{src: src, through: start}
 	if closed.After(start) {
-		entries, err := b.entries(src, start, closed)
+		entries, err := b.spanEntries(src, written)
 		if err != nil {
 			return sourcePlan{}, err
 		}
 		plan.entries, plan.through, plan.advance = entries, closed, true
 	}
-	if horizon.After(plan.through) {
-		open, err := b.entries(src, plan.through, horizon)
-		if err != nil {
-			return sourcePlan{}, err
-		}
-		for _, e := range open {
-			plan.accrued += e.charge.Total()
-		}
+	accrued, err := b.spanEntries(src, open)
+	if err != nil {
+		return sourcePlan{}, err
+	}
+	for _, e := range accrued {
+		plan.accrued += e.charge.Total()
 	}
 	return plan, nil
 }

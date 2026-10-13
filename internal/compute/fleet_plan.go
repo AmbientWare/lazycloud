@@ -33,13 +33,20 @@ type FleetHost struct {
 	State        FleetState
 	// Load is what its live containers reserve; Lent, on an on-demand
 	// host, what those that could run on Spot reserve, which counts as the
-	// load of the Spot market of its GPU model, or of CPU.
-	Load, Lent FleetCapacity
+	// load of the Spot market of its GPU model, or of CPU; Packed, on a GPU
+	// host, what CPU work reserves, which counts as the load of the CPU
+	// Spot market and which GPU work evicts.
+	Load, Lent, Packed FleetCapacity
+	// Containers counts the live containers that keep it up: on a GPU host,
+	// its GPU work.
 	Containers int
 	// UsedDisks counts the disks its live containers attach.
 	UsedDisks int
 	// Protected is an interruption's source or replacement.
 	Protected bool
+	// Requested is set on a host EC2 has not launched yet, which its
+	// launch's walk through refused pools may still move.
+	Requested bool
 	// Current is set on a reserve prepared for the current agent release.
 	Current bool
 	// UpdateDue is set on a host whose agent must move to the target
@@ -56,7 +63,7 @@ type FleetHost struct {
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
 	// IdleSince is when the serving host became idle, as last recorded;
-	// BusySince when its newest live container was placed.
+	// BusySince when the newest container Containers counts was placed.
 	IdleSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
@@ -105,6 +112,7 @@ func (h FleetHost) capacity() HostCapacity {
 		Market: h.Market, GPUType: h.GPU, GPUCount: h.Usable.GPUs,
 		CPUMillis: h.Usable.CPUMillis, MemoryBytes: h.Usable.MemoryBytes,
 		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs, HandsBack: h.HandsBack,
+		Packed: h.Packed,
 	}
 	if t, ok := CatalogTypeNamed(h.InstanceType); ok && !h.UpdateDue {
 		room.FreeDiskSlots = max(0, t.DiskSlots()-h.UsedDisks)
@@ -505,17 +513,21 @@ func (ps *pass) views(items []coverItem) []*marketView {
 }
 
 // marketLoad is what market m's work holds on running hosts: its hosts'
-// containers, less what Spot-tolerant work borrows on them, and for a Spot
-// market what its work borrows on on-demand hosts of its GPU model, or of
-// CPU.
+// containers, less what Spot-tolerant work borrows on them and CPU work
+// packs on them, for a Spot market what its work borrows on on-demand
+// hosts of its GPU model, or of CPU, and for the CPU Spot market what its
+// work packs on GPU hosts.
 func (ps *pass) marketLoad(m ReserveMarket) FleetCapacity {
 	var load FleetCapacity
 	for _, h := range ps.hosts {
 		switch {
 		case h.market() == m:
-			load = load.Plus(h.Load.Minus(h.Lent))
+			load = load.Plus(h.Load.Minus(h.Lent).Minus(h.Packed))
 		case m == reserveMarketOf(MarketSpot, h.GPU):
 			load = load.Plus(h.Lent)
+		}
+		if m.spotCPU() {
+			load = load.Plus(h.Packed)
 		}
 	}
 	return load
@@ -588,9 +600,11 @@ func (ps *pass) misplaced(v *marketView, region string) bool {
 	return i >= 0 && offers[i].Region == r.Region && offers[i].HourlyMicros*int64(ps.p.Provision/time.Second) < saved
 }
 
-// placed is a reserve of market v that holds its stopped target.
+// placed is a reserve of market v that holds its stopped target: one not
+// launched yet wherever its walk points, and a launched one only where it
+// is not misplaced.
 func (ps *pass) placed(v *marketView) func(FleetHost) bool {
-	return func(h FleetHost) bool { return h.reserve() && !ps.misplaced(v, h.Region) }
+	return func(h FleetHost) bool { return h.reserve() && (h.Requested || !ps.misplaced(v, h.Region)) }
 }
 
 func boolKey(b bool) string {
@@ -814,7 +828,11 @@ func (ps *pass) cover(items []coverItem) {
 				continue
 			}
 		}
-		if i := take(coming, comingRooms, it, floor); i >= 0 {
+		// CPU work packs only into a GPU host that serves, so it never
+		// waits on one booting.
+		booting := it
+		booting.need.Packs = false
+		if i := take(coming, comingRooms, booting, floor); i >= 0 {
 			ps.provisioning(it, ptr(coming[i].host.ID), nil)
 			continue
 		}

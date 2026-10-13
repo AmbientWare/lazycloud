@@ -184,12 +184,14 @@ func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetH
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
 		Lent:       lent,
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
-		Current: onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Requested: Phase(h.Phase) == PhaseRequested,
+		Current:   onRelease(h.RolloutBucket, h.PreparedAgentVersion, release), UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
 		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays,
+		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},
 	}
 }
 
@@ -247,7 +249,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
 			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, Disks: int(r.Disks),
-			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes),
+			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes), Packs: r.Packs,
 		}}}
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id}

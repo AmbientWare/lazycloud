@@ -34,7 +34,7 @@ func newOwners(t *testing.T, config compute.Config) owners {
 	e := execution.NewExecution(pool)
 	return owners{
 		pool: pool, compute: compute.NewCompute(pool, e, config), execution: e,
-		scheduling: scheduling.NewScheduling(pool, discard()),
+		scheduling: scheduling.NewScheduling(pool, e, discard()),
 	}
 }
 
@@ -178,19 +178,22 @@ select ctr.id, task.id, att.id from ctr, task, att`, workspace, release, uuid.UU
 }
 
 // assertRetried checks that w's container stopped as host_lost and its
-// attempt was lost and queued for a retry.
+// attempt was lost to preemption, which bills nothing, and queued for a
+// retry.
 func assertRetried(t *testing.T, pool *pgxpool.Pool, w work) {
 	t.Helper()
 	var container, reason, attempt, task string
+	var preempted bool
 	err := pool.QueryRow(t.Context(), `
-select c.state, coalesce(c.stop_reason, ''), a.state, t.status
+select c.state, coalesce(c.stop_reason, ''), a.state, t.status, a.preempted
 from attempts a join containers c on c.id = a.container_id join tasks t on t.id = a.task_id
-where a.id = $1`, w.attempt).Scan(&container, &reason, &attempt, &task)
+where a.id = $1`, w.attempt).Scan(&container, &reason, &attempt, &task, &preempted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if container != "stopped" || reason != "host_lost" || attempt != "lost" || task != "queued" {
-		t.Fatalf("container %s (%s), attempt %s, task %s; want stopped (host_lost), lost, queued for a retry", container, reason, attempt, task)
+	if container != "stopped" || reason != "host_lost" || attempt != "lost" || !preempted || task != "queued" {
+		t.Fatalf("container %s (%s), attempt %s (preempted %v), task %s; want stopped (host_lost), lost to preemption, queued for a retry",
+			container, reason, attempt, preempted, task)
 	}
 }
 

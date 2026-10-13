@@ -393,7 +393,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	p.hosts = grpcListener.Addr().String()
 	edgeServer := &http.Server{Handler: tel.EdgeHandler(p.edge), ReadHeaderTimeout: 10 * time.Second}
 	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
-	sched := scheduling.NewScheduling(pool, logger)
+	sched := scheduling.NewScheduling(pool, p.execution, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
 	wg.Go(func() { _ = listener.Run(ctx) })

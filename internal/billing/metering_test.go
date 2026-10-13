@@ -221,3 +221,61 @@ func abs(n int64) int64 {
 	}
 	return n
 }
+
+// An attempt that ends by preemption, as GPU work's eviction or a Spot
+// reclaim ends it, bills nothing; the attempts that completed on the same
+// container bill, overlapping it or not. While attempts run no entry passes
+// the start of the oldest, since preemption may yet void it. A period the
+// voided time splits bills its measured use over the time it was read.
+func TestMeteringChargesNothingForAPreemptedAttempt(t *testing.T) {
+	f := newFixture(t)
+	ws := f.workspace(f.user())
+	rel := f.release(ws)
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	at := func(minutes int) time.Time { return base.Add(time.Duration(minutes) * time.Minute) }
+	c := f.container(containerSpec{workspace: ws, host: f.host(time.Now()), release: &rel.id, ready: at(5), cpuMillis: 1000, memoryBytes: 1 << 30})
+	// attempt runs from start, finishing as state at end unless it is still
+	// running.
+	attempt := func(start time.Time, state string, end *time.Time) uuid.UUID {
+		var id uuid.UUID
+		if err := f.pool.QueryRow(t.Context(), `
+with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+              values ($1, $2, $3, 'running', 1, 1, $5) returning id)
+insert into attempts (task_id, number, container_id, state, started_at, finished_at, deadline_at)
+select id, 1, $4, $6, $5, $7, now() + interval '1 hour' from task returning id`,
+			ws, rel.workload, rel.id, c, start, state, end).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	attempt(at(10), "succeeded", new(at(20)))
+	overlapping := attempt(at(35), "running", nil)
+	lost := attempt(at(40), "running", nil)
+
+	f.meter()
+	if got := f.ledger(c); len(got) != 2 || !got[1].end.Equal(at(30)) {
+		t.Fatalf("while attempts run, entries %+v; want them to end at %s, the quarter-hour before the oldest", got, at(30))
+	}
+	f.exec("update attempts set state = 'succeeded', finished_at = $2 where id = $1", overlapping, at(45))
+	attempt(at(50), "succeeded", new(at(55)))
+	// Two cores through minutes 45 to 54, which the voided time splits.
+	f.exec(`insert into container_metric_minutes (container_id, minute, samples, interval_ms, cpu_usage_usec, memory_rss_bytes,
+            memory_swap_bytes, network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes)
+select $1, $2::timestamptz + interval '1 minute' * g, 12, 60000, 120000000, 0, 0, 0, 0, 0, 0
+from generate_series(0, 9) g`, c, at(45))
+	f.exec("update attempts set state = 'lost', preempted = true, finished_at = now() where id = $1", lost)
+	f.exec("update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", c)
+	f.meter()
+	got := f.ledger(c)
+	if n := len(got); n != 4 || !got[0].start.Equal(at(5)) || !got[2].end.Equal(at(45)) || !got[3].start.Equal(at(50)) || !got[3].end.Equal(at(55)) {
+		t.Fatalf("entries %+v; want [%s, %s) up to the preempted attempt and on while the overlapping one ran, then [%s, %s)",
+			got, at(5), at(45), at(50), at(55))
+	}
+	var millis int64
+	if err := f.pool.QueryRow(t.Context(), "select cpu_millis from ledger_entries where source_id = $1 and started_at = $2", c, at(50)).Scan(&millis); err != nil {
+		t.Fatal(err)
+	}
+	if millis != 2000 {
+		t.Errorf("the entry after the voided time bills %d millicores, want the 2000 measured", millis)
+	}
+}

@@ -74,8 +74,8 @@ values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uu
 	gpuHost := fleetHost(t, o, compute.PhaseReady, "g6.xlarge", "i-0000000000000a002")
 	run(t, o.pool, "update hosts set gpu_type = 'L4', gpu_count = 1 where id = $1", uuid.UUID(gpuHost))
 	gpuRelease := newRelease(t, o.pool, ws, `{"resources": {"gpu": ["L4"], "gpu_count": 1}}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
 	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}

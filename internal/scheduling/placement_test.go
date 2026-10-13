@@ -13,10 +13,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
 func newScheduling(pool *pgxpool.Pool) *Scheduling {
-	return NewScheduling(pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewScheduling(pool, execution.NewExecution(pool), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func exec(t testing.TB, pool *pgxpool.Pool, sql string, args ...any) {
@@ -164,17 +165,21 @@ values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.wor
 }
 
 // A container that mounts platform volumes goes to a host in its
-// workspace bucket's region before a tighter one elsewhere; one that
-// mounts none takes the tightest fit.
+// workspace bucket's region before a tighter one elsewhere, even a GPU
+// host whose spare room it could pack into; one that mounts none packs.
 func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
-	west := newHost(t, pool, 4000, 4*gib, 0)
+	west := newHost(t, pool, 5000, 5*gib, 0)
 	east := newHost(t, pool, 8000, 8*gib, 0)
-	exec(t, pool, "update hosts set region = 'us-west-2' where id = $1", west)
-	exec(t, pool, "update hosts set region = 'us-east-1' where id = $1", east)
-	mounts, plain := newRelease(t, pool), newRelease(t, pool)
-	exec(t, pool, `update releases set spec = '{"volumes":[{"name":"models","mount_path":"/models"}]}' where id = $1`, mounts.id)
+	exec(t, pool, "update hosts set region = 'us-west-2', provider = 'aws', market = 'spot', gpu_type = 'T4', gpu_count = 1 where id = $1", west)
+	exec(t, pool, "update hosts set region = 'us-east-1', market = 'spot' where id = $1", east)
+	mounts, plain, gpu := newRelease(t, pool), newRelease(t, pool), newRelease(t, pool)
+	exec(t, pool, `update releases set spec = '{"kind": "function", "volumes":[{"name":"models","mount_path":"/models"}]}' where id = $1`, mounts.id)
+	exec(t, pool, `update releases set spec = '{"kind": "function"}' where id = $1`, plain.id)
+	exec(t, pool, `update releases set spec = '{"kind": "function", "resources": {"gpu": ["T4"]}}' where id = $1`, gpu.id)
+	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace, gpu.id, west)
 	exec(t, pool, "insert into workspace_buckets (workspace_id, bucket, region) select id, 'ws-' || id, 'us-east-1' from workspaces where id = $1", mounts.workspace)
 	exec(t, pool, "insert into volumes (workspace_id, name, size_bytes) values ($1, 'models', 16000000000)", mounts.workspace)
 	reads := pendingContainer(t, pool, mounts, 2000, gib, time.Minute)
@@ -202,7 +207,7 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 		{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib},
 		{ID: uuid.New(), CpuMillis: 9000, MemoryBytes: gib},
 	}
-	ids, hosts := pack([]compute.HostCapacity{roomy, tight}, pending)
+	ids, hosts, _ := pack([]compute.HostCapacity{roomy, tight}, pending, nil)
 	if len(ids) != 2 || hosts[0] != uuid.UUID(tight.Host) || hosts[1] != uuid.UUID(roomy.Host) {
 		t.Fatalf("placed %v on %v; want the first on the tight host, the second on the roomy one and the oversized one nowhere", ids, hosts)
 	}
@@ -246,7 +251,7 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 		{"no borrowing the last free floor for a disk's host", []compute.HostCapacity{onDemand, spot},
 			[]PendingContainersRow{diskOn(onDemand)}, []int{1}},
 	} {
-		ids, hosts := pack(c.hosts, c.pending)
+		ids, hosts, _ := pack(c.hosts, c.pending, nil)
 		placed := map[uuid.UUID]uuid.UUID{}
 		for i, id := range ids {
 			placed[id] = hosts[i]
@@ -364,5 +369,75 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 	}
 	if result.Assigned != 0 || state != "pending" || assigned != nil {
 		t.Fatalf("assigned %d; container %s on %v, want pending off the lost host", result.Assigned, state, assigned)
+	}
+}
+
+// GPU work placed on a GPU host whose CPU work holds the room it needs
+// evicts that work in the same pass until it fits: idle containers first,
+// then the busy one whose attempt started last, which stops with its task
+// preempted and queued again. CPU work it need not evict keeps running.
+func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	host := newHost(t, pool, 4000, 16*gib, 0)
+	exec(t, pool, "update hosts set provider = 'aws', market = 'spot', gpu_type = 'T4', gpu_count = 2 where id = $1", host)
+	cpuWork, gpuWork := newRelease(t, pool), newRelease(t, pool)
+	exec(t, pool, `update releases set spec = '{"kind": "function", "resources": {"gpu": ["T4"]}}' where id = $1`, gpuWork.id)
+	// live is a ready CPU container on the host, running an attempt that
+	// started ago before now unless ago is zero.
+	live := func(ago time.Duration) (container, task uuid.UUID) {
+		t.Helper()
+		if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
+			t.Fatal(err)
+		}
+		if ago == 0 {
+			return container, uuid.Nil
+		}
+		var attempt uuid.UUID
+		if err := pool.QueryRow(t.Context(), `
+with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+              select $1, workload_id, id, 'running', 1, 1, now() from releases where id = $2 returning id)
+insert into attempts (task_id, number, container_id, state, started_at, deadline_at)
+select task.id, 1, $3, 'running', now() - make_interval(secs => $4), now() + interval '1 hour' from task returning task_id, id`,
+			cpuWork.workspace, cpuWork.id, container, ago.Seconds()).Scan(&task, &attempt); err != nil {
+			t.Fatal(err)
+		}
+		exec(t, pool, "update tasks set current_attempt_id = $1 where id = $2", attempt, task)
+		return container, task
+	}
+	idle, _ := live(0)
+	longer, _ := live(10 * time.Minute)
+	newest, retried := live(time.Minute)
+	// 1000m is free: the first needs the idle container's room as well, the
+	// second the newest busy one's.
+	first := pendingContainer(t, pool, gpuWork, 2000, 4*gib, 2*time.Minute)
+	second := pendingContainer(t, pool, gpuWork, 1000, 2*gib, time.Minute)
+	exec(t, pool, "update containers set gpu_count = 1 where id in ($1, $2)", first, second)
+
+	if result := place(t, s); result.Assigned != 2 {
+		t.Fatalf("assigned %d of the two GPU containers", result.Assigned)
+	}
+	for id, want := range map[uuid.UUID]string{first: "starting", second: "starting", idle: "stopped", newest: "stopped", longer: "ready"} {
+		var state string
+		if err := pool.QueryRow(t.Context(), "select state from containers where id = $1", id).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state != want {
+			t.Errorf("container %s is %s, want %s", id, state, want)
+		}
+	}
+	var status string
+	var preemptions, maxAttempts int
+	var preempted bool
+	if err := pool.QueryRow(t.Context(), `
+select t.status, t.preemptions, t.max_attempts, a.preempted from tasks t join attempts a on a.task_id = t.id where t.id = $1`,
+		retried).Scan(&status, &preemptions, &maxAttempts, &preempted); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || preemptions != 1 || maxAttempts != 2 || !preempted {
+		t.Errorf("the evicted task is %s after %d preemptions with %d attempts, its attempt preempted %v; want queued after one, its retry not spent, and preempted, which bills nothing",
+			status, preemptions, maxAttempts, preempted)
 	}
 }

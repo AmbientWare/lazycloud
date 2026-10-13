@@ -685,6 +685,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			wake = append(wake, id.String())
 			ps.note("host returning to the reserve", "host_id", id)
 		}
+		if err := ps.evictPacked(ctx, tx, returned); err != nil {
+			return err
+		}
 		ps.result.Returned, moved = len(returned), moved || len(returned) > 0
 	}
 	for _, d := range []struct {
@@ -700,6 +703,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, id := range drained {
 			ps.note("host draining", "host_id", id, "reason", d.reason)
+		}
+		if err := ps.evictPacked(ctx, tx, drained); err != nil {
+			return err
 		}
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
@@ -770,6 +776,19 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		return database.Notify(ctx, tx, ChannelCompute, string(KindPlatform))
 	}
 	return nil
+}
+
+// evictPacked evicts the CPU work packed on GPU hosts that leave, which
+// never keeps one up.
+func (ps *fleetPass) evictPacked(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
+	var ids []uuid.UUID
+	for _, id := range hosts {
+		ids = append(ids, ps.rows[HostID(id)].PackedIds...)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ps.c.containers.EvictContainers(ctx, tx, ids)
 }
 
 // writeWaits records every batch container's wait in one statement, in id

@@ -53,7 +53,8 @@ func TestReadsRankOffersInTheBucketsRegionFirst(t *testing.T) {
 
 // A ready Spot L4 reserve outside the region its market's starts read from
 // stays until the market's reserve there is ready, then retires; each step
-// is stable, so the same inputs again plan nothing.
+// is stable, so the same inputs again plan nothing. One not launched yet
+// is awaited wherever its launch's walk points it.
 func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 	t.Parallel()
 	in, read := readRegions(t)
@@ -68,6 +69,11 @@ func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 	}
 	plan := func(hosts ...FleetHost) FleetPlan {
 		return PlanFleet(gpuPolicy(), FleetSnapshot{Now: offerNow, Hosts: hosts, Offers: in, HostRoom: 100, ReserveRoom: 100})
+	}
+	walking := reserve(1, "us-west-2", "us-west-2a", "usw2-az2", FleetPreparing)
+	walking.Requested = true
+	if got := plan(walking).Actions; len(got) > 0 {
+		t.Fatalf("while a reserve not launched yet points at us-west-2: %+v, want it awaited", got)
 	}
 	west := reserve(1, "us-west-2", "us-west-2a", "usw2-az2", FleetStopped)
 	bought := actionsOf(plan(west), ActionBuyReserve, ActionRetireReserve)
