@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
@@ -22,8 +23,8 @@ const stopGrace = 10 * time.Second
 
 // Serve runs the snapshotter on a Unix socket only root reaches, serving
 // containerd's snapshotter API, LayerSources, DiskSources and
-// VolumeSources, and the volumes' S3 endpoint on cfg.VolumeAddr, until ctx
-// ends. ready runs once both accept calls.
+// VolumeSources, and with cfg.VolumeAddr the volumes' S3 endpoint, until
+// ctx ends. ready runs once they accept calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
@@ -50,16 +51,22 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	imagefsproto.RegisterLayerSourcesServer(server, layerSources{cache: s.cache})
 	imagefsproto.RegisterDiskSourcesServer(server, diskSources{disks: s.disks})
 	imagefsproto.RegisterVolumeSourcesServer(server, volumeSources{volumes: s.volumes})
-	endpoint, err := lc.Listen(ctx, "tcp", cfg.VolumeAddr)
-	if err != nil {
-		_ = listener.Close()
-		return fmt.Errorf("listen on %s: %w", cfg.VolumeAddr, err)
-	}
 	// Forwarded writes and reads run as long as they take.
 	volumes := &http.Server{Handler: s.volumes, ReadHeaderTimeout: stopGrace}
+	var endpoint net.Listener
+	if cfg.VolumeAddr != "" {
+		if endpoint, err = lc.Listen(ctx, "tcp", cfg.VolumeAddr); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("listen on %s: %w", cfg.VolumeAddr, err)
+		}
+		s.volumes.addr = endpoint.Addr().String()
+	}
+	var serving sync.WaitGroup
 	served := make(chan error, 2)
-	go func() { served <- server.Serve(listener) }()
-	go func() { served <- volumes.Serve(endpoint) }()
+	serving.Go(func() { served <- server.Serve(listener) })
+	if endpoint != nil {
+		serving.Go(func() { served <- volumes.Serve(endpoint) })
+	}
 	ready()
 	select {
 	case err = <-served:
@@ -71,5 +78,6 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	server.GracefulStop()
 	force.Stop()
 	_ = volumes.Close()
+	serving.Wait()
 	return err
 }

@@ -75,7 +75,8 @@ type Config struct {
 	// are all fetched in the background once it is mounted; zero fills
 	// none.
 	FillBytes int64
-	// VolumeAddr is the loopback address the volumes' S3 endpoint serves.
+	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
+	// on; empty serves none.
 	VolumeAddr string
 	HTTP       *http.Client
 	Logger     *slog.Logger

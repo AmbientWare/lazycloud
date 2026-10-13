@@ -185,37 +185,46 @@ message DiskReadsResponse {
   repeated uint32 recent_frames = 2;
 }
 
-// VolumeSources serves workspaces' platform volumes through the frame cache.
-// The snapshotter answers S3 requests on a loopback address for the buckets
-// granted to it, addressed path-style, and signs each request it forwards to
-// the bucket's store with the bucket's grant. A GET with no query string of
-// an object of 1 MiB or more is served from the cache, by the object's
-// version: its ETag, as a HEAD answered at most a second earlier reported
-// it. Every frame of a version is fetched with If-Match on that ETag, so a
-// cached version never mixes bytes of two. Any other request is forwarded
-// unchanged, and a PUT, POST or DELETE makes the next read of every object
-// of the workspace ask the store for its version again.
+// VolumeSources serves workspaces' platform volumes through the frame cache
+// on a host whose data volume is instance store. The snapshotter answers S3
+// requests on a loopback address for keys under volumes/ of the buckets
+// granted to it, addressed path-style and signed with the bucket's key as
+// access key. It signs each request it forwards to the bucket's store with
+// the bucket's grant. A GET with no query string or condition of an object
+// of 1 MiB or more is served from the cache, by the object's version: its
+// ETag, as a HEAD answered at most a second earlier reported it. Every frame
+// of a version is fetched with If-Match on that ETag, so a cached version
+// never mixes bytes of two. Any other request is forwarded unchanged, and a
+// write of an object makes its next read ask the store for its version
+// again.
 service VolumeSources {
-  // GrantVolumes records the read-write credential of a workspace's bucket,
-  // replacing the bucket's current one unless that expires later. Requests
-  // for a bucket without a live grant are refused.
+  // GrantVolumes records the read-write credential of a workspace's bucket
+  // and the key its requests name, replacing the bucket's current grant
+  // unless that expires later with the same key. A request naming no
+  // workspace records nothing. The answer names the endpoint, empty on a
+  // host that does not cache volumes.
   rpc GrantVolumes(GrantVolumesRequest) returns (GrantVolumesResponse);
   // WarmVolumes fills the objects under prefixes of the workspace's granted
   // bucket into the cache in the background, behind containers' reads,
-  // within a share of the cache. A request naming no prefix warms nothing.
+  // within a share of the cache.
   rpc WarmVolumes(WarmVolumesRequest) returns (WarmVolumesResponse);
 }
 
 message GrantVolumesRequest {
   string workspace_id = 1;
   BucketGrant grant = 2;
+  // The access key requests for the bucket sign with, 16 bytes or more.
+  string key = 3;
 }
 
-message GrantVolumesResponse {}
+message GrantVolumesResponse {
+  // The endpoint's host:port.
+  string endpoint = 1;
+}
 
 message WarmVolumesRequest {
   string workspace_id = 1;
-  // Key prefixes, each a volume's, ending in "/".
+  // Key prefixes, each a volume's, under volumes/.
   repeated string prefixes = 2;
 }
 

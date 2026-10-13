@@ -1127,9 +1127,11 @@ func (x *DiskReadsResponse) GetRecentFrames() []uint32 {
 }
 
 type GrantVolumesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceId   string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	Grant         *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	Grant       *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
+	// The access key requests for the bucket sign with, 16 bytes or more.
+	Key           string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1178,8 +1180,17 @@ func (x *GrantVolumesRequest) GetGrant() *BucketGrant {
 	return nil
 }
 
+func (x *GrantVolumesRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
 type GrantVolumesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The endpoint's host:port.
+	Endpoint      string `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1214,10 +1225,17 @@ func (*GrantVolumesResponse) Descriptor() ([]byte, []int) {
 	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{22}
 }
 
+func (x *GrantVolumesResponse) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
 type WarmVolumesRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	// Key prefixes, each a volume's, ending in "/".
+	// Key prefixes, each a volume's, under volumes/.
 	Prefixes      []string `protobuf:"bytes,2,rep,name=prefixes,proto3" json:"prefixes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1374,11 +1392,13 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"[\n" +
 	"\x11DiskReadsResponse\x12!\n" +
 	"\fstart_frames\x18\x01 \x03(\rR\vstartFrames\x12#\n" +
-	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"q\n" +
+	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\x83\x01\n" +
 	"\x13GrantVolumesRequest\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x127\n" +
-	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\"\x16\n" +
-	"\x14GrantVolumesResponse\"S\n" +
+	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\"2\n" +
+	"\x14GrantVolumesResponse\x12\x1a\n" +
+	"\bendpoint\x18\x01 \x01(\tR\bendpoint\"S\n" +
 	"\x12WarmVolumesRequest\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1a\n" +
 	"\bprefixes\x18\x02 \x03(\tR\bprefixes\"\x15\n" +

@@ -77,22 +77,17 @@ func (a *Agent) replaceSnapshotter(ctx context.Context) error {
 	return nil
 }
 
-// cachesVolumes reports whether the host mounts platform volumes through
-// its snapshotter's endpoint: a GPU host, whose data volume is instance
-// store, with a snapshotter that serves VolumeSources.
-func (a *Agent) cachesVolumes(ctx context.Context, snapshotter *layersource.Client) (bool, error) {
-	if len(a.gpus) == 0 && !a.cfg.cacheVolumes {
-		return false, nil
-	}
+// volumeEndpoint is the address of the snapshotter's endpoint for platform
+// volumes, empty when it does not cache them.
+func (a *Agent) volumeEndpoint(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	_, err := snapshotter.Volumes.WarmVolumes(ctx, &imagefsproto.WarmVolumesRequest{})
+	answer, err := a.volumes.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{})
 	if status.Code(err) == codes.Unimplemented {
-		a.log.Info("the host's snapshotter serves no volumes; volumes mount from their buckets")
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("ask the snapshotter for volumes: %w", err)
+		return "", fmt.Errorf("ask the snapshotter for its volume endpoint: %w", err)
 	}
-	return true, nil
+	return answer.GetEndpoint(), nil
 }

@@ -1,7 +1,7 @@
 // Command lazycloud-snapshotter serves containerd's snapshotter API with
 // lazily read image layers, the disk engine its disks' published
 // generations, and volume mounts an S3 endpoint, on a host. It runs as root in its own systemd unit, which
-// agent updates never restart: the FUSE mounts it serves die with it.
+// the agent restarts only on a host that runs no container: the FUSE mounts it serves die with it.
 //
 //	lazycloud-snapshotter
 package main
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -24,10 +25,13 @@ import (
 )
 
 const (
-	// fetches bounds the frames read from the stores at once; half of them
-	// fill in the background, and 32 parallel 8 MiB reads fill a volume
-	// object at the store's full speed.
-	fetches = 64
+	// fetches bounds the frames read from the stores at once, half of them
+	// in the background. Where volumes are cached, 32 parallel 8 MiB reads
+	// fill a volume object at the store's full speed.
+	fetches       = 16
+	volumeFetches = 64
+	// instanceStore is the model EC2 gives NVMe instance store volumes.
+	instanceStore = "Amazon EC2 NVMe Instance Storage"
 	// fillBytes is the largest layer, uncompressed, fetched whole in the
 	// background once mounted.
 	fillBytes = 256 << 20
@@ -72,7 +76,6 @@ func run(args []string) int {
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	// Every fetch slot keeps its connection to the store between frames.
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
-	transport.MaxIdleConnsPerHost = fetches
 	// Each disk's writes stall at its dirty budget, so the cache keeps the
 	// budget of every disk slot the volume's free space holds free for
 	// them. The cache starts empty; what else the volume holds, such as
@@ -93,9 +96,13 @@ func run(args []string) int {
 	reserve := hostproto.DiskSlots(int64(volume.Bavail)*volume.Bsize) * hostproto.DiskDirtyBytes //nolint:gosec // Block counts fit an int64.
 	cfg := snapshotter.Config{
 		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
-		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes, VolumeAddr: layersource.VolumeEndpoint,
+		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
+	if cachesVolumes(layersource.CacheDir) {
+		cfg.Fetches, cfg.VolumeAddr = volumeFetches, "127.0.0.1:0"
+	}
+	transport.MaxIdleConnsPerHost = cfg.Fetches
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {
 		logger.Info("serving", "socket", layersource.Socket)
 		if err := notifyReady(); err != nil {
@@ -107,6 +114,22 @@ func run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// cachesVolumes reports whether the snapshotter caches platform volumes: on
+// a data volume of instance store, which holds the cache at local NVMe
+// speed, or where LAZYCLOUD_VOLUME_CACHE is true, as on the local stack's
+// hosts.
+func cachesVolumes(dir string) bool {
+	if os.Getenv("LAZYCLOUD_VOLUME_CACHE") == "true" {
+		return true
+	}
+	var st unix.Stat_t
+	if unix.Stat(dir, &st) != nil {
+		return false
+	}
+	model, err := os.ReadFile(fmt.Sprintf("/sys/dev/block/%d:%d/device/model", unix.Major(st.Dev), unix.Minor(st.Dev)))
+	return err == nil && strings.TrimSpace(string(model)) == instanceStore
 }
 
 // notifyReady tells systemd the socket accepts calls, so containerd and

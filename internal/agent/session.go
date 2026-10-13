@@ -134,7 +134,7 @@ func (a *Agent) runSession(ctx context.Context) error {
 				errs <- fmt.Errorf("receive command: %w", err)
 				return
 			}
-			if !a.handle(ctx, command) {
+			if !a.handle(command) {
 				continue
 			}
 			ack := &hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}}
@@ -237,7 +237,7 @@ func (a *Agent) reportIfRoom(m *hostproto.HostMessage) {
 // are never delayed by container work. It reports whether to acknowledge
 // the command: one the host failed to take is left for the server to send
 // again.
-func (a *Agent) handle(ctx context.Context, command *hostproto.ServerMessage) bool {
+func (a *Agent) handle(command *hostproto.ServerMessage) bool {
 	switch body := command.GetBody().(type) {
 	case *hostproto.ServerMessage_Start:
 		a.start(body.Start)
@@ -268,8 +268,21 @@ func (a *Agent) handle(ctx context.Context, command *hostproto.ServerMessage) bo
 		}
 		a.platform.update(body.PlatformImages.GetImages())
 	case *hostproto.ServerMessage_StorageGrant:
-		if err := a.volumes.grant(ctx, body.StorageGrant); err != nil {
-			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
+		workspace := body.StorageGrant.GetWorkspaceId()
+		if err := a.volumes.grant(body.StorageGrant); err != nil {
+			a.log.Error("storing a storage grant failed", "workspace_id", workspace, "error", err)
+			return false
+		}
+		if a.volumes.endpoint != "" {
+			// The snapshotter takes the grant off the receive loop, which
+			// acknowledges it once it holds it.
+			a.goOwned(func(ctx context.Context) {
+				if err := a.volumes.grantCache(ctx, workspace); err != nil {
+					a.log.Error("handing a storage grant to the snapshotter failed", "workspace_id", workspace, "error", err)
+					return
+				}
+				a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}})
+			})
 			return false
 		}
 	default:

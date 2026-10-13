@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -494,11 +495,11 @@ func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 	})
 }
 
-// TestVolumesMountThroughAnHTTPSStore: a mount verifies its store's
-// certificate against the host's trust bundle. A store the bundle does not
-// trust fails the start with GeeseFS's own words and leaves no mount; once
-// the host trusts it, the next start mounts.
-func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
+// TestMountsVerifyTheirStoreAgainstTheTrustBundle: a mount that reaches its
+// store itself, as a cloud bucket's does, trusts only the agent's CA
+// bundle: a store it does not trust fails the start, with the
+// certificate's error, and one it trusts mounts.
+func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
 	geesefs := testGeeseFS(t)
 	store := newTestStore(t)
 	target, err := url.Parse(store.endpoint)
@@ -516,11 +517,14 @@ func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
 	e.geesefs = geesefs
 	e.startAgent(func(c *Config) { c.TrustBundle = bundle })
 	s := e.session()
-	source := serveSource(t, "testdata/volumes")
-	workspace, volume := uuid.NewString(), uuid.NewString()
-	s.send(t, store.grant(workspace))
+	prefix := "test-buckets/" + uuid.NewString() + "/"
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String(prefix + "hello.txt"), Body: strings.NewReader("over https"),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	untrusted := volumeStart(e, source, workspace, volume, false)
+	untrusted := cloudBucketStart(e, store.bucketMount("/bucket", prefix))
 	began := time.Now()
 	s.send(t, untrusted)
 	exit := s.phase(t, untrusted.GetStart().GetContainerId(), exited).GetExit()
@@ -535,9 +539,10 @@ func TestVolumesMountThroughAnHTTPSStore(t *testing.T) {
 	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.Certificate().Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	id := e.startVolume(s, source, workspace, volume)
-	e.write(id, "/volumes/data/hello.txt", "over https")
-	if got := e.read(id, "/volumes/data/hello.txt"); got != `"over https"` {
+	trusted := cloudBucketStart(e, store.bucketMount("/bucket", prefix))
+	s.send(t, trusted)
+	s.phase(t, trusted.GetStart().GetContainerId(), ready)
+	if got := e.read(trusted.GetStart().GetContainerId(), "/bucket/hello.txt"); got != `"over https"` {
 		t.Fatalf("read: %s", got)
 	}
 }
@@ -755,7 +760,7 @@ func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
-	store := testStore{endpoint: "http://127.0.0.1:1", bucket: "bucket", accessKey: "key", secretKey: "secret"}
+	store := testStore{endpoint: "http://127.0.0.1:1", region: "us-east-1", bucket: "bucket", accessKey: "key", secretKey: "secret"}
 	refused := store.grant("not-a-workspace")
 	stored := store.grant(uuid.NewString())
 	s.send(t, refused)
@@ -857,5 +862,94 @@ func TestADyingMountFailsItsStartOrItsContainer(t *testing.T) {
 	upFirst := v.newMounter(mounterName(uuid.NewString(), 0), "")
 	if !v.markUp(upFirst) || !v.markExited(upFirst) {
 		t.Fatal("a mount that came up and exited was not lost")
+	}
+}
+
+// TestCachedVolumesMountThroughTheSnapshotter: on a host that caches
+// volumes, as test hosts do, the mount container addresses the snapshotter
+// and holds only the workspace's endpoint key, no store credential. What
+// one container writes, another container's mount reads, symlinks
+// included, and a file overwritten in the bucket reads anew once listed
+// again.
+func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	writer := e.startVolume(s, source, workspace, volume)
+	inspect, err := e.docker.ContainerInspect(t.Context(), e.mounter(writer).ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range inspect.Container.Mounts {
+		if m.Destination != "/creds" {
+			continue
+		}
+		key, err := os.ReadFile(filepath.Join(m.Source, "credentials.json")) //nolint:gosec // The test's own state.
+		if err != nil || filepath.Base(m.Source) != "endpoint" || strings.Contains(string(key), store.accessKey) {
+			t.Fatalf("the mount container holds %s: %s (%v)", m.Source, key, err)
+		}
+	}
+	if args := strings.Join(inspect.Container.Config.Entrypoint, " "); !strings.Contains(args, "'http://127.0.0.1:") {
+		t.Fatalf("the mount does not address the snapshotter: %s", args)
+	}
+
+	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "4"]}`)))
+	if got := result(t, e.completion(e.task(writer, `{"args": ["symlink", "/volumes/data/link", "model.bin"]}`))); got != `"model.bin"` {
+		t.Fatalf("symlink: %s", got)
+	}
+	reader := e.startVolume(s, source, workspace, volume)
+	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != sum {
+		t.Fatalf("the other container reads %s, written %s", got, sum)
+	}
+	if got := result(t, e.completion(e.task(reader, `{"args": ["readlink", "/volumes/data/link"]}`))); got != `"model.bin"` {
+		t.Fatalf("readlink: %s", got)
+	}
+
+	rewritten := make([]byte, 3<<20)
+	_, _ = rand.NewChaCha8([32]byte{9}).Read(rewritten)
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/model.bin"), Body: bytes.NewReader(rewritten),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
+		t.Fatalf("the volume lists %v", names)
+	}
+	want := sha256.Sum256(rewritten)
+	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != `"`+hex.EncodeToString(want[:])+`"` {
+		t.Fatalf("after the overwrite the container reads %s", got)
+	}
+}
+
+// TestALargeRenameLandsAcrossAStop: a file of hundreds of MiB renamed just
+// before its container stops, which GeeseFS stores as a copy in parts
+// through the snapshotter, is in the bucket under its new name once the
+// mount stopped.
+func TestALargeRenameLandsAcrossAStop(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
+	sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "640"]}`)))
+	s.send(t, stopCommand(id, 10))
+	s.phase(t, id, exited)
+	for deadline := time.Now().Add(mounterFlushSeconds * time.Second); len(e.mounters(true, id)) > 0; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatal("the mount did not stop within its flush window")
+		}
+	}
+	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/model.bin")})
+	if err != nil {
+		t.Fatalf("the renamed file is not in the bucket: %v", err)
+	}
+	defer func() { _ = object.Body.Close() }()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, object.Body); err != nil {
+		t.Fatal(err)
+	}
+	if got := `"` + hex.EncodeToString(digest.Sum(nil)) + `"`; got != sum {
+		t.Fatalf("the bucket holds %s, written %s", got, sum)
 	}
 }

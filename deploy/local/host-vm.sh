@@ -7,10 +7,10 @@
 #
 # Usage: deploy/local/host-vm.sh up|down|reset
 #   up     download Lima and the image (pinned, checksums verified) into
-#          .lazycloud/, create or start the VM, set it up once, replace its
-#          snapshotter when the release's differs and no container runs, and
-#          install and start the agent from the local server (run.sh start
-#          runs it)
+#          .lazycloud/, create or start the VM, set it up once, and install
+#          and start the agent from the local server (run.sh start runs it),
+#          which replaces the VM's snapshotter with its release's while no
+#          container runs
 #   down   stop the VM
 #   reset  delete the VM; the next up builds a fresh host
 #
@@ -40,29 +40,11 @@ setup() {
   # Builds push to the registry forward on the VM's loopback.
   printf '[Service]\nEnvironment=LAZYCLOUD_BUILD_NETWORK=host\n' |
     shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-agent.service.d && cat >/etc/systemd/system/lazycloud-agent.service.d/local-host.conf'
+  # Its snapshotter caches volumes as on GPU hosts, whose data volume is
+  # instance store.
+  printf '[Service]\nEnvironment=LAZYCLOUD_VOLUME_CACHE=true\n' |
+    shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d && cat >/etc/systemd/system/lazycloud-snapshotter.service.d/local-host.conf'
   shell systemctl daemon-reload && shell systemctl enable --now lazycloud-bridge-address.service
-}
-
-# refresh_snapshotter replaces the VM's snapshotter with the one in the
-# agent release when they differ. Agent updates never replace a running
-# snapshotter, since its FUSE mounts die with it, so this restarts it only
-# while no container runs and otherwise says how to start over.
-refresh_snapshotter() {
-  : "${LAZYCLOUD_AGENT_ARCHIVE:?run by deploy/local/run.sh}"
-  binary=/usr/local/lib/lazycloud/lazycloud-snapshotter
-  shell test -x "$binary" || return 0
-  want=$(tar -xzOf "$LAZYCLOUD_AGENT_ARCHIVE" lazycloud-snapshotter | sha256sum | cut -d' ' -f1)
-  [ "$(shell sha256sum "$binary" | cut -d' ' -f1)" = "$want" ] && return 0
-  # A stopped agent starts no container while this checks.
-  shell systemctl stop lazycloud-agent
-  if [ -n "$(shell docker ps --quiet)" ]; then
-    echo "the VM's lazycloud-snapshotter differs from this tree's, and containers run there; deploy/local/host-vm.sh reset gives a fresh host" >&2
-    return 0
-  fi
-  tar -xzOf "$LAZYCLOUD_AGENT_ARCHIVE" lazycloud-snapshotter |
-    shell sh -c "cat >$binary.new && chmod 0755 $binary.new && mv $binary.new $binary"
-  shell systemctl restart lazycloud-snapshotter
-  echo "restarted the VM's lazycloud-snapshotter on this tree's build" >&2
 }
 
 # install_agent joins the VM the way hosts join, installing the release the
@@ -81,7 +63,6 @@ install_agent() {
 up() {
   start 4 8GiB 'mounts: []'
   setup
-  refresh_snapshotter
   install_agent
 }
 

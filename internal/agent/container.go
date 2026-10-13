@@ -340,7 +340,6 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 		}
 	}
 
-	c.a.volumes.warm(spec)
 	began := time.Now()
 	tracing, err := c.a.layers.start(ctx, c.log, c.id, spec)
 	if err != nil {
@@ -353,6 +352,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			}
 		})
 	}
+	c.a.volumes.warm(spec)
 	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull")
 	pulled, err := c.a.images.ensure(pullCtx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))

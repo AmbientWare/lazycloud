@@ -28,8 +28,8 @@ const (
 
 // snapshotterUnit runs the snapshotter before containerd and Docker. Its
 // FUSE mounts die with its process, so stopping or restarting the unit
-// kills that process only, and nothing but the node image or an operator
-// restarts it.
+// kills that process only, and only an agent on a host that runs no
+// container restarts it.
 const snapshotterUnit = `[Unit]
 Description=LazyCloud snapshotter: lazily read image layers for containerd
 Before=containerd.service docker.service
@@ -59,7 +59,8 @@ const containerdProxy = `
 // installSnapshotter installs the snapshotter beside the agent executable
 // and points containerd and Docker at it: the containerd image store, the
 // snapshotter as storage driver and live-restore. A running snapshotter is
-// left alone, since restarting it breaks every container on the host.
+// left alone, since restarting it breaks every container on the host; the
+// agent replaces it when it starts on a host that runs none.
 // containerd and Docker restart only when their settings change, which
 // stops containers that run then; Docker images pulled under another
 // storage driver stay hidden while this one is set.
@@ -72,7 +73,7 @@ func installSnapshotter(executable string, out io.Writer) error {
 	}
 	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", layersource.Unit).Run() == nil //nolint:gosec // a fixed unit name
 	if active {
-		_, _ = fmt.Fprintln(out, "lazycloud-snapshotter is running and keeps its version; it changes on a drained host")
+		_, _ = fmt.Fprintln(out, "lazycloud-snapshotter is running; the agent replaces it once the host runs no container")
 	} else {
 		exe, err := resolveAgent(executable)
 		if err != nil {

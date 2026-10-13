@@ -35,6 +35,8 @@ const (
 	// trimEvery is how often the cache checks the free space its volume
 	// keeps for disks' unpublished writes.
 	trimEvery = 5 * time.Second
+	// frameDecoders bounds the layer and disk frames decoded at once.
+	frameDecoders = 16
 )
 
 // errNoGrant marks a read of a layer or disk the agent has not granted, or
@@ -134,7 +136,7 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create frame cache: %w", err)
 	}
-	reader, err := imagefs.NewFrameReader(cfg.Fetches)
+	reader, err := imagefs.NewFrameReader(frameDecoders)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the decoder names itself
 	}
