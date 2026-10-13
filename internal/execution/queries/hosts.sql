@@ -15,21 +15,5 @@ from containers c
 join releases r on r.id = c.release_id
 where c.host_id = any(@host_ids::uuid[]) and c.state <> 'stopped' and c.purpose = 'serve' and release_moves(r.spec);
 
--- name: LockContainersToEvict :many
--- The live containers among the ids not evicted yet, locked in id order.
-select id from containers
-where id = any(@ids::uuid[]) and state <> 'stopped' and evicted_at is null
-order by id
-for update;
-
--- name: EvictContainers :many
--- The locked containers are evicted, each with whether it runs attempts.
--- This statement's snapshot follows the locks, so it sees any attempt a
--- claim committed before them.
-update containers c
-set evicted_at = now()
-where c.id = any(@ids::uuid[])
-returning c.id, c.release_id, exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')::bool as busy;
-
 -- name: StoppedContainersAmong :many
 select id from containers where id = any(@ids::uuid[]) and state = 'stopped';

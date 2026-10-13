@@ -153,16 +153,10 @@ type simResult struct {
 	purchases []simPurchase
 	cancelled int
 	// cpuLaunches counts CPU hosts bought; evicted the CPU work GPU work
-	// evicted, of it evictedAgain retries evicted again; packedSpotSec the
-	// seconds CPU work ran on Spot GPU hosts; gpuHostSec the seconds GPU
-	// hosts ran, and gpuRevenueNanos what work on them billed.
+	// evicted, of it evictedAgain retries evicted again; gpuHostSec the
+	// seconds GPU hosts ran.
 	cpuLaunches, evicted, evictedAgain int
-	packedSpotSec, gpuHostSec          float64
-	gpuRevenueNanos                    int64
-	// retryWaits are the evicted work's waits to start again, and flips
-	// count GPU hosts that began handing CPU work back or lending again.
-	retryWaits []time.Duration
-	flips      int
+	gpuHostSec                         float64
 }
 
 // simPurchase is one reserve purchase: its market and each pool its launch
@@ -373,8 +367,8 @@ func (s *sim) place() {
 			return false
 		}
 		best := serving[i]
-		if rooms[i].evicts(c.need) {
-			retries = append(retries, s.evict(best, func(room HostCapacity) bool { return !room.evicts(c.need) })...)
+		if rooms[i].Evicts(c.need) {
+			retries = append(retries, s.evict(best, func(room HostCapacity) bool { return !room.Evicts(c.need) })...)
 		}
 		switch {
 		case !c.need.Preemptible && best.Market == MarketSpot:
@@ -402,11 +396,10 @@ func (s *sim) place() {
 		s.r.starts[kind]++
 		best.containers, best.served = append(best.containers, c), true
 		s.placedLog = append(s.placedLog, c)
-		wait := s.now.Sub(c.arrived)
 		if c.retry {
-			s.r.retryWaits = append(s.r.retryWaits, wait)
 			return true
 		}
+		wait := s.now.Sub(c.arrived)
 		s.r.waits = append(s.r.waits, wait)
 		if !c.need.Preemptible {
 			s.r.pinnedWaits = append(s.r.pinnedWaits, wait)
@@ -860,9 +853,6 @@ func (s *sim) apply(plan FleetPlan) {
 			s.host(*a.Host).State, s.host(*a.Host).HandsBack = FleetDraining, false
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
-			if s.host(*a.Host).GPU != "" {
-				s.r.flips++
-			}
 		case ActionRetireReserve:
 			if s.host(*a.Host).State == FleetPreparing {
 				s.r.cancelled++
@@ -924,11 +914,6 @@ func (s *sim) accountGPU(h *simHost, secs int64) {
 	switch {
 	case h.Market == MarketSpot:
 		s.r.spotGPUSec += float64(secs)
-		for _, c := range h.containers {
-			if c.packed {
-				s.r.packedSpotSec += float64(secs)
-			}
-		}
 	case slices.ContainsFunc(h.containers, func(c *simContainer) bool { return c.need.Preemptible && !c.packed }):
 		s.r.borrowedSec += float64(secs)
 	}
@@ -946,11 +931,7 @@ func (s *sim) bill(c *simContainer, d time.Duration) {
 	}
 	rate := s.in.Rates[i]
 	perHour := int64(c.need.CPUMillis)*rate.CPUHour/1000 + c.need.MemoryBytes*rate.MemoryGiBHour/gib + int64(c.need.GPUsNeeded())*rate.GPUCardHour
-	revenue := perHour * d.Milliseconds() / int64(time.Hour/time.Millisecond)
-	s.r.revenueNanos += revenue
-	if c.packed || c.need.GPUsNeeded() > 0 {
-		s.r.gpuRevenueNanos += revenue
-	}
+	s.r.revenueNanos += perHour * d.Milliseconds() / int64(time.Hour/time.Millisecond)
 }
 
 // slow counts the starts that waited over 30 seconds.
@@ -1534,18 +1515,14 @@ func TestRefusedReservesStayWithinTheCap(t *testing.T) {
 	}
 }
 
-// packRow prints a packing scenario: profit, what work on GPU hosts bills
-// per GPU host-hour, the CPU hosts bought, the GPU and CPU start waits, the
-// CPU work evicted (every simulated container runs a task, so each is
-// busy), its retries evicted again and how long they waited to start
-// again, the GPU hosts' hand-back flips, and the CPU task-hours on Spot
-// GPU hosts, which their reclaims reach.
+// packRow prints a packing scenario: profit, the CPU hosts bought, the GPU
+// and CPU start waits, and the packed tasks evictions preempted (every
+// simulated container runs a task) and of them retries preempted again.
 func (r simResult) packRow(name string) string {
 	gpu, cpu := r.fnWaits["gpu"], r.fnWaits["cpu"]
-	return fmt.Sprintf("%-38s profit $%6.2f  $%5.2f/GPU host-h  CPU hosts %2d  GPU p50 %5s p95 %5s  CPU p50 %4s p95 %4s  evicted %3d again %d retry p95 %4s  flips %3d  CPU on Spot GPU %5.2fh",
-		name, float64(r.revenueNanos)/1e9-float64(r.spendMicros)/3600/1e6, float64(r.gpuRevenueNanos)/1e9/(r.gpuHostSec/3600), r.cpuLaunches,
-		quantile(gpu, 0.5), quantile(gpu, 0.95), quantile(cpu, 0.5), quantile(cpu, 0.95), r.evicted, r.evictedAgain,
-		quantile(r.retryWaits, 0.95), r.flips, r.packedSpotSec/3600)
+	return fmt.Sprintf("%-38s profit $%5.2f  CPU hosts %2d  GPU p50 %4s p95 %5s  CPU p50 %4s p95 %4s  preempted %d again %d",
+		name, float64(r.revenueNanos)/1e9-float64(r.spendMicros)/3600/1e6, r.cpuLaunches,
+		quantile(gpu, 0.5), quantile(gpu, 0.95), quantile(cpu, 0.5), quantile(cpu, 0.95), r.evicted, r.evictedAgain)
 }
 
 // CPU work that can move fills the spare room of GPU hosts running GPU
@@ -1558,7 +1535,7 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 	t4 := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib}
 	t4Large := t4
 	t4Large.CPUMillis, t4Large.MemoryBytes = 2000, 8*gib
-	small := Requirement{Preemptible: true, Moves: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
+	small := Requirement{Preemptible: true, Packs: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
 	every := func(need Requirement, fn string, from, until, gap time.Duration, count int, runs time.Duration) []simArrival {
 		var out []simArrival
 		for at := from; at < until; at += gap {
@@ -1596,7 +1573,7 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 					s.start, s.until, s.r = s.now, time.Time{}, simResult{}
 					arrivals := slices.Clone(sc.arrivals)
 					for a := range arrivals {
-						arrivals[a].need.Moves = n == 1 && arrivals[a].need.Moves
+						arrivals[a].need.Packs = n == 1 && arrivals[a].need.Packs
 					}
 					r := s.run(3*time.Hour+15*time.Minute, arrivals)
 					t.Log(r.packRow(name))

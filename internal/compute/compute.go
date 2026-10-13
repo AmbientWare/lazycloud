@@ -64,9 +64,8 @@ type Containers interface {
 	// WakeReleasesOnHosts wakes planning for the releases whose containers
 	// on hosts could move to Spot.
 	WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error
-	// EvictContainers gives GPU work the room of CPU containers packed on
-	// its GPU host: idle ones leave once replaced, busy ones stop now and
-	// their attempts are preempted.
+	// EvictContainers stops CPU containers packed on a fleet GPU host; their
+	// running attempts are preempted and retried.
 	EvictContainers(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error
 }
 

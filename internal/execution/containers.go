@@ -26,6 +26,9 @@ type ContainerExit struct {
 	LoadError *Failure
 	// ExitCode is how a pod's command exited, for StopExited.
 	ExitCode *int
+	// Preempted retries its running attempts as preempted, outside their
+	// policy, as a lost host's are.
+	Preempted bool
 }
 
 // containerExited stops a container in tx. Its running attempts are lost and
@@ -56,7 +59,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		return fmt.Errorf("list running attempts: %w", err)
 	}
 	lost := &Failure{Kind: FailureLost, Message: fmt.Sprintf("container stopped: %s", exit.Reason)}
-	if exit.Reason == StopHostLost || row.EvictedAt != nil {
+	if exit.Reason == StopHostLost || exit.Preempted {
 		lost = &Failure{Kind: FailurePreempted, Message: "lost to preemption"}
 	}
 	if exit.Message != "" {

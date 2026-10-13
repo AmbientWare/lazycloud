@@ -222,32 +222,49 @@ func abs(n int64) int64 {
 	return n
 }
 
-// The platform absorbs the attempts an eviction preempts: while CPU work
-// packed on a fleet GPU host runs an attempt, its entries wait at the
-// attempt's start, and once GPU work evicts it, it bills up to there and
-// no further.
-func TestMeteringAbsorbsTheAttemptAnEvictionPreempted(t *testing.T) {
-	f := newFixture(t)
-	ws := f.workspace(f.user())
-	rel := f.release(ws)
+// An attempt that ends by preemption, as GPU work's eviction or a Spot
+// reclaim ends it, bills nothing; the attempts that completed on the same
+// container bill, overlapping it or not. While attempts run no entry passes
+// the start of the oldest, since preemption may yet end it.
+func TestMeteringChargesNothingForAPreemptedAttempt(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
-	ready, started := base.Add(5*time.Minute), base.Add(20*time.Minute)
-	host := f.host(time.Now())
-	f.exec("update hosts set provider = 'aws', gpu_type = 'T4', gpu_count = 1 where id = $1", host)
-	c := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: ready, cpuMillis: 1000, memoryBytes: 1 << 30})
-	f.exec(`with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+	ready, preempted := base.Add(5*time.Minute), base.Add(40*time.Minute)
+	for _, reason := range []string{"stopped", "host_lost"} {
+		t.Run(reason, func(t *testing.T) {
+			f := newFixture(t)
+			ws := f.workspace(f.user())
+			rel := f.release(ws)
+			c := f.container(containerSpec{workspace: ws, host: f.host(time.Now()), release: &rel.id, ready: ready, cpuMillis: 1000, memoryBytes: 1 << 30})
+			// attempt runs from start, finishing as state at end unless it
+			// is still running.
+			attempt := func(start time.Time, state string, end *time.Time) uuid.UUID {
+				var id uuid.UUID
+				if err := f.pool.QueryRow(t.Context(), `
+with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
               values ($1, $2, $3, 'running', 1, 1, $5) returning id)
-insert into attempts (task_id, number, container_id, state, started_at, deadline_at)
-select id, 1, $4, 'running', $5, now() + interval '1 hour' from task`, ws, rel.workload, rel.id, c, started)
+insert into attempts (task_id, number, container_id, state, started_at, finished_at, deadline_at)
+select id, 1, $4, $6, $5, $7, now() + interval '1 hour' from task returning id`,
+					ws, rel.workload, rel.id, c, start, state, end).Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				return id
+			}
+			attempt(base.Add(10*time.Minute), "succeeded", new(base.Add(20*time.Minute)))
+			overlapping := attempt(base.Add(35*time.Minute), "running", nil)
+			lost := attempt(preempted, "running", nil)
 
-	f.meter()
-	if got := f.ledger(c); len(got) != 1 || !got[0].start.Equal(ready) || !got[0].end.Equal(base.Add(15*time.Minute)) {
-		t.Fatalf("while its attempt runs, entries %+v; want [%s, %s), the quarter-hours before the attempt", got, ready, base.Add(15*time.Minute))
-	}
-	f.exec("update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now(), evicted_at = now() where id = $1", c)
-	f.exec("update attempts set state = 'lost', finished_at = now() where container_id = $1", c)
-	f.meter()
-	if got := f.ledger(c); len(got) != 2 || !got[1].end.Equal(started) {
-		t.Fatalf("evicted, entries %+v; want them to end at %s, where the preempted attempt started", got, started)
+			f.meter()
+			if got := f.ledger(c); len(got) != 2 || !got[1].end.Equal(base.Add(30*time.Minute)) {
+				t.Fatalf("while attempts run, entries %+v; want them to end at %s, the quarter-hour before the oldest", got, base.Add(30*time.Minute))
+			}
+			f.exec("update attempts set state = 'succeeded', finished_at = $2 where id = $1", overlapping, base.Add(45*time.Minute))
+			f.exec("update attempts set state = 'lost', preempted = true, finished_at = now() where id = $1", lost)
+			f.exec("update containers set state = 'stopped', stop_reason = $2, stopped_at = now() where id = $1", c, reason)
+			f.meter()
+			got := f.ledger(c)
+			if last := got[len(got)-1]; !got[0].start.Equal(ready) || !last.end.Equal(base.Add(45*time.Minute)) {
+				t.Fatalf("entries %+v; want [%s, %s): up to the preempted attempt and on while the overlapping one ran", got, ready, base.Add(45*time.Minute))
+			}
+		})
 	}
 }

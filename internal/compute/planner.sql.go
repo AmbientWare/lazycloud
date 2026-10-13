@@ -122,7 +122,9 @@ update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
     idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id
 `
 
@@ -133,6 +135,7 @@ type DrainHostsParams struct {
 
 // Idle serving hosts, and reserves still preparing, drain toward
 // termination; a host that took a container since the snapshot stays.
+// Packed CPU work, which the planner evicts, holds none.
 func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, drainHosts, arg.Reason, arg.Ids)
 	if err != nil {
@@ -330,38 +333,6 @@ func (q *Queries) LockFleet(ctx context.Context) (LockFleetRow, error) {
 	return i, err
 }
 
-const lockLeavingGPUHosts = `-- name: LockLeavingGPUHosts :many
-select h.id from hosts h
-where h.id = any($1::uuid[]) and h.phase = 'ready'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and c.gpu_count > 0)
-order by h.id
-for update of h
-`
-
-// The serving GPU hosts among the ids that still run no GPU work, locked
-// in id order before their CPU work is evicted: a host is locked before
-// its containers, as interruptions and host loss lock them, and only a
-// host that leaves evicts.
-func (q *Queries) LockLeavingGPUHosts(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, lockLeavingGPUHosts, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const notifyHosts = `-- name: NotifyHosts :exec
 select pg_notify($1::text, v.id) from unnest($2::text[]) as v(id)
 `
@@ -395,7 +366,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
        sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
-       coalesce(b.purpose = 'serve' and release_moves(r.spec), false)::bool as moves,
+       coalesce(b.purpose = 'serve' and release_packs(r.spec), false)::bool as packs,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -423,7 +394,7 @@ type PendingDemandRow struct {
 	Disks        int32
 	ReadRegion   *string
 	ReadBytes    int64
-	Moves        bool
+	Packs        bool
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
@@ -456,7 +427,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Disks,
 			&i.ReadRegion,
 			&i.ReadBytes,
-			&i.Moves,
+			&i.Packs,
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
@@ -559,8 +530,8 @@ left join lateral (
         select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
                case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
     ) m
-    cross join lateral (select h.gpu_count > 0 and m.gpus = 0 as packed) p
-    where c.host_id = h.id and c.state <> 'stopped' and c.evicted_at is null
+    cross join lateral (select packed(h.provider, h.gpu_count, c.gpu_count) as packed) p
+    where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.provider = 'aws' and h.phase not in ('deleted', 'failed')
 order by h.id
@@ -622,10 +593,9 @@ type PlannerHostsRow struct {
 // Every cloud host the fleet holds or is buying, with what its live
 // containers reserve, what those that could run on Spot reserve, what each
 // of those that could move to a Spot host needs, whether one of them could
-// not, and whether its agent must move to the target release first. On a
-// GPU host, CPU work is packed: it counts apart, and the containers and
-// the newest placement that keep the host up are its GPU work. An evicted
-// container's room is the GPU work's.
+// not, and whether its agent must move to the target release first.
+// Packed CPU work counts apart: the containers and the newest placement
+// that keep a GPU host up are its GPU work.
 func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 	rows, err := q.db.Query(ctx, plannerHosts)
 	if err != nil {
@@ -899,7 +869,9 @@ set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', p
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
     idle_since = null, hands_back_at = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id
 `
 
@@ -910,7 +882,7 @@ type ReturnToReserveParams struct {
 
 // Idle serving hosts start proving they may stop into the reserve, each in
 // the mode the planner chose; a host that took a container since the
-// snapshot stays.
+// snapshot stays. Packed CPU work, which the planner evicts, holds none.
 func (q *Queries) ReturnToReserve(ctx context.Context, arg ReturnToReserveParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, returnToReserve, arg.HibernateIds, arg.Ids)
 	if err != nil {
@@ -959,7 +931,7 @@ func (q *Queries) SetCapacityWaits(ctx context.Context, arg SetCapacityWaitsPara
 const setHandsBack = `-- name: SetHandsBack :many
 update hosts
 set hands_back_at = case when id = any($1::uuid[]) then coalesce(hands_back_at, now()) end, updated_at = now()
-where id = any($1::uuid[] || $2::uuid[]) and phase = 'ready' and (market = 'on_demand' or gpu_count > 0)
+where id = any($1::uuid[] || $2::uuid[]) and phase = 'ready' and market = 'on_demand'
 returning id
 `
 
@@ -968,9 +940,8 @@ type SetHandsBackParams struct {
 	LendIds []uuid.UUID
 }
 
-// Serving on-demand hosts start handing Spot-tolerant work back, and GPU
-// hosts their CPU work, those of @back_ids, or lend to it again; one that
-// started keeps its time.
+// Serving on-demand hosts start handing Spot-tolerant work back, those of
+// @back_ids, or lend to it again; one that started keeps its time.
 func (q *Queries) SetHandsBack(ctx context.Context, arg SetHandsBackParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, setHandsBack, arg.BackIds, arg.LendIds)
 	if err != nil {

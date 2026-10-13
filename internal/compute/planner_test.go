@@ -432,9 +432,8 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 }
 
 // CPU work never keeps a fleet GPU host up: once its GPU work ends, the
-// host hands that work back and leaves on its idle timeout, evicting what
-// still runs there, whose task is preempted and queued again. Until then
-// the work counts as the CPU Spot market's load.
+// host leaves on its idle timeout, evicting what still runs there, whose
+// task is preempted and queued again.
 func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -449,22 +448,17 @@ func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
 	plan(t, o)
 	var phase, container, attempt, task string
 	var preemptions int
-	var load []byte
 	if err := o.pool.QueryRow(t.Context(), `
-select h.phase, c.state, a.state, t.status, t.preemptions, m.plan -> 'load'
+select h.phase, c.state, a.state, t.status, t.preemptions
 from attempts a
 join containers c on c.id = a.container_id
 join hosts h on h.id = c.host_id
 join tasks t on t.id = a.task_id
-join fleet_markets m on m.market = 'spot:cpu'
-where a.id = $1`, w.attempt).Scan(&phase, &container, &attempt, &task, &preemptions, &load); err != nil {
+where a.id = $1`, w.attempt).Scan(&phase, &container, &attempt, &task, &preemptions); err != nil {
 		t.Fatal(err)
 	}
 	if phase != string(compute.PhaseDraining) || container != "stopped" || attempt != "lost" || task != "queued" || preemptions != 1 {
 		t.Errorf("host %s, container %s, attempt %s, task %s after %d preemptions; want draining, stopped, lost, queued after one",
 			phase, container, attempt, task, preemptions)
-	}
-	if string(load) != `{"gpus": 0, "cpu_millis": 1000, "memory_bytes": 268435456}` {
-		t.Errorf("CPU Spot market load %s, want the packed work", load)
 	}
 }

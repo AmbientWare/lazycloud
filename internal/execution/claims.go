@@ -127,9 +127,8 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 			return ErrNotAssigned
 		}
 		// An instance or shell container of a function's release runs no
-		// tasks, and neither does one evicted for GPU work, whose room the
-		// GPU work holds.
-		if ContainerState(c.State) != ContainerReady || ContainerPurpose(c.Purpose) != PurposeServe || c.Evicted {
+		// tasks.
+		if ContainerState(c.State) != ContainerReady || ContainerPurpose(c.Purpose) != PurposeServe {
 			return nil
 		}
 		running, err := q.CountRunningAttemptsOnContainer(ctx, uuid.UUID(container))

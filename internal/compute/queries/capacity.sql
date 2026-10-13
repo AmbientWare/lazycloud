@@ -1,9 +1,8 @@
 -- name: AvailableCapacity :many
 -- Hosts that take new containers, with their capacity minus the resources of
--- their live containers, and on a fleet GPU host what its CPU work holds,
--- which GPU work evicts. An evicted container's room is the GPU work's. A
--- host whose agent must move to the target release takes none until it
--- runs it. Reads the live-container partial index per host.
+-- their live containers, and what packed CPU work holds, which GPU work
+-- evicts. A host whose agent must move to the target release takes none
+-- until it runs it. Reads the live-container partial index per host.
 select h.id,
        h.kind,
        h.provider,
@@ -26,16 +25,14 @@ select h.id,
        array(select hw.workspace_id from host_workspaces hw where hw.host_id = h.id order by hw.workspace_id)::uuid[] as workspaces
 from hosts h
 left join lateral (
-    select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory, sum(m.gpus) as gpus,
+    select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
+           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
-           sum(c.cpu_millis) filter (where m.gpus = 0 and h.provider = 'aws' and h.gpu_count > 0) as packed_cpu,
-           sum(c.memory_bytes) filter (where m.gpus = 0 and h.provider = 'aws' and h.gpu_count > 0) as packed_memory
+           sum(c.cpu_millis) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_cpu,
+           sum(c.memory_bytes) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_memory
     from containers c
     left join releases r on r.id = c.release_id
-    cross join lateral (
-        select case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
-    ) m
-    where c.host_id = h.id and c.state <> 'stopped' and c.evicted_at is null
+    where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.state = 'online'
   and h.phase = 'ready'

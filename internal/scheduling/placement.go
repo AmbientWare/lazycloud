@@ -109,11 +109,10 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 		if len(hosts) == 0 {
 			return nil
 		}
-		// GPU work may also take the room it evicts.
 		var maxCPU cpu.Millis
 		var maxMemory int64
 		for _, h := range hosts {
-			maxCPU, maxMemory = max(maxCPU, h.FreeCPUMillis+h.Packed.CPUMillis), max(maxMemory, h.FreeMemoryBytes+h.Packed.MemoryBytes)
+			maxCPU, maxMemory = max(maxCPU, h.FreeCPUMillis), max(maxMemory, h.FreeMemoryBytes)
 		}
 		pending, err := q.PendingContainers(ctx, PendingContainersParams{
 			MaxFreeCpuMillis: maxCPU, MaxFreeMemoryBytes: maxMemory, Targets: targets(hosts), BatchSize: placementBatch,
@@ -190,7 +189,7 @@ func requirement(c PendingContainersRow) compute.Requirement {
 		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
 		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
 		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks), Prefer: (*compute.HostID)(c.DiskHost),
-		Read: compute.VolumeReadOf(c.ReadRegion, c.ReadBytes), Moves: c.Moves,
+		Read: compute.VolumeReadOf(c.ReadRegion, c.ReadBytes), Packs: c.Packs,
 	}
 }
 
@@ -243,12 +242,11 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow, packed m
 		}
 		h, rest := free[best], packed[free[best].Host]
 		var evicts []uuid.UUID
-		short := func() bool { return h.FreeCPUMillis < need.CPUMillis || h.FreeMemoryBytes < need.MemoryBytes }
-		for ; short() && len(rest) > 0; rest = rest[1:] {
+		for ; h.Evicts(need) && len(rest) > 0; rest = rest[1:] {
 			h.Evict(compute.FleetCapacity{CPUMillis: rest[0].CpuMillis, MemoryBytes: rest[0].MemoryBytes})
 			evicts = append(evicts, rest[0].ID)
 		}
-		if short() {
+		if h.Evicts(need) {
 			continue
 		}
 		h.Reserve(need)

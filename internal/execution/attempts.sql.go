@@ -203,18 +203,19 @@ func (q *Queries) RequeueTasks(ctx context.Context, arg RequeueTasksParams) erro
 
 const setAttemptStates = `-- name: SetAttemptStates :exec
 update attempts a
-set state = v.state, finished_at = now()
-from (select unnest($1::uuid[]) as id, unnest($2::text[]) as state) v
+set state = v.state, preempted = v.preempted, finished_at = now()
+from (select unnest($1::uuid[]) as id, unnest($2::text[]) as state, unnest($3::bool[]) as preempted) v
 where a.id = v.id
 `
 
 type SetAttemptStatesParams struct {
-	Ids    []uuid.UUID
-	States []string
+	Ids       []uuid.UUID
+	States    []string
+	Preempted []bool
 }
 
 func (q *Queries) SetAttemptStates(ctx context.Context, arg SetAttemptStatesParams) error {
-	_, err := q.db.Exec(ctx, setAttemptStates, arg.Ids, arg.States)
+	_, err := q.db.Exec(ctx, setAttemptStates, arg.Ids, arg.States, arg.Preempted)
 	return err
 }
 

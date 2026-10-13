@@ -12,10 +12,9 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 -- Every cloud host the fleet holds or is buying, with what its live
 -- containers reserve, what those that could run on Spot reserve, what each
 -- of those that could move to a Spot host needs, whether one of them could
--- not, and whether its agent must move to the target release first. On a
--- GPU host, CPU work is packed: it counts apart, and the containers and
--- the newest placement that keep the host up are its GPU work. An evicted
--- container's room is the GPU work's.
+-- not, and whether its agent must move to the target release first.
+-- Packed CPU work counts apart: the containers and the newest placement
+-- that keep a GPU host up are its GPU work.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
@@ -59,8 +58,8 @@ left join lateral (
         select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
                case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
     ) m
-    cross join lateral (select h.gpu_count > 0 and m.gpus = 0 as packed) p
-    where c.host_id = h.id and c.state <> 'stopped' and c.evicted_at is null
+    cross join lateral (select packed(h.provider, h.gpu_count, c.gpu_count) as packed) p
+    where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.provider = 'aws' and h.phase not in ('deleted', 'failed')
 order by h.id;
@@ -88,7 +87,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
        jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
        sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
-       coalesce(b.purpose = 'serve' and release_moves(r.spec), false)::bool as moves,
+       coalesce(b.purpose = 'serve' and release_packs(r.spec), false)::bool as packs,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
@@ -273,43 +272,36 @@ returning id;
 -- name: ReturnToReserve :many
 -- Idle serving hosts start proving they may stop into the reserve, each in
 -- the mode the planner chose; a host that took a container since the
--- snapshot stays.
+-- snapshot stays. Packed CPU work, which the planner evicts, holds none.
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any(@hibernate_ids::uuid[]) then 'hibernate' else 'stop' end,
     idle_since = null, hands_back_at = null, updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id;
-
--- name: LockLeavingGPUHosts :many
--- The serving GPU hosts among the ids that still run no GPU work, locked
--- in id order before their CPU work is evicted: a host is locked before
--- its containers, as interruptions and host loss lock them, and only a
--- host that leaves evicts.
-select h.id from hosts h
-where h.id = any(@ids::uuid[]) and h.phase = 'ready'
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and c.gpu_count > 0)
-order by h.id
-for update of h;
 
 -- name: DrainHosts :many
 -- Idle serving hosts, and reserves still preparing, drain toward
 -- termination; a host that took a container since the snapshot stays.
+-- Packed CPU work, which the planner evicts, holds none.
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = @reason, reserve_mode = null,
     idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase in ('ready', 'preparing')
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
+  and not exists (
+      select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
+  )
 returning h.id;
 
 -- name: SetHandsBack :many
--- Serving on-demand hosts start handing Spot-tolerant work back, and GPU
--- hosts their CPU work, those of @back_ids, or lend to it again; one that
--- started keeps its time.
+-- Serving on-demand hosts start handing Spot-tolerant work back, those of
+-- @back_ids, or lend to it again; one that started keeps its time.
 update hosts
 set hands_back_at = case when id = any(@back_ids::uuid[]) then coalesce(hands_back_at, now()) end, updated_at = now()
-where id = any(@back_ids::uuid[] || @lend_ids::uuid[]) and phase = 'ready' and (market = 'on_demand' or gpu_count > 0)
+where id = any(@back_ids::uuid[] || @lend_ids::uuid[]) and phase = 'ready' and market = 'on_demand'
 returning id;
 
 -- name: RetireReserves :many

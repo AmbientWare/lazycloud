@@ -676,9 +676,6 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			ps.note("reserve resuming", "host_id", id)
 		}
 	}
-	if err := ps.evictLeaving(ctx, tx, q); err != nil {
-		return err
-	}
 	if len(ps.w.returns) > 0 {
 		returned, err := q.ReturnToReserve(ctx, ReturnToReserveParams{Ids: ps.w.returns, HibernateIds: ps.w.hibernate})
 		if err != nil {
@@ -687,6 +684,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		for _, id := range returned {
 			wake = append(wake, id.String())
 			ps.note("host returning to the reserve", "host_id", id)
+		}
+		if err := ps.evictPacked(ctx, tx, returned); err != nil {
+			return err
 		}
 		ps.result.Returned, moved = len(returned), moved || len(returned) > 0
 	}
@@ -703,6 +703,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, id := range drained {
 			ps.note("host draining", "host_id", id, "reason", d.reason)
+		}
+		if err := ps.evictPacked(ctx, tx, drained); err != nil {
+			return err
 		}
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
@@ -775,25 +778,15 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	return nil
 }
 
-// evictLeaving evicts the CPU work packed on the GPU hosts that leave,
-// which never keeps one up; each leaves once nothing runs on it.
-func (ps *fleetPass) evictLeaving(ctx context.Context, tx pgx.Tx, q *Queries) error {
-	var hosts []uuid.UUID
-	for _, id := range slices.Concat(ps.w.returns, ps.w.drains) {
-		if len(ps.rows[HostID(id)].PackedIds) > 0 {
-			hosts = append(hosts, id)
-		}
-	}
-	if len(hosts) == 0 {
-		return nil
-	}
-	locked, err := q.LockLeavingGPUHosts(ctx, hosts)
-	if err != nil {
-		return fmt.Errorf("lock leaving GPU hosts: %w", err)
-	}
+// evictPacked evicts the CPU work packed on GPU hosts that leave, which
+// never keeps one up.
+func (ps *fleetPass) evictPacked(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
 	var ids []uuid.UUID
-	for _, id := range locked {
+	for _, id := range hosts {
 		ids = append(ids, ps.rows[HostID(id)].PackedIds...)
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	return ps.c.containers.EvictContainers(ctx, tx, ids)
 }

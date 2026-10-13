@@ -12,14 +12,15 @@ select pg_try_advisory_xact_lock(hashtextextended('placement', 0))::bool;
 -- containers_pending partial index. Each container of the batch reads
 -- its workspace bucket's region and the measured bytes of the platform
 -- volumes its release mounts, which its start reads from there, and
--- whether it can move to another host (release_moves).
+-- whether it may pack into a fleet GPU host (release_packs). GPU work may
+-- take room it evicts, so only CPU work must fit the largest free host.
 select q.id, q.workspace_id, q.release_id, q.cpu_millis, q.memory_bytes, q.connection_id,
        q.machine, q.region, q.zone, q.preemptible, q.gpus, q.gpu_count, q.disks, q.disk_host,
-       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes, q.moves
+       sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes, q.packs
 from (
     select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
            p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host,
-           p.volumes, p.turn, p.created_at, p.moves
+           p.volumes, p.turn, p.created_at, p.packs
     from (
         select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
                cw.connection_id,
@@ -42,15 +43,14 @@ from (
                array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', build_gpus(c.image_build_id), '[]'::jsonb)))::text[] as gpus,
                coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
                r.spec -> 'volumes' as volumes,
-               coalesce(c.purpose = 'serve' and release_moves(r.spec), false)::bool as moves,
+               coalesce(c.purpose = 'serve' and release_packs(r.spec), false)::bool as packs,
                row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
         from containers c
         left join releases r on r.id = c.release_id
         left join image_builds b on b.id = c.image_build_id
         left join workspaces cw on cw.id = c.workspace_id and b.mirror is not true
         where c.state = 'pending'
-          and c.cpu_millis <= @max_free_cpu_millis
-          and c.memory_bytes <= @max_free_memory_bytes
+          and (c.gpu_count > 0 or c.cpu_millis <= @max_free_cpu_millis and c.memory_bytes <= @max_free_memory_bytes)
     ) p
     where (case
                when p.machine <> '' then 'machine:' || p.workspace_id::text || ':' || p.machine
@@ -70,12 +70,11 @@ order by q.turn, q.created_at, q.id;
 -- oldest running attempt started latest, which lose the least work.
 select c.id, c.host_id::uuid as host_id, c.cpu_millis, c.memory_bytes
 from containers c
-left join releases r on r.id = c.release_id
+join hosts h on h.id = c.host_id
 left join lateral (
     select min(a.started_at) as started_at from attempts a where a.container_id = c.id and a.state = 'running'
 ) run on true
-where c.host_id = any(@host_ids::uuid[]) and c.state <> 'stopped' and c.evicted_at is null
-  and c.image_build_id is null and coalesce(release_gpus(r.spec), 0) = 0
+where c.host_id = any(@host_ids::uuid[]) and c.state <> 'stopped' and packed(h.provider, h.gpu_count, c.gpu_count)
 order by c.host_id, run.started_at is not null, run.started_at desc, c.id;
 
 -- name: AssignContainers :many

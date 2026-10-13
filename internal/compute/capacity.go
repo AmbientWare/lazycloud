@@ -44,9 +44,9 @@ type Requirement struct {
 	// Read is what the container reads from its workspace's bucket as it
 	// starts; nil when it mounts no platform volume.
 	Read *VolumeRead
-	// Moves is set on work that can move to another host without losing
-	// what it holds (release_moves).
-	Moves bool
+	// Packs is set on work that may fill a fleet GPU host's spare room as
+	// CPU work (release_packs).
+	Packs bool
 }
 
 // VolumeRead is a start's read of its platform volumes from its
@@ -100,8 +100,7 @@ type HostCapacity struct {
 	FreeGPUs        int
 	FreeDiskSlots   int
 	// HandsBack is set on an on-demand host that hands Spot-tolerant work
-	// back to Spot, which lends that work no room, or on a GPU host that
-	// hands its CPU work back.
+	// back to Spot, which lends that work no room.
 	HandsBack bool
 	// Packed is what CPU work reserves on a fleet GPU host; GPU work placed
 	// there evicts it for the room it lacks.
@@ -131,22 +130,22 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 	if r.Zone != "" && h.Zone != r.Zone && h.ZoneID != r.Zone {
 		return false
 	}
-	if !r.Preemptible && h.Market == MarketSpot || r.Preemptible && h.HandsBack && h.Market == MarketOnDemand {
+	if !r.Preemptible && h.Market == MarketSpot || r.Preemptible && h.HandsBack {
 		return false
 	}
 	if n := r.GPUsNeeded(); n > 0 {
 		return h.GPUCount >= n && GPUAccepted(r.GPUs, h.GPUType)
 	}
-	// Fleet GPU instances are bought for GPU work: CPU work that can move
-	// fills their spare room only while they run GPU work. Joined machines
-	// and operator hosts run whatever is pinned or sent to them.
+	// Fleet GPU instances are bought for GPU work: CPU work that packs fills
+	// their spare room only while they run GPU work. Joined machines and
+	// operator hosts run whatever is pinned or sent to them.
 	return h.GPUCount == 0 || h.Provider != ProviderAWS || h.packs(r)
 }
 
-// packs reports whether r is CPU work that can move onto the host, a fleet
-// GPU host running GPU work.
+// packs reports whether r is CPU work that packs onto the host, a fleet GPU
+// host running GPU work.
 func (h HostCapacity) packs(r Requirement) bool {
-	return r.Moves && r.GPUsNeeded() == 0 && h.GPUCount > 0 && h.Provider == ProviderAWS && h.FreeGPUs < h.GPUCount
+	return r.Packs && r.GPUsNeeded() == 0 && h.GPUCount > 0 && h.Provider == ProviderAWS && h.FreeGPUs < h.GPUCount
 }
 
 // Fits reports whether the host accepts r and has room for it now, GPU
@@ -167,8 +166,8 @@ func (h HostCapacity) room(r Requirement) FleetCapacity {
 	return room
 }
 
-// evicts reports whether GPU work r evicts packed CPU work for room.
-func (h HostCapacity) evicts(r Requirement) bool {
+// Evicts reports whether GPU work r evicts packed CPU work for room.
+func (h HostCapacity) Evicts(r Requirement) bool {
 	return r.GPUsNeeded() > 0 && (h.FreeCPUMillis < r.CPUMillis || h.FreeMemoryBytes < r.MemoryBytes)
 }
 
@@ -183,14 +182,14 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 }
 
 // ChooseHost is the host, by index, a container of r goes to, or -1: one
-// that fits it; for CPU work that can move, a fleet GPU host running GPU
-// work first, whose spare room is paid for; a Spot host before an
-// on-demand one for work that can run on Spot; for GPU work, a host it
-// need not evict CPU work from; then the tightest fit, whose free CPU and
-// memory as fractions of its size sum lowest after placement, which keeps
-// large holes for large containers. r's preferred host wins among hosts
-// that borrow alike, then a host in the region r's volumes are read from,
-// which it reads without transfer.
+// that fits it, a Spot host before an on-demand one for work that can run
+// on Spot; r's preferred host among hosts that borrow alike, then a host
+// in the region r's volumes are read from, which it reads without
+// transfer; then for CPU work that packs, a fleet GPU host running GPU
+// work, whose spare room is paid for, and for GPU work a host it need not
+// evict CPU work from; then the tightest fit, whose free CPU and memory as
+// fractions of its size sum lowest after placement, which keeps large
+// holes for large containers.
 // Spot-tolerant work borrows an on-demand platform CPU host only while one
 // of them still keeps floor free afterwards, so work that cannot run on
 // Spot starts at once.
@@ -204,7 +203,7 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 		}
 	}
 	type rank struct {
-		unpacked, borrows, evicts, elsewhere, remote bool
+		borrows, elsewhere, remote, unpacked, evicts bool
 		score                                        float64
 	}
 	best, bestRank := -1, rank{}
@@ -224,12 +223,12 @@ func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 			}
 		}
 		rk := rank{
-			unpacked: !h.packs(r), borrows: borrows, evicts: h.evicts(r),
-			elsewhere: r.Prefer == nil || h.Host != *r.Prefer, remote: r.Read == nil || h.Region != r.Read.Region,
+			borrows: borrows, elsewhere: r.Prefer == nil || h.Host != *r.Prefer, remote: r.Read == nil || h.Region != r.Read.Region,
+			unpacked: !h.packs(r), evicts: h.Evicts(r),
 			score: float64(h.FreeCPUMillis-r.CPUMillis)/float64(h.CPUMillis) + float64(h.FreeMemoryBytes-r.MemoryBytes)/float64(h.MemoryBytes),
 		}
-		if best < 0 || cmp.Or(boolOrder(rk.unpacked, bestRank.unpacked), boolOrder(rk.borrows, bestRank.borrows),
-			boolOrder(rk.evicts, bestRank.evicts), boolOrder(rk.elsewhere, bestRank.elsewhere), boolOrder(rk.remote, bestRank.remote),
+		if best < 0 || cmp.Or(boolOrder(rk.borrows, bestRank.borrows), boolOrder(rk.elsewhere, bestRank.elsewhere),
+			boolOrder(rk.remote, bestRank.remote), boolOrder(rk.unpacked, bestRank.unpacked), boolOrder(rk.evicts, bestRank.evicts),
 			cmp.Compare(rk.score, bestRank.score)) < 0 {
 			best, bestRank = i, rk
 		}

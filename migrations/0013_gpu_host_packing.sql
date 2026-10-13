@@ -1,19 +1,16 @@
--- When GPU work placed on a fleet GPU host evicted the container, CPU work
--- packed into the host's spare room. Its room went to the GPU work then:
--- an idle container claims nothing more and drains once its replacement
--- is ready; a busy one stopped, its attempts preempted, and bills nothing
--- from the first of them.
-alter table containers add column evicted_at timestamptz;
+-- Whether a release's serve containers may pack into a fleet GPU host's
+-- spare room: a function's that can move.
+create function release_packs(spec jsonb) returns boolean
+language sql immutable
+return spec ->> 'kind' = 'function' and release_moves(spec);
 
--- Whether a live container of a release of spec leaves its host: the host
--- hands work back and the release can move, which on a Spot GPU host
--- moves only CPU work; GPU work evicted it; or a replacement of it is
--- ready.
-create or replace function container_leaves(container uuid, host uuid, spec jsonb) returns boolean
-language sql stable
-return release_moves(spec) and exists (
-        select 1 from hosts h
-        where h.id = host and h.hands_back_at is not null and (h.market = 'on_demand' or coalesce(release_gpus(spec), 0) = 0)
-    )
-    or exists (select 1 from containers e where e.id = container and e.evicted_at is not null)
-    or exists (select 1 from containers r where r.replaces = container and r.ready_at is not null);
+-- Whether a container that reserves container_gpus cards on a host is CPU
+-- work packed into the spare room of a fleet GPU host, which GPU work
+-- placed there evicts.
+create function packed(provider text, host_gpus integer, container_gpus integer) returns boolean
+language sql immutable
+return provider = 'aws' and host_gpus > 0 and container_gpus = 0;
+
+-- The attempt ended by preemption: its host was lost or reclaimed, or GPU
+-- work evicted its container. Billing charges none of its time.
+alter table attempts add column preempted boolean not null default false;
