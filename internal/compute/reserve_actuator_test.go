@@ -254,6 +254,30 @@ func TestAResumedSpotReserveWhoseRequestStaysActiveRetires(t *testing.T) {
 	}
 }
 
+// A reserve stopped for an hour waits out a failed read of its Spot
+// request instead of taking it as stuck.
+func TestAResumedSpotReserveWaitsOutAnUnreadRequest(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseResuming, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c043")
+	ec2.add(fakeInstance{ID: "i-0000000000000c043", State: "stopped", SpotRequest: "sir-0000c043"}, host.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c043", State: "disabled", Instance: "i-0000000000000c043"}, host.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c043', stopped_at = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		return ec2Error(http.StatusForbidden, "UnauthorizedOperation", "You are not authorized to perform this operation."),
+			call.Action == "DescribeSpotInstanceRequests"
+	}
+
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseResuming) {
+		t.Fatalf("reserve whose request went unread is %s, want resuming", phase)
+	}
+	ec2.refuse = nil
+	expireLeases(t, o)
+	if r := actuate(t, o); r.Started != 1 || len(emulator.calls("StartInstances")) != 1 {
+		t.Fatalf("actuate %+v once the request reads disabled, want the reserve started", r)
+	}
+}
+
 // EC2 names a hibernation in the stop reason; a hibernation that stopped
 // for another reason saved no image.
 func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {

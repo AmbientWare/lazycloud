@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -83,5 +84,19 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 	s.Hosts = s.Hosts[:1]
 	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); len(plan.Actions) > 0 {
 		t.Fatalf("a full quota still buys: %+v", plan.Actions)
+	}
+}
+
+// A stopping Spot reserve counts against its quota already, so work waits
+// for it even when the quota has no room for another host.
+func TestWorkWaitsForAStoppingReserveInAFullQuota(t *testing.T) {
+	h := planHost(1, planSmall, FleetStopping)
+	h.Market, h.StoppedAt = MarketSpot, ptr(offerNow.Add(-DefaultPolicy().Starts.SpotDisable))
+	s := planSnapshot(t, h)
+	s.Offers.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketSpot}, VCPUs: 16}}
+	g, _ := pendingOne(Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: gib}, nil)
+	s.Pending = []DemandGroup{g}
+	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); !slices.Equal(hostsOf(actionsOf(plan, ActionResume)), []HostID{h.ID}) {
+		t.Fatalf("actions %+v, want the stopping reserve resumed", plan.Actions)
 	}
 }

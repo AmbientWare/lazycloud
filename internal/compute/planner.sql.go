@@ -810,9 +810,9 @@ where id = any($1::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stop
 returning id
 `
 
-// Starts stopped reserves to serve, their reserve mode cleared, and
-// stopping ones whose instance stopped, which start once EC2 allows. Only
-// a requested resume serves.
+// Starts stopped reserves to serve, their reserve mode cleared; a stopping
+// one whose instance stopped starts once EC2 disables its Spot request.
+// Only a requested resume serves.
 func (q *Queries) ResumeReserves(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, resumeReserves, ids)
 	if err != nil {

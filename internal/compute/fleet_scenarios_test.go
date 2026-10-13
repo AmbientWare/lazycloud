@@ -1441,10 +1441,10 @@ func TestGPUWorkStartsOnAReserveOfItsMarket(t *testing.T) {
 }
 
 // EC2 starts a stopped Spot instance only once it disables the persistent
-// request, about a minute after the instance stops. Work that arrives in
-// between waits for the reserve when what is left of that and a resume
-// beats a purchase, as for L4 work, and buys otherwise, as CPU work does.
-func TestWorkArrivingAsASpotReserveStopsWaitsOnlyWhenThatIsSooner(t *testing.T) {
+// request, about a minute after the stop. L4 work arriving in between
+// waits for the reserve, since the rest of that wait and a resume beat a
+// purchase; CPU work buys.
+func TestWorkWaitsForAStoppingSpotReserveOnlyWhenItStartsSooner(t *testing.T) {
 	t.Parallel()
 	st := DefaultPolicy().Starts
 	for _, c := range []struct {

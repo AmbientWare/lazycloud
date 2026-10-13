@@ -20,7 +20,8 @@ var ErrPhaseTransition = errors.New("host phase transition not allowed")
 //	joining -> preparing     a host bought for the reserve
 //	preparing -> ready       the agent refused to stop
 //	preparing -> draining    a pass retires a reserve still preparing
-//	stopping -> resuming     the agent says Hello before EC2 reports it stopped
+//	stopping -> resuming     work waits for a Spot reserve EC2 cannot start yet,
+//	                         or the agent says Hello before EC2 reports it stopped
 //	stopping -> terminating  EC2 refused the stop
 //	stopped -> terminating   a reserve retires
 //	resuming -> terminating  EC2 refused the start for capacity

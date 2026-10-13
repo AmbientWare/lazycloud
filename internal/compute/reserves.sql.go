@@ -163,10 +163,9 @@ type RecordInstanceStoppedParams struct {
 	ID                  uuid.UUID
 }
 
-// EC2 reports a stopping Spot host's instance stopped while it holds the
-// persistent request active, which it must disable before the host can
-// start. A hibernation still unproven takes the evidence EC2's stop reason
-// gives.
+// EC2 reports a stopping Spot host's instance stopped but holds its
+// persistent request active, so the host cannot start yet. A hibernation
+// still unproven takes the evidence EC2's stop reason gives.
 func (q *Queries) RecordInstanceStopped(ctx context.Context, arg RecordInstanceStoppedParams) error {
 	_, err := q.db.Exec(ctx, recordInstanceStopped, arg.HibernationEvidence, arg.ID)
 	return err
