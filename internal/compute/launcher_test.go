@@ -184,17 +184,22 @@ func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 
 // The pools one launch walk refuses, over as many passes as it takes, come
 // out of cooldown together, so the planner buys for them once when they
-// end rather than as each one's ends.
+// end rather than as each one's ends. That holds when each refusal
+// doubles a cooldown that ended, as when the walk after a refused one
+// meets the same pools again.
 func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseCapacity)
 	alice := newUser(t, o.pool, "alice@example.com")
-	requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
-
-	launchAll(t, o)
-	ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns")
-	if tried := len(emulator.calls("RunInstances")); tried <= 8 || ends != 1 {
-		t.Fatalf("a walk refused %d pools, whose cooldowns end at %d times; want more than a pass's 8, ending at one", tried, ends)
+	ws := newWorkspace(t, o.pool, "dev", alice)
+	for walk := range 2 {
+		requestedHost(t, o, ws, `{}`)
+		launchAll(t, o)
+		ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns")
+		if tried := len(emulator.calls("RunInstances")); tried <= 8*(walk+1) || ends != 1 {
+			t.Fatalf("walk %d: %d pools refused, whose cooldowns end at %d times; want more than a pass's 8, ending at one", walk+1, tried, ends)
+		}
+		run(t, o.pool, "update capacity_cooldowns set until = now()")
 	}
 }
 

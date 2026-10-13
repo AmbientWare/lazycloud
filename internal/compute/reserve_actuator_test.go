@@ -232,25 +232,26 @@ func TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest(t *testing.T) {
 	}
 }
 
-// A Spot request still active past the longest disable EC2 takes is
-// stuck: the resumed reserve retires, so its work buys instead of waiting.
-func TestAResumedSpotReserveWhoseRequestStaysActiveRetires(t *testing.T) {
+// EC2 holds a stopped Spot reserve's request active for up to 165 s, and
+// longer when it is slow. A resumed reserve waits for the request however
+// long it stays active, and starts once EC2 disables it; reconcile ends a
+// reserve that never resumes.
+func TestAResumedSpotReserveWaitsForASlowDisable(t *testing.T) {
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c042")
 	ec2.add(fakeInstance{ID: "i-0000000000000c042", State: "stopped", SpotRequest: "sir-0000c042"}, host.String())
 	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c042", State: "active", Instance: "i-0000000000000c042"}, host.String())
-	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c042', stop_requested_at = now(), stopped_at = now() where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c042', stop_requested_at = now(), stopped_at = now() - interval '10 minutes' where id = $1", uuid.UUID(host))
 
 	actuate(t, o)
-	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseResuming) {
-		t.Fatalf("reserve within the disable is %s, want resuming", phase)
-	}
-	ago(t, o, host, "stopped_at", compute.DefaultPolicy().Starts.SpotDisableMax+time.Second)
-	expireLeases(t, o)
-	actuate(t, o)
-	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) || len(emulator.calls("StartInstances")) != 0 {
-		t.Fatalf("reserve with a stuck request is %s after %d starts, want terminating without one",
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseResuming) || len(emulator.calls("StartInstances")) != 0 {
+		t.Fatalf("reserve whose request is active 10 minutes after the stop is %s after %d starts, want resuming without one",
 			phase, len(emulator.calls("StartInstances")))
+	}
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c042", State: "disabled", Instance: "i-0000000000000c042"}, host.String())
+	expireLeases(t, o)
+	if r := actuate(t, o); r.Started != 1 {
+		t.Fatalf("actuate %+v once the request disabled, want the reserve started", r)
 	}
 }
 

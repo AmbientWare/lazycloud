@@ -58,6 +58,32 @@ type simHost struct {
 	// unbilledFrom, on a GPU reserve being made, is when EC2 begins
 	// stopping it, which it bills as stopped.
 	unbilledFrom time.Time
+	// walk is set while the host is requested: its launch through refused
+	// pools.
+	walk *simWalk
+	// prepared is the agent release a reserve stopped on.
+	prepared simRelease
+	// retireAt, on a resumed Spot reserve, is when the actuator retires it
+	// because its request stayed active.
+	retireAt *time.Time
+}
+
+// simRelease is an agent release: its version and the build of its
+// archive, which a release that changes no host code keeps.
+type simRelease struct{ version, build int }
+
+// simWalk is a requested host's launch: what the launcher reads of it,
+// the containers waiting for it, its purchase record and the end its
+// refused pools share.
+type simWalk struct {
+	row       ClaimLaunchesRow
+	waiters   []HostWaitersRow
+	purchase  *simPurchase
+	walkUntil *time.Time
+	kind      FleetActionKind
+	// passPools are the pools the walk refused this pass, refused every
+	// pool it refused.
+	passPools, refused []OfferCooldown
 }
 
 // stopAt has h, made a reserve, begin its stop at from: a GPU host's stop
@@ -154,6 +180,11 @@ type simResult struct {
 	// retired before they first stopped.
 	purchases []simPurchase
 	cancelled int
+	// bought are the hosts each purchase bought to serve, with every pool
+	// its launch tried; stuckRetired counts the reserves retired because
+	// their Spot request stayed active.
+	bought       []simPurchase
+	stuckRetired int
 	// cpuLaunches counts CPU hosts bought; evicted the CPU work GPU work
 	// evicted, of it evictedAgain retries evicted again; gpuHostSec the
 	// seconds GPU hosts ran.
@@ -168,6 +199,10 @@ type simPurchase struct {
 	market   ReserveMarket
 	tried    []FleetOffer
 	launched bool
+	// holds is what the purchase was bought to hold, and containers the
+	// work it was bought for.
+	holds      FleetCapacity
+	containers int
 }
 
 type sim struct {
@@ -212,8 +247,53 @@ type sim struct {
 	builds    []simBuild
 	placedLog []*simContainer
 	// cools are the runs of refusals by pool.
-	cools map[OfferCooldown]simCool
+	cools map[OfferCooldown]*simCool
 	next  int
+	// release is the target agent release; deploys bump it, and the
+	// scheduler runs no pass during each deploy's outage.
+	release simRelease
+	deploys []simDeploy
+	outage  time.Time
+	// launchedAt is when the launcher last ran a pass, and wake is set
+	// when a plan pass bought, as the compute notification wakes it.
+	launchedAt time.Time
+	wake       bool
+	// disableGap, when set, is how long EC2 takes to disable a stopped
+	// Spot reserve's request; otherwise each host draws one of the
+	// measured gaps.
+	disableGap time.Duration
+	// checkRetire records a stale reserve retired before its replacement
+	// was ready as a violation.
+	checkRetire bool
+}
+
+// simDeploy is a deploy at at: a new agent release, of a new build when
+// agent is set.
+type simDeploy struct {
+	at    time.Duration
+	agent bool
+}
+
+// simOutage is how long a Recreate rollout runs no scheduler pass: the old
+// replicas stop, then the new ones start and wait for the publish job
+// (22 s on 2026-10-13).
+const simOutage = 30 * time.Second
+
+// launchTick is the launch loop's period, fleetTick in cmd/scheduler.
+const launchTick = 5 * time.Second
+
+// disableGaps are measured gaps between a Spot reserve's stop and EC2
+// disabling its persistent request: 38-146 s, with 63 s and 165 s on
+// 2026-10-13.
+var disableGaps = []time.Duration{38 * time.Second, 45 * time.Second, 52 * time.Second, 58 * time.Second, 63 * time.Second,
+	66 * time.Second, 70 * time.Second, 80 * time.Second, 90 * time.Second, 146 * time.Second, 165 * time.Second}
+
+// gap is how long EC2 takes to disable h's request once it stopped.
+func (s *sim) gap(h *simHost) time.Duration {
+	if s.disableGap > 0 {
+		return s.disableGap
+	}
+	return disableGaps[(int(h.ID[0])<<8|int(h.ID[1]))%len(disableGaps)]
 }
 
 type simBuild struct {
@@ -274,14 +354,37 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				}
 			}
 		}
+		for _, d := range s.deploys {
+			if at := s.start.Add(d.at); !at.Before(s.now) && at.Before(s.now.Add(s.tick)) {
+				s.release.version++
+				if d.agent {
+					s.release.build++
+				}
+				s.outage = at.Add(simOutage)
+			}
+		}
 		s.place()
+		if s.now.Before(s.outage) {
+			s.account()
+			s.now = s.now.Add(s.tick)
+			continue
+		}
 		// A pass that held purchases for arrivals runs again once they
 		// settle, as the planner loop does.
+		if s.wake || s.now.Sub(s.launchedAt) >= launchTick {
+			s.launchPass()
+		}
 		if wait := s.plan(); wait > 0 {
 			tick := s.now
 			s.now = s.now.Add(wait)
 			s.plan()
+			if s.wake {
+				s.launchPass()
+			}
 			s.now = tick
+		}
+		if s.wake {
+			s.launchPass()
 		}
 		s.account()
 		s.now = s.now.Add(s.tick)
@@ -304,9 +407,17 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 
 // advance moves hosts through their timed phases and ends containers.
 func (s *sim) advance() {
-	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.failAt != nil && !s.now.Before(*h.failAt) })
+	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool {
+		retired := h.retireAt != nil && !s.now.Before(*h.retireAt)
+		if retired {
+			s.r.retired = append(s.r.retired, s.now)
+			s.r.stuckRetired++
+			s.unwait(h.ID)
+		}
+		return retired || h.failAt != nil && !s.now.Before(*h.failAt)
+	})
 	for _, h := range s.hosts {
-		if h.until.After(s.now) {
+		if h.walk != nil || h.until.After(s.now) {
 			continue
 		}
 		switch {
@@ -314,15 +425,15 @@ func (s *sim) advance() {
 			h.State, h.PhaseAt = FleetServing, s.now
 		case h.State == FleetPreparing && h.Market == MarketSpot:
 			// Its instance stopped; EC2 disables the Spot request later.
-			h.State, h.Current, h.StoppedAt, h.until = FleetStopping, true, ptr(s.now), s.now.Add(s.p.Starts.SpotDisable)
+			h.State, h.StoppedAt, h.until = FleetStopping, ptr(s.now), s.now.Add(s.gap(h))
 			if h.unbilledFrom.IsZero() {
 				h.unbilledFrom = s.now
 			}
 		case (h.State == FleetPreparing || h.State == FleetStopping) && *h.ReserveMode == ReserveHibernate:
-			h.State, h.Current = FleetImageSaved, true
+			h.State = FleetImageSaved
 			s.r.stops++
 		case h.State == FleetPreparing || h.State == FleetStopping:
-			h.State, h.Current = FleetStopped, true
+			h.State = FleetStopped
 			s.r.stops++
 		}
 	}
@@ -448,8 +559,24 @@ func (s *sim) load(h *simHost) HostCapacity {
 	return fh.capacity()
 }
 
+// current reports whether h was prepared for the target agent release, as
+// the planner reads it.
+func (s *sim) current(h *simHost) bool {
+	return onRelease(0, ptr(fmt.Sprint(h.prepared.version)), &AgentRelease{Version: fmt.Sprint(s.release.version), RolloutPercent: 100})
+}
+
+// unwait returns the containers waiting for host id to waiting for none.
+func (s *sim) unwait(id HostID) {
+	for _, c := range s.pending {
+		if c.host != nil && *c.host == id {
+			c.host = nil
+		}
+	}
+}
+
 func (s *sim) fleetHost(h *simHost) FleetHost {
 	fh := h.FleetHost
+	fh.Current, fh.Requested = s.current(h), h.walk != nil
 	fh.Load, fh.Lent, fh.Packed, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, FleetCapacity{}, 0, nil, 0
 	var tolerant FleetCapacity
 	for _, c := range h.containers {
@@ -661,13 +788,20 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 	}
 }
 
-// offers are the offer inputs at now. The scheduler refreshes Spot quotes
-// far more often than they age out.
+// offers are the offer inputs at now, with the pools cooling now. The
+// scheduler refreshes Spot quotes far more often than they age out.
 func (s *sim) offers() OfferInputs {
 	in := s.in
 	in.Now, in.Spot = s.now, slices.Clone(s.in.Spot)
 	for i := range in.Spot {
 		in.Spot[i].ObservedAt = s.now
+	}
+	in.Cooldowns = slices.Clone(s.in.Cooldowns)
+	for key, c := range s.cools {
+		if c.until.After(s.now) {
+			key.Until, key.Quota = c.until, c.quota
+			in.Cooldowns = append(in.Cooldowns, key)
+		}
 	}
 	return in
 }
@@ -680,12 +814,11 @@ func (s *sim) host(id HostID) *simHost {
 	return s.hosts[i]
 }
 
-// launch starts a host for a purchase. EC2 refuses it when it would exceed
-// its vCPU quota, cooling the offer or with quotas known its whole class,
-// or when refuses names its pool, cooling the pool's zone; a refused launch
-// moves on to the pool fallbackPool picks.
-func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (HostID, bool) {
+// purchase inserts the host a purchase buys, requested in the pool the
+// planner picked, for the launcher to launch.
+func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	o := *a.Offer
+	reserve := a.Kind == ActionBuyReserve
 	row := ClaimLaunchesRow{
 		Market: ptr(string(o.Market)), GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount),
 		CpuMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
@@ -695,102 +828,191 @@ func (s *sim) launch(a FleetAction, reserve bool, waiters []HostWaitersRow) (Hos
 	if a.Kind == ActionRightsize {
 		row.Replaces = ptr(uuid.UUID(*a.Host))
 	}
-	purchase := simPurchase{at: s.now, market: a.Market}
 	if reserve {
 		row.ReserveMode, row.HoldsDisks = ptr(string(*a.Mode)), ptr(int16(o.Type.DiskSlots()))
-		defer func() { s.r.purchases = append(s.r.purchases, purchase) }()
 	}
-	for {
-		purchase.tried = append(purchase.tried, o)
-		cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
-		if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
-			cool.Quota = s.knowQuota
-		} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
-			cool.ZoneID = o.ZoneID
-		} else {
-			break
+	s.next++
+	h := &simHost{offer: o, FleetHost: FleetHost{Replaces: a.Host,
+		ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
+		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, HourlyMicros: ptr(o.HourlyMicros),
+		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
+	}}
+	if a.Kind != ActionRightsize {
+		h.Replaces = nil
+	}
+	if reserve {
+		h.State, h.ReserveMode, h.Slept, h.prepared = FleetPreparing, a.Mode, true, s.release
+	}
+	h.walk = &simWalk{row: row, waiters: waiters, kind: a.Kind,
+		purchase: &simPurchase{at: s.now, market: a.Market, holds: a.Holds, containers: len(a.Containers)}}
+	s.hosts = append(s.hosts, h)
+	s.wake = true
+	return h.ID
+}
+
+// launchPass is one launcher pass: each requested host tries its pool,
+// then the next pools fallbackPool picks while EC2 refuses, up to
+// passPools pools this pass.
+func (s *sim) launchPass() {
+	s.launchedAt, s.wake = s.now, false
+	for _, h := range slices.Clone(s.hosts) {
+		if h.walk == nil {
+			continue
 		}
-		s.r.refusals++
-		s.r.refused = append(s.r.refused, s.now)
-		s.cool(cool)
-		next, ok := FleetOffer{}, false
-		if row.Replaces == nil {
-			next, ok = fallbackPool(s.p, row, waiters, s.offers(), func(string, bool) bool { return true })
-		}
-		if !ok {
-			if row.Replaces != nil {
-				s.host(*a.Host).RightsizeRefusedAt = ptr(s.now)
+		h.walk.passPools = nil
+		for tried := 1; ; tried++ {
+			done, moved := s.tryPool(h)
+			if done || !moved || tried == passPools {
+				break
 			}
-			return HostID{}, false
 		}
-		o = next
 	}
-	if a.Kind == ActionRightsize {
-		if replaced := s.host(*a.Host); o.running() >= replaced.offer.running() {
+}
+
+// tryPool launches h in its pool, as launchHost does. EC2 refuses it when
+// it would exceed its vCPU quota, cooling with quotas known the whole
+// class, or when refuses names its pool, cooling the pool's zone. A
+// refused launch moves to the pool fallbackPool picks; without one the
+// host fails. It reports whether the walk ended and whether it moved.
+func (s *sim) tryPool(h *simHost) (bool, bool) {
+	w, o := h.walk, h.offer
+	w.purchase.tried = append(w.purchase.tried, o)
+	cool := OfferCooldown{Region: o.Region, InstanceType: o.Type.Name, Market: o.Market}
+	if limit, ok := s.quotas[o.Quota]; ok && s.quotaUse()[o.Quota]+o.Type.VCPUs() > limit {
+		cool.Quota = s.knowQuota
+	} else if s.refuses != nil && s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
+		cool.ZoneID = o.ZoneID
+	} else {
+		s.launched(h)
+		return true, false
+	}
+	s.r.refusals++
+	s.r.refused = append(s.r.refused, s.now)
+	s.walkCool(h, cool)
+	next, ok := FleetOffer{}, false
+	if w.row.Replaces == nil {
+		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), func(string, bool) bool { return true })
+	}
+	if !ok {
+		if w.row.Replaces != nil {
+			s.host(HostID(*w.row.Replaces)).RightsizeRefusedAt = ptr(s.now)
+		}
+		s.record(w)
+		s.hosts = slices.DeleteFunc(s.hosts, func(o *simHost) bool { return o == h })
+		s.unwait(h.ID)
+		ends := map[time.Time]bool{}
+		for _, k := range w.refused {
+			ends[s.cools[k].until] = true
+		}
+		if len(ends) > 1 {
+			s.r.violations = append(s.r.violations, fmt.Sprintf("%s a walk's %d refused pools cool until %d ends",
+				s.now.Format(time.TimeOnly), len(w.refused), len(ends)))
+		}
+		return true, false
+	}
+	h.offer, h.InstanceType, h.Region, h.Zone, h.ZoneID, h.Usable, h.GPU = next, next.Type.Name, next.Region, next.Zone, next.ZoneID, next.Usable, next.Type.GPU
+	h.HourlyMicros = ptr(next.HourlyMicros)
+	w.row.Region, w.row.AvailabilityZone, w.row.InstanceType, w.row.LaunchPools = next.Region, next.Zone, next.Type.Name, w.row.LaunchPools+1
+	return false, true
+}
+
+// launched starts h's instance in its pool.
+func (s *sim) launched(h *simHost) {
+	w, o := h.walk, h.offer
+	h.walk = nil
+	w.purchase.launched = true
+	s.record(w)
+	if w.kind == ActionRightsize {
+		if replaced := s.host(*h.Replaces); o.running() >= replaced.offer.running() {
 			s.r.violations = append(s.r.violations, fmt.Sprintf("%s replaced %s with %s, which costs no less",
 				s.now.Format(time.TimeOnly), replaced.offer.Key(), o.Key()))
 		}
 	}
-	s.next++
-	var replaces *HostID
-	if a.Kind == ActionRightsize {
-		replaces = a.Host
-	}
-	h := &simHost{offer: o, FleetHost: FleetHost{Replaces: replaces,
-		ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
-		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
-		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand,
-	}}
 	provision := s.provision
 	if o.Type.GPU != "" {
 		provision = s.p.Starts.GPULaunch
 	}
 	h.until = s.now.Add(provision)
-	if reserve {
-		h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
+	if h.State == FleetPreparing {
 		h.stopAt(s.now.Add(provision + simPrepare))
 		s.r.reserveBought = append(s.r.reserveBought, s.now)
 	}
-	if !reserve && o.Market == MarketOnDemand {
+	if h.State != FleetPreparing && o.Market == MarketOnDemand {
 		s.r.onDemand++
 	}
-	purchase.launched = true
 	for _, zone := range []string{o.ZoneID, ""} {
 		delete(s.cools, OfferCooldown{Region: o.Region, ZoneID: zone, InstanceType: o.Type.Name, Market: o.Market})
 	}
 	if o.Type.GPU == "" {
 		s.r.cpuLaunches++
 	}
-	s.hosts = append(s.hosts, h)
 	s.r.launches++
 	s.r.launched = append(s.r.launched, s.now)
-	return h.ID, true
 }
 
-// cool cools c's pool as InsertCooldown does: for simCooldown, at least
-// that long from now while it cools, and after its cooldown ended twice as
-// long as that one lasted, up to cooldownGrowth cooldowns.
-func (s *sim) cool(c OfferCooldown) {
+// record keeps a finished walk's purchase.
+func (s *sim) record(w *simWalk) {
+	switch w.kind {
+	case ActionBuyReserve:
+		s.r.purchases = append(s.r.purchases, *w.purchase)
+	case ActionBuy:
+		s.r.bought = append(s.r.bought, *w.purchase)
+	case ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionRightsize, ActionHandBack, ActionLend:
+	}
+}
+
+// walkCool cools a pool h's walk refused as coolPool does: InsertCooldown
+// with the end the walk's earlier passes shared, then AlignCooldowns over
+// the pools the walk refused this pass.
+func (s *sim) walkCool(h *simHost, c OfferCooldown) {
+	w := h.walk
+	s.cool(c, w.walkUntil)
+	key := OfferCooldown{Region: c.Region, ZoneID: c.ZoneID, InstanceType: c.InstanceType, Market: c.Market}
+	w.passPools, w.refused = append(w.passPools, key), append(w.refused, key)
+	var shared time.Time
+	if w.walkUntil != nil {
+		shared = *w.walkUntil
+	}
+	for _, k := range w.passPools {
+		shared = maxTime(shared, s.cools[k].until)
+	}
+	for _, k := range w.passPools {
+		s.cools[k].until = shared
+	}
+	w.walkUntil = &shared
+}
+
+// cool cools c's pool as InsertCooldown does: for simCooldown, until
+// walkUntil when a walk's earlier passes set it, at least that long from
+// now while it cools, and after its cooldown ended twice as long as that
+// one lasted, up to cooldownGrowth cooldowns.
+func (s *sim) cool(c OfferCooldown, walkUntil *time.Time) {
 	if s.cools == nil {
-		s.cools = map[OfferCooldown]simCool{}
+		s.cools = map[OfferCooldown]*simCool{}
 	}
 	key := OfferCooldown{Region: c.Region, ZoneID: c.ZoneID, InstanceType: c.InstanceType, Market: c.Market}
-	run := simCool{lasted: simCooldown, until: s.now.Add(simCooldown)}
-	if last, ok := s.cools[key]; ok && last.until.After(s.now) {
-		run = simCool{lasted: last.lasted, until: maxTime(last.until, run.until)}
-	} else if ok {
-		run.lasted = min(max(2*last.lasted, simCooldown), cooldownGrowth*simCooldown)
-		run.until = s.now.Add(run.lasted)
+	until := s.now.Add(simCooldown)
+	if walkUntil != nil {
+		until = *walkUntil
 	}
-	s.cools[key] = run
-	c.Until = run.until
-	s.in.Cooldowns = append(s.in.Cooldowns, c)
+	last, ok := s.cools[key]
+	switch {
+	case !ok:
+		s.cools[key] = &simCool{lasted: simCooldown, until: until, quota: c.Quota}
+	case last.until.After(s.now):
+		last.until, last.quota = maxTime(last.until, until), c.Quota
+	default:
+		last.lasted = min(max(2*last.lasted, simCooldown), cooldownGrowth*simCooldown)
+		last.until, last.quota = s.now.Add(last.lasted), c.Quota
+	}
 }
 
-// simCool is a pool's cooldown: how long it lasted and when it ends.
+// simCool is a pool's cooldown: how long it lasted and when it ends, and
+// whether it cools the pool's quota class.
 type simCool struct {
 	lasted time.Duration
 	until  time.Time
+	quota  bool
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -817,12 +1039,10 @@ func (s *sim) apply(plan FleetPlan) {
 			for _, w := range plan.Waits {
 				if w.Action != nil && *w.Action == i {
 					c := s.pending[slices.IndexFunc(s.pending, func(c *simContainer) bool { return c.id == w.Container })]
-					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks)})
+					waiters = append(waiters, HostWaitersRow{Preemptible: c.need.Preemptible, Disks: int32(c.need.Disks), Region: c.need.Region, Zone: c.need.Zone})
 				}
 			}
-			if id, ok := s.launch(a, a.Kind == ActionBuyReserve, waiters); ok {
-				bought[i] = id
-			}
+			bought[i] = s.purchase(a, waiters)
 		case ActionResume:
 			h := s.host(*a.Host)
 			if s.refuses != nil && s.refuses(h.Region, h.ZoneID, h.InstanceType, h.Market) {
@@ -830,14 +1050,19 @@ func (s *sim) apply(plan FleetPlan) {
 				// zone, as the actuator does.
 				s.r.refusals++
 				s.r.refused = append(s.r.refused, s.now)
-				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market})
+				s.cool(OfferCooldown{Region: h.Region, ZoneID: h.ZoneID, InstanceType: h.InstanceType, Market: h.Market}, nil)
 				s.hosts = slices.DeleteFunc(s.hosts, func(r *simHost) bool { return r == h })
 				continue
 			}
-			// EC2 starts a stopping Spot reserve once it disables the request.
+			// EC2 starts a stopping Spot reserve once it disables the
+			// request; the actuator retires one whose request stays active
+			// past SpotDisableMax.
 			from := s.now
 			if h.State == FleetStopping {
-				from = maxTime(from, h.StoppedAt.Add(s.p.Starts.SpotDisable))
+				from = maxTime(from, h.until)
+				if limit := h.StoppedAt.Add(s.p.Starts.SpotDisableMax); h.until.After(limit) {
+					h.retireAt = ptr(maxTime(s.now, limit))
+				}
 			}
 			switch {
 			case h.State == FleetImageSaved || h.State == FleetStopping && *h.ReserveMode == ReserveHibernate:
@@ -852,7 +1077,7 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
 			s.pending = append(s.pending, s.evict(h, func(HostCapacity) bool { return false })...)
-			h.State, h.ReserveMode, h.Current, h.Slept = FleetPreparing, a.Mode, false, true
+			h.State, h.ReserveMode, h.Slept, h.prepared = FleetPreparing, a.Mode, true, s.release
 			h.stopAt(s.now.Add(simStop))
 			h.HandsBack = false
 			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)
@@ -862,7 +1087,12 @@ func (s *sim) apply(plan FleetPlan) {
 		case ActionHandBack, ActionLend:
 			s.host(*a.Host).HandsBack = a.Kind == ActionHandBack
 		case ActionRetireReserve:
-			if s.host(*a.Host).State == FleetPreparing {
+			if s.checkRetire {
+				s.retireViolation(s.host(*a.Host))
+			}
+			if h := s.host(*a.Host); h.walk != nil {
+				s.record(h.walk)
+			} else if h.State == FleetPreparing {
 				s.r.cancelled++
 			}
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
