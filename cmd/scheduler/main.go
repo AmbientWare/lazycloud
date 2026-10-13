@@ -186,6 +186,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelFleetWake()
+	launchWake, cancelLaunchWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelLaunchWake()
 	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelCapacityWake()
 	capacityFleetWake, cancelCapacityFleetWake := listener.Subscribe(compute.ChannelCompute, "")
@@ -359,11 +361,18 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			return result.Skipped
 		}))
 	})
+	// A launch walks EC2's refused pools on a loop of its own, so it holds
+	// up no reserve, retirement or preemption.
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, timed("fleet_launch", func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: fleetTick}, launchWake, nil, timed("fleet_launch", func(ctx context.Context) bool {
 			if _, err := comp.Launch(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "launch pass", "error", err)
 			}
+			return false
+		}))
+	})
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: fleetTick}, fleetWake, nil, timed("fleet_hosts", func(ctx context.Context) bool {
 			if _, err := comp.Actuate(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "reserve actuator pass", "error", err)
 			}

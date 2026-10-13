@@ -37,3 +37,4 @@ kubeconfig
 *.key
 /work/
 /bin/
+/scheduler

@@ -44,6 +44,9 @@ type FleetHost struct {
 	UsedDisks int
 	// Protected is an interruption's source or replacement.
 	Protected bool
+	// Requested is set on a host EC2 has not launched yet, which its
+	// launch's walk through refused pools may still move.
+	Requested bool
 	// Current is set on a reserve prepared for the current agent release.
 	Current bool
 	// UpdateDue is set on a host whose agent must move to the target
@@ -597,9 +600,11 @@ func (ps *pass) misplaced(v *marketView, region string) bool {
 	return i >= 0 && offers[i].Region == r.Region && offers[i].HourlyMicros*int64(ps.p.Provision/time.Second) < saved
 }
 
-// placed is a reserve of market v that holds its stopped target.
+// placed is a reserve of market v that holds its stopped target: one not
+// launched yet wherever its walk points, and a launched one only where it
+// is not misplaced.
 func (ps *pass) placed(v *marketView) func(FleetHost) bool {
-	return func(h FleetHost) bool { return h.reserve() && !ps.misplaced(v, h.Region) }
+	return func(h FleetHost) bool { return h.reserve() && (h.Requested || !ps.misplaced(v, h.Region)) }
 }
 
 func boolKey(b bool) string {

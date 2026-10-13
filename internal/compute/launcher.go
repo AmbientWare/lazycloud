@@ -98,7 +98,10 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 	var wg sync.WaitGroup
 	for _, h := range claimed {
 		wg.Go(func() {
-			started, err := c.launch(ctx, logger, h, pools)
+			// An EC2 call that never answers ends with the host's lease.
+			bounded, cancel := context.WithTimeout(ctx, launchLease)
+			defer cancel()
+			started, err := c.launch(bounded, logger, h, pools)
 			if err != nil && ctx.Err() == nil {
 				logger.ErrorContext(ctx, "launch host", "host_id", h.ID, "error", err)
 			}
@@ -128,14 +131,17 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 // launchPools launches h in its pool, then in each next pool that holds
 // what h was bought to hold while EC2 refuses the last for capacity, quota
 // or price, up to passPools pools this pass. Each refused pool cools before
-// the next is picked, so the walk ends.
+// the next is picked, so the walk ends, and every pool the walk refuses,
+// in this pass or a later one, cools until the end they share.
 func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow, pools *poolInputs) (bool, error) {
+	walk := &AlignCooldownsParams{ConnectionKey: ownerKey(h), WalkUntil: h.WalkCooledUntil}
 	for tried := 1; ; tried++ {
 		started, refusal, err := c.launchHost(ctx, logger, h)
 		if refusal == nil {
 			return started, err
 		}
 		cool := refusal.cooldown()
+		cool.walk = walk
 		if h.Replaces != nil {
 			// A rightsize is optional: its refusal keeps the host it would
 			// replace.
@@ -187,10 +193,12 @@ func (r *poolRefusal) cooldown() poolCooldown {
 
 // poolCooldown is how far a refusal cools a host's type and market: in the
 // zone zoneID, or in its whole region when zoneID is empty, and on a quota
-// refusal the platform's quota class in the region.
+// refusal the platform's quota class in the region. walk, when set, is the
+// pools the host's launch walk refused this pass and the end they share.
 type poolCooldown struct {
 	zoneID string
 	quota  bool
+	walk   *AlignCooldownsParams
 }
 
 // poolInputs are one launch pass's offer inputs by owner, read at the
@@ -400,7 +408,7 @@ func (c *Compute) movePool(ctx context.Context, h ClaimLaunchesRow, next FleetOf
 			ID: h.ID, LaunchPools: h.LaunchPools, InstanceType: next.Type.Name, Region: next.Region,
 			AvailabilityZone: next.Zone, AvailabilityZoneID: next.ZoneID, HourlyMicros: &next.HourlyMicros,
 			CpuMillis: next.Usable.CPUMillis, MemoryBytes: next.Usable.MemoryBytes,
-			LeaseSeconds: lease.Seconds(),
+			LeaseSeconds: lease.Seconds(), WalkCooledUntil: cool.walk.WalkUntil,
 		})
 		if err != nil {
 			return fmt.Errorf("move launch pool: %w", err)
@@ -710,17 +718,32 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 
 // coolPool skips h's type and market in the zone or region cool names
 // until the cooldown ends, and on a quota refusal its class in the region
-// for the platform.
+// for the platform. In a launch walk the pool's cooldown ends with the
+// pools the walk refused before it, in the same transaction, so no pass
+// plans from cooldowns that end apart.
 func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimLaunchesRow, message string, cool poolCooldown) error {
 	if h.Market == nil {
 		return nil
 	}
-	if err := q.InsertCooldown(ctx, InsertCooldownParams{
+	params := InsertCooldownParams{
 		ConnectionKey: ownerKey(h), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
 		Reason: truncate(message),
-	}); err != nil {
+	}
+	if cool.walk != nil {
+		params.WalkUntil = cool.walk.WalkUntil
+	}
+	if err := q.InsertCooldown(ctx, params); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)
+	}
+	if w := cool.walk; w != nil {
+		w.Regions, w.ZoneIds = append(w.Regions, h.Region), append(w.ZoneIds, cool.zoneID)
+		w.InstanceTypes, w.Markets = append(w.InstanceTypes, h.InstanceType), append(w.Markets, *h.Market)
+		end, err := q.AlignCooldowns(ctx, *w)
+		if err != nil {
+			return fmt.Errorf("align the walk's cooldowns: %w", err)
+		}
+		w.WalkUntil = &end
 	}
 	if cool.quota && h.ConnectionID == nil {
 		return c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market))

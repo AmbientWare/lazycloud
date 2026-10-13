@@ -16,3 +16,7 @@ return provider = 'aws' and host_gpus > 0 and container_gpus = 0;
 alter table attempts add column preempted boolean not null default false;
 
 create index attempts_preempted on attempts (container_id, started_at) where preempted;
+
+-- When the cooldowns of the pools a requested host's launch walk refused
+-- end, which the pools it refuses in later passes share.
+alter table hosts add column walk_cooled_until timestamptz;
