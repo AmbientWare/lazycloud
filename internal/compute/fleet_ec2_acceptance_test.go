@@ -295,8 +295,10 @@ func (r liveReserve) cycle(launched time.Time) {
 		kind = "hibernate"
 	}
 	r.timings.add(r.c.name()+": "+kind+" to stopped", stopped.Sub(accepted))
+	// A Spot reserve enters the reserve once EC2 disables its persistent
+	// request, 38-90 s after its instance stops.
 	for r.phase() != string(compute.PhaseStopped) {
-		if time.Since(stopped) > time.Minute {
+		if time.Since(stopped) > 3*time.Minute {
 			t.Fatalf("actuator left a stopped instance's host %s", r.phase())
 		}
 		time.Sleep(2 * time.Second)
@@ -316,10 +318,8 @@ func (r liveReserve) cycle(launched time.Time) {
 	r.move(compute.PhaseResuming)
 	asked := time.Now()
 	r.act()
-	// Another reserve's actuator pass may hold this host's claim. EC2
-	// answers IncorrectSpotRequestState for about 40 s after a Spot
-	// reserve stops, which the actuator retries, and may then refuse the
-	// start for Spot capacity, which retires the reserve.
+	// Another reserve's actuator pass may hold this host's claim. EC2 may
+	// refuse the start for Spot capacity, which retires the reserve.
 	refused := false
 	for scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
 		if r.phase() == string(compute.PhaseTerminating) {

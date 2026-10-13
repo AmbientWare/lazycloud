@@ -265,6 +265,9 @@ func (f *fakeEC2) describeRequests(call awsCall) awsReply {
 		if v, ok := want["state"]; ok && !slices.Contains(v, r.State) {
 			continue
 		}
+		if v, ok := want["spot-instance-request-id"]; ok && !slices.Contains(v, r.ID) {
+			continue
+		}
 		if !matches(r.Tags, want) {
 			continue
 		}

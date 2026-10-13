@@ -221,6 +221,28 @@ type Policy struct {
 	// FloorHold is how long a warm floor slot that new work took from a host
 	// able to hold it waits for that work to end before it buys a host.
 	FloorHold time.Duration
+	Starts    StartTimes
+}
+
+// StartTimes are how long work waits to start on a host by how the host
+// starts, from prod's host lifecycle logs of 2026-10-09 and the real EC2
+// checks: a CPU launch serves its first container 21-25 s after the
+// purchase and a stopped CPU reserve 13-15 s after its resume; a Spot L4
+// launch about 150 s after placement and a stopped g4dn.xlarge Spot
+// reserve about 70 s after its start. EC2 starts a stopped Spot instance
+// only once it disables the persistent request, 38-90 s after the instance
+// stops, 66 s on average (2026-10-13); a request still active past the
+// longest, SpotDisableMax, is taken as stuck.
+type StartTimes struct {
+	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax time.Duration
+}
+
+// of is a purchase's and a resume's start times in market m.
+func (s StartTimes) of(m ReserveMarket) (launch, resume time.Duration) {
+	if m.GPU != "" {
+		return s.GPULaunch, s.GPUResume
+	}
+	return s.Launch, s.Resume
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -270,6 +292,10 @@ func DefaultPolicy() Policy {
 		ReturnWait:      5 * time.Minute,
 		FloorHold:       time.Minute,
 		SpotPriceAge:    time.Hour,
+		Starts: StartTimes{
+			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
+			SpotDisable: 66 * time.Second, SpotDisableMax: 90 * time.Second,
+		},
 	}
 }
 

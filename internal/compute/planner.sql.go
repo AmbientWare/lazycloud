@@ -492,7 +492,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
-       h.rightsize_refused_at, h.hands_back_at,
+       h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
@@ -569,6 +569,7 @@ type PlannerHostsRow struct {
 	Replaces              *uuid.UUID
 	RightsizeRefusedAt    *time.Time
 	HandsBackAt           *time.Time
+	StoppedAt             *time.Time
 	UsedCpu               int64
 	UsedMemory            int64
 	UsedGpus              int32
@@ -637,6 +638,7 @@ func (q *Queries) PlannerHosts(ctx context.Context) ([]PlannerHostsRow, error) {
 			&i.Replaces,
 			&i.RightsizeRefusedAt,
 			&i.HandsBackAt,
+			&i.StoppedAt,
 			&i.UsedCpu,
 			&i.UsedMemory,
 			&i.UsedGpus,
@@ -804,12 +806,13 @@ const resumeReserves = `-- name: ResumeReserves :many
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
     reserve_mode = null, idle_since = null, updated_at = now()
-where id = any($1::uuid[]) and phase = 'stopped'
+where id = any($1::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id
 `
 
-// Starts stopped reserves to serve, their reserve mode cleared. Only a
-// requested resume serves.
+// Starts stopped reserves to serve, their reserve mode cleared, and
+// stopping ones whose instance stopped, which start once EC2 allows. Only
+// a requested resume serves.
 func (q *Queries) ResumeReserves(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, resumeReserves, ids)
 	if err != nil {

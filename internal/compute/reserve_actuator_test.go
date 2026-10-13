@@ -194,6 +194,66 @@ func TestAStoppingReserveIsRecheckedWithinSecondsOfItsStopCall(t *testing.T) {
 	}
 }
 
+// EC2 refuses to start a stopped Spot instance until it disables its
+// persistent request, so the reserve waits in stopping until then, with
+// its instance's stop recorded, and a resume asked meanwhile starts it
+// once EC2 allows.
+func TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c040")
+	ec2.add(fakeInstance{ID: "i-0000000000000c040", State: "stopped", SpotRequest: "sir-0000c040"}, host.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c040", State: "active", Instance: "i-0000000000000c040"}, host.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c040', stop_requested_at = now() where id = $1", uuid.UUID(host))
+	waiting := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c041")
+	ec2.add(fakeInstance{ID: "i-0000000000000c041", State: "stopped", SpotRequest: "sir-0000c041"}, waiting.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c041", State: "active", Instance: "i-0000000000000c041"}, waiting.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c041', stop_requested_at = now() where id = $1", uuid.UUID(waiting))
+
+	actuate(t, o)
+	for _, h := range []compute.HostID{host, waiting} {
+		if f := stopOf(t, o, h); f.Phase != "stopping" || !f.Stopped {
+			t.Fatalf("reserve with its Spot request still active %+v, want stopping with its instance's stop recorded", f)
+		}
+	}
+	run(t, o.pool, "update hosts set phase = 'resuming' where id = $1", uuid.UUID(waiting))
+	expireLeases(t, o)
+	actuate(t, o)
+	if n := len(emulator.calls("StartInstances")); n != 0 {
+		t.Fatalf("%d StartInstances calls while EC2 holds the request active, want none", n)
+	}
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c040", State: "disabled", Instance: "i-0000000000000c040"}, host.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c041", State: "disabled", Instance: "i-0000000000000c041"}, waiting.String())
+	expireLeases(t, o)
+	if r := actuate(t, o); r.Started != 1 {
+		t.Fatalf("actuate %+v once the requests disabled, want the resumed reserve started", r)
+	}
+	if f := stopOf(t, o, host); f.Phase != "stopped" {
+		t.Fatalf("reserve with its Spot request disabled %+v, want stopped", f)
+	}
+}
+
+// A Spot request still active past the longest disable EC2 takes is
+// stuck: the resumed reserve retires, so its work buys instead of waiting.
+func TestAResumedSpotReserveWhoseRequestStaysActiveRetires(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseResuming, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c042")
+	ec2.add(fakeInstance{ID: "i-0000000000000c042", State: "stopped", SpotRequest: "sir-0000c042"}, host.String())
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000c042", State: "active", Instance: "i-0000000000000c042"}, host.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000c042', stop_requested_at = now(), stopped_at = now() where id = $1", uuid.UUID(host))
+
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseResuming) {
+		t.Fatalf("reserve within the disable is %s, want resuming", phase)
+	}
+	ago(t, o, host, "stopped_at", compute.DefaultPolicy().Starts.SpotDisableMax+time.Second)
+	expireLeases(t, o)
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) || len(emulator.calls("StartInstances")) != 0 {
+		t.Fatalf("reserve with a stuck request is %s after %d starts, want terminating without one",
+			phase, len(emulator.calls("StartInstances")))
+	}
+}
+
 // EC2 names a hibernation in the stop reason; a hibernation that stopped
 // for another reason saved no image.
 func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {
@@ -204,9 +264,7 @@ func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {
 	plain := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c008")
 	ec2.add(fakeInstance{ID: "i-0000000000000c008", State: "stopped", StateReason: "Client.UserInitiatedShutdown"}, plain.String())
 	run(t, o.pool, "update hosts set stop_requested_at = now(), image_evidence = 'unavailable' where id = $1", uuid.UUID(plain))
-	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
-		t.Fatal(err)
-	}
+	actuate(t, o)
 	if f := stopOf(t, o, host); f.Phase != "stopped" || f.Evidence != string(compute.EvidenceFailed) {
 		t.Fatalf("hibernation stopped otherwise %+v, want stopped with the image failed", f)
 	}
@@ -415,7 +473,7 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 		t.Fatal(err)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		stopped: compute.PhaseStopped, settling: compute.PhaseStopped, preparing: compute.PhaseFailed,
+		stopped: compute.PhaseStopped, settling: compute.PhaseStopping, preparing: compute.PhaseFailed,
 		woken: compute.PhaseFailed, live: compute.PhaseStopped,
 	} {
 		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {

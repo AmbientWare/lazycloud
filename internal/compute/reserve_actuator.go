@@ -80,17 +80,36 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 			logger.ErrorContext(ctx, "describe reserve instances", "region", region, "error", err)
 			continue
 		}
+		var stopped []string
+		for _, h := range hosts {
+			if i, seen := instances[deref(h.InstanceID)]; seen && Phase(h.Phase) != PhaseTerminating && h.SpotRequestID != nil &&
+				i.State.Name == ec2types.InstanceStateNameStopped {
+				stopped = append(stopped, *h.SpotRequestID)
+			}
+		}
+		active, err := activeSpotRequests(ctx, client, stopped)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, err
+			}
+			// Unread requests count as active: their hosts wait a pass.
+			logger.ErrorContext(ctx, "describe reserve spot requests", "region", region, "error", err)
+			active = map[string]bool{}
+			for _, r := range stopped {
+				active[r] = true
+			}
+		}
 		for _, h := range hosts {
 			instance, seen := instances[deref(h.InstanceID)]
 			var err error
 			switch Phase(h.Phase) {
 			case PhaseStopping:
 				if seen {
-					err = c.stopReserve(ctx, logger, client, h, instance, &result)
+					err = c.stopReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], &result)
 				}
 			case PhaseResuming:
 				if seen {
-					err = c.startReserve(ctx, logger, client, h, instance, &result)
+					err = c.startReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], &result)
 				}
 			case PhaseTerminating:
 				// A vanished instance is reconcile's to mark deleted.
@@ -130,9 +149,13 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 // hibernates when the host sleeps that way and launched able to, no sooner
 // than EC2 allows after a start; refusals retry until providerDeadline,
 // then the host stops plainly, at once when EC2 says the instance cannot
-// hibernate. A stop still pending past providerDeadline is forced.
+// hibernate. A stop still pending past providerDeadline is forced. The
+// host enters the reserve once EC2 can start it: a Spot instance reads
+// stopped 38-90 s before EC2 disables its persistent request, which stays
+// active until then, and EC2 refuses to start it in between; the host
+// records when its instance stopped, so work may wait for it.
 func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
-	instance ec2types.Instance, result *ActuateResult) error {
+	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	now := time.Now()
 	hibernate := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate && h.HibernationConfigured &&
 		instance.HibernationOptions != nil && aws.ToBool(instance.HibernationOptions.Configured)
@@ -152,6 +175,14 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 			if err := c.recordStop(ctx, h.ID, lostEvidence, false); err != nil {
 				return err
 			}
+		}
+		if requestActive {
+			if err := c.queries.RecordInstanceStopped(ctx, RecordInstanceStoppedParams{
+				ID: h.ID, HibernationEvidence: string(hibernationEvidence(stopReason(instance.StateReason))),
+			}); err != nil {
+				return fmt.Errorf("record instance stopped: %w", err)
+			}
+			return nil
 		}
 		return c.reserveStopped(ctx, h.ID, stopReason(instance.StateReason))
 	case ec2types.InstanceStateNameStopping:
@@ -282,19 +313,25 @@ func stopReason(r *ec2types.StateReason) string {
 	return aws.ToString(r.Code)
 }
 
+// hibernationEvidence is what an unproven hibernation that EC2 stopped for
+// reason saved: the image when EC2 stopped it for the hibernation.
+func hibernationEvidence(reason string) ImageEvidence {
+	if reason == hibernatedReason {
+		return EvidenceSaved
+	}
+	return EvidenceFailed
+}
+
 // reserveStopped moves a stopping host whose instance EC2 reports stopped
-// for reason into the reserve. An unproven hibernation is saved when EC2
-// stopped it for the hibernation, and failed otherwise.
+// for reason into the reserve.
 func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason string) error {
 	if err := transition(PhaseStopping, PhaseStopped); err != nil {
 		return err
 	}
-	evidence := EvidenceFailed
-	if reason == hibernatedReason {
-		evidence = EvidenceSaved
-	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, MarkReserveStoppedParams{ID: host, HibernationEvidence: string(evidence)})
+		n, err := c.queries.WithTx(tx).MarkReserveStopped(ctx, MarkReserveStoppedParams{
+			ID: host, HibernationEvidence: string(hibernationEvidence(reason)),
+		})
 		if err != nil {
 			return fmt.Errorf("mark reserve stopped: %w", err)
 		}
@@ -305,13 +342,21 @@ func (c *Compute) reserveStopped(ctx context.Context, host uuid.UUID, reason str
 	})
 }
 
-// startReserve starts a resuming host's stopped instance. EC2 refusing it
+// startReserve starts a resuming host's stopped instance once EC2 has
+// disabled its Spot request; a request still active past SpotDisableMax
+// is stuck, and the host retires so its work buys. EC2 refusing the start
 // for capacity retires the host and cools its offer, so the planner buys
 // elsewhere; the host's session moves it on once the agent says Hello.
 func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client *ec2.Client, h ClaimProviderActionsRow,
-	instance ec2types.Instance, result *ActuateResult) error {
+	instance ec2types.Instance, requestActive bool, result *ActuateResult) error {
 	switch instance.State.Name {
 	case ec2types.InstanceStateNameStopped:
+		if requestActive && h.StoppedAt != nil && time.Since(*h.StoppedAt) > c.policy().Starts.SpotDisableMax {
+			return c.retireReserve(ctx, logger, h, PhaseResuming, "The Spot request stayed active after its instance stopped", nil)
+		}
+		if requestActive {
+			return nil
+		}
 	case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:
 		// Started already, by a call whose answer was lost.
 		return c.recordStart(ctx, h.ID)
@@ -359,6 +404,32 @@ func describeInstances(ctx context.Context, client *ec2.Client, ids []string) (m
 					out[aws.ToString(i.InstanceId)] = i
 				}
 			}
+		}
+	}
+	return out, nil
+}
+
+// activeSpotRequests reports which of requests EC2 holds active.
+func activeSpotRequests(ctx context.Context, client *ec2.Client, requests []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(requests) == 0 {
+		return out, nil
+	}
+	// A filter, unlike SpotInstanceRequestIds, leaves out an id EC2 no
+	// longer lists instead of failing the call.
+	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("spot-instance-request-id"), Values: requests},
+			{Name: aws.String("state"), Values: []string{string(ec2types.SpotInstanceStateActive)}},
+		},
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe spot requests: %w", err)
+		}
+		for _, r := range page.SpotInstanceRequests {
+			out[aws.ToString(r.SpotInstanceRequestId)] = true
 		}
 	}
 	return out, nil
