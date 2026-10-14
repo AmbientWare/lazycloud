@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -30,6 +32,7 @@ def read() -> int:
 // trust bundle holds, named in the host name or in the path, and a
 // read-only mount refuses writes.
 func TestCloudBucketsMountOverHTTPS(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	if p.geesefs == "" {
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
