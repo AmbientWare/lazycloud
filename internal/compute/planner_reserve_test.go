@@ -332,7 +332,7 @@ func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
 	other := idleHost(t, o, "c6a.2xlarge", "i-0000000000000fc02")
 	run(t, o.pool, "update hosts set hibernation_configured = true where id = any($1)", []uuid.UUID{uuid.UUID(refused), uuid.UUID(other)})
 	// The agent's refusal returned it to ready just now. The other host
-	// costs less, so it keeps the warm slot and the refused one leaves.
+	// costs less, so it keeps the floor and the refused one leaves.
 	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now() where id = $1", uuid.UUID(refused))
 
 	if r := plan(t, o); r.Drained != 1 || r.Returned != 0 {
@@ -613,10 +613,10 @@ func TestSurplusReservesRetire(t *testing.T) {
 		reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, "c6a.4xlarge", instance)))
 	}
 	// Two keep the stopped target, the floor and the 8 CPU largest shape,
-	// and two retire. The empty warm slot buys a small host: running a
-	// 16-CPU reserve for it costs more.
+	// and two retire. The empty market's floor buys a small host: running
+	// a 16-CPU reserve for it costs more.
 	if r := plan(t, o); r.Retired != 2 || r.Resumed != 0 || r.Requested != 1 {
-		t.Fatalf("plan %+v, want two of four reserves retired and a host bought for the slot", r)
+		t.Fatalf("plan %+v, want two of four reserves retired and a host bought for the floor", r)
 	}
 	for phase, want := range map[string]int{"terminating": 2, "stopped": 2} {
 		if n := scan[int](t, o.pool, "select count(*) from hosts where id = any($1) and phase = $2", reserves, phase); n != want {
@@ -761,8 +761,8 @@ func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 }
 
 // Five 1 CPU starts in a burst leave at most two hosts: the warm host takes
-// one, and one reserve resumes for the other four and the warm slot, so
-// nothing is bought and no slot refill follows once they run.
+// one, and one reserve resumes for the other four and the floor, so
+// nothing is bought and no floor refill follows once they run.
 func TestABurstOfFiveSmallStartsLeavesAtMostTwoHosts(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
