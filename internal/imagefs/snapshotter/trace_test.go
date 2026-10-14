@@ -278,6 +278,9 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 // set.
 type holdingTransport struct {
 	release chan struct{}
+	// abort ends a held answer once its request's context ends, as a
+	// store connection does.
+	abort   bool
 	pass    atomic.Bool
 	waiting atomic.Int64
 }
@@ -294,8 +297,16 @@ func (h *holdingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	h.waiting.Add(1)
-	<-h.release
-	return resp, nil
+	if !h.abort {
+		<-h.release
+		return resp, nil
+	}
+	select {
+	case <-h.release:
+		return resp, nil
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
 }
 
 func waitFor(t *testing.T, done func() bool) {

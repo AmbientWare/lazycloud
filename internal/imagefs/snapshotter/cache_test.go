@@ -213,7 +213,7 @@ func (l storedLayer) grantTo(c *frameCache) *layer {
 func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	t.Parallel()
 	ts := newTestStore(t)
-	held := &holdingTransport{release: make(chan struct{})}
+	held := &holdingTransport{release: make(chan struct{}), abort: true}
 	c := newTestCache(t, held, 64<<20)
 	c.fillBytes = 64 << 20
 	l := ts.file(t, "a", random(1<<20)).grantTo(c)
@@ -221,16 +221,19 @@ func TestCancelledFillsFinishSharedFetches(t *testing.T) {
 	filled := make(chan struct{})
 	go func() { c.fillLayer(fillCtx, l); close(filled) }()
 	waitFor(t, func() bool { return held.waiting.Load() > 0 })
+	// The read joins the fill's fetch or, once that stored the frame, reads
+	// it from the cache: either way the frame is fetched once.
 	read := make(chan error, 1)
 	go func() { read <- l.read(0, make([]byte, 16), 0) }()
-	time.Sleep(100 * time.Millisecond)
 	stopFill()
-	time.Sleep(100 * time.Millisecond)
 	close(held.release)
 	if err := <-read; err != nil {
 		t.Fatalf("a read sharing a cancelled fill's fetch: %v", err)
 	}
 	<-filled
+	if n := held.waiting.Load(); n != 1 {
+		t.Fatalf("the frame was fetched %d times: the cancelled fill's fetch did not finish", n)
+	}
 }
 
 // An eviction that cannot delete a frame's file keeps the frame counted, so
