@@ -5,6 +5,7 @@ import (
 )
 
 func TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)

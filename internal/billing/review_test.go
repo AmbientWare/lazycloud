@@ -28,6 +28,7 @@ func (f *fixture) reloadingAccount(balance int64) uuid.UUID {
 }
 
 func TestReloadDecidesFromASettledBalanceOnce(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.reloadingAccount(NanosPerUSD)
 	// A reload that already succeeded granted its credit; the balance row
@@ -63,6 +64,7 @@ func TestReloadDecidesFromASettledBalanceOnce(t *testing.T) {
 }
 
 func TestAutomaticPaymentIsNotRetriedOnceReloadIsOff(t *testing.T) {
+	t.Parallel()
 	f := newStripeFixture(t)
 	owner := f.reloadingAccount(0)
 	var id uuid.UUID
@@ -81,6 +83,7 @@ func TestAutomaticPaymentIsNotRetriedOnceReloadIsOff(t *testing.T) {
 }
 
 func TestMeteringMarksDueBehindAConcurrentRollup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -100,7 +103,18 @@ func TestMeteringMarksDueBehindAConcurrentRollup(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, err := f.billing.Meter(t.Context()); done <- err }()
-	time.Sleep(300 * time.Millisecond)
+	// Metering queues on the balance the rollup holds.
+	for len(done) == 0 {
+		var waiting int
+		if err := f.pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
+			where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err := rollup.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +127,7 @@ func TestMeteringMarksDueBehindAConcurrentRollup(t *testing.T) {
 }
 
 func TestRetentionKeepsDataOfAnAccountFundedOnTheLastDay(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -135,6 +150,7 @@ func TestRetentionKeepsDataOfAnAccountFundedOnTheLastDay(t *testing.T) {
 }
 
 func TestScheduledDowngradeHoldsAdditionsToTheCheaperPlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.setAccount(owner, "terms_version = 'team-v3', payment_method_attached_at = now(), scheduled_terms_version = 'free-v2', scheduled_change_at = now() + interval '10 days'")
@@ -148,6 +164,7 @@ func TestScheduledDowngradeHoldsAdditionsToTheCheaperPlan(t *testing.T) {
 }
 
 func TestConcurrentWorkspaceCreationsCountEachOther(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	var wg sync.WaitGroup
@@ -175,6 +192,7 @@ insert into workspace_members (workspace_id, user_id, role) select id, $1, 'owne
 }
 
 func TestAContainerReadLiveAndStoppedIsWrittenOnce(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -190,7 +208,9 @@ func TestAContainerReadLiveAndStoppedIsWrittenOnce(t *testing.T) {
 }
 
 // stripeStub stands in for Stripe's API where a test needs an object
-// stripe-mock's fixtures cannot hold, and records each request's form.
+// stripe-mock's fixtures cannot hold, and records each request's form. Its
+// answers are objects of the shapes Stripe's API reference documents, which
+// stripe-mock's specification also holds.
 type stripeStub struct {
 	mu       sync.Mutex
 	requests map[string][]url.Values
@@ -235,6 +255,7 @@ func (s *stripeStub) sent(request string) []url.Values {
 }
 
 func TestAPaidReloadWhoseResponseWasLostIsFoundByItsWebhook(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.reloadingAccount(0)
 	var id uuid.UUID
@@ -264,6 +285,7 @@ func TestAPaidReloadWhoseResponseWasLostIsFoundByItsWebhook(t *testing.T) {
 }
 
 func TestThePortalOffersOnlyInvoicesAndCards(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	stub := f.stubStripe(func(request string) any {
 		switch request {

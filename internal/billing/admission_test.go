@@ -47,6 +47,7 @@ func limitReached(err error) bool {
 }
 
 func TestAdmitRefusesWorkTheAccountCannotPayFor(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -87,6 +88,7 @@ func TestAdmitRefusesWorkTheAccountCannotPayFor(t *testing.T) {
 }
 
 func TestAdmitCapsContainersAtTheAccountsConcurrency(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -115,6 +117,7 @@ func TestAdmitCapsContainersAtTheAccountsConcurrency(t *testing.T) {
 }
 
 func TestConcurrentStartsCountEachOther(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -171,6 +174,7 @@ func (f *fixture) email(user uuid.UUID) string {
 }
 
 func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	if err := f.admitWorkspace(owner); err != nil {
@@ -225,6 +229,7 @@ func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
 }
 
 func TestCapabilitiesFollowThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -263,6 +268,7 @@ func TestCapabilitiesFollowThePlan(t *testing.T) {
 }
 
 func TestRetentionFollowsThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -289,6 +295,7 @@ func TestRetentionFollowsThePlan(t *testing.T) {
 }
 
 func TestPlanChangesCannotGoBelowHeldLimits(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.setAccount(owner, "terms_version = 'team-v3', payment_method_attached_at = now()")
