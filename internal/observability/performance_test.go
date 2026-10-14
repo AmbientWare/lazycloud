@@ -50,6 +50,7 @@ const none = time.Duration(-1)
 // cold starts are the deployment's containers created in the bucket. Tasks
 // of other deployments or outside the range do not count.
 func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, _, otherWL, otherRel := f.addFunction("acme", "billing", "charge", `{}`)
 	hour := time.Now().Truncate(time.Hour)
@@ -96,6 +97,7 @@ func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 // An endpoint's calls are its request records: a 5xx answer failed and a
 // caller that left first (499) cancelled.
 func TestWorkloadPerformanceCountsEndpointRequests(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	hour := time.Now().Truncate(time.Hour)
 	early := hour.Add(-2 * time.Hour).Add(10 * time.Minute)
@@ -123,6 +125,7 @@ values (uuidv7($5::timestamptz - now()), $1, $2, $3, 'POST', '/', $4, $5, $6, 0,
 // range; activity buckets are dense and split per app, or per function of
 // one app.
 func TestTaskMetricsAndActivity(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, _, chargeWL, chargeRel := f.addFunction("acme", "billing", "charge", `{}`)
 	hour := time.Now().Truncate(time.Hour)
@@ -180,6 +183,7 @@ func TestTaskMetricsAndActivity(t *testing.T) {
 // concurrency in the owned ones; activity measures starts per app and the
 // average CPU live containers reserved per bucket.
 func TestAccountMetricsAndActivity(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	sharedWS, _, _, sharedRel := f.addFunction("shared", "etl", "load", `{}`)
 	_, _, _, chargeRel := f.addFunction("acme", "billing", "charge", `{"resources":{"gpu_count":2}}`)

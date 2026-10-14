@@ -155,11 +155,18 @@ func decodeFrame(t *testing.T, frame []byte) apitypes.ChangeEvent {
 	return out
 }
 
-func noEvent(t *testing.T, sub *observability.Subscription, wait time.Duration) {
-	t.Helper()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("unexpected event %s", e.Frame)
-	case <-time.After(wait):
+// quiet proves that sub received nothing since its last event: a change
+// made now in ws, the subscription's workspace, is the next event it
+// receives, as the hub delivers in commit order.
+func (f *fixture) quiet(sub *observability.Subscription, ws identity.WorkspaceID) {
+	f.t.Helper()
+	var marker uuid.UUID
+	if err := f.pool.QueryRow(f.t.Context(), "insert into volumes (workspace_id, name) values ($1, 'marker-' || gen_random_uuid()) returning id",
+		uuid.UUID(ws)).Scan(&marker); err != nil {
+		f.t.Fatal(err)
+	}
+	e, event := nextEvent(f.t, sub)
+	if len(event.Changes) != 1 || event.Changes[0].ResourceId == nil || *event.Changes[0].ResourceId != marker.String() {
+		f.t.Fatalf("unexpected event %s", e.Frame)
 	}
 }
