@@ -957,3 +957,94 @@ func TestAReserveResumedForWorkIsReplacedInTheReserve(t *testing.T) {
 		t.Fatalf("actions %+v, want a reserve bought to replace the one serving work", plan.Actions)
 	}
 }
+
+// A reserve shortfall is bought in one cover: the largest shape and the
+// rest of the stopped target share the cheapest hosts, here one host of
+// twice the size rather than one for the shape and another for the rest.
+func TestAReserveShortfallIsBoughtInOneCover(t *testing.T) {
+	double := CatalogType{Name: "m.double", Topology: twoPerCore(32), MemoryBytes: 32 * gib, prices: [4]int64{150_000, 150_000, 150_000, 150_000}}
+	p := planPolicy(FleetCapacity{}, small)
+	p.OnDemand.FitLargest, p.LargestShape.Default = true, FleetCapacity{}
+	s := planSnapshot(t)
+	s.Offers.Catalog = append(s.Offers.Catalog, double)
+	s.Recent = map[ReserveMarket]FleetCapacity{onDemand: small}
+	reserves := actionsOf(PlanFleet(p, s), ActionBuyReserve)
+	if len(reserves) != 1 || reserves[0].Offer.Type.Name != double.Name {
+		t.Fatalf("bought reserves %+v, want one %s for the shape and the rest", reserves, double.Name)
+	}
+}
+
+// Headroom resumes the reserve that holds all the market lacks before
+// cheaper ones that hold part of it, so one resume does.
+func TestHeadroomResumesTheReserveThatHoldsAllItLacks(t *testing.T) {
+	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
+	s := planSnapshot(t, planHost(1, planSmall, FleetStopped), planHost(2, planSmall, FleetStopped), planHost(3, planLarge, FleetStopped))
+	s.Arrived = map[ReserveMarket]FleetCapacity{onDemand: cpuGiB(20_000, 20)}
+	plan := PlanFleet(p, s)
+	if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{{3}}) || len(actionsOf(plan, ActionBuy)) > 0 {
+		t.Fatalf("actions %+v, want the large reserve resumed alone", plan.Actions)
+	}
+}
+
+// full is a serving m.small its work fills.
+func full(id byte) FleetHost {
+	h := planHost(id, planSmall, FleetServing)
+	h.Load, h.Containers = small, 1
+	return h
+}
+
+// As load ramps up, each step buys what the market then lacks, sized to
+// it, and releases nothing; once the load falls, the hosts the ramp bought
+// stay for the window after the last purchase, then what the target no
+// longer holds leaves.
+func TestARampBuysEachStepsShortfallAndReleasesOnlyAfterTheWindow(t *testing.T) {
+	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
+	step := func(s FleetSnapshot, at time.Duration, bought, left int) FleetPlan {
+		t.Helper()
+		s.Now = offerNow.Add(at)
+		plan := PlanFleet(p, s)
+		if b, l := boughtTypes(plan), actionsOf(plan, ActionDrain, ActionReturnToReserve); len(b) != bought || len(l) != left ||
+			slices.ContainsFunc(b, func(n string) bool { return n != planSmall.Name }) {
+			t.Fatalf("at %s bought %v and released %v, want %d %s and %d released", at, b, hostsOf(l), bought, planSmall.Name, left)
+		}
+		return plan
+	}
+	plan := step(planSnapshot(t, full(1)), 0, 1, 0)
+	s := planSnapshot(t, full(1), full(2))
+	s.Holds = carried(plan)
+	plan = step(s, 20*time.Second, 1, 0)
+	s = planSnapshot(t, full(1), planHost(2, planSmall, FleetServing), planHost(3, planSmall, FleetServing))
+	s.Holds = carried(plan)
+	plan = step(s, 40*time.Second, 0, 0)
+	s.Holds = carried(plan)
+	step(s, 20*time.Second+p.Window(onDemand), 0, 1)
+}
+
+// A job that recurs every few minutes and fills the market's floor host
+// starts on that host each time; the market restores its floor while the
+// job runs and holds one host again once the window after it passes.
+func TestARecurringJobStartsOnTheFloorEachTimeAndTheMarketSettlesBetweenRuns(t *testing.T) {
+	p := planPolicy(small, FleetCapacity{})
+	job := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
+	for cycle := range 3 {
+		start := offerNow.Add(time.Duration(cycle) * 3 * time.Minute)
+		s := planSnapshot(t, planHost(1, planSmall, FleetServing))
+		s.Now = start
+		g, id := pendingOne(job, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(p, s)
+		if w := waitOf(t, plan, id); w.Wait != nil || len(boughtForWork(plan)) > 0 || len(boughtTypes(plan)) != 1 {
+			t.Fatalf("cycle %d: wait %+v, actions %+v; want the job on the floor host and the floor bought back", cycle, w, plan.Actions)
+		}
+		s = planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetServing))
+		s.Holds = carried(plan)
+		s.Now = start.Add(p.Window(onDemand) - holdStep)
+		if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) > 0 {
+			t.Fatalf("cycle %d: released %v within the window after the floor was bought", cycle, hostsOf(left))
+		}
+		s.Now = start.Add(p.Window(onDemand))
+		if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) != 1 {
+			t.Fatalf("cycle %d: released %v once the window passed, want one host", cycle, hostsOf(left))
+		}
+	}
+}
