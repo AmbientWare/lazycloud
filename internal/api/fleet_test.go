@@ -67,6 +67,7 @@ func (e *env) fleet(token string) apitypes.FleetSummary {
 }
 
 func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	admin := e.administrator()
@@ -154,9 +155,11 @@ select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); er
 	}
 }
 
-// Nodes lists live hosts in their fleet state; a failed host and a launch
-// the provider refused are left out.
+// The fleet is for administrators. Nodes lists live platform hosts in their
+// fleet state; a failed host, a launch the provider refused and a
+// customer's machine are left out.
 func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	admin := e.administrator()
@@ -193,6 +196,19 @@ func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 	failed := e.fleetHost(fleetHost{instance: "i-0failed", phase: "failed"})
 	refused := e.fleetHost(fleetHost{phase: "failed"})
 	requested := e.fleetHost(fleetHost{phase: "requested"})
+	var machine uuid.UUID
+	if err := e.pool.QueryRow(ctx, `
+insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes, kind, account_id)
+values ('gpu-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30, 'machine', (select id from users where email = 'owner@example.com'))
+returning id`).Scan(&machine); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/fleet", "/v1/fleet/nodes"} {
+		var apiErr apitypes.Error
+		if status := e.do("GET", path, e.owner, nil, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
+			t.Errorf("GET %s as a user: %d %+v, want 403", path, status, apiErr)
+		}
+	}
 
 	got := map[uuid.UUID]apitypes.FleetNode{}
 	cursor := ""
@@ -219,9 +235,9 @@ func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 		}
 		cursor = *page.NextCursor
 	}
-	for _, absent := range []uuid.UUID{failed, refused, requested} {
+	for _, absent := range []uuid.UUID{failed, refused, requested, machine} {
 		if n, ok := got[absent]; ok {
-			t.Errorf("failed host or one without an instance listed: %+v", n)
+			t.Errorf("a failed host, one without an instance or a customer's machine listed: %+v", n)
 		}
 	}
 	if r := e.fleet(admin).Release; r == nil || r.Complete || r.Phases["current"] != 1 || r.Phases["updating"] != 1 || r.Phases["reserve"] != 6 {

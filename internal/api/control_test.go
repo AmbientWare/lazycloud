@@ -14,6 +14,7 @@ import (
 // validation and typed errors. Owner behavior is proven in the control and
 // execution packages; this covers what only the HTTP surface adds.
 func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	var apiErr apitypes.Error
@@ -135,6 +136,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 // A refused deploy answers with the code of the refusal its account most
 // needs to act on; a GPU model the fleet does not offer stays unsupported.
 func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	unoffered := e.deploy().Releases[0].Spec
 	unoffered.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
