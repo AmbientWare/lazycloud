@@ -165,7 +165,8 @@ func (c reserveCase) name() string {
 }
 
 // launchReserve asks for a reserve of the case and launches it through the
-// launcher, in the next zone when one refuses the type for capacity.
+// launcher, in the next zone when one refuses the type for capacity or does
+// not sell it.
 func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.Network, c reserveCase, timings *lifecycleTimings) (liveReserve, time.Time) {
 	typ, ok := compute.CatalogTypeNamed(c.instanceType)
 	if !ok {
@@ -192,7 +193,7 @@ returning id`, typ.CPUMillis(), typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegi
 				return liveReserve{t: t, o: o, client: client, host: host, c: c, timings: timings}, launched
 			}
 			if phase == string(compute.PhaseFailed) {
-				if !strings.Contains(message, "InsufficientInstanceCapacity") {
+				if !strings.Contains(message, "InsufficientInstanceCapacity") && !strings.Contains(message, "Unsupported") {
 					t.Fatalf("%s launch failed: %s", c.name(), message)
 				}
 				t.Logf("%s in %s: %s", c.name(), subnet.Zone, message)
