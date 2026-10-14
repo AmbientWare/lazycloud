@@ -49,19 +49,7 @@ type fleetRun struct {
 	// Refusals are EC2's capacity refusals of the run's launches, [ms after
 	// start, region, zone id, type, market].
 	Refusals [][5]json.RawMessage `json:"refusals"`
-	Recorded struct {
-		Revenue        float64               `json:"revenue"`
-		FleetCPUHours  float64               `json:"fleet_cpu_hours"`
-		CostAboveIdle  float64               `json:"cost_above_idle"`
-		IdleRate       float64               `json:"idle_rate"`
-		WindowSeconds  int                   `json:"window_seconds"`
-		HostsLaunched  int                   `json:"hosts_launched"`
-		WaitsP50AndP95 map[string][2]float64 `json:"waits_p50_p95"`
-		Refused        int                   `json:"refused"`
-		// NeverRanSpotCPU counts the Spot CPU hosts that served and ended
-		// without running a container.
-		NeverRanSpotCPU int `json:"never_ran_spot_cpu"`
-	} `json:"recorded"`
+	Recorded fleetRecorded        `json:"recorded"`
 	// Prices are every Spot price change, [region, zone id, type, µ$/h,
 	// effective]; Spot is the latest quote per pool with its placement
 	// score, [region, zone id, type, µ$/h, score].
@@ -230,6 +218,21 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 	return s
 }
 
+// fleetRecorded is what prod recorded over a run's window.
+type fleetRecorded struct {
+	Revenue        float64               `json:"revenue"`
+	FleetCPUHours  float64               `json:"fleet_cpu_hours"`
+	CostAboveIdle  float64               `json:"cost_above_idle"`
+	IdleRate       float64               `json:"idle_rate"`
+	WindowSeconds  int                   `json:"window_seconds"`
+	HostsLaunched  int                   `json:"hosts_launched"`
+	WaitsP50AndP95 map[string][2]float64 `json:"waits_p50_p95"`
+	Refused        int                   `json:"refused"`
+	// NeverRanSpotCPU counts the Spot CPU hosts that served and ended
+	// without running a container.
+	NeverRanSpotCPU int `json:"never_ran_spot_cpu"`
+}
+
 // replayWindow is how long a replay runs: the run's 30 minutes of
 // arrivals, its 20-minute jobs and the fleet's idle tail.
 const replayWindow = 65 * time.Minute
@@ -240,11 +243,11 @@ const replayWindow = 65 * time.Minute
 const containerStart = 2500 * time.Millisecond
 
 // TestFleetReplayOfAMixedCPURun replays run2, which saw no reclaims,
-// without them, as a cost check: every container runs, the planner spends
-// no more above the idle rate than the planner prod ran did, and no host
-// it buys for headroom leaves without running a container. A host bought
-// for work whose containers took room that freed before it served is
-// logged, as are its launches and start waits beside prod's.
+// without them, and holds the planner to what prod recorded: every
+// container runs, the hosts launched and each function's start p50 and
+// p95 stay near prod's, it spends no more above the idle rate than the
+// planner prod ran did, and no host it buys for headroom leaves without
+// running a container.
 func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
@@ -258,7 +261,7 @@ func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 	cost := float64(r.windowMicros)/3600e6 - rec.IdleRate*window.Hours()
 	t.Logf("revenue $%.2f (prod $%.2f), fleet %.1f CPU-h (%.1f), cost above idle $%.2f (prod $%.2f, main $%.2f), hosts launched %d (%d, %d)",
 		revenue, rec.Revenue, fleetCPU, rec.FleetCPUHours, cost, rec.CostAboveIdle, run.Main.CostAboveIdle, r.launches, rec.HostsLaunched, run.Main.HostsLaunched)
-	logWaits(t, r, rec.WaitsP50AndP95, containerStart)
+	matchesProd(t, r, rec, containerStart)
 	if math.Abs(revenue-rec.Revenue) > 0.02*rec.Revenue || len(s.pending) > 0 || len(r.violations) > 0 {
 		t.Errorf("revenue $%.2f of $%.2f, %d containers unplaced, violations %v", revenue, rec.Revenue, len(s.pending), r.violations)
 	}
@@ -274,11 +277,11 @@ func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 // TestFleetReplayOfAMixedGPURun replays prodcheck6 (run3), a mixed CPU
 // load beside on-demand A10G functions while EC2 refused GPU pools. Prod
 // launched Spot CPU hosts that never ran a container, three A10G hosts for
-// one job and returned a g5.8xlarge above the size cap to the reserve. As
-// a cost check, the planner runs every container, buys no GPU host
-// without work, keeps every reserve within the cap and spends no more than
-// the planner prod ran did. Its launches and start waits are logged beside
-// prod's.
+// one job and returned a g5.8xlarge above the size cap to the reserve. The
+// planner runs every container, keeps the hosts launched and each
+// function's start p50 and p95 near prod's, buys no GPU host without
+// work, keeps every reserve within the cap and spends no more than the
+// planner prod ran did.
 func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
@@ -306,7 +309,7 @@ func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 	t.Logf("hosts launched %d (prod %d, main %d), refused %d (%d), Spot CPU hosts that never ran a container %d (%d), most serving A10G hosts %d, cost $%.2f (main $%.2f)",
 		r.launches, rec.HostsLaunched, run.Main.HostsLaunched, r.refusals, rec.Refused, r.unusedBy[spotCPU], rec.NeverRanSpotCPU,
 		r.mostServing[ReserveMarket{GPU: "A10G"}], cost, run.Main.Cost)
-	logWaits(t, r, rec.WaitsP50AndP95, 0)
+	matchesProd(t, r, rec, 0)
 	if len(s.pending) > 0 || len(r.violations) > 0 || len(r.breaches) > 0 {
 		t.Errorf("%d containers unplaced, violations %v, breaches %v", len(s.pending), r.violations, r.breaches)
 	}
@@ -320,13 +323,23 @@ func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 	}
 }
 
-// logWaits logs each function's start p50 and p95, with start added to the
-// placement waits, beside what prod recorded.
-func logWaits(t *testing.T, r simResult, recorded map[string][2]float64, start time.Duration) {
-	for _, fn := range slices.Sorted(maps.Keys(recorded)) {
-		want := recorded[fn]
-		t.Logf("%s start p50 %.1fs p95 %.1fs, prod %.1fs %.1fs", fn, (quantile(r.fnWaits[fn], 0.5) + start).Seconds(),
-			(quantile(r.fnWaits[fn], 0.95) + start).Seconds(), want[0], want[1])
+// matchesProd holds a replay to what prod recorded: the hosts launched
+// within three, and each function's start p50 and p95, with start added
+// to the placement waits, within 4 s.
+func matchesProd(t *testing.T, r simResult, rec fleetRecorded, start time.Duration) {
+	t.Helper()
+	if d := r.launches - rec.HostsLaunched; d < -3 || d > 3 {
+		t.Errorf("launched %d hosts, prod %d", r.launches, rec.HostsLaunched)
+	}
+	for _, fn := range slices.Sorted(maps.Keys(rec.WaitsP50AndP95)) {
+		want := rec.WaitsP50AndP95[fn]
+		for i, q := range []float64{0.5, 0.95} {
+			got := (quantile(r.fnWaits[fn], q) + start).Seconds()
+			t.Logf("%s start p%.0f %.1fs, prod %.1fs", fn, 100*q, got, want[i])
+			if math.Abs(got-want[i]) > 4 {
+				t.Errorf("%s start p%.0f %.1fs, prod %.1fs", fn, 100*q, got, want[i])
+			}
+		}
 	}
 }
 
