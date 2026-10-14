@@ -37,6 +37,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # Test images, pinned by digest, from the run that last pulled them.
+      - uses: actions/cache@v6
+        with:
+          path: .lazycloud/test-images
+          key: test-images-${{ hashFiles('internal/agent/harness_test.go', 'internal/agent/lazy_test.go', 'internal/agent/workloads_test.go', 'internal/imagefs/image_test.go', 'internal/platformimages/*.go') }}
       - name: PostgreSQL, stripe-mock and the object store
         run: docker compose -f compose.test.yaml up -d --wait
       - name: GeeseFS for volume mount tests
@@ -73,6 +78,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # Test images, pinned by digest, from the run that last pulled them.
+      - uses: actions/cache@v6
+        with:
+          path: .lazycloud/test-images
+          key: test-images-${{ hashFiles('internal/agent/harness_test.go', 'internal/agent/lazy_test.go', 'internal/agent/workloads_test.go', 'internal/imagefs/image_test.go', 'internal/platformimages/*.go') }}
       - name: Install the snapshotter as hosts do
         run: deploy/local/install-snapshotter.sh
       - name: Object store for layers and volumes
