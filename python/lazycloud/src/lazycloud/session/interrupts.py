@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import signal
 import threading
-from collections.abc import Callable
-from typing import TypeVar
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, TypeVar
+from uuid import UUID
+
+if TYPE_CHECKING:
+    from lazycloud.session.task import Task
 
 T = TypeVar("T")
 
@@ -37,4 +41,26 @@ def uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
     return value, None
 
 
-__all__ = ["uninterrupted"]
+def cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
+    """Cancel each task, finishing even through repeated Ctrl-C.
+
+    Returns the failures to cancel; an interrupt during cancellation is
+    re-raised once every cancel has been attempted.
+    """
+    failures: list[Exception] = []
+    interrupted: KeyboardInterrupt | None = None
+    for task in tasks:
+        try:
+            _, again = uninterrupted(
+                lambda task=task: task.client.cancel_task(task.workspace, UUID(task.task_id))
+            )
+        except Exception as exc:
+            failures.append(exc)
+            continue
+        interrupted = interrupted or again
+    if interrupted is not None:
+        raise interrupted
+    return failures
+
+
+__all__ = ["cancel_tasks", "uninterrupted"]
