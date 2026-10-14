@@ -1391,20 +1391,24 @@ func (ps *pass) grew(m ReserveMarket) bool {
 // raise holds market v's running target at what it holds now, its window
 // restarted.
 func (ps *pass) raise(v *marketView) {
-	v.Holds.Running = v.Holds.Running.raised(ps.held(v), ps.s.Now)
+	v.Holds.Running = v.Holds.Running.raised(ps.held(v), v.Want, ps.s.Now)
 	v.Running = v.Holds.Running.Value
 }
 
 // grow resumes, then buys, what market v's kept hosts lack of its running
-// target, and a host with its floor free when none of them has it, in a
-// market that keeps running headroom, and reports whether it did. A resume
-// serves sooner than any purchase and waits for no batch; a purchase waits
-// while containers keep arriving.
+// target, with a host that has its floor free when none of them has it, in
+// a market that keeps running headroom, and reports whether it did. The
+// running target rises only once its want has stayed above it for the
+// market's window, so headroom that work takes and frees again within it
+// grows nothing. Each host it resumes or buys is one the shortfall fills
+// (fills): less than a host is left to pending work, which buys at once. A
+// resume serves sooner than any purchase and waits for no batch; a
+// purchase waits while containers keep arriving.
 func (ps *pass) grow(v *marketView, kept FleetCapacity, floorFree bool) bool {
-	if v.Floor.Empty() {
+	need := CoverNeed{Aggregate: v.Running.Minus(kept).Clamp()}
+	if v.Floor.Empty() || need.Aggregate.Empty() {
 		return false
 	}
-	need := CoverNeed{Aggregate: v.Running.Minus(kept).Clamp()}
 	if !floorFree {
 		need.Items, need.Aggregate = []CoverItem{{Shape: v.Floor, Count: 1}}, need.Aggregate.Minus(v.Floor).Clamp()
 	}
@@ -1437,16 +1441,21 @@ func (ps *pass) grow(v *marketView, kept FleetCapacity, floorFree bool) bool {
 	}
 	r := ps.marketRanking(v.m, false)
 	result := Cover(r.offers, need, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom), r))
+	short, floorShort := need.Aggregate, len(need.Items) > 0
 	for _, node := range result.Nodes {
-		holds := node.Offer.Usable.Lower(need.Aggregate)
-		if len(node.Placed) > 0 && node.Placed[0] > 0 {
-			holds = holds.Upper(v.Floor)
+		floor := len(node.Placed) > 0 && node.Placed[0] > 0
+		if !fills(CoverNeed{Aggregate: short}, node.Offer.Usable) && !floor {
+			continue
+		}
+		holds := node.Offer.Usable.Lower(short)
+		if floor {
+			holds, floorShort = holds.Upper(v.Floor), false
 		}
 		ps.buy(v.m, node.Offer, ActionBuy, holds, nil, nil)
-		grew = true
+		short, grew = short.Minus(node.Offer.Usable).Clamp(), true
 	}
-	v.shortfall = need.Aggregate.Minus(result.Supplied).Clamp()
-	if len(result.UnmetItems) > 0 {
+	v.shortfall = short
+	if floorShort {
 		v.shortfall = v.shortfall.Plus(v.Floor)
 	}
 	if !v.shortfall.Empty() {
@@ -1456,18 +1465,26 @@ func (ps *pass) grow(v *marketView, kept FleetCapacity, floorFree bool) bool {
 }
 
 // headroomReserve is the reserve of market v first in resume order that
-// may resume for its running headroom: on the target agent build, its
-// absence leaves a reserve that fits the largest shape, and serving costs
-// no more than the cheapest purchase of need.
+// may resume for its running headroom: on the target agent build, one need
+// fills, its absence leaves a reserve that fits the largest shape, and
+// serving costs no more than the cheapest purchase of need.
 func (ps *pass) headroomReserve(v *marketView, need CoverNeed) *FleetHost {
 	all := func(h *FleetHost) bool { return h.Usable.Covers(need.Aggregate) }
 	var best *FleetHost
 	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return ps.ready(h, false) }) {
-		if ps.leavesLarge(*h) && ps.resumePays(h, need) && (best == nil || ps.resumeOrder(h, best, all) < 0) {
+		if fills(need, h.Usable) && ps.leavesLarge(*h) && ps.resumePays(h, need) && (best == nil || ps.resumeOrder(h, best, all) < 0) {
 			best = h
 		}
 	}
 	return best
+}
+
+// fills reports whether headroom need fills a host of room usable: it
+// takes need's floor, or need reaches its CPU or memory, so headroom never
+// runs a host its shortfall leaves partly idle; the rest waits for work.
+func fills(need CoverNeed, usable FleetCapacity) bool {
+	return len(need.Items) > 0 && usable.Covers(need.Items[0].Shape) ||
+		need.Aggregate.CPUMillis >= usable.CPUMillis || need.Aggregate.MemoryBytes >= usable.MemoryBytes
 }
 
 // resumeOrder orders the reserves a resume may take: one on the target
@@ -1704,8 +1721,8 @@ func preferHibernating(offers []FleetOffer, shape FleetCapacity, disks int) []Fl
 // costs while it provisions, and the new type must hold the room the
 // market keeps the host for within the size rule. It runs only while
 // market v holds steady and keeps no headroom beyond its floor, since
-// headroom that follows the load leaves with it: its running target holds
-// nothing above what it wants now, so it did not grow within its window,
+// headroom that follows the load leaves with it: its running target is
+// what it wants now, so it did not grow or move within its window,
 // nothing in it starts or moves, and no container waits or arrives. The
 // same type in another zone never replaces a host, so a Spot price move
 // between zones buys nothing.
@@ -1713,7 +1730,7 @@ func (ps *pass) rightsize(v *marketView, idle []idleHost) {
 	moving := slices.ContainsFunc(ps.plan.Actions, func(a FleetAction) bool {
 		return a.Market == v.m && a.Kind != ActionRetireReserve
 	})
-	if ps.waiting[v.m] || ps.s.BatchWait > 0 || moving || !v.Want.Covers(v.Running) ||
+	if ps.waiting[v.m] || ps.s.BatchWait > 0 || moving || v.Want != v.Running ||
 		!v.Floor.Covers(v.Want.Minus(v.Load)) || len(ps.inMarket(v.m, starting)) > 0 ||
 		ps.room(v.m) <= 0 || ps.hostRoom <= 0 {
 		return
