@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ func pendingReason(t *testing.T, e *Execution, f functionFixture, id TaskID) Pen
 }
 
 func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -67,6 +69,7 @@ func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
 }
 
 func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -159,6 +162,7 @@ func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
 }
 
 func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -187,6 +191,7 @@ func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
 }
 
 func TestRerunSubmitsTheSameInputToTheSameRelease(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -211,6 +216,7 @@ func TestRerunSubmitsTheSameInputToTheSameRelease(t *testing.T) {
 
 // Lineage itself is proven in workload_runtime_test.go.
 func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -225,6 +231,7 @@ func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
 }
 
 func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -282,6 +289,7 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 }
 
 func TestDeletedWorkloadCancelsRunningAndQueuedTasks(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -315,6 +323,7 @@ func TestDeletedWorkloadCancelsRunningAndQueuedTasks(t *testing.T) {
 }
 
 func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "autoscaler": {"max_containers": 1}, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
@@ -358,6 +367,7 @@ func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
 // A line whose transaction commits after a later line is still delivered:
 // readers hold back lines that an older running transaction may precede.
 func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -369,12 +379,17 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 		t.Fatalf("claim %v %v", claimed, err)
 	}
 	source := LogSource{Kind: LogsOfContainer, ID: uuid.UUID(container)}
-	read := func(after int64) []LogEntry {
+	readOn := func(ctx context.Context, e *Execution, after int64) ([]LogEntry, error) {
 		var out []LogEntry
-		err := e.StreamLogs(t.Context(), l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
+		err := e.StreamLogs(ctx, l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
 			out = append(out, batch...)
 			return nil
 		})
+		return out, err
+	}
+	read := func(after int64) []LogEntry {
+		t.Helper()
+		out, err := readOn(t.Context(), e, after)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,6 +398,11 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	line := func(n int, data string) []LogLine {
 		return []LogLine{{Attempt: claimed[n].Attempt, Stream: LogStdout, Data: data, Time: time.Now()}}
 	}
+	counted, statements := countedExecution(t, pool)
+	if got, err := readOn(t.Context(), counted, 0); err != nil || len(got) != 0 {
+		t.Fatalf("read before any line: %+v, %v", got, err)
+	}
+	pass := statements.take()
 
 	// The first writer takes the lower id and commits last.
 	slow, err := pool.Begin(t.Context())
@@ -399,8 +419,31 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	if err := e.AppendLogs(t.Context(), host, container, line(1, "second")); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(0); len(got) != 0 {
-		t.Fatalf("read while an older writer runs returned %+v", got)
+	// A read while the older writer runs holds the later line back: it
+	// drains once and reads again without returning anything.
+	type result struct {
+		got []LogEntry
+		err error
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	held := make(chan result, 1)
+	go func() {
+		got, err := readOn(ctx, counted, 0)
+		held <- result{got, err}
+	}()
+	for statements.n.Load() <= pass {
+		select {
+		case r := <-held:
+			t.Fatalf("read while an older writer runs returned %+v, %v", r.got, r.err)
+		case <-statements.done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the read never read again")
+		}
+	}
+	cancel()
+	if r := <-held; len(r.got) != 0 || (r.err != nil && !errors.Is(r.err, context.Canceled)) {
+		t.Fatalf("read while an older writer runs returned %+v, %v", r.got, r.err)
 	}
 	if err := slow.Commit(t.Context()); err != nil {
 		t.Fatal(err)
@@ -420,6 +463,7 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 }
 
 func TestLogsByWorkloadAndContainerWithTail(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)

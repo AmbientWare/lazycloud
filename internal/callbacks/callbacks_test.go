@@ -98,21 +98,24 @@ func state(t *testing.T, pool *pgxpool.Pool) (string, int) {
 	return s, n
 }
 
-// deliverUntil runs passes until the callback leaves pending, as the
-// scheduler loop does each tick.
+// deliverUntil runs passes until the callback leaves pending, each when the
+// next one is due, as the scheduler loop does.
 func deliverUntil(t *testing.T, c *Callbacks, pool *pgxpool.Pool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	for range callbackAttempts {
 		if _, err := c.Deliver(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		if s, _ := state(t, pool); s != "pending" {
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		next, ok, err := c.NextDue(t.Context())
+		if err != nil || !ok {
+			t.Fatalf("a pending callback with no next delivery: %v", err)
+		}
+		time.Sleep(time.Until(next))
 	}
-	t.Fatal("the callback stayed pending")
+	t.Fatal("the callback stayed pending past its attempts")
 }
 
 func TestCallbackIsSignedAndRetriedUntilDelivered(t *testing.T) {
@@ -239,18 +242,25 @@ func TestAFloodFromOneWorkspaceDoesNotDelayAnother(t *testing.T) {
 	vault := newSecrets(t, pool)
 	var mu sync.Mutex
 	var order []string
-	// Arrival order, recorded before the receiver's delay: a wave's requests
-	// all arrive before any of them finishes and frees a slot for the next.
+	// The first claim fills every slot; its requests all arrive before any
+	// of them finishes and frees a slot for the next claim.
+	firstWave := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		order = append(order, r.Header.Get("X-Task-ID"))
+		if len(order) == deliveryConcurrency {
+			close(firstWave)
+		}
 		mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-firstWave:
+		case <-time.After(10 * time.Second):
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 	_, flooded := callback(t, pool, server.URL)
-	const flood = 300
+	const flood = 2 * deliveryConcurrency
 	if _, err := pool.Exec(t.Context(), `
 insert into task_callbacks (task_id, workspace_id, url, event, attempt, max_attempts, next_attempt_at)
 select c.task_id, c.workspace_id, c.url, 'retry', n, 400, now() - interval '1 hour'

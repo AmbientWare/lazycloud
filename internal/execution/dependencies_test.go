@@ -40,6 +40,7 @@ func failureKind(t *testing.T, e *Execution, f functionFixture, id TaskID) Failu
 }
 
 func TestDependentWaitsForUpstreamThenReceivesItsResult(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -79,6 +80,7 @@ func TestDependentWaitsForUpstreamThenReceivesItsResult(t *testing.T) {
 }
 
 func TestUnsuccessfulUpstreamFailsDependentsTransitively(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -111,6 +113,7 @@ func TestUnsuccessfulUpstreamFailsDependentsTransitively(t *testing.T) {
 // id-ordered set, so it never deadlocks with upstream cancellations that
 // lock the same dependents.
 func TestStoppingAReleaseRacesUpstreamCancelsWithoutDeadlock(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 200, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
@@ -148,6 +151,7 @@ func TestStoppingAReleaseRacesUpstreamCancelsWithoutDeadlock(t *testing.T) {
 }
 
 func TestSubmitRejectsUpstreamOutsideTheWorkspace(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -166,6 +170,7 @@ func TestSubmitRejectsUpstreamOutsideTheWorkspace(t *testing.T) {
 }
 
 func TestOversizedDependencyResultsFailTheDependent(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)

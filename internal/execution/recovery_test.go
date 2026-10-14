@@ -12,6 +12,7 @@ import (
 )
 
 func TestOverdueAttemptsRetryThenFailAsTimeouts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	spec := `{"retry_policy": {"max_attempts": 2}}`
@@ -47,6 +48,7 @@ func TestOverdueAttemptsRetryThenFailAsTimeouts(t *testing.T) {
 }
 
 func TestLostHostStopsItsContainersAndRetriesAttempts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	lost := runningAttempt(t, pool, `{"retry_policy": {"max_attempts": 2}}`, 2)
@@ -84,6 +86,7 @@ where a.id = $1`, uuid.UUID(lost.attempt)).Scan(&hostState, &ctrState, &stopReas
 // holding a later container and then locking a task of an earlier one, in
 // container then task order, must not deadlock with it.
 func TestLostHostLocksContainersBeforeTasks(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -141,12 +144,13 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 	if n := <-done; n != 1 {
 		t.Fatalf("marked %d hosts lost, want 1", n)
 	}
-	if stateOf(t, e, first) != ContainerStopped || stateOf(t, e, ContainerID(last)) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskQueued {
+	if containerState(t, pool, uuid.UUID(first)) != ContainerStopped || containerState(t, pool, last) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskQueued {
 		t.Fatal("both containers must stop and the task must wait for a retry")
 	}
 }
 
 func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{}`)
@@ -176,6 +180,7 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 // retries stay for their own failures. The last preemption the bound allows
 // fails it.
 func TestPreemptionRetriesWithoutSpendingAttemptsUntilItsBound(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	preempt := func(f attemptFixture) {
@@ -191,7 +196,7 @@ func TestPreemptionRetriesWithoutSpendingAttemptsUntilItsBound(t *testing.T) {
 	// rerun starts the task's next attempt on a new container of its host.
 	rerun := func(f *attemptFixture) {
 		t.Helper()
-		var attempt uuid.UUID
+		var attempt, container uuid.UUID
 		err := pool.QueryRow(t.Context(), `
 with ctr as (
     insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
@@ -199,14 +204,14 @@ with ctr as (
 ), att as (
     insert into attempts (task_id, number, container_id, state, deadline_at)
     select t.id, t.attempt_count + 1, ctr.id, 'running', now() + interval '1 hour' from tasks t, ctr where t.id = $1
-    returning id, number
+    returning id, number, container_id
 )
 update tasks t set status = 'running', attempt_count = att.number, current_attempt_id = att.id
-from att where t.id = $1 returning att.id`, f.task, uuid.UUID(f.host)).Scan(&attempt)
+from att where t.id = $1 returning att.id, att.container_id`, f.task, uuid.UUID(f.host)).Scan(&attempt, &container)
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.attempt = AttemptID(attempt)
+		f.attempt, f.container = AttemptID(attempt), ContainerID(container)
 	}
 
 	once := runningAttempt(t, pool, `{}`, 1)
@@ -239,9 +244,7 @@ from att where t.id = $1 returning att.id`, f.task, uuid.UUID(f.host)).Scan(&att
 	preempt(retried)
 	rerun(&retried)
 	userError := &Failure{Kind: FailureUserError, Type: "ValueError", Message: "bad"}
-	if err := finish(t.Context(), e, &retried.host, AttemptOutcome{Attempt: retried.attempt, State: AttemptFailed, Failure: userError}); err != nil {
-		t.Fatal(err)
-	}
+	finish(t, e, retried, AttemptFailed, userError)
 	if status, _ := taskState(t, pool, retried.task); status != string(TaskQueued) {
 		t.Fatalf("user error after a preemption: task %s, want queued for the user's retry", status)
 	}

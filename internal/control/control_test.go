@@ -62,6 +62,7 @@ func deploy(t *testing.T, c *Control, ws identity.WorkspaceID, prune bool, specs
 }
 
 func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 
@@ -115,6 +116,7 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 }
 
 func TestConcurrentDeploysKeepVersionsDistinct(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	const deploys = 8
@@ -145,6 +147,7 @@ func TestConcurrentDeploysKeepVersionsDistinct(t *testing.T) {
 }
 
 func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	missing := function("export")
@@ -169,6 +172,7 @@ func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
 // only models the fleet does not offer; one pinned to a joined machine, or
 // in a connected account's workspace, deploys any model.
 func TestDeployRefusesGPUModelsOnlyWhereTheFleetMustServeThem(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	h100 := function("train")

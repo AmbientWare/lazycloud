@@ -9,16 +9,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-func stateOf(t *testing.T, e *Execution, id ContainerID) ContainerState {
-	t.Helper()
-	var s string
-	if err := e.pool.QueryRow(t.Context(), "select state from containers where id = $1", uuid.UUID(id)).Scan(&s); err != nil {
-		t.Fatal(err)
-	}
-	return ContainerState(s)
-}
-
 func TestReportsDriveContainerLifecycle(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -27,7 +19,7 @@ func TestReportsDriveContainerLifecycle(t *testing.T) {
 
 	// Another host's report neither readies the container nor keeps it.
 	actions, err := e.ApplyReport(t.Context(), other, ContainerReport{Container: container, Phase: ReportReady})
-	if err != nil || len(actions.Stop) != 1 || stateOf(t, e, container) != ContainerStarting {
+	if err != nil || len(actions.Stop) != 1 || containerState(t, pool, uuid.UUID(container)) != ContainerStarting {
 		t.Fatalf("foreign ready report: %+v, %v", actions, err)
 	}
 	if _, err := pool.Exec(t.Context(), "update releases set start_failures = 2"); err != nil {
@@ -40,8 +32,8 @@ func TestReportsDriveContainerLifecycle(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), "select start_failures from releases").Scan(&failures); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, container) != ContainerReady || failures != 0 {
-		t.Fatalf("ready report: state %s, start failures %d", stateOf(t, e, container), failures)
+	if containerState(t, pool, uuid.UUID(container)) != ContainerReady || failures != 0 {
+		t.Fatalf("ready report: state %s, start failures %d", containerState(t, pool, uuid.UUID(container)), failures)
 	}
 
 	tasks := submit(t, e, f, 2)
@@ -52,7 +44,7 @@ func TestReportsDriveContainerLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, container) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskFailed {
+	if containerState(t, pool, uuid.UUID(container)) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskFailed {
 		t.Fatal("a load error must stop the container and fail queued tasks")
 	}
 	// A stopped container the host still reports must stop.
@@ -63,6 +55,7 @@ func TestReportsDriveContainerLifecycle(t *testing.T) {
 }
 
 func TestReconcileStopsMissingAndUnknownContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -93,7 +86,7 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.wor
 	if len(actions.Stop) != 1 || actions.Stop[0] != unknown {
 		t.Fatalf("stop %v, want the unknown container", actions.Stop)
 	}
-	if stateOf(t, e, missing) != ContainerStopped {
+	if containerState(t, pool, uuid.UUID(missing)) != ContainerStopped {
 		t.Fatal("a ready container the host no longer runs must stop")
 	}
 	// Its attempt was lost and the task waits for a retry.
@@ -110,6 +103,7 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.wor
 }
 
 func TestReportedAttemptThatEndedIsCancelled(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -137,6 +131,7 @@ func TestReportedAttemptThatEndedIsCancelled(t *testing.T) {
 // After an agent restart, Hello lists adopted containers as starting until
 // their slots report ready again, and recently exited ones as exited.
 func TestHelloAdoptsStartingAndAppliesExited(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -157,8 +152,8 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.worksp
 			t.Fatalf("reconcile: %+v, %v", actions, err)
 		}
 	}
-	if stateOf(t, e, adopted) != ContainerReady || stateOf(t, e, exited) != ContainerStopped {
-		t.Fatalf("adopted %s, exited %s; want ready and stopped", stateOf(t, e, adopted), stateOf(t, e, exited))
+	if containerState(t, pool, uuid.UUID(adopted)) != ContainerReady || containerState(t, pool, uuid.UUID(exited)) != ContainerStopped {
+		t.Fatalf("adopted %s, exited %s; want ready and stopped", containerState(t, pool, uuid.UUID(adopted)), containerState(t, pool, uuid.UUID(exited)))
 	}
 }
 
@@ -167,6 +162,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.worksp
 // container's starting report and attempts claimed after the report keep
 // running.
 func TestReadyReportLosesOmittedAttempts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)

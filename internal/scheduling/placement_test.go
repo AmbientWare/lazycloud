@@ -86,6 +86,7 @@ func place(t testing.TB, s *Scheduling) PlacementResult {
 const gib = 1 << 30
 
 func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 8*gib, 0)
@@ -131,6 +132,7 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 // it, whose frame cache still holds the disk, and each disk takes one of a
 // host's disk slots.
 func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	tight := newHost(t, pool, 2000, 2*gib, 0)
@@ -168,6 +170,7 @@ values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.wor
 // workspace bucket's region before a tighter one elsewhere, even a GPU
 // host whose spare room it could pack into; one that mounts none packs.
 func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	west := newHost(t, pool, 5000, 5*gib, 0)
@@ -200,6 +203,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace,
 }
 
 func TestPackChoosesTheTightestFit(t *testing.T) {
+	t.Parallel()
 	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
 	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
 	pending := []PendingContainersRow{
@@ -219,6 +223,7 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 // borrowed room never crowds it out. The host holding a container's disk
 // wins only among hosts it may take.
 func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
+	t.Parallel()
 	host := func(market compute.Market, freeCPU cpu.Millis) compute.HostCapacity {
 		return compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, Market: market,
 			CPUMillis: 4000, MemoryBytes: 16 * gib, FreeCPUMillis: freeCPU, FreeMemoryBytes: 16 * gib}
@@ -268,6 +273,7 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 // Placers racing over the same hosts never reserve more than a host holds:
 // the placement lock serializes them over one capacity snapshot.
 func TestConcurrentPlacersNeverOversubscribeHosts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	for range 3 {
@@ -309,6 +315,7 @@ select count(*) from (
 // placement either commits first, so host loss stops the container, or skips
 // the host.
 func TestPlacementSkipsAHostMarkedLostConcurrently(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 8*gib, 0)
@@ -377,6 +384,7 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 // then the busy one whose attempt started last, which stops with its task
 // preempted and queued again. CPU work it need not evict keeps running.
 func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 16*gib, 0)
