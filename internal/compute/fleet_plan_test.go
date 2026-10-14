@@ -746,11 +746,11 @@ func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 	s := FleetSnapshot{Now: offerNow, Offers: in, HostRoom: 10, ReserveRoom: 10,
 		Pending: []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4"}, CPUMillis: 2000, MemoryBytes: 13056 << 20},
 			Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}}
-	if bought := boughtForWork(PlanFleet(demandOnly(), s)); len(bought) > 0 {
+	if bought := boughtForWork(PlanFleet(connectionPolicy(DefaultPolicy()), s)); len(bought) > 0 {
 		t.Fatalf("bought %v while g6.xlarge cools for two seconds", bought)
 	}
 	s.Now, s.Offers.Now = offerNow.Add(3*time.Second), offerNow.Add(3*time.Second)
-	if bought := boughtForWork(PlanFleet(demandOnly(), s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
+	if bought := boughtForWork(PlanFleet(connectionPolicy(DefaultPolicy()), s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
 		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
 	}
 }
