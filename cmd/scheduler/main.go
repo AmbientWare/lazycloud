@@ -174,7 +174,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	vault := secrets.NewSecrets(pool, masterKey)
 	callbackConfig := callbacks.DefaultCallbackConfig()
 	callbackConfig.AllowPrivateTargets = os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1"
-	deliverer := callbacks.NewCallbacks(pool, vault, callbackConfig, logger)
+	deliverer, err := callbacks.NewCallbacks(pool, vault, callbackConfig, logger)
+	if err != nil {
+		return err
+	}
 	// Build recovery and the layer sweep need no registry: they read and move
 	// build state and delete layer pairs.
 	buildCPU, err := cpu.ParseCores(cmp.Or(os.Getenv("LAZYCLOUD_BUILD_CPU"), "4"))

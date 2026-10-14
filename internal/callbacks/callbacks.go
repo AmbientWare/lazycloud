@@ -77,8 +77,13 @@ type Callbacks struct {
 }
 
 // NewCallbacks returns the callback deliverer. Signing keys come from
-// secrets.
-func NewCallbacks(pool *pgxpool.Pool, s *secrets.Secrets, config CallbackConfig, logger *slog.Logger) *Callbacks {
+// secrets. It refuses a retry delay that is not positive.
+func NewCallbacks(pool *pgxpool.Pool, s *secrets.Secrets, config CallbackConfig, logger *slog.Logger) (*Callbacks, error) {
+	for n, delay := range config.RetryDelays {
+		if delay <= 0 {
+			return nil, fmt.Errorf("callback retry delay %d is %s; it must be positive", n+1, delay)
+		}
+	}
 	dialer := &net.Dialer{Timeout: callbackTimeout}
 	transport := &http.Transport{
 		// Each connection goes to an address checked at dial time, so a
@@ -108,7 +113,7 @@ func NewCallbacks(pool *pgxpool.Pool, s *secrets.Secrets, config CallbackConfig,
 			// A redirect could lead to an unchecked target.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-	}
+	}, nil
 }
 
 // errPrivateTarget means the callback host resolves to an address that is
