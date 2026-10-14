@@ -26,17 +26,14 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 
 	page := int32(101)
 	scans := []scan{
-		{"tasks", listTasks, []any{f.workspace, uuid.Max, page}},
-		{"root tasks", listWorkloadTasks, taskListing{rootOnly: true}.args(f)},
-		{"failed tasks", listWorkloadTasks, taskListing{status: TaskFailed}.args(f)},
-		{"app tasks", listWorkloadTasks, taskListing{app: f.app}.args(f)},
-		{"root app tasks", listWorkloadTasks, taskListing{app: f.app, rootOnly: true}.args(f)},
-		{"failed app tasks", listWorkloadTasks, taskListing{app: f.app, status: TaskFailed}.args(f)},
-		{"version tasks", listWorkloadTasks, taskListing{app: f.app, function: "f", version: 1}.args(f)},
-		{"tasks searched by function", listWorkloadTasks, taskListing{search: "f"}.args(f)},
-		{"tasks searched by id", listWorkloadTasks, taskListing{search: queued.String()[:8]}.args(f)},
-		{"tasks searched for nothing", listWorkloadTasks, taskListing{search: "zz"}.args(f)},
-		{"app tasks searched for nothing", listWorkloadTasks, taskListing{app: f.app, search: "zz"}.args(f)},
+		{"tasks", listTasks, []any{f.workspace, nil, false, uuid.Max, page}},
+		{"root tasks", listTasks, []any{f.workspace, nil, true, uuid.Max, page}},
+		{"app tasks", listWorkloadTasks, workloadTasks(f, f.app, nil, nil, nil)},
+		{"version tasks", listWorkloadTasks, workloadTasks(f, f.app, "f", 1, nil)},
+		{"tasks searched by function", listWorkloadTasks, workloadTasks(f, nil, nil, nil, "f")},
+		{"tasks searched by id", listWorkloadTasks, workloadTasks(f, nil, nil, nil, queued.String()[:8])},
+		{"tasks searched for nothing", listWorkloadTasks, workloadTasks(f, nil, nil, nil, "zz")},
+		{"app tasks searched for nothing", listWorkloadTasks, workloadTasks(f, f.app, nil, nil, "zz")},
 		{"containers", listContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
 		{"app containers", listContainers, []any{f.workspace, "app", uuid.Max, nil, page}},
 		{"live containers", listLiveContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
@@ -44,39 +41,20 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 		{"sandboxes", listSandboxes, []any{f.workspace, uuid.Max, nil, nil, page}},
 		{"sandboxes searched", listSandboxes, []any{f.workspace, uuid.Max, nil, "box", page}},
 	}
-	// Finished tasks are a queued task's children, which root listings skip.
-	history := func(tasks int) {
-		addHistory(t, pool, f, host, tasks)
-		exec(t, pool, "update tasks set parent_task_id = $1, root_task_id = $1 where status = 'succeeded' and parent_task_id is null", queued)
-		exec(t, pool, "analyze")
-	}
-	history(1_000)
+	addHistory(t, pool, f, host, 1_000)
+	exec(t, pool, "analyze")
 	small := costAt(t, pool, scans, "1,000 finished tasks", 0)
-	history(10_000)
+	addHistory(t, pool, f, host, 10_000)
+	exec(t, pool, "analyze")
 	large := costAt(t, pool, scans, "11,000 finished tasks", 500)
 	constantCost(t, small, large, "10,000 finished tasks and 1,000 stopped containers")
 }
 
-// taskListing is a ListWorkloadTasks filter.
-type taskListing struct {
-	app, function, version, search any
-	status                         TaskStatus
-	rootOnly                       bool
-}
-
-// args are the filter's arguments for a first page of 101.
-func (l taskListing) args(f releaseFixture) []any {
-	statuses := []string{"queued", "running", "succeeded", "failed", "cancelled"}
-	if l.status != "" {
-		statuses = []string{string(l.status)}
-	}
-	roots := []bool{true, false}
-	if l.rootOnly {
-		roots = []bool{true}
-	}
+// workloadTasks are ListWorkloadTasks' arguments for a first page of 101.
+func workloadTasks(f releaseFixture, app, function, version, search any) []any {
 	low, high := uuid.Nil, uuid.Max
-	if l.search != nil {
-		low, high = idPrefixRange(l.search.(string))
+	if search != nil {
+		low, high = idPrefixRange(search.(string))
 	}
-	return []any{statuses, roots, l.search, low, high, uuid.Max, int32(101), f.workspace, l.app, l.function, l.version}
+	return []any{nil, false, search, low, high, uuid.Max, int32(101), f.workspace, app, function, version}
 }

@@ -14,8 +14,7 @@ join releases r on r.id = t.release_id
 where t.id = @id and t.workspace_id = @workspace_id;
 
 -- name: ListTasks :many
--- Newest first below the cursor, from the workspace's recent index, with no
--- filter: a filter would walk the history it leaves out.
+-- Newest first below the cursor, from the workspace's recent index.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
@@ -29,16 +28,18 @@ join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
 where t.workspace_id = @workspace_id
+  and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
+  and (not @root_only::bool or t.parent_task_id is null)
   and t.id < @before
 order by t.id desc
 limit @max_rows;
 
 -- name: ListWorkloadTasks :many
--- Like ListTasks, for the workspace's functions or one app's, through
--- tasks_listing: each workload, status in statuses and rootness in roots
--- yields at most a page, and the pages merge, so a filter that matches
--- little reads little. A search reads all of a workload whose name contains
--- it, and otherwise only the ids between id_low and id_high.
+-- Like ListTasks, for the workspace's functions or one app's: each
+-- workload's recent index yields at most a page, and the pages merge. A
+-- search reads all of a workload whose name contains it, and otherwise
+-- only the ids between id_low and id_high, so a search that matches little
+-- reads little.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
@@ -49,13 +50,11 @@ select t.id, a.name as app_name, w.name as function_name, t.release_id, r.versio
              where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from workloads w
 join apps a on a.id = w.app_id
-cross join unnest(@statuses::text[]) as s(status)
-cross join unnest(@roots::bool[]) as k(root)
 cross join lateral (
     select * from tasks t
     where t.workload_id = w.id
-      and t.status = s.status
-      and (t.parent_task_id is null) = k.root
+      and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
+      and (not @root_only::bool or t.parent_task_id is null)
       and t.id >= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
                        then '00000000-0000-0000-0000-000000000000'::uuid else @id_low::uuid end
       and t.id <= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
