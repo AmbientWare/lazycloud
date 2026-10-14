@@ -8,16 +8,20 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // One engine call can outlast one grant, so the store asks for credentials
 // again before the ones it holds expire, and refuses ones already expired.
 func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
+	t.Parallel()
 	store := testStore(t)
 	fetch := store.Credentials
 	var calls atomic.Int32
 	// Held credentials count as due a credentialMargin before they expire.
-	due := time.Now().Add(700 * time.Millisecond)
+	due := time.Now().Add(300 * time.Millisecond)
 	store.Credentials = aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 		calls.Add(1)
 		current, err := fetch.Retrieve(ctx)
@@ -56,5 +60,16 @@ func TestStoreRefreshesCredentialsBeforeExpiry(t *testing.T) {
 	}
 	if err := expired.Put(t.Context(), "present", []byte("x")); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired credentials returned %v", err)
+	}
+}
+
+// testStore is a bucket of the test object store, deleted with everything
+// in it when the test ends.
+func testStore(t *testing.T) Store {
+	t.Helper()
+	cfg := storagetest.Config(t)
+	return Store{
+		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 	}
 }
