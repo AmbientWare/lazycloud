@@ -17,6 +17,7 @@ import (
 // Starts of one archive share its download, and a start whose deadline
 // ends the shared download leaves a start with time left to fetch it.
 func TestASharedDownloadOutlivesAnotherStartsDeadline(t *testing.T) {
+	t.Parallel()
 	archive := []byte("the archive")
 	sum := sha256.Sum256(archive)
 	var requests atomic.Int32
@@ -33,7 +34,7 @@ func TestASharedDownloadOutlivesAnotherStartsDeadline(t *testing.T) {
 	cache := &sourceCache{dir: t.TempDir(), http: server.Client()}
 	src := &hostproto.Source{Url: server.URL, Sha256: hex.EncodeToString(sum[:])}
 
-	short, cancel := context.WithTimeout(t.Context(), time.Second)
+	short, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer cancel()
 	first := make(chan error, 1)
 	go func() {

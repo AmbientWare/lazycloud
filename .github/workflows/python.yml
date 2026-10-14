@@ -1,8 +1,6 @@
 name: Python clients and runner
 
 on:
-  # Ship runs it before publishing images.
-  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/python.yml"

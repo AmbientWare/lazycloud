@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,60 +15,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
-
-// statementCounter counts the statements a pool sends that contain match.
-type statementCounter struct {
-	match string
-	n     atomic.Int64
-}
-
-func (s *statementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, s.match) {
-		s.n.Add(1)
-	}
-	return ctx
-}
-
-func (*statementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-// tracedPool is a second pool on pool's database whose statements counter
-// sees.
-func tracedPool(t *testing.T, pool *pgxpool.Pool, counter *statementCounter) *pgxpool.Pool {
-	t.Helper()
-	cfg := pool.Config().Copy()
-	cfg.ConnConfig.Tracer = counter
-	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(traced.Close)
-	return traced
-}
-
-// notifications collects the payloads committed on channel.
-func notifications(t *testing.T, pool *pgxpool.Pool, channel database.Channel) func() []string {
-	t.Helper()
-	conn, err := pool.Acquire(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(conn.Release)
-	if _, err := conn.Exec(t.Context(), "listen "+pgx.Identifier{string(channel)}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
-	return func() []string {
-		var got []string
-		for {
-			ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-			n, err := conn.Conn().WaitForNotification(ctx)
-			cancel()
-			if err != nil {
-				return got
-			}
-			got = append(got, n.Payload)
-		}
-	}
-}
 
 type batchFixture struct {
 	host       compute.HostID
@@ -95,8 +40,8 @@ with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::
      host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               select 'h' || n, sha256(random()::text::bytea), 'online', 4000, 1 << 32 from generate_series(1, 2) n
               returning id, name),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-             select ws.id, rel.id, 'ready', host.id, $2, 1000, 1 << 28 from ws, rel, host returning id, host_id),
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+             select ws.id, rel.id, rel.workload_id, 'ready', host.id, $2, 1000, 1 << 28 from ws, rel, host returning id, host_id),
      task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
               select ws.id, rel.workload_id, rel.id, 'running', 1, 2, now() from ws, rel, generate_series(1, $2 + 1)
               returning id),
@@ -134,18 +79,11 @@ select (select id from host where name = 'h1'), (select ctr.id from ctr join hos
 	return f
 }
 
-// A batch commits in one transaction with one task notification: the
-// completions of the host's running attempts succeed or retry, while an
-// attempt of another host and a repeated completion are rejected as stale
-// and change nothing.
-func TestABatchRejectsItsStaleCompletionsAndCommitsTheRest(t *testing.T) {
-	base := dbtest.New(t)
-	counter := &statementCounter{match: "name: SetAttemptStates"}
-	e := NewExecution(tracedPool(t, base, counter))
-	const n = 50
-	f := runningBatch(t, base, `{"retry_policy": {"max_attempts": 2}}`, n)
-	taskNotes := notifications(t, base, database.ChannelTask)
-
+// completeBatch reports f's attempts as one batch, the first failed and the
+// rest succeeded, with a completion of another host's attempt and a repeat
+// of the second in the middle. The two extras are stale and change nothing.
+func completeBatch(t *testing.T, e *Execution, f batchFixture) {
+	t.Helper()
 	var batch []Completion
 	for i, attempt := range f.attempts {
 		o := AttemptOutcome{Attempt: attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte(`1`)}}
@@ -154,30 +92,49 @@ func TestABatchRejectsItsStaleCompletionsAndCommitsTheRest(t *testing.T) {
 		}
 		batch = append(batch, Completion{Container: f.container, Outcome: o})
 	}
+	mid := len(batch) / 2
 	stale := []Completion{
 		{Container: f.container, Outcome: AttemptOutcome{Attempt: f.otherHosts, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte(`2`)}}},
 		batch[1],
 	}
-	batch = append(batch[:n/2], append(stale, batch[n/2:]...)...)
-	errs := e.CompleteAttempts(t.Context(), f.host, batch)
-	for i, err := range errs {
-		isStale := i == n/2 || i == n/2+1
+	batch = append(batch[:mid], append(stale, batch[mid:]...)...)
+	for i, err := range e.CompleteAttempts(t.Context(), f.host, batch) {
+		isStale := i == mid || i == mid+1
 		if isStale != errors.Is(err, ErrStaleAttempt) || (!isStale && err != nil) {
-			t.Fatalf("completion %d: %v, stale %v", i, err, isStale)
+			t.Fatalf("completion %d of %d: %v, stale %v", i, len(batch), err, isStale)
 		}
 	}
-	if got := counter.n.Load(); got != 1 {
-		t.Fatalf("the batch ran %d transactions, want 1", got)
+}
+
+// A batch of completions succeeds or retries the host's running attempts
+// and rejects the stale ones, waking every finished task's waiters, in as
+// many statements and notifications at 50 completions as at 5.
+func TestABatchRejectsItsStaleCompletionsAndCommitsTheRest(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e, counter := countedExecution(t, pool)
+	spec := `{"retry_policy": {"max_attempts": 2}}`
+	small, large := runningBatch(t, pool, spec, 5), runningBatch(t, pool, spec, 50)
+	taskNotes := notifications(t, pool, database.ChannelTask)
+
+	completeBatch(t, e, small)
+	smallStatements, smallNotes := counter.take(), taskNotes()
+	completeBatch(t, e, large)
+	largeStatements, largeNotes := counter.take(), taskNotes()
+	if largeStatements > smallStatements || len(largeNotes) > len(smallNotes) {
+		t.Fatalf("50 completions took %d statements and %d notifications, 5 took %d and %d",
+			largeStatements, len(largeNotes), smallStatements, len(smallNotes))
 	}
 
+	n := len(large.tasks)
 	var succeeded, results, requeued, otherRunning int
-	err := base.QueryRow(t.Context(), `
+	err := pool.QueryRow(t.Context(), `
 select count(*) filter (where t.status = 'succeeded'),
        count(r.task_id),
        count(*) filter (where t.status = 'queued' and t.current_attempt_id is null),
        (select count(*) from attempts where id = $2 and state = 'running')
 from tasks t left join task_results r on r.task_id = t.id
-where t.id = any($1)`, f.tasks, uuid.UUID(f.otherHosts)).Scan(&succeeded, &results, &requeued, &otherRunning)
+where t.id = any($1)`, large.tasks, uuid.UUID(large.otherHosts)).Scan(&succeeded, &results, &requeued, &otherRunning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,21 +142,23 @@ where t.id = any($1)`, f.tasks, uuid.UUID(f.otherHosts)).Scan(&succeeded, &resul
 		t.Fatalf("succeeded %d with %d results, requeued %d, other host's attempt running %d; want %d, %d, 1, 1",
 			succeeded, results, requeued, otherRunning, n-1, n-1)
 	}
-	notes := taskNotes()
 	woken := map[string]bool{}
-	for _, payload := range notes {
+	for _, payload := range largeNotes {
 		for id := range strings.SplitSeq(payload, "\n") {
 			woken[id] = true
 		}
 	}
-	if len(notes) != 1 || len(woken) != n {
-		t.Fatalf("%d task notifications woke %d tasks, want 1 waking %d", len(notes), len(woken), n)
+	for _, task := range large.tasks {
+		if !woken[task.String()] {
+			t.Fatalf("task %s finished without waking its waiters", task)
+		}
 	}
 }
 
 // A completion the database refuses fails alone: the batch's other
 // completions are written.
 func TestACompletionThatFailsItsWriteLeavesTheOthersWritten(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := runningBatch(t, pool, `{}`, 3)
@@ -233,6 +192,7 @@ func TestACompletionThatFailsItsWriteLeavesTheOthersWritten(t *testing.T) {
 // wait on each other instead of deadlocking. A third transaction holds one
 // dependent until both batches queue behind it.
 func TestBatchesSharingDependentsDoNotDeadlock(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := runningBatch(t, pool, `{}`, 4)

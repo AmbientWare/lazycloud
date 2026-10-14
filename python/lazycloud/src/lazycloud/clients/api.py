@@ -104,10 +104,13 @@ class ApiError(SdkError):
         code: ErrorCode | None,
         message: str,
         refusals: list[DeploymentRefusal] | None = None,
+        url: str = "",
     ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
+        # The request's URL when a response carried the error, else empty.
+        self.url = url
         # Every reason a refused deploy failed.
         self.refusals = refusals or []
         label = code.value if code is not None else f"HTTP {status_code}"
@@ -864,7 +867,12 @@ def _api_error(response: httpx.Response) -> ApiError:
         error = Error.model_validate_json(response.content)
     except ValidationError:
         text = response.text.strip()[:500] or response.reason_phrase
-        return ApiError(status_code=response.status_code, code=None, message=text)
+        return ApiError(
+            status_code=response.status_code,
+            code=None,
+            message=text,
+            url=str(response.request.url),
+        )
     return ApiError(
         status_code=response.status_code,
         code=error.code,

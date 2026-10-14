@@ -21,8 +21,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// resendStub plays Resend's send endpoint. Each recipient gets a scripted
-// list of status codes; the last one repeats.
+// resendStub plays Resend's send endpoint as Resend's API reference records
+// it: a send answers its id, a repeated Idempotency-Key answers the first
+// send's id without sending again, and a refusal carries a name and a
+// message. Each recipient gets a scripted list of status codes; the last
+// one repeats.
 type resendStub struct {
 	mu       sync.Mutex
 	script   map[string][]int
@@ -119,6 +122,7 @@ func makeDue(t *testing.T, pool *pgxpool.Pool) {
 }
 
 func TestDeliveryRetriesAndFailures(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	stub, sender := newResendStub(t)
 	n := NewNotifications(pool, sender, slog.New(slog.DiscardHandler))
@@ -157,12 +161,30 @@ func TestDeliveryRetriesAndFailures(t *testing.T) {
 	if r := read(t, pool, flaky); r.State != "sent" || r.Attempts != 2 {
 		t.Fatalf("flaky after retry %+v", r)
 	}
-	// The rate-limited message gives up after MaxAttempts.
+	// The rate-limited message waits longer after each failure, never past
+	// retryCap, and gives up after MaxAttempts.
+	var waits []time.Duration
 	for range MaxAttempts {
+		var seconds *float64
+		if err := pool.QueryRow(ctx, `select case when state = 'queued' then extract(epoch from next_attempt_at - now()) end from email_outbox where id = $1`,
+			uuid.UUID(limited)).Scan(&seconds); err != nil {
+			t.Fatal(err)
+		}
+		if seconds != nil {
+			waits = append(waits, time.Duration(*seconds*float64(time.Second)))
+		}
 		makeDue(t, pool)
 		if _, err := n.Deliver(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for i, wait := range waits {
+		if wait > retryCap || i > 0 && wait < waits[i-1] {
+			t.Fatalf("waits after each failure %v: want growing and at most %s", waits, retryCap)
+		}
+	}
+	if last := waits[len(waits)-1]; last < retryCap-time.Minute {
+		t.Fatalf("waits after each failure %v: want the cap reached", waits)
 	}
 	if r := read(t, pool, limited); r.State != "failed" || r.Attempts != MaxAttempts {
 		t.Fatalf("limited %+v", r)
@@ -177,18 +199,10 @@ func TestDeliveryRetriesAndFailures(t *testing.T) {
 	}
 }
 
-func TestBackoffIsCapped(t *testing.T) {
-	want := []time.Duration{10, 20, 40, 80, 160, 320, 600, 600}
-	for n, w := range want {
-		if got := RetryDelay(n + 1); got != w*time.Second {
-			t.Errorf("attempt %d: %s, want %s", n+1, got, w*time.Second)
-		}
-	}
-}
-
 // A pass whose lease expired cannot settle a message another pass took,
 // and a resend under the same key is accepted once by the provider.
 func TestLeaseFencesStaleSettle(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	stub, sender := newResendStub(t)
 	n := NewNotifications(pool, sender, slog.New(slog.DiscardHandler))
@@ -222,6 +236,7 @@ func TestLeaseFencesStaleSettle(t *testing.T) {
 }
 
 func TestDiscardPurgeAndNoSender(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	ctx := t.Context()
 	off := NewNotifications(pool, nil, slog.New(slog.DiscardHandler))
@@ -257,6 +272,7 @@ func TestDiscardPurgeAndNoSender(t *testing.T) {
 }
 
 func TestWebhookSignature(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_790_000_000, 0)
 	secret := "whsec_c2VjcmV0LWtleS1mb3ItdGVzdHM="
 	body := []byte(`{"type":"email.delivered"}`)

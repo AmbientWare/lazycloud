@@ -14,7 +14,6 @@ HOOKED = """
 import logging
 import sys
 import threading
-import time
 
 # Configured at import, before any attempt runs.
 log = logging.getLogger("hooked")
@@ -67,7 +66,6 @@ def loud(size):
 def together(name):
     print(f"{name} waiting")
     barrier.wait()
-    time.sleep(0.05)
     print(f"{name} done", file=sys.stderr)
     return name
 """

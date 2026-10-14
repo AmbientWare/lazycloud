@@ -75,6 +75,7 @@ from lazycloud.exceptions import (
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
+from lazycloud.session.interrupts import cancel_tasks, uninterrupted
 
 # Every container start declares functions; the API client, task session and
 # terminal load only when a call needs them.
@@ -104,7 +105,6 @@ QUEUED_POLL_SECONDS = 1.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
-T = TypeVar("T")
 
 
 class FunctionOperationError(SdkError):
@@ -538,7 +538,7 @@ class Function(Generic[P, R]):
             try:
                 result = next(finished)
             except KeyboardInterrupt:
-                _cancel_tasks(tasks[n:])
+                cancel_tasks(tasks[n:])
                 raise
             if isinstance(result, Exception):
                 raise result
@@ -580,7 +580,7 @@ class Function(Generic[P, R]):
             events = client.run_task(workspace, self._app_slug, self.resource_name, request)
             try:
                 # Ctrl-C waits for admission so the admitted task can be cancelled.
-                admitted, interrupted = _uninterrupted(lambda: next(events, None))
+                admitted, interrupted = uninterrupted(lambda: next(events, None))
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if error is exc:
@@ -593,7 +593,7 @@ class Function(Generic[P, R]):
             task = Task(str(admitted.task.id), workspace, client)
             if interrupted is not None:
                 events.close()
-                _cancel_tasks([task])
+                cancel_tasks([task])
                 raise interrupted
             step.update(f"{short_id(task.task_id)} {admitted.task.status.value}")
             return cast(R, self._follow(task, step, events))
@@ -634,7 +634,7 @@ class Function(Generic[P, R]):
             if view is None or view.status not in TERMINAL_STATUSES:
                 view = task.wait_view()
         except BaseException as exc:
-            failures = _cancel_tasks([task])
+            failures = cancel_tasks([task])
             if failures and not isinstance(exc, KeyboardInterrupt):
                 msg = (
                     f"Connection ended; cancellation of task {task.task_id} "
@@ -719,11 +719,14 @@ class Function(Generic[P, R]):
             try:
                 # Ctrl-C waits for the request, so the tasks it admitted are
                 # known and cancelled rather than left running.
-                response, interrupted = _uninterrupted(
+                response, interrupted = uninterrupted(
                     lambda request=request: client.submit_tasks(
                         workspace, self._app_slug, self.resource_name, request
                     )
                 )
+            except KeyboardInterrupt:
+                cancel_tasks(tasks)
+                raise
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if not tasks:
@@ -733,7 +736,7 @@ class Function(Generic[P, R]):
                 ) from exc
             tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
             if interrupted is not None:
-                _cancel_tasks(tasks)
+                cancel_tasks(tasks)
                 raise interrupted
         return tasks
 
@@ -872,56 +875,6 @@ class _QueuedTaskWatcher:
                 self.reporter.update(self.task.task_id, view.pending)
                 if view.status is not TaskStatus.queued:
                     return
-
-
-def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
-    """Run call to completion even through Ctrl-C, returning the interrupt."""
-    outcome: dict[str, Any] = {}
-    done = threading.Event()
-
-    def run() -> None:
-        try:
-            outcome["value"] = call()
-        except BaseException as exc:
-            outcome["error"] = exc
-        finally:
-            done.set()
-
-    threading.Thread(target=copy_context().run, args=(run,), daemon=True).start()
-    interrupted: KeyboardInterrupt | None = None
-    while True:
-        try:
-            # An interrupted Event.wait leaves the event usable, unlike an
-            # interrupted Thread.join.
-            if done.wait(0.1):
-                break
-        except KeyboardInterrupt as exc:
-            interrupted = exc
-    if "error" in outcome:
-        raise outcome["error"]
-    return cast(T, outcome["value"]), interrupted
-
-
-def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
-    """Cancel each task, finishing even through repeated Ctrl-C.
-
-    Returns the failures to cancel; an interrupt during cancellation is
-    re-raised once every cancel has been attempted.
-    """
-    failures: list[Exception] = []
-    interrupted: KeyboardInterrupt | None = None
-    for task in tasks:
-        try:
-            _, again = _uninterrupted(
-                lambda task=task: task.client.cancel_task(task.workspace, UUID(task.task_id))
-            )
-        except Exception as exc:
-            failures.append(exc)
-            continue
-        interrupted = interrupted or again
-    if interrupted is not None:
-        raise interrupted
-    return failures
 
 
 # The failures each retryable status names: a failed task raised or lost

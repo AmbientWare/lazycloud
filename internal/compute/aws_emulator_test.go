@@ -151,14 +151,18 @@ func list(form url.Values, prefix string) []string {
 }
 
 // instanceTags reads the instance tag specification of a RunInstances call.
-func instanceTags(form url.Values) map[string]string {
+func instanceTags(form url.Values) map[string]string { return specTags(form, "instance") }
+
+// specTags reads the tag specification of resource kind in a RunInstances
+// call; nil without one.
+func specTags(form url.Values, kind string) map[string]string {
 	for s := 1; ; s++ {
 		prefix := fmt.Sprintf("TagSpecification.%d.", s)
-		kind, ok := form[prefix+"ResourceType"]
+		resource, ok := form[prefix+"ResourceType"]
 		if !ok {
 			return nil
 		}
-		if kind[0] != "instance" {
+		if resource[0] != kind {
 			continue
 		}
 		tags := map[string]string{}

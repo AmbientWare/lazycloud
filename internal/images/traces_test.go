@@ -18,6 +18,7 @@ import (
 // period still prefetches. It goes when the sweep retires the layers. A
 // trace naming a frame the image does not have is refused.
 func TestStartupTracesLastAsLongAsTheirLayers(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
@@ -67,6 +68,7 @@ func TestStartupTracesLastAsLongAsTheirLayers(t *testing.T) {
 // A trace recorded while the sweep retires its reference's layer is not
 // stored: it would outlive the layers it reads.
 func TestATraceRacingItsLayersRetirementIsDropped(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
@@ -86,7 +88,7 @@ func TestATraceRacingItsLayersRetirementIsDropped(t *testing.T) {
 	}
 	recorded := make(chan error, 1)
 	go func() { recorded <- f.images.RecordTrace(ctx, ws, reference, []*imagefsproto.FrameRead{{}}) }()
-	time.Sleep(300 * time.Millisecond)
+	waitForLockWait(t, f)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}

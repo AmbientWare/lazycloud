@@ -37,23 +37,43 @@ type ChangesConfig struct {
 	MaxSubscribers  int
 	MaxPerPrincipal int
 	// Idle is how long the listener waits without a notification before
-	// it checks the connection; zero means 30 s.
+	// it checks the connection.
 	Idle time.Duration
-}
-
-func (c ChangesConfig) idle() time.Duration {
-	if c.Idle <= 0 {
-		return 30 * time.Second
-	}
-	return c.Idle
+	// Reconnect is how long the listener waits to connect again after
+	// losing its connection.
+	Reconnect time.Duration
 }
 
 // DefaultChangesConfig keeps 4,096 events: a few seconds of a busy cluster,
 // enough to resume after a reconnect. Frames are typically under 1 KiB and
 // at most 8 KiB, so the ring holds 32 MiB at worst; subscribers share its
-// frames.
+// frames. An idle listener checks its connection every 30 s, and a lost
+// one connects again after a second.
 func DefaultChangesConfig() ChangesConfig {
-	return ChangesConfig{Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32}
+	return ChangesConfig{
+		Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32,
+		Idle: 30 * time.Second, Reconnect: time.Second,
+	}
+}
+
+// validate checks that every bound and interval of cfg is positive.
+func (c ChangesConfig) validate() error {
+	for _, field := range []struct {
+		name  string
+		value int64
+	}{
+		{"retained events", int64(c.Retained)},
+		{"subscriber buffer", int64(c.Buffer)},
+		{"streams per server", int64(c.MaxSubscribers)},
+		{"streams per caller", int64(c.MaxPerPrincipal)},
+		{"idle check interval", int64(c.Idle)},
+		{"reconnect delay", int64(c.Reconnect)},
+	} {
+		if field.value <= 0 {
+			return fmt.Errorf("the change hub's %s must be positive", field.name)
+		}
+	}
+	return nil
 }
 
 var (
@@ -117,7 +137,10 @@ type changeMetrics struct {
 
 // NewChanges returns the hub; Run delivers notifications to it. registerer
 // may be nil.
-func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Registerer, logger *slog.Logger) *Changes {
+func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Registerer, logger *slog.Logger) (*Changes, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	m := changeMetrics{
 		subscribers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "lazycloud_change_stream_subscribers", Help: "Open workspace change streams.",
@@ -145,7 +168,7 @@ func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Reg
 		subs:    map[identity.WorkspaceID]map[*Subscription]struct{}{},
 		streams: map[string]int{},
 		done:    make(chan struct{}),
-	}
+	}, nil
 }
 
 // Done is closed once the hub stops, so streams end with the server.
@@ -182,7 +205,7 @@ func (c *Changes) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(time.Second):
+		case <-time.After(c.cfg.Reconnect):
 		}
 	}
 }
@@ -221,7 +244,7 @@ func (c *Changes) listen(ctx context.Context) error {
 // half-open connection that stopped delivering is otherwise silent forever.
 func (c *Changes) waitAlive(ctx context.Context, conn *pgx.Conn) (*pgconn.Notification, error) {
 	for {
-		waitCtx, cancel := context.WithTimeout(ctx, c.cfg.idle())
+		waitCtx, cancel := context.WithTimeout(ctx, c.cfg.Idle)
 		n, err := conn.WaitForNotification(waitCtx)
 		cancel()
 		if err == nil {
@@ -413,7 +436,7 @@ func (c *Changes) Subscribe(ws identity.WorkspaceID, principal string, after *in
 	if c.count >= c.cfg.MaxSubscribers {
 		return nil, Resume{}, ErrTooManySubscribers
 	}
-	if c.cfg.MaxPerPrincipal > 0 && c.streams[principal] >= c.cfg.MaxPerPrincipal {
+	if c.streams[principal] >= c.cfg.MaxPerPrincipal {
 		return nil, Resume{}, ErrTooManyStreams
 	}
 	c.streams[principal]++

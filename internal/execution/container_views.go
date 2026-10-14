@@ -73,55 +73,73 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 		before = id
 	}
 	size := pageSize(limit)
-	var rows []ContainerViewRow
-	if filter.Live {
-		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{
-			WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before,
-			WorkloadID: filter.Workload, MaxRows: size + 1,
-		})
-		if err != nil {
-			return ContainerPage{}, fmt.Errorf("list live containers: %w", err)
-		}
-		for _, row := range r {
-			rows = append(rows, ContainerViewRow(row))
-		}
-	} else {
-		r, err := e.queries.ListContainers(ctx, ListContainersParams{
-			WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before,
-			WorkloadID: filter.Workload, MaxRows: size + 1,
-		})
-		if err != nil {
-			return ContainerPage{}, fmt.Errorf("list containers: %w", err)
-		}
-		for _, row := range r {
-			rows = append(rows, ContainerViewRow(row))
-		}
+	ids, err := e.containerIDs(ctx, workspace, filter, before, size+1)
+	if err != nil {
+		return ContainerPage{}, fmt.Errorf("list containers: %w", err)
 	}
-	var page ContainerPage
-	if len(rows) > int(size) {
-		rows = rows[:size]
-		page.Next = rows[len(rows)-1].ID.String()
+	page := ContainerPage{Containers: []Container{}}
+	if len(ids) > int(size) {
+		ids = ids[:size]
+		page.Next = ids[len(ids)-1].String()
 	}
-	page.Containers = make([]Container, len(rows))
-	for n, row := range rows {
-		page.Containers[n] = containerFrom(row)
+	if len(ids) == 0 {
+		return page, nil
+	}
+	if page.Containers, err = e.containerViews(ctx, workspace, ids); err != nil {
+		return ContainerPage{}, err
 	}
 	return page, nil
 }
 
-// GetContainer reads a container of the workspace.
-func (e *Execution) GetContainer(ctx context.Context, workspace identity.WorkspaceID, id ContainerID) (Container, error) {
-	row, err := e.queries.ContainerView(ctx, ContainerViewParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Container{}, ErrNotFound
+// containerIDs reads the ids of a page of the filter's containers below
+// before, newest first, from one index range for the workspace or per
+// workload.
+func (e *Execution) containerIDs(ctx context.Context, workspace identity.WorkspaceID, filter ContainerFilter, before uuid.UUID, rows int32) ([]uuid.UUID, error) {
+	ws := uuid.UUID(workspace)
+	byWorkload := filter.App != nil || filter.Workload != nil
+	switch {
+	case filter.Live && byWorkload:
+		return e.queries.LiveWorkloadContainerIDs(ctx, LiveWorkloadContainerIDsParams{
+			Before: before, MaxRows: rows, WorkspaceID: ws, App: filter.App, WorkloadID: filter.Workload,
+		})
+	case filter.Live:
+		return e.queries.LiveWorkspaceContainerIDs(ctx, LiveWorkspaceContainerIDsParams{WorkspaceID: ws, Before: before, MaxRows: rows})
+	case byWorkload:
+		return e.queries.WorkloadContainerIDs(ctx, WorkloadContainerIDsParams{
+			Before: before, MaxRows: rows, WorkspaceID: ws, App: filter.App, WorkloadID: filter.Workload,
+		})
+	default:
+		return e.queries.WorkspaceContainerIDs(ctx, WorkspaceContainerIDsParams{WorkspaceID: ws, Before: before, MaxRows: rows})
 	}
-	if err != nil {
-		return Container{}, fmt.Errorf("read container: %w", err)
-	}
-	return containerFrom(row), nil
 }
 
-func containerFrom(row ContainerViewRow) Container {
+// GetContainer reads a container of the workspace.
+func (e *Execution) GetContainer(ctx context.Context, workspace identity.WorkspaceID, id ContainerID) (Container, error) {
+	containers, err := e.containerViews(ctx, workspace, []uuid.UUID{uuid.UUID(id)})
+	if err != nil {
+		return Container{}, err
+	}
+	if len(containers) == 0 {
+		return Container{}, ErrNotFound
+	}
+	return containers[0], nil
+}
+
+// containerViews reads the workspace's function containers of ids, newest
+// first.
+func (e *Execution) containerViews(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) ([]Container, error) {
+	rows, err := e.queries.ContainerViews(ctx, ContainerViewsParams{Ids: ids, WorkspaceID: uuid.UUID(workspace)})
+	if err != nil {
+		return nil, fmt.Errorf("read containers: %w", err)
+	}
+	containers := make([]Container, len(rows))
+	for n, row := range rows {
+		containers[n] = containerFrom(row)
+	}
+	return containers, nil
+}
+
+func containerFrom(row ContainerViewsRow) Container {
 	c := Container{
 		ID: ContainerID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Version: versionOf(row.Version), State: ContainerState(row.State), ExitMessage: row.ExitMessage,

@@ -133,212 +133,46 @@ func (q *Queries) FinishedTasks(ctx context.Context, arg FinishedTasksParams) ([
 	return items, nil
 }
 
-const listAppTasks = `-- name: ListAppTasks :many
-select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
-       -- The latest attempt's container, as zero or one element: a scalar
-       -- subquery keeps the per-row index lookup, and the array keeps sqlc
-       -- from reading it as non-null.
-       array(select at.container_id from attempts at
-             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
+const listingWorkloads = `-- name: ListingWorkloads :many
+select w.id, w.name, r.id as release_id
 from workloads w
 join apps a on a.id = w.app_id
-cross join lateral (
-    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent, preemptions from tasks t
-    where t.workload_id = w.id
-      and ($1::text is null or t.status = $1::text)
-      and (not $2::bool or t.parent_task_id is null)
-      and ($3::text is null
-           or starts_with(t.id::text, $3::text)
-           or strpos(lower(w.name), $3::text) > 0)
-      and t.id < $4
-    order by t.id desc
-    limit $5
-) t
-join releases r on r.id = t.release_id
-where a.workspace_id = $6 and a.id = $7
-  and ($8::text is null or w.name = $8::text)
-  and ($9::int is null or r.version = $9::int)
-order by t.id desc
-limit $5
+left join releases r on r.workload_id = w.id and r.version = $1::int
+where a.workspace_id = $2
+  and ($3::text is null or a.name = $3::text and a.state <> 'deleted')
+  and ($4::text is null or w.name = $4::text)
 `
 
-type ListAppTasksParams struct {
-	Status      *string
-	RootOnly    bool
-	Search      *string
-	Before      uuid.UUID
-	MaxRows     int32
-	WorkspaceID uuid.UUID
-	AppID       uuid.UUID
-	Function    *string
+type ListingWorkloadsParams struct {
 	Version     *int32
+	WorkspaceID uuid.UUID
+	App         *string
+	Function    *string
 }
 
-type ListAppTasksRow struct {
-	ID           uuid.UUID
-	AppName      string
-	FunctionName string
-	ReleaseID    uuid.UUID
-	Version      *int32
-	Status       string
-	AttemptCount int32
-	MaxAttempts  int32
-	Preemptions  int32
-	ParentTaskID *uuid.UUID
-	RootTaskID   *uuid.UUID
-	AvailableAt  time.Time
-	CreatedAt    time.Time
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
-	Failure      []byte
-	ScheduledFor *time.Time
-	ContainerIds []uuid.UUID
+type ListingWorkloadsRow struct {
+	ID        uuid.UUID
+	Name      string
+	ReleaseID *uuid.UUID
 }
 
-// Like ListTasks for one app's functions: each workload's recent index
-// yields at most a page, and the pages merge.
-func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]ListAppTasksRow, error) {
-	rows, err := q.db.Query(ctx, listAppTasks,
-		arg.Status,
-		arg.RootOnly,
-		arg.Search,
-		arg.Before,
-		arg.MaxRows,
-		arg.WorkspaceID,
-		arg.AppID,
-		arg.Function,
+// The workspace's workloads, narrowed to its live app of a name and to a
+// function name; with a version, each one's release of that version.
+func (q *Queries) ListingWorkloads(ctx context.Context, arg ListingWorkloadsParams) ([]ListingWorkloadsRow, error) {
+	rows, err := q.db.Query(ctx, listingWorkloads,
 		arg.Version,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListAppTasksRow
-	for rows.Next() {
-		var i ListAppTasksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.FunctionName,
-			&i.ReleaseID,
-			&i.Version,
-			&i.Status,
-			&i.AttemptCount,
-			&i.MaxAttempts,
-			&i.Preemptions,
-			&i.ParentTaskID,
-			&i.RootTaskID,
-			&i.AvailableAt,
-			&i.CreatedAt,
-			&i.StartedAt,
-			&i.FinishedAt,
-			&i.Failure,
-			&i.ScheduledFor,
-			&i.ContainerIds,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTasks = `-- name: ListTasks :many
-select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
-       -- The latest attempt's container, as zero or one element: a scalar
-       -- subquery keeps the per-row index lookup, and the array keeps sqlc
-       -- from reading it as non-null.
-       array(select at.container_id from attempts at
-             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
-from tasks t
-join workloads w on w.id = t.workload_id
-join apps a on a.id = w.app_id
-join releases r on r.id = t.release_id
-where t.workspace_id = $1
-  and ($2::text is null or t.status = $2::text)
-  and (not $3::bool or t.parent_task_id is null)
-  and ($4::text is null
-       or starts_with(t.id::text, $4::text)
-       or strpos(lower(w.name), $4::text) > 0)
-  and t.id < $5
-order by t.id desc
-limit $6
-`
-
-type ListTasksParams struct {
-	WorkspaceID uuid.UUID
-	Status      *string
-	RootOnly    bool
-	Search      *string
-	Before      uuid.UUID
-	MaxRows     int32
-}
-
-type ListTasksRow struct {
-	ID           uuid.UUID
-	AppName      string
-	FunctionName string
-	ReleaseID    uuid.UUID
-	Version      *int32
-	Status       string
-	AttemptCount int32
-	MaxAttempts  int32
-	Preemptions  int32
-	ParentTaskID *uuid.UUID
-	RootTaskID   *uuid.UUID
-	AvailableAt  time.Time
-	CreatedAt    time.Time
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
-	Failure      []byte
-	ScheduledFor *time.Time
-	ContainerIds []uuid.UUID
-}
-
-// Newest first below the cursor, from the workspace's recent index.
-func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
-	rows, err := q.db.Query(ctx, listTasks,
 		arg.WorkspaceID,
-		arg.Status,
-		arg.RootOnly,
-		arg.Search,
-		arg.Before,
-		arg.MaxRows,
+		arg.App,
+		arg.Function,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTasksRow
+	var items []ListingWorkloadsRow
 	for rows.Next() {
-		var i ListTasksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.FunctionName,
-			&i.ReleaseID,
-			&i.Version,
-			&i.Status,
-			&i.AttemptCount,
-			&i.MaxAttempts,
-			&i.Preemptions,
-			&i.ParentTaskID,
-			&i.RootTaskID,
-			&i.AvailableAt,
-			&i.CreatedAt,
-			&i.StartedAt,
-			&i.FinishedAt,
-			&i.Failure,
-			&i.ScheduledFor,
-			&i.ContainerIds,
-		); err != nil {
+		var i ListingWorkloadsRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.ReleaseID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -347,22 +181,6 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 		return nil, err
 	}
 	return items, nil
-}
-
-const liveAppID = `-- name: LiveAppID :one
-select id from apps where workspace_id = $1 and name = $2 and state <> 'deleted'
-`
-
-type LiveAppIDParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-}
-
-func (q *Queries) LiveAppID(ctx context.Context, arg LiveAppIDParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, liveAppID, arg.WorkspaceID, arg.Name)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
 }
 
 const missingTasks = `-- name: MissingTasks :many
@@ -475,6 +293,56 @@ func (q *Queries) PendingFacts(ctx context.Context, ids []uuid.UUID) ([]PendingF
 	return items, nil
 }
 
+const releaseTaskIDs = `-- name: ReleaseTaskIDs :many
+select k.id
+from unnest($1::uuid[]) r(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned and t.id < $4
+    order by t.id desc
+    limit $5
+) k
+order by k.id desc
+limit $5
+`
+
+type ReleaseTaskIDsParams struct {
+	ReleaseIds []uuid.UUID
+	Statuses   []string
+	Spawned    []bool
+	Before     uuid.UUID
+	MaxRows    int32
+}
+
+// One range per release, status and spawned flag.
+func (q *Queries) ReleaseTaskIDs(ctx context.Context, arg ReleaseTaskIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, releaseTaskIDs,
+		arg.ReleaseIds,
+		arg.Statuses,
+		arg.Spawned,
+		arg.Before,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const taskForRerun = `-- name: TaskForRerun :one
 select t.release_id, a.name as app_name, w.name as function_name, i.encoding, i.data,
        array(select d.depends_on from task_dependencies d where d.task_id = t.id order by d.depends_on)::uuid[] as depends_on
@@ -544,7 +412,7 @@ func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskRes
 	return i, err
 }
 
-const taskView = `-- name: TaskView :one
+const taskViews = `-- name: TaskViews :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
@@ -557,15 +425,16 @@ from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-where t.id = $1 and t.workspace_id = $2
+where t.id = any($1::uuid[]) and t.workspace_id = $2
+order by t.id desc
 `
 
-type TaskViewParams struct {
-	ID          uuid.UUID
+type TaskViewsParams struct {
+	Ids         []uuid.UUID
 	WorkspaceID uuid.UUID
 }
 
-type TaskViewRow struct {
+type TaskViewsRow struct {
 	ID           uuid.UUID
 	AppName      string
 	FunctionName string
@@ -586,28 +455,276 @@ type TaskViewRow struct {
 	ContainerIds []uuid.UUID
 }
 
-func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow, error) {
-	row := q.db.QueryRow(ctx, taskView, arg.ID, arg.WorkspaceID)
-	var i TaskViewRow
-	err := row.Scan(
-		&i.ID,
-		&i.AppName,
-		&i.FunctionName,
-		&i.ReleaseID,
-		&i.Version,
-		&i.Status,
-		&i.AttemptCount,
-		&i.MaxAttempts,
-		&i.Preemptions,
-		&i.ParentTaskID,
-		&i.RootTaskID,
-		&i.AvailableAt,
-		&i.CreatedAt,
-		&i.StartedAt,
-		&i.FinishedAt,
-		&i.Failure,
-		&i.ScheduledFor,
-		&i.ContainerIds,
+// The workspace's tasks of ids, newest first.
+func (q *Queries) TaskViews(ctx context.Context, arg TaskViewsParams) ([]TaskViewsRow, error) {
+	rows, err := q.db.Query(ctx, taskViews, arg.Ids, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskViewsRow
+	for rows.Next() {
+		var i TaskViewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.FunctionName,
+			&i.ReleaseID,
+			&i.Version,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.Preemptions,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.AvailableAt,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Failure,
+			&i.ScheduledFor,
+			&i.ContainerIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workloadTaskIDs = `-- name: WorkloadTaskIDs :many
+select k.id
+from unnest($1::uuid[]) w(id)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.id < $2
+    order by t.id desc
+    limit $3
+) k
+order by k.id desc
+limit $3
+`
+
+type WorkloadTaskIDsParams struct {
+	WorkloadIds []uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// One range per workload.
+func (q *Queries) WorkloadTaskIDs(ctx context.Context, arg WorkloadTaskIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDs, arg.WorkloadIds, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workloadTaskIDsByStatus = `-- name: WorkloadTaskIDsByStatus :many
+select k.id
+from unnest($1::uuid[]) w(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned and t.id < $4
+    order by t.id desc
+    limit $5
+) k
+order by k.id desc
+limit $5
+`
+
+type WorkloadTaskIDsByStatusParams struct {
+	WorkloadIds []uuid.UUID
+	Statuses    []string
+	Spawned     []bool
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// One range per workload, status and spawned flag.
+func (q *Queries) WorkloadTaskIDsByStatus(ctx context.Context, arg WorkloadTaskIDsByStatusParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDsByStatus,
+		arg.WorkloadIds,
+		arg.Statuses,
+		arg.Spawned,
+		arg.Before,
+		arg.MaxRows,
 	)
-	return i, err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workloadTaskIDsInRange = `-- name: WorkloadTaskIDsInRange :many
+select k.id
+from unnest($1::uuid[]) w(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned
+      and t.id between $4 and $5 and t.id < $6
+      and ($7::uuid[] is null or t.release_id = any($7::uuid[]))
+    order by t.id desc
+    limit $8
+) k
+order by k.id desc
+limit $8
+`
+
+type WorkloadTaskIDsInRangeParams struct {
+	WorkloadIds []uuid.UUID
+	Statuses    []string
+	Spawned     []bool
+	IDLow       uuid.UUID
+	IDHigh      uuid.UUID
+	Before      uuid.UUID
+	ReleaseIds  []uuid.UUID
+	MaxRows     int32
+}
+
+// One range per workload, status and spawned flag, of the ids from id_low to
+// id_high that a search's id prefix spans; with releases, only theirs.
+func (q *Queries) WorkloadTaskIDsInRange(ctx context.Context, arg WorkloadTaskIDsInRangeParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDsInRange,
+		arg.WorkloadIds,
+		arg.Statuses,
+		arg.Spawned,
+		arg.IDLow,
+		arg.IDHigh,
+		arg.Before,
+		arg.ReleaseIds,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workspaceTaskIDs = `-- name: WorkspaceTaskIDs :many
+
+select id from tasks
+where workspace_id = $1 and id < $2
+order by id desc
+limit $3
+`
+
+type WorkspaceTaskIDsParams struct {
+	WorkspaceID uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// Listings take the ids of a page below the cursor, newest first, from one
+// index range per key, and TaskViews loads them.
+func (q *Queries) WorkspaceTaskIDs(ctx context.Context, arg WorkspaceTaskIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workspaceTaskIDs, arg.WorkspaceID, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workspaceTaskIDsByStatus = `-- name: WorkspaceTaskIDsByStatus :many
+select k.id
+from unnest($1::text[]) s(status)
+cross join unnest($2::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workspace_id = $3 and t.status = s.status and t.spawned = p.spawned and t.id < $4
+    order by t.id desc
+    limit $5
+) k
+order by k.id desc
+limit $5
+`
+
+type WorkspaceTaskIDsByStatusParams struct {
+	Statuses    []string
+	Spawned     []bool
+	WorkspaceID uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// One range per status and spawned flag.
+func (q *Queries) WorkspaceTaskIDsByStatus(ctx context.Context, arg WorkspaceTaskIDsByStatusParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workspaceTaskIDsByStatus,
+		arg.Statuses,
+		arg.Spawned,
+		arg.WorkspaceID,
+		arg.Before,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

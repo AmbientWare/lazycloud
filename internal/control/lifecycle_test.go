@@ -8,6 +8,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 func withConcurrency(spec apitypes.WorkloadSpec, n int) apitypes.WorkloadSpec {
@@ -16,6 +17,7 @@ func withConcurrency(spec apitypes.WorkloadSpec, n int) apitypes.WorkloadSpec {
 }
 
 func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	first := deploy(t, c, ws, false, function("summarize"))
@@ -77,6 +79,7 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 }
 
 func TestDeploymentStopStartVersionsAndDelete(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	v1 := deploy(t, c, ws, false, function("summarize"))
@@ -139,6 +142,7 @@ func TestDeploymentStopStartVersionsAndDelete(t *testing.T) {
 }
 
 func TestRunningContainersCountReadyAndDrainingAcrossReleases(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	v1 := deploy(t, c, ws, false, function("summarize"), function("digest"))
@@ -150,8 +154,8 @@ func TestRunningContainersCountReadyAndDrainingAcrossReleases(t *testing.T) {
 	_, err := pool.Exec(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256('h'), 'online', 64000, 1 << 36) returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-select $1, c.release_id, c.state, case when c.state = 'pending' then null else host.id end, 1, 1000, 1 << 28
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+select $1, c.release_id, (select workload_id from releases where id = c.release_id), c.state, case when c.state = 'pending' then null else host.id end, 1, 1000, 1 << 28
 from host, (values ($2::uuid, 'ready'), ($2, 'draining'), ($2, 'stopped'),
                    ($3::uuid, 'ready'), ($3, 'pending'), ($3, 'starting'), ($3, 'stopped'),
                    ($4::uuid, 'ready')) as c (release_id, state)`,
@@ -182,6 +186,7 @@ from host, (values ($2::uuid, 'ready'), ($2, 'draining'), ($2, 'stopped'),
 }
 
 func TestPlanDeploymentActions(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deploy(t, c, ws, false, function("keep"), function("drop"))
@@ -217,6 +222,7 @@ func TestPlanDeploymentActions(t *testing.T) {
 }
 
 func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deployed := deploy(t, c, ws, false, function("summarize"))
@@ -244,61 +250,58 @@ func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
 	}
 }
 
-func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
-	pool, ws := fixture(t)
-	c := NewControl(pool)
-	deployed := deploy(t, c, ws, false, function("summarize"))
-	list, err := c.ListWorkloads(t.Context(), ws, WorkloadFilter{}, 10, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.StopWorkload(t.Context(), ws, WorkloadID(list.Workloads[0].Id)); err != nil {
-		t.Fatal(err)
-	}
-	release, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
-	if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
-		t.Fatalf("prepare on a stopped workload %+v %v, want a new unversioned release", release, err)
-	}
-	tasks, err := execution.NewExecution(pool).Submit(t.Context(), execution.SubmitRequest{
-		Workspace: ws, App: "reports", Function: "summarize", Release: &release.Id,
-		Inputs: []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}},
-	})
-	if err != nil || len(tasks) != 1 {
-		t.Fatalf("submit to the prepared release %v %v", tasks, err)
-	}
-	if again, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize")); err != nil || again.Id != release.Id {
-		t.Fatalf("second prepare %+v %v, want %v", again, err, release.Id)
-	}
-}
-
-// A paused app's unchanged code runs from the laptop on its own
-// working-tree release, which execution admits while the app is paused.
-func TestPausedAppRunsUnchangedWorkingTreeCalls(t *testing.T) {
-	pool, ws := fixture(t)
-	c := NewControl(pool)
-	deployed := deploy(t, c, ws, false, function("summarize"))
-	if _, err := c.PauseApp(t.Context(), ws, "reports"); err != nil {
-		t.Fatal(err)
-	}
-	release, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
-	if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
-		t.Fatalf("prepare on a paused app %+v %v, want a new unversioned release", release, err)
-	}
-	e := execution.NewExecution(pool)
-	input := []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}}
-	if _, err := e.Submit(t.Context(), execution.SubmitRequest{
-		Workspace: ws, App: "reports", Function: "summarize", Release: &release.Id, Inputs: input,
-	}); err != nil {
-		t.Fatalf("working-tree submit to a paused app %v", err)
-	}
-	if _, err := e.Submit(t.Context(), execution.SubmitRequest{
-		Workspace: ws, App: "reports", Function: "summarize", Inputs: input,
-	}); !errors.Is(err, execution.ErrNotAccepting) {
-		t.Fatalf("deployed submit to a paused app %v", err)
+// A stopped workload's or paused app's unchanged code runs from the laptop
+// on a working-tree release of its own, which execution admits while the
+// deployed release is held, and a repeated prepare reuses it.
+func TestHeldWorkloadsRunUnchangedWorkingTreeCalls(t *testing.T) {
+	t.Parallel()
+	for name, hold := range map[string]func(*Control, identity.WorkspaceID, WorkloadID) error{
+		"stopped workload": func(c *Control, ws identity.WorkspaceID, id WorkloadID) error {
+			_, err := c.StopWorkload(t.Context(), ws, id)
+			return err
+		},
+		"paused app": func(c *Control, ws identity.WorkspaceID, _ WorkloadID) error {
+			_, err := c.PauseApp(t.Context(), ws, "reports")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pool, ws := fixture(t)
+			c := NewControl(pool)
+			deployed := deploy(t, c, ws, false, function("summarize"))
+			id, err := c.FindWorkload(t.Context(), ws, WorkloadRef{App: "reports", Kind: apitypes.WorkloadKindFunction, Name: "summarize"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := hold(c, ws, id); err != nil {
+				t.Fatal(err)
+			}
+			release, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize"))
+			if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
+				t.Fatalf("prepare %+v %v, want a new unversioned release", release, err)
+			}
+			e := execution.NewExecution(pool)
+			input := []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}}
+			if _, err := e.Submit(t.Context(), execution.SubmitRequest{
+				Workspace: ws, App: "reports", Function: "summarize", Release: &release.Id, Inputs: input,
+			}); err != nil {
+				t.Fatalf("working-tree submit %v", err)
+			}
+			if _, err := e.Submit(t.Context(), execution.SubmitRequest{
+				Workspace: ws, App: "reports", Function: "summarize", Inputs: input,
+			}); !errors.Is(err, execution.ErrNotAccepting) {
+				t.Fatalf("deployed submit %v", err)
+			}
+			if again, err := c.PrepareRelease(t.Context(), ws, "reports", function("summarize")); err != nil || again.Id != release.Id {
+				t.Fatalf("second prepare %+v %v, want %v", again, err, release.Id)
+			}
+		})
 	}
 }
 
 func TestPruneWithoutFunctionsDeletesTheDeployedOnes(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deploy(t, c, ws, false, function("a"), function("b"))

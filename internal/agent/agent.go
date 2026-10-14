@@ -105,8 +105,9 @@ type Config struct {
 	// in place of a join token.
 	CloudHostID string
 	// IMDSEndpoint is the instance metadata service. Set, the agent reports
-	// Spot interruption notices.
-	IMDSEndpoint string
+	// Spot interruption notices, asking for one every InterruptionPoll.
+	IMDSEndpoint     string
+	InterruptionPoll time.Duration
 	// Hostname is reported at enrollment; empty uses the system's.
 	Hostname string
 	// RuntimeDir holds managed Python runtimes at <dir>/<python_version>.
@@ -261,6 +262,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if err := os.MkdirAll(cfg.SocketDir, 0o700); err != nil {
 		return fmt.Errorf("create socket directory: %w", err)
+	}
+	if cfg.IMDSEndpoint != "" && cfg.InterruptionPoll <= 0 {
+		return errors.New("an agent that reads IMDS needs a positive interruption poll")
 	}
 	if _, err := os.Stat(cfg.SupervisorPath); err != nil {
 		return fmt.Errorf("supervisor binary: %w", err)

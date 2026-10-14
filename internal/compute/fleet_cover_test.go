@@ -27,6 +27,7 @@ func boughtNames(r CoverResult) []string {
 }
 
 func TestCoverChoosesTheLowerTotalCostForRequiredCapacity(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		need FleetCapacity
 		want []string
@@ -43,6 +44,7 @@ func TestCoverChoosesTheLowerTotalCostForRequiredCapacity(t *testing.T) {
 }
 
 func TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom(t *testing.T) {
+	t.Parallel()
 	items := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(16_000, 32), Count: 1}}}
 	if r := Cover([]FleetOffer{coverSmall, coverLarge}, items, hourlyCost, CoverLimits{Nodes: 16}); !slices.Equal(boughtNames(r), []string{"large"}) {
 		t.Fatalf("items bought %v", boughtNames(r))
@@ -50,6 +52,7 @@ func TestCoverFitsALargeRequestOnOneHostDespiteAggregateRoom(t *testing.T) {
 }
 
 func TestCoverCountsEachContainerFittingANode(t *testing.T) {
+	t.Parallel()
 	medium := coverOffer("medium", cpuGiB(16_000, 32), 250_000)
 	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(5000, 10), Count: 3}}}
 	r := Cover([]FleetOffer{coverSmall, medium}, need, hourlyCost, CoverLimits{Nodes: 16})
@@ -59,6 +62,7 @@ func TestCoverCountsEachContainerFittingANode(t *testing.T) {
 }
 
 func TestCoverReportsWhatNoOfferCanPlace(t *testing.T) {
+	t.Parallel()
 	request := cpuGiB(5000, 10)
 	need := CoverNeed{Items: []CoverItem{{Shape: request, Count: 2}, {Shape: coverLarge.Usable, Count: 1}}}
 	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, CoverLimits{Nodes: 16})
@@ -75,6 +79,7 @@ func TestCoverReportsWhatNoOfferCanPlace(t *testing.T) {
 }
 
 func TestCoverStopsAtItsNodeBoundAndReturnsTheBestPartial(t *testing.T) {
+	t.Parallel()
 	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(7000, 14), Count: 5}}}
 	r := Cover([]FleetOffer{coverSmall}, need, hourlyCost, CoverLimits{Nodes: 3})
 	if len(r.Nodes) != 3 || r.UnmetItems[0].Count != 2 {
@@ -86,6 +91,7 @@ func TestCoverStopsAtItsNodeBoundAndReturnsTheBestPartial(t *testing.T) {
 }
 
 func TestCoverPacksTwoThreeCPURequestsOntoOneLargerHost(t *testing.T) {
+	t.Parallel()
 	// A 3 CPU request takes a 4 CPU host alone; two share an 8 CPU host,
 	// which costs no more and keeps one host.
 	eight := mustType(t, "c6a.2xlarge")
@@ -111,6 +117,7 @@ func TestCoverPacksTwoThreeCPURequestsOntoOneLargerHost(t *testing.T) {
 // Items take a node's disk slots as well as its room: three containers of
 // two disks each need two nodes of four slots, however much room one has.
 func TestCoverPlacesNoMoreDisksOnANodeThanItHasSlots(t *testing.T) {
+	t.Parallel()
 	slots := coverOffer("slots", cpuGiB(32_000, 64), 300_000)
 	slots.Type.Topology = twoPerCore(8)
 	need := CoverNeed{Items: []CoverItem{{Shape: cpuGiB(1000, 2), Disks: 2, Count: 3}}}

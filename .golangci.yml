@@ -2,6 +2,9 @@ version: "2"
 
 run:
   timeout: 5m
+  # Lints the host runtime tests too; untagged files build either way.
+  build-tags:
+    - hostruntime
 
 linters:
   enable:

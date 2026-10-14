@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const containerView = `-- name: ContainerView :one
+const containerViews = `-- name: ContainerViews :many
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
@@ -26,15 +26,16 @@ join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
-where c.workspace_id = $1 and c.id = $2
+where c.id = any($1::uuid[]) and c.workspace_id = $2
+order by c.id desc
 `
 
-type ContainerViewParams struct {
+type ContainerViewsParams struct {
+	Ids         []uuid.UUID
 	WorkspaceID uuid.UUID
-	ID          uuid.UUID
 }
 
-type ContainerViewRow struct {
+type ContainerViewsRow struct {
 	ID              uuid.UUID
 	AppName         string
 	FunctionName    string
@@ -60,35 +61,49 @@ type ContainerViewRow struct {
 	Image           string
 }
 
-func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (ContainerViewRow, error) {
-	row := q.db.QueryRow(ctx, containerView, arg.WorkspaceID, arg.ID)
-	var i ContainerViewRow
-	err := row.Scan(
-		&i.ID,
-		&i.AppName,
-		&i.FunctionName,
-		&i.ReleaseID,
-		&i.Version,
-		&i.State,
-		&i.StopReason,
-		&i.ExitMessage,
-		&i.Slots,
-		&i.CpuMillis,
-		&i.MemoryBytes,
-		&i.CreatedAt,
-		&i.ReadyAt,
-		&i.StoppedAt,
-		&i.Running,
-		&i.Kind,
-		&i.Purpose,
-		&i.ExitCode,
-		&i.GpuCount,
-		&i.HostName,
-		&i.KeepWarmSeconds,
-		&i.ActiveUntil,
-		&i.Image,
-	)
-	return i, err
+// The workspace's function containers of ids, newest first.
+func (q *Queries) ContainerViews(ctx context.Context, arg ContainerViewsParams) ([]ContainerViewsRow, error) {
+	rows, err := q.db.Query(ctx, containerViews, arg.Ids, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ContainerViewsRow
+	for rows.Next() {
+		var i ContainerViewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.FunctionName,
+			&i.ReleaseID,
+			&i.Version,
+			&i.State,
+			&i.StopReason,
+			&i.ExitMessage,
+			&i.Slots,
+			&i.CpuMillis,
+			&i.MemoryBytes,
+			&i.CreatedAt,
+			&i.ReadyAt,
+			&i.StoppedAt,
+			&i.Running,
+			&i.Kind,
+			&i.Purpose,
+			&i.ExitCode,
+			&i.GpuCount,
+			&i.HostName,
+			&i.KeepWarmSeconds,
+			&i.ActiveUntil,
+			&i.Image,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const drainContainer = `-- name: DrainContainer :exec
@@ -99,220 +114,6 @@ where id = $1 and state in ('starting', 'ready')
 func (q *Queries) DrainContainer(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, drainContainer, id)
 	return err
-}
-
-const listContainers = `-- name: ListContainers :many
-select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
-       c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
-       c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
-       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until,
-       coalesce(r.spec #>> '{image,reference}', '')::text as image
-from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
-join apps a on a.id = w.app_id
-left join hosts h on h.id = c.host_id
-where c.workspace_id = $1
-  and ($2::text is null or a.name = $2::text)
-  and c.id < $3
-  and ($4::uuid is null or r.workload_id = $4)
-order by c.id desc
-limit $5
-`
-
-type ListContainersParams struct {
-	WorkspaceID uuid.UUID
-	App         *string
-	Before      uuid.UUID
-	WorkloadID  *uuid.UUID
-	MaxRows     int32
-}
-
-type ListContainersRow struct {
-	ID              uuid.UUID
-	AppName         string
-	FunctionName    string
-	ReleaseID       uuid.UUID
-	Version         *int32
-	State           string
-	StopReason      *string
-	ExitMessage     *string
-	Slots           int32
-	CpuMillis       cpu.Millis
-	MemoryBytes     int64
-	CreatedAt       time.Time
-	ReadyAt         *time.Time
-	StoppedAt       *time.Time
-	Running         int32
-	Kind            string
-	Purpose         string
-	ExitCode        *int32
-	GpuCount        int32
-	HostName        *string
-	KeepWarmSeconds *int32
-	ActiveUntil     *time.Time
-	Image           string
-}
-
-// Newest first below the cursor, from the workspace's recent index.
-func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) ([]ListContainersRow, error) {
-	rows, err := q.db.Query(ctx, listContainers,
-		arg.WorkspaceID,
-		arg.App,
-		arg.Before,
-		arg.WorkloadID,
-		arg.MaxRows,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListContainersRow
-	for rows.Next() {
-		var i ListContainersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.FunctionName,
-			&i.ReleaseID,
-			&i.Version,
-			&i.State,
-			&i.StopReason,
-			&i.ExitMessage,
-			&i.Slots,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.CreatedAt,
-			&i.ReadyAt,
-			&i.StoppedAt,
-			&i.Running,
-			&i.Kind,
-			&i.Purpose,
-			&i.ExitCode,
-			&i.GpuCount,
-			&i.HostName,
-			&i.KeepWarmSeconds,
-			&i.ActiveUntil,
-			&i.Image,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLiveContainers = `-- name: ListLiveContainers :many
-select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
-       c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
-       c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
-       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
-       c.keep_warm_seconds, c.active_until,
-       coalesce(r.spec #>> '{image,reference}', '')::text as image
-from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
-join apps a on a.id = w.app_id
-left join hosts h on h.id = c.host_id
-where c.workspace_id = $1
-  and c.state <> 'stopped'
-  and ($2::text is null or a.name = $2::text)
-  and c.id < $3
-  and ($4::uuid is null or r.workload_id = $4)
-order by c.id desc
-limit $5
-`
-
-type ListLiveContainersParams struct {
-	WorkspaceID uuid.UUID
-	App         *string
-	Before      uuid.UUID
-	WorkloadID  *uuid.UUID
-	MaxRows     int32
-}
-
-type ListLiveContainersRow struct {
-	ID              uuid.UUID
-	AppName         string
-	FunctionName    string
-	ReleaseID       uuid.UUID
-	Version         *int32
-	State           string
-	StopReason      *string
-	ExitMessage     *string
-	Slots           int32
-	CpuMillis       cpu.Millis
-	MemoryBytes     int64
-	CreatedAt       time.Time
-	ReadyAt         *time.Time
-	StoppedAt       *time.Time
-	Running         int32
-	Kind            string
-	Purpose         string
-	ExitCode        *int32
-	GpuCount        int32
-	HostName        *string
-	KeepWarmSeconds *int32
-	ActiveUntil     *time.Time
-	Image           string
-}
-
-// Like ListContainers for containers that have not stopped, from the
-// workspace's live partial index.
-func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainersParams) ([]ListLiveContainersRow, error) {
-	rows, err := q.db.Query(ctx, listLiveContainers,
-		arg.WorkspaceID,
-		arg.App,
-		arg.Before,
-		arg.WorkloadID,
-		arg.MaxRows,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListLiveContainersRow
-	for rows.Next() {
-		var i ListLiveContainersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AppName,
-			&i.FunctionName,
-			&i.ReleaseID,
-			&i.Version,
-			&i.State,
-			&i.StopReason,
-			&i.ExitMessage,
-			&i.Slots,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.CreatedAt,
-			&i.ReadyAt,
-			&i.StoppedAt,
-			&i.Running,
-			&i.Kind,
-			&i.Purpose,
-			&i.ExitCode,
-			&i.GpuCount,
-			&i.HostName,
-			&i.KeepWarmSeconds,
-			&i.ActiveUntil,
-			&i.Image,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const liveFunctionContainers = `-- name: LiveFunctionContainers :many
@@ -331,6 +132,91 @@ type LiveFunctionContainersParams struct {
 // Containers that still run or will; draining ones are already stopping.
 func (q *Queries) LiveFunctionContainers(ctx context.Context, arg LiveFunctionContainersParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, liveFunctionContainers, arg.WorkspaceID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveWorkloadContainerIDs = `-- name: LiveWorkloadContainerIDs :many
+select k.id
+from workloads w
+join apps a on a.id = w.app_id
+cross join lateral (
+    select c.id from containers c
+    where c.workload_id = w.id and c.state <> 'stopped' and c.id < $1
+    order by c.id desc
+    limit $2
+) k
+where a.workspace_id = $3
+  and ($4::text is null or a.name = $4::text)
+  and ($5::uuid is null or w.id = $5::uuid)
+order by k.id desc
+limit $2
+`
+
+type LiveWorkloadContainerIDsParams struct {
+	Before      uuid.UUID
+	MaxRows     int32
+	WorkspaceID uuid.UUID
+	App         *string
+	WorkloadID  *uuid.UUID
+}
+
+// Like WorkloadContainerIDs for containers that have not stopped.
+func (q *Queries) LiveWorkloadContainerIDs(ctx context.Context, arg LiveWorkloadContainerIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, liveWorkloadContainerIDs,
+		arg.Before,
+		arg.MaxRows,
+		arg.WorkspaceID,
+		arg.App,
+		arg.WorkloadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveWorkspaceContainerIDs = `-- name: LiveWorkspaceContainerIDs :many
+select id from containers
+where workspace_id = $1 and state <> 'stopped' and release_id is not null and id < $2
+order by id desc
+limit $3
+`
+
+type LiveWorkspaceContainerIDsParams struct {
+	WorkspaceID uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+func (q *Queries) LiveWorkspaceContainerIDs(ctx context.Context, arg LiveWorkspaceContainerIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, liveWorkspaceContainerIDs, arg.WorkspaceID, arg.Before, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -378,4 +264,93 @@ func (q *Queries) LockContainerInWorkspace(ctx context.Context, arg LockContaine
 		&i.ReleaseID,
 	)
 	return i, err
+}
+
+const workloadContainerIDs = `-- name: WorkloadContainerIDs :many
+select k.id
+from workloads w
+join apps a on a.id = w.app_id
+cross join lateral (
+    select c.id from containers c
+    where c.workload_id = w.id and c.id < $1
+    order by c.id desc
+    limit $2
+) k
+where a.workspace_id = $3
+  and ($4::text is null or a.name = $4::text)
+  and ($5::uuid is null or w.id = $5::uuid)
+order by k.id desc
+limit $2
+`
+
+type WorkloadContainerIDsParams struct {
+	Before      uuid.UUID
+	MaxRows     int32
+	WorkspaceID uuid.UUID
+	App         *string
+	WorkloadID  *uuid.UUID
+}
+
+// One range per workload of the workspace's apps of a name, or of one
+// workload.
+func (q *Queries) WorkloadContainerIDs(ctx context.Context, arg WorkloadContainerIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadContainerIDs,
+		arg.Before,
+		arg.MaxRows,
+		arg.WorkspaceID,
+		arg.App,
+		arg.WorkloadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workspaceContainerIDs = `-- name: WorkspaceContainerIDs :many
+
+select id from containers
+where workspace_id = $1 and release_id is not null and id < $2
+order by id desc
+limit $3
+`
+
+type WorkspaceContainerIDsParams struct {
+	WorkspaceID uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// Listings take the ids of a page of function containers below the cursor,
+// newest first, from one index range per key, and ContainerViews loads them.
+func (q *Queries) WorkspaceContainerIDs(ctx context.Context, arg WorkspaceContainerIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workspaceContainerIDs, arg.WorkspaceID, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

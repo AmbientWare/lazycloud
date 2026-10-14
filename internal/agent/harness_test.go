@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -9,15 +11,12 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -25,15 +24,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-const testImage = "python:3.12-slim"
+// The images tests start, pinned so that the image cache serves them.
+const (
+	testImage   = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+	alpineImage = "docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4"
+	// ungrantedImage is pulled by no test, so no grant of it exists.
+	ungrantedImage = "docker.io/library/python:3.11-alpine@sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929"
+)
 
 // supervisorBinary is built once per test binary by TestMain.
 var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain
@@ -60,6 +62,16 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("convert the test images: %v", err))
 	}
 	code := m.Run()
+	// The images the tests pulled read their layers from the test store,
+	// whose buckets go next; left behind, they would serve later runs of
+	// other tests unreadable files.
+	for _, image := range lazyImages {
+		out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", image).CombinedOutput()
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", image).Run() == nil {
+			fmt.Fprintf(os.Stderr, "remove %s: %v: %s\n", image, err, out)
+			code = max(code, 1)
+		}
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)
@@ -68,243 +80,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// hostServer is the server's side of HostService for focused agent tests.
-// Integration with the real server happens in the integrated slice.
-type hostServer struct {
-	hostproto.UnimplementedHostServiceServer
-	joinToken, hostID, hostToken string
-
-	sessions    chan *serverSession
-	enrolls     chan *hostproto.EnrollRequest
-	completions chan *hostproto.CompleteTaskRequest
-	builds      chan *hostproto.CompleteImageBuildRequest
-	snapshots   chan *hostproto.CompleteSnapshotRequest
-	filesystems chan *hostproto.CompleteFilesystemImageRequest
-	data        *dataServer
-
-	mu      sync.Mutex
-	queued  map[string][]*hostproto.ClaimedTask
-	changed chan struct{}
-	logs    []*hostproto.LogLine
-	// containerLogs holds each container's logged lines.
-	containerLogs map[string][]string
-	// buildLogs holds image build output in arrival order.
-	buildLogs []string
-	// appendDelay makes AppendLogs a slow consumer.
-	appendDelay time.Duration
-	// releases answers ReleaseDisk in disk tests.
-	releases *releases
-	// completeOutage fails CompleteTask as unavailable until it passes.
-	completeOutage time.Time
-	// answerBuild answers CompleteImageBuild when set.
-	answerBuild func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse
-	// answerPlatform, when set, gives the platform images a session sends
-	// at open, none when it returns none.
-	answerPlatform func(named []string) []*hostproto.PlatformImage
-}
-
-type serverSession struct {
-	hello  *hostproto.Hello
-	stream hostproto.HostService_SessionServer
-	msgs   chan *hostproto.HostMessage
-	// end ends the session from the server's side.
-	end chan struct{}
-}
-
 // platformImage is how the server answers a platform image the tests
 // converted: hosts here pull it as named.
 func platformImage(reference string) *hostproto.PlatformImage {
 	return &hostproto.PlatformImage{Reference: reference, Image: reference, Platform: "linux/" + runtime.GOARCH, Layers: imageLayers[reference]}
-}
-
-func newHostServer() *hostServer {
-	return &hostServer{
-		joinToken: "lc_join", hostID: uuid.NewString(), hostToken: "lc_host_" + uuid.NewString(),
-		sessions:      make(chan *serverSession, 8),
-		enrolls:       make(chan *hostproto.EnrollRequest, 8),
-		completions:   make(chan *hostproto.CompleteTaskRequest, 64),
-		builds:        make(chan *hostproto.CompleteImageBuildRequest, 8),
-		snapshots:     make(chan *hostproto.CompleteSnapshotRequest, 8),
-		filesystems:   make(chan *hostproto.CompleteFilesystemImageRequest, 8),
-		data:          &dataServer{calls: make(chan *forwardCall, 64)},
-		queued:        map[string][]*hostproto.ClaimedTask{},
-		containerLogs: map[string][]string{},
-		changed:       make(chan struct{}),
-	}
-}
-
-func (s *hostServer) authorize(ctx context.Context, method string) error {
-	if method == hostproto.HostService_Enroll_FullMethodName {
-		return nil
-	}
-	md, _ := metadata.FromIncomingContext(ctx)
-	s.mu.Lock()
-	token := s.hostToken
-	s.mu.Unlock()
-	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+token {
-		return status.Error(codes.Unauthenticated, "bad host token")
-	}
-	return nil
-}
-
-func (s *hostServer) serve(t *testing.T, address string) (*grpc.Server, string) {
-	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes),
-		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			if err := s.authorize(ctx, info.FullMethod); err != nil {
-				return nil, err
-			}
-			return handler(ctx, req)
-		}),
-		grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-			if err := s.authorize(ss.Context(), info.FullMethod); err != nil {
-				return err
-			}
-			return handler(srv, ss)
-		}),
-	)
-	hostproto.RegisterHostServiceServer(server, s)
-	hostproto.RegisterHostDataServer(server, s.data)
-	go func() { _ = server.Serve(listener) }()
-	return server, listener.Addr().String()
-}
-
-func (s *hostServer) Enroll(_ context.Context, r *hostproto.EnrollRequest) (*hostproto.EnrollResponse, error) {
-	s.enrolls <- r
-	if r.GetJoinToken() != s.joinToken && r.GetCloudIdentity() == nil {
-		return nil, status.Error(codes.PermissionDenied, "bad join token")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return &hostproto.EnrollResponse{HostId: s.hostID, HostToken: s.hostToken}, nil
-}
-
-// revoke replaces the host token, as removing the machine does.
-func (s *hostServer) revoke() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hostToken = "lc_host_" + uuid.NewString()
-}
-
-func (s *hostServer) Session(stream hostproto.HostService_SessionServer) error {
-	first, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024), end: make(chan struct{})}
-	// As the server does once it converted them, the session answers the
-	// platform images the Hello names with their grants.
-	s.mu.Lock()
-	answer := s.answerPlatform
-	s.mu.Unlock()
-	var platform []*hostproto.PlatformImage
-	if answer != nil {
-		platform = answer(session.hello.GetPlatformImages())
-	} else {
-		for _, ref := range session.hello.GetPlatformImages() {
-			platform = append(platform, platformImage(ref))
-		}
-	}
-	if len(platform) > 0 {
-		if err := stream.Send(&hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_PlatformImages{
-			PlatformImages: &hostproto.PlatformImages{Images: platform},
-		}}); err != nil {
-			return err
-		}
-	}
-	s.sessions <- session
-	received := make(chan error, 1)
-	go func() {
-		for {
-			m, err := stream.Recv()
-			if err != nil {
-				close(session.msgs)
-				received <- err
-				return
-			}
-			session.msgs <- m
-		}
-	}()
-	select {
-	case err := <-received:
-		return err
-	case <-session.end:
-		return status.Error(codes.Unavailable, "the test ended the session")
-	}
-}
-
-func (s *hostServer) enqueue(container string, task *hostproto.ClaimedTask) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.queued[container] = append(s.queued[container], task)
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-func (s *hostServer) ClaimTasks(ctx context.Context, r *hostproto.ClaimTasksRequest) (*hostproto.ClaimTasksResponse, error) {
-	deadline := time.After(time.Duration(r.GetWaitSeconds()) * time.Second)
-	for {
-		s.mu.Lock()
-		queue := s.queued[r.GetContainerId()]
-		n := min(len(queue), int(r.GetMaxTasks()))
-		if n > 0 {
-			s.queued[r.GetContainerId()] = queue[n:]
-			s.mu.Unlock()
-			return &hostproto.ClaimTasksResponse{Tasks: queue[:n]}, nil
-		}
-		changed := s.changed
-		s.mu.Unlock()
-		select {
-		case <-changed:
-		case <-deadline:
-			return &hostproto.ClaimTasksResponse{}, nil
-		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
-		}
-	}
-}
-
-func (s *hostServer) CompleteTask(_ context.Context, r *hostproto.CompleteTaskRequest) (*hostproto.CompleteTaskResponse, error) {
-	s.mu.Lock()
-	outage := time.Now().Before(s.completeOutage)
-	s.mu.Unlock()
-	if outage {
-		return nil, status.Error(codes.Unavailable, "server is restarting")
-	}
-	s.completions <- r
-	return &hostproto.CompleteTaskResponse{}, nil
-}
-
-func (s *hostServer) AppendLogs(_ context.Context, r *hostproto.AppendLogsRequest) (*hostproto.AppendLogsResponse, error) {
-	s.mu.Lock()
-	delay := s.appendDelay
-	s.mu.Unlock()
-	time.Sleep(delay)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.logs = append(s.logs, r.GetLines()...)
-	for _, line := range r.GetLines() {
-		s.containerLogs[r.GetContainerId()] = append(s.containerLogs[r.GetContainerId()], line.GetData())
-	}
-	return &hostproto.AppendLogsResponse{}, nil
-}
-
-// output joins the logged lines of one attempt.
-func (s *hostServer) output(attempt string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var b strings.Builder
-	for _, line := range s.logs {
-		if line.GetAttemptId() == attempt {
-			b.WriteString(line.GetData() + "\n")
-		}
-	}
-	return b.String()
 }
 
 // env is one test's server, source store, state directory and agents.
@@ -334,6 +113,15 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("docker is required for agent tests: %v", err)
 	}
 	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker}
+	// As the server does once it converted them, sessions answer the
+	// platform images the Hello names with their grants.
+	e.server.answerPlatform = func(named []string) []*hostproto.PlatformImage {
+		var platform []*hostproto.PlatformImage
+		for _, ref := range named {
+			platform = append(platform, platformImage(ref))
+		}
+		return platform
+	}
 	e.grpc, e.address = e.server.serve(t, "127.0.0.1:0")
 	e.stateDir = shortDir(t)
 	e.source = serveSource(t, "../supervisor/testdata/workspace")
@@ -343,18 +131,6 @@ func newEnv(t *testing.T) *env {
 		_ = docker.Close()
 	})
 	return e
-}
-
-// shortDir is a directory removed when the test ends, short enough to hold
-// Unix sockets, which a test's own directory may not be.
-func shortDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "lca")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
 }
 
 // removeContainers deletes every container this test created.
@@ -493,33 +269,6 @@ func (e *env) session() *serverSession {
 	case <-time.After(30 * time.Second):
 		e.t.Fatal("agent did not open a session")
 		return nil
-	}
-}
-
-func (s *serverSession) send(t *testing.T, m *hostproto.ServerMessage) {
-	t.Helper()
-	if err := s.stream.Send(m); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// until reads host messages until match accepts one.
-func (s *serverSession) until(t *testing.T, timeout time.Duration, match func(*hostproto.HostMessage) bool) *hostproto.HostMessage {
-	t.Helper()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case m, ok := <-s.msgs:
-			if !ok {
-				t.Fatal("session closed")
-			}
-			if match(m) {
-				return m
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for a host message")
-			return nil
-		}
 	}
 }
 

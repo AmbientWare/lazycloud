@@ -79,7 +79,7 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
   // response contains the first app and replaces the guided steps in place.
   published = true;
   publishWorkspaceChange!();
-  await expect(page.getByRole("link", { name: "quickstart" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("link", { name: "quickstart" })).toBeVisible();
   await expect(page.getByText("Run your first function")).not.toBeVisible();
 });
 

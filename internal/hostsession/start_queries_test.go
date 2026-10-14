@@ -13,6 +13,7 @@ import (
 // buckets: the platform volumes are recorded in one batch and every secret
 // the start needs is read at once.
 func TestStartStatementsDoNotGrowWithVolumes(t *testing.T) {
+	t.Parallel()
 	count := func(volumes, buckets int) int64 {
 		h, _, queries := countedHarness(t, func(c *hostsession.Config) { c.TouchInterval = time.Hour })
 		host, ctx := h.enroll()

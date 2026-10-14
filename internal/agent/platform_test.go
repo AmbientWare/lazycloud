@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -5,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -57,11 +61,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	// Registered first, so it runs after the cleanups that use the client.
 	t.Cleanup(func() { _ = ctrd.Close() })
 
-	parsed, err := name.ParseReference(platformimages.Mount)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, err := remote.Image(parsed, remote.WithContext(ctx), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
+	base, err := imagefstest.Image(ctx, platformimages.Mount, v1.Platform{OS: "linux", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	// soon.
 	store, bucket := layerStore()
 	prefix := "agent-test/tenant-" + uuid.NewString()[:8] + "/"
-	expires := time.Now().Add(20 * time.Second)
+	expires := time.Now().Add(8 * time.Second)
 	layers, err := tenant.Layers()
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +169,7 @@ func (e *env) withPlatformAnswer(answer func(named []string) []*hostproto.Platfo
 // A start that fails while its network holder waits for the mount image
 // ends at once, not when the image comes.
 func TestAFailedStartDoesNotWaitForItsHoldersImage(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withPlatformAnswer(func([]string) []*hostproto.PlatformImage {
 		return []*hostproto.PlatformImage{platformImage(platformimages.Builder)}
@@ -191,6 +192,7 @@ func TestAFailedStartDoesNotWaitForItsHoldersImage(t *testing.T) {
 // A platform image failure one session sent does not fail starts on the
 // next: they wait for that session's answer.
 func TestAPlatformFailureLastsOnlyItsSession(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.withPlatformAnswer(func([]string) []*hostproto.PlatformImage {
 		return []*hostproto.PlatformImage{platformImage(platformimages.Builder), {Reference: platformimages.Mount, Failure: "a layer cannot be converted"}}

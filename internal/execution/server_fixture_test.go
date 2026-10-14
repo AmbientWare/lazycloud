@@ -4,9 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -52,8 +55,8 @@ func placedContainer(t *testing.T, pool *pgxpool.Pool, f functionFixture, state 
 	err := pool.QueryRow(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-             select $1, $2, $3, host.id, $4, 1000, 1 << 28, now() from host returning id)
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+             select $1, r.id, r.workload_id, $3, host.id, $4, 1000, 1 << 28, now() from host, releases r where r.id = $2 returning id)
 select host.id, ctr.id from host, ctr`, uuid.UUID(f.workspace), f.release, string(state), slots).Scan(&host, &container)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -100,4 +103,103 @@ func status(t *testing.T, pool *pgxpool.Pool, task TaskID) TaskStatus {
 		t.Fatal(err)
 	}
 	return TaskStatus(s)
+}
+
+// statements counts the statements a pool finished.
+type statements struct {
+	n    atomic.Int64
+	done chan struct{}
+}
+
+func (*statements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (s *statements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+	s.n.Add(1)
+	select {
+	case s.done <- struct{}{}:
+	default:
+	}
+}
+
+// take returns how many statements finished since the last take.
+func (s *statements) take() int64 { return s.n.Swap(0) }
+
+// await waits until n statements finished since the last take.
+func (s *statements) await(t *testing.T, n int64) {
+	t.Helper()
+	for s.n.Load() < n {
+		select {
+		case <-s.done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%d of %d statements finished", s.n.Load(), n)
+		}
+	}
+}
+
+// countedExecution is an Execution on a pool of its own over pool's
+// database, whose finished statements it counts.
+func countedExecution(t *testing.T, pool *pgxpool.Pool) (*Execution, *statements) {
+	t.Helper()
+	counter := &statements{done: make(chan struct{}, 1)}
+	cfg := pool.Config().Copy()
+	cfg.ConnConfig.Tracer = counter
+	counted, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(counted.Close)
+	return NewExecution(counted), counter
+}
+
+// waiting starts call and returns once it has run the statements of probe,
+// one pass of the same call without its wait. Nothing call reads after that
+// is committed yet, so a change committed afterwards reaches call only
+// through a wake.
+func waiting[T any](t *testing.T, pool *pgxpool.Pool, probe func(*Execution), call func(*Execution) T) <-chan T {
+	t.Helper()
+	e, counter := countedExecution(t, pool)
+	probe(e)
+	pass := counter.take()
+	out := make(chan T, 1)
+	go func() { out <- call(e) }()
+	counter.await(t, pass)
+	return out
+}
+
+// notifications collects the payloads committed on channel; each call
+// returns those committed since the last.
+func notifications(t *testing.T, pool *pgxpool.Pool, channel database.Channel) func() []string {
+	t.Helper()
+	conn, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Release)
+	if _, err := conn.Exec(t.Context(), "listen "+pgx.Identifier{string(channel)}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	return func() []string {
+		t.Helper()
+		// Notifications arrive in commit order, so a later commit's marks
+		// the end of what came before.
+		end := uuid.NewString()
+		if _, err := pool.Exec(t.Context(), "select pg_notify($1, $2)", string(channel), end); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			n, err := conn.Conn().WaitForNotification(ctx)
+			cancel()
+			if err != nil {
+				t.Fatalf("wait for notifications: %v", err)
+			}
+			if n.Payload == end {
+				return got
+			}
+			got = append(got, n.Payload)
+		}
+	}
 }

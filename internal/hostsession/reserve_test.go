@@ -74,6 +74,26 @@ func openHello(t *testing.T, ctx context.Context, client hostproto.HostServiceCl
 	return stream
 }
 
+// helloSettled opens a session with hello and returns once the server
+// settled it, which it does in the transaction that opens the session.
+func (h *harness) helloSettled(ctx context.Context, host compute.HostID, hello *hostproto.Hello) {
+	h.t.Helper()
+	epoch := func() int64 {
+		var n int64
+		if err := h.pool.QueryRow(ctx, "select session_epoch from hosts where id = $1", uuid.UUID(host)).Scan(&n); err != nil {
+			h.t.Fatal(err)
+		}
+		return n
+	}
+	before := epoch()
+	openHello(h.t, ctx, h.client, hello)
+	for deadline := time.Now().Add(5 * time.Second); epoch() == before; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			h.t.Fatal("the server did not open the session")
+		}
+	}
+}
+
 // prepareReserve returns the next PrepareReserve the session sends.
 func prepareReserve(t *testing.T, stream hostStream) *hostproto.PrepareReserve {
 	t.Helper()
@@ -99,6 +119,7 @@ func readyFor(p *hostproto.PrepareReserve) *hostproto.ReserveReady {
 // answers the current request from the current boot; a refusal returns it
 // to ready.
 func TestReserveStopsOnlyOnTheAgentsProof(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	stream := open(t, ctx, h.client)
@@ -130,11 +151,8 @@ func TestReserveStopsOnlyOnTheAgentsProof(t *testing.T) {
 	unknown := readyFor(p)
 	unknown.AttemptId = uuid.NewString()
 	answer(t, stream, unknown)
-	time.Sleep(300 * time.Millisecond)
-	if r := h.reserveHost(host); r.phase != "preparing" {
-		t.Fatalf("a stale answer moved the host to %s", r.phase)
-	}
-
+	// The session handles its host's messages in order, so the stale
+	// answers are handled before the proof.
 	answer(t, stream, readyFor(p))
 	r := h.waitPhase(host, "stopping")
 	if r.attempt == nil || r.attempt.String() != p.GetAttemptId() || *r.sleepBoot != "boot-1" || *r.preparedVersion != "v1" || r.gpuProven {
@@ -145,6 +163,7 @@ func TestReserveStopsOnlyOnTheAgentsProof(t *testing.T) {
 // A reconnect sends a fresh attempt; the old attempt's answer is stale on
 // the new session, as an answer to a superseded attempt is.
 func TestReserveSupersededAttemptIsStale(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	first := open(t, ctx, h.client)
@@ -159,10 +178,6 @@ func TestReserveSupersededAttemptIsStale(t *testing.T) {
 		t.Fatalf("reconnect sent %v after %v", fresh, old)
 	}
 	answer(t, second, readyFor(old))
-	time.Sleep(300 * time.Millisecond)
-	if r := h.reserveHost(host); r.phase != "preparing" {
-		t.Fatalf("the superseded attempt moved the host to %s", r.phase)
-	}
 	answer(t, second, readyFor(fresh))
 	if r := h.waitPhase(host, "stopping"); r.attempt.String() != fresh.GetAttemptId() {
 		t.Fatalf("stopping under attempt %v", r.attempt)
@@ -170,6 +185,7 @@ func TestReserveSupersededAttemptIsStale(t *testing.T) {
 }
 
 func TestReserveRefusesUnprovenHosts(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	release := compute.AgentRelease{Version: "v2", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100}
 	if err := h.compute.PublishAgentRelease(h.t.Context(), release); err != nil {
@@ -210,6 +226,7 @@ func TestReserveRefusesUnprovenHosts(t *testing.T) {
 }
 
 func TestGPUReserveRecordsItsProof(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	stream := open(t, ctx, h.client)
@@ -242,6 +259,7 @@ func (h *harness) stoppedReserve(host compute.HostID, phase, evidence string, mo
 // memory restored in the same boot or a cold boot in a new one. A host
 // that keeps its reserve mode prepares again.
 func TestResumeSettlesTheSleepAttempt(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	stop := "stop"
 	for _, c := range []struct {
@@ -292,8 +310,7 @@ from hosts where id = $1`, uuid.UUID(host)).Scan(&stopFacts); err != nil {
 				t.Fatalf("image evidence %s, want %s", evidence, c.proven)
 			}
 			// The same report again settles nothing more.
-			openHello(t, ctx, h.client, hello)
-			time.Sleep(300 * time.Millisecond)
+			h.helloSettled(ctx, host, hello)
 			if again := h.reserveHost(host); again.phase != c.phase || *again.outcome != c.outcome {
 				t.Fatalf("a repeated Hello moved the host to %+v", again)
 			}
@@ -305,6 +322,7 @@ from hosts where id = $1`, uuid.UUID(host)).Scan(&stopFacts); err != nil {
 // stays out of placement and prepares to stop again; one whose session only
 // reconnected before its stop stays stopping.
 func TestUnrequestedWakeGoesBackToTheReserve(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	hibernate := "hibernate"
 	for _, c := range []struct {
@@ -330,8 +348,7 @@ func TestUnrequestedWakeGoesBackToTheReserve(t *testing.T) {
 			_ = first.CloseSend()
 			attempt := uuid.New()
 			h.stoppedReserve(host, c.phase, "saved", &hibernate, attempt)
-			openHello(t, ctx, h.client, c.hello(attempt))
-			time.Sleep(300 * time.Millisecond)
+			h.helloSettled(ctx, host, c.hello(attempt))
 			if r := h.waitPhase(host, c.want); c.want == "stopping" && r.attempt == nil {
 				t.Fatal("a reconnect settled the attempt")
 			}
@@ -342,6 +359,7 @@ func TestUnrequestedWakeGoesBackToTheReserve(t *testing.T) {
 // The first session of a launched platform host bought for the reserve
 // prepares instead of serving.
 func TestFirstSessionOfALaunchedHost(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	for _, c := range []struct {
 		name string
@@ -365,6 +383,7 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 // it sends no new Hello: its session ends, and the agent's next Hello
 // settles the resume.
 func TestResumeOfAHostThatNeverStopped(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	stream := open(t, ctx, h.client)
@@ -430,6 +449,7 @@ func nextPrepare(t *testing.T, commands <-chan *hostproto.ServerMessage, within 
 // flight, and a refusal for an update keeps it preparing instead of
 // sending it into service.
 func TestReserveWaitsOutAnAgentUpdate(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	if err := h.compute.PublishAgentRelease(h.t.Context(), compute.AgentRelease{
 		Version: "v2", SHA256: map[string]string{"amd64": strings.Repeat("a", 64)}, RolloutPercent: 100,
@@ -441,7 +461,7 @@ func TestReserveWaitsOutAnAgentUpdate(t *testing.T) {
 	commands := pump(old)
 	h.waitPhase(host, "ready")
 	h.exec("update hosts set phase = 'preparing', phase_at = now(), reserve_mode = 'hibernate' where id = $1", uuid.UUID(host))
-	if p := nextPrepare(t, commands, time.Second); p != nil {
+	if p := nextPrepare(t, commands, 500*time.Millisecond); p != nil {
 		t.Fatalf("asked an updating host to stop: %v", p)
 	}
 	_ = old.CloseSend()

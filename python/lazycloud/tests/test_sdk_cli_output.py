@@ -2,86 +2,14 @@ from __future__ import annotations
 
 import email.message
 import io
-import json
 import sys
 import urllib.error
-from collections.abc import Iterator
 
 import pytest
-import typer
 from lazycloud._shared.http.errors import HttpApiError
-from lazycloud._terminal.streams import console, error_console, set_json_output
 from lazycloud.cli.components.errors import (
     normalize_exception,
 )
-from lazycloud.cli.components.output import CliContextState, print_payload
-from typer.core import TyperCommand
-
-
-@pytest.fixture
-def human_output_mode() -> Iterator[None]:
-    set_json_output(False)
-    yield
-    set_json_output(False)
-
-
-def _context(*, json_output: bool) -> typer.Context:
-    context = typer.Context(TyperCommand(name="test"))
-    context.obj = CliContextState(json=json_output)
-    return context
-
-
-def test_output_channels_preserve_json_cleanliness_and_restore_human_state(
-    capsys: pytest.CaptureFixture[str],
-    human_output_mode: None,
-) -> None:
-    print_payload(_context(json_output=True), {"b": 1, "a": {"z": None, "y": [2, "x"]}})
-    captured = capsys.readouterr()
-    assert captured.out == '{"a": {"y": [2, "x"], "z": null}, "b": 1}\n'
-    assert captured.err == ""
-
-    print_payload(_context(json_output=False), "deployed handler")
-    captured = capsys.readouterr()
-    assert "deployed handler" in captured.out
-    assert captured.err == ""
-
-    print_payload(_context(json_output=False), {"phase": "ready", "attempts": 2})
-    captured = capsys.readouterr()
-    assert "Phase" in captured.out
-    assert "ready" in captured.out
-    assert "{'phase'" not in captured.out
-
-    set_json_output(True)
-    console.print("Tip: run lazycloud cloud validate next.")
-    print_payload(_context(json_output=True), {"phase": "ready"})
-    captured = capsys.readouterr()
-    assert json.loads(captured.out) == {"phase": "ready"}
-    assert "Tip: run lazycloud cloud validate next." in captured.err
-
-    set_json_output(True)
-    set_json_output(False)
-    console.print("human line")
-    captured = capsys.readouterr()
-    assert "human line" in captured.out
-    assert captured.err == ""
-
-    error_console.print("problem detail")
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "problem detail" in captured.err
-
-
-def test_stream_output_preserves_rich_looking_user_text(
-    capsys: pytest.CaptureFixture[str],
-    human_output_mode: None,
-) -> None:
-    from lazycloud.cli.components.output import write_stream
-
-    write_stream("[red]literal[/red]\n")
-
-    captured = capsys.readouterr()
-    assert captured.out == "[red]literal[/red]\n"
-    assert captured.err == ""
 
 
 def _transport_error(body: str, *, status: int, url: str) -> HttpApiError:

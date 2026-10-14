@@ -25,6 +25,7 @@ from lazycloud.cli.ssh import AppOption, WorkspaceOption, cancel_devbox_start, s
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.contracts.api import Devbox, DevboxPhase, DevboxState, PodRole, Resources, SshHost
 from lazycloud.session.agent_login import login_agent
+from lazycloud.session.interrupts import uninterrupted
 from lazycloud.session.ssh import run_ssh
 from lazycloud.terminal import Terminal, humanize_bytes
 
@@ -185,8 +186,11 @@ def start(
     name = _name(ctx)
     client = workloads(workspace=workspace)
     host = _devbox_host(client, name, app)
-    box = client.start_devbox(host.app, host.pod)
+    # Ctrl-C waits for the request, so a start it began is stopped.
+    box, interrupted = uninterrupted(lambda: client.start_devbox(host.app, host.pod))
     try:
+        if interrupted is not None:
+            raise interrupted
         box = _wait_running(client, host, box)
     except KeyboardInterrupt:
         cancel_devbox_start(client, host.app, host.pod)

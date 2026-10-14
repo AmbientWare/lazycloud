@@ -55,7 +55,7 @@ func (q *Queries) DependencyResults(ctx context.Context, taskIds []uuid.UUID) ([
 const failTasks = `-- name: FailTasks :exec
 update tasks
 set status = 'failed', failure = $1, finished_at = now(), current_attempt_id = null
-where id = any($2::uuid[]) and status = 'queued'
+where id = any($2::uuid[])
 `
 
 type FailTasksParams struct {
@@ -63,6 +63,8 @@ type FailTasksParams struct {
 	Ids     []uuid.UUID
 }
 
+// The ids are queued tasks the caller locked or inserted, read by key alone
+// as FailQueuedTasksOfRelease reads them.
 func (q *Queries) FailTasks(ctx context.Context, arg FailTasksParams) error {
 	_, err := q.db.Exec(ctx, failTasks, arg.Failure, arg.Ids)
 	return err
@@ -265,7 +267,7 @@ from (
     where d.depends_on = any($2::uuid[])
     group by d.task_id
 ) c
-where t.id = c.task_id and t.id = any($1::uuid[]) and t.status = 'queued'
+where t.id = c.task_id and t.id = any($1::uuid[])
 returning t.id, t.release_id, t.unmet_dependencies,
           (select octet_length(i.data) from task_inputs i where i.task_id = t.id)::bigint
           + coalesce((select sum(octet_length(r.data))
@@ -286,7 +288,9 @@ type SatisfyDependenciesRow struct {
 	InputBytes        int32
 }
 
-// Each upstream succeeds once, so each dependency row counts once.
+// Each upstream succeeds once, so each dependency row counts once. The
+// dependents are queued tasks the caller locked, read by key alone as
+// FailQueuedTasksOfRelease reads them.
 func (q *Queries) SatisfyDependencies(ctx context.Context, arg SatisfyDependenciesParams) ([]SatisfyDependenciesRow, error) {
 	rows, err := q.db.Query(ctx, satisfyDependencies, arg.Dependents, arg.Upstream)
 	if err != nil {

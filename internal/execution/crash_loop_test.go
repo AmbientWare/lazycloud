@@ -56,6 +56,7 @@ func planPods(t *testing.T, e *Execution) PlanResult {
 // the release keeps no warm minimum. A stop by request or an exit after
 // ready does not count.
 func TestExitsBeforeReadyCountAsStartFailures(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10,
@@ -107,6 +108,7 @@ func TestExitsBeforeReadyCountAsStartFailures(t *testing.T) {
 // After a failed start the next container waits, longer after each
 // consecutive failure, and the plan names when it may start.
 func TestFailedStartsBackOff(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "pod", 600)
@@ -144,6 +146,7 @@ func TestFailedStartsBackOff(t *testing.T) {
 // a starting one drains and its host is told to stop it, and neither an
 // earlier scale nor always-on starts another until the next wake.
 func TestParkStopsStartingAndCrashLoopingPods(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", -1)
@@ -188,8 +191,8 @@ where id = (select id from containers where state = 'pending' order by id limit 
 func podContainerOn(t *testing.T, pool *pgxpool.Pool, f podFixture, host uuid.UUID) ContainerID {
 	t.Helper()
 	var id uuid.UUID
-	if err := pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 500, 1 << 28, now()) returning id`, uuid.UUID(f.workspace), f.release, host).Scan(&id); err != nil {
+	if err := pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 500, 1 << 28, now()) returning id`, uuid.UUID(f.workspace), f.release, host).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return ContainerID(id)
@@ -200,6 +203,7 @@ values ($1, $2, 'starting', $3, 1, 500, 1 << 28, now()) returning id`, uuid.UUID
 // with its error, and a task submitted within the backoff after it fails
 // with that error without another start.
 func TestATaskRetriesAReleaseThatStoppedStarting(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10}`)

@@ -12,6 +12,7 @@ import (
 // TestDisksAreHeldToThePlansAllowance: Free allows no disks, and a paid
 // plan's allowance covers growing one.
 func TestDisksAreHeldToThePlansAllowance(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, diskSpec)
 	container := f.container()
 	if _, err := f.pool.Exec(t.Context(), `

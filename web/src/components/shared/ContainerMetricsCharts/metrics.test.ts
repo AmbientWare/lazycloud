@@ -43,15 +43,11 @@ describe("container metric chart data", () => {
     expect(datum.diskWriteRate).toBe(0);
   });
 
-  it("leaves gaps instead of fake zero rates for samples without an interval", () => {
-    const series = metrics([{}]);
-    const [datum] = buildMetricData(series);
-    expect(datum.networkRecvRate).toBeNull();
-    expect(datum.diskWriteRate).toBeNull();
-  });
-
-  it("keeps the network readout null until interval-bearing samples arrive", () => {
-    expect(latestComputeReadout(buildMetricData(metrics([{}])))).toEqual({
+  it("leaves gaps and no network readout, not fake zero rates, for samples without an interval", () => {
+    const data = buildMetricData(metrics([{}]));
+    expect(data[0].networkRecvRate).toBeNull();
+    expect(data[0].diskWriteRate).toBeNull();
+    expect(latestComputeReadout(data)).toEqual({
       cpu: "0.25 CPU",
       memory: "100.0 MiB",
       network: null,

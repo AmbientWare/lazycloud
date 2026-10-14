@@ -1,15 +1,13 @@
+//go:build hostruntime
+
 package agent
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,319 +26,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
-// dataServer is the edge's side of HostData: each Forward stream the agent
-// opens waits in calls until a test assigns it a request.
-type dataServer struct {
-	hostproto.UnimplementedHostDataServer
-	calls chan *forwardCall
-}
-
-type forwardCall struct {
-	stream hostproto.HostData_ForwardServer
-	done   chan struct{}
-}
-
-func (d *dataServer) Listen(_ *hostproto.ListenRequest, stream hostproto.HostData_ListenServer) error {
-	<-stream.Context().Done()
-	return nil
-}
-
-func (d *dataServer) Forward(stream hostproto.HostData_ForwardServer) error {
-	call := &forwardCall{stream: stream, done: make(chan struct{})}
-	select {
-	case d.calls <- call:
-	case <-stream.Context().Done():
-		return nil
-	}
-	select {
-	case <-call.done:
-	case <-stream.Context().Done():
-	}
-	return nil
-}
-
-// forwarded is what the agent answered on one stream.
-type forwarded struct {
-	status int32
-	body   string
-	err    *hostproto.ForwardError
-}
-
-// forward sends one request on an idle stream and reads the answer.
-func (d *dataServer) forward(t *testing.T, head *hostproto.RequestHead, body string) forwarded {
-	t.Helper()
-	call := d.assign(t, head)
-	defer close(call.done)
-	send := func(m *hostproto.ForwardDown) {
-		if err := call.stream.Send(m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if body != "" {
-		send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Data{Data: []byte(body)}})
-	}
-	send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_End{End: &hostproto.End{}}})
-	var out forwarded
-	var b strings.Builder
-	for {
-		m, err := call.stream.Recv()
-		if err != nil {
-			t.Fatalf("receive response: %v", err)
-		}
-		switch body := m.GetBody().(type) {
-		case *hostproto.ForwardUp_Head:
-			out.status = body.Head.GetStatus()
-		case *hostproto.ForwardUp_Data:
-			b.Write(body.Data)
-		case *hostproto.ForwardUp_Error:
-			out.err = body.Error
-			return out
-		case *hostproto.ForwardUp_End:
-			out.body = b.String()
-			return out
-		}
-	}
-}
-
-// assign sends head on an idle stream of a live agent; streams of a
-// stopped agent may still wait in calls.
-func (d *dataServer) assign(t *testing.T, head *hostproto.RequestHead) *forwardCall {
-	t.Helper()
-	deadline := time.After(30 * time.Second)
-	for {
-		select {
-		case call := <-d.calls:
-			if call.stream.Context().Err() == nil && call.stream.Send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Head{Head: head}}) == nil {
-				return call
-			}
-			close(call.done)
-		case <-deadline:
-			t.Fatal("the agent opened no data stream")
-			return nil
-		}
-	}
-}
-
-// tunnel sends an upgrade request and returns the stream once the agent
-// answered 101, to exchange raw bytes over.
-func (d *dataServer) tunnel(t *testing.T, head *hostproto.RequestHead) *forwardCall {
-	t.Helper()
-	call := d.assign(t, head)
-	t.Cleanup(func() { close(call.done) })
-	m, err := call.stream.Recv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.GetHead().GetStatus() != http.StatusSwitchingProtocols {
-		t.Fatalf("upgrade answered %v", m)
-	}
-	return call
-}
-
-func controlHead(container, method, uri string) *hostproto.RequestHead {
-	return &hostproto.RequestHead{ContainerId: container, Kind: &hostproto.RequestHead_Control{Control: &hostproto.HttpRequest{Method: method, Uri: uri, Host: "container"}}}
-}
-
-func portHead(container string, port int32, uri string, headers ...*hostproto.Header) *hostproto.RequestHead {
-	return &hostproto.RequestHead{ContainerId: container, Kind: &hostproto.RequestHead_Port{Port: &hostproto.PortRequest{
-		Port: port, Http: &hostproto.HttpRequest{Method: http.MethodGet, Uri: uri, Host: "pod.example", Headers: headers},
-	}}}
-}
-
-// newForwardingAgent runs a data link for one started container without
-// Docker, whose control socket a test serves.
-func newForwardingAgent(t *testing.T) (*dataServer, *container) {
-	t.Helper()
-	server := newHostServer()
-	grpcServer, address := server.serve(t, "127.0.0.1:0")
-	conn, err := dialServer(Config{Server: address, ServerPlaintext: true}, server.hostToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := shortDir(t)
-	layers, _ := testLayerSources(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	a := &Agent{
-		cfg:        Config{StateDir: dir, SocketDir: filepath.Join(dir, "s")},
-		log:        slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		host:       hostproto.NewHostServiceClient(conn),
-		layers:     layers,
-		ctx:        ctx,
-		drain:      ctx,
-		containers: map[string]*container{},
-	}
-	c := a.newContainer(uuid.NewString(), "", 1, nil, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
-	c.started = true
-	a.containers[c.id] = c
-	data := &dataLink{a: a, client: hostproto.NewHostDataClient(conn)}
-	a.goOwned(data.run)
-	t.Cleanup(func() {
-		cancel()
-		a.work.Wait()
-		_ = conn.Close()
-		grpcServer.Stop()
-	})
-	if err := os.MkdirAll(c.linkDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return server.data, c
-}
-
-// serveControl serves handler on the container's control socket, as its
-// supervisor does.
-func serveControl(t *testing.T, c *container, handler http.Handler) {
-	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(c.linkDir(), controlSocketName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close() })
-}
-
-// tunnelTo answers a lazycloud-tunnel upgrade by joining the connection to
-// address, as the supervisor's port tunnels do.
-func tunnelTo(t *testing.T, w http.ResponseWriter, r *http.Request, address string) {
-	t.Helper()
-	upstream, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", address)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	conn, buffered, err := http.NewResponseController(w).Hijack()
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	_, _ = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + tunnelProtocol + "\r\n\r\n")
-	_ = buffered.Flush()
-	go func() {
-		_, _ = io.Copy(upstream, buffered)
-		_ = upstream.(*net.TCPConn).CloseWrite()
-	}()
-	_, _ = io.Copy(conn, upstream)
-	_ = conn.Close()
-	_ = upstream.Close()
-}
-
-// Control requests reach the container's control socket with their bodies;
-// port requests reach the port through a supervisor tunnel that later
-// requests reuse, and a client upgrade still tunnels. A refused port, a
-// container not running here and an unstarted one answer NOT_RUNNING, since
-// nothing reached a workload.
-func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
-	data, c := newForwardingAgent(t)
-	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Upgrade") == "echo" {
-			conn, buffered, _ := http.NewResponseController(w).Hijack()
-			_, _ = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
-			_ = buffered.Flush()
-			line, _ := buffered.ReadString('\n')
-			_, _ = conn.Write([]byte("echo " + line))
-			_ = conn.Close()
-			return
-		}
-		_, _ = fmt.Fprintf(w, "port saw %s %s for %s", r.Method, r.URL.RequestURI(), r.Host)
-	}))
-	t.Cleanup(app.Close)
-	_, appPort, _ := net.SplitHostPort(app.Listener.Addr().String())
-	var tunnels atomic.Int32
-	serveControl(t, c, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/ports/"+appPort && r.Header.Get("Upgrade") == tunnelProtocol:
-			tunnels.Add(1)
-			tunnelTo(t, w, r, app.Listener.Addr().String())
-		case strings.HasPrefix(r.URL.Path, "/ports/"):
-			http.Error(w, `{"code":"unavailable","message":"connection refused"}`, http.StatusBadGateway)
-		default:
-			body, _ := io.ReadAll(r.Body)
-			_, _ = fmt.Fprintf(w, "control saw %s %s %s", r.Method, r.URL.RequestURI(), body)
-		}
-	}))
-
-	got := data.forward(t, controlHead(c.id, http.MethodPost, "/files/find?path=/workspace"), `{"pattern":"x"}`)
-	if got.status != http.StatusOK || got.body != `control saw POST /files/find?path=/workspace {"pattern":"x"}` {
-		t.Fatalf("control request: %+v", got)
-	}
-	port, _ := strconvAtoi32(appPort)
-	for range 3 {
-		got = data.forward(t, portHead(c.id, port, "/index.html?q=1"), "")
-		if got.status != http.StatusOK || got.body != "port saw GET /index.html?q=1 for pod.example" {
-			t.Fatalf("port request: %+v", got)
-		}
-	}
-	if n := tunnels.Load(); n != 1 {
-		t.Fatalf("three requests opened %d tunnels", n)
-	}
-
-	call := data.tunnel(t, portHead(c.id, port, "/ws",
-		&hostproto.Header{Name: "Connection", Value: "Upgrade"}, &hostproto.Header{Name: "Upgrade", Value: "echo"}))
-	if err := call.stream.Send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Data{Data: []byte("hello\n")}}); err != nil {
-		t.Fatal(err)
-	}
-	var echoed strings.Builder
-	for !strings.HasSuffix(echoed.String(), "\n") {
-		m, err := call.stream.Recv()
-		if err != nil {
-			t.Fatalf("tunnel: %v after %q", err, echoed.String())
-		}
-		echoed.Write(m.GetData())
-	}
-	if echoed.String() != "echo hello\n" {
-		t.Fatalf("tunnel echoed %q", echoed.String())
-	}
-
-	refused := data.forward(t, portHead(c.id, 1, "/", nil...), "")
-	if refused.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING || !strings.Contains(refused.err.GetMessage(), "connection refused") {
-		t.Fatalf("refused port: %+v", refused)
-	}
-	unknown := data.forward(t, controlHead(uuid.NewString(), http.MethodGet, "/processes"), "")
-	if unknown.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING {
-		t.Fatalf("unknown container: %+v", unknown)
-	}
-	c.mu.Lock()
-	c.started = false
-	c.mu.Unlock()
-	unstarted := data.forward(t, portHead(c.id, port, "/"), "")
-	if unstarted.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING {
-		t.Fatalf("unstarted container: %+v", unstarted)
-	}
-}
-
-// A workload that swaps its supervisor's socket for a symlink reaches
-// nothing through it: on the host the link would lead to another socket.
-func TestSupervisorSocketsAreNeverReachedThroughALink(t *testing.T) {
-	data, c := newForwardingAgent(t)
-	outside := filepath.Join(t.TempDir(), "other.sock")
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", outside)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reached atomic.Int32
-	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		reached.Add(1)
-	})}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close() })
-	if err := os.Symlink(outside, filepath.Join(c.linkDir(), controlSocketName)); err != nil {
-		t.Fatal(err)
-	}
-	for _, head := range []*hostproto.RequestHead{controlHead(c.id, http.MethodGet, "/processes"), portHead(c.id, 8000, "/")} {
-		got := data.forward(t, head, "")
-		if got.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING || !strings.Contains(got.err.GetMessage(), "not a socket") {
-			t.Fatalf("through a link: %+v %v", got, got.err)
-		}
-	}
-	if n := reached.Load(); n != 0 {
-		t.Fatalf("the linked socket answered %d requests", n)
-	}
-}
-
 // The agent's link directory lets a container user other than the agent's
 // create the supervisor's sockets, as when a root agent runs a non-root
 // image.
 func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
+	t.Parallel()
 	_, c := newForwardingAgent(t)
 	l, err := listenLink(t.Context(), c, c.linkDir())
 	if err != nil {
@@ -353,31 +43,6 @@ func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "bound") {
 		t.Fatalf("a non-root container user could not create its socket: %v: %s", err, out)
 	}
-}
-
-// A filesystem archive past what the container can store fails the read.
-func TestFilesystemArchiveStopsAtTheContainersDisks(t *testing.T) {
-	_, c := newForwardingAgent(t)
-	archive := &countingReader{r: strings.NewReader(strings.Repeat("a", 4096)), max: c.archiveBound(map[string]string{"size": "1024"})}
-	if _, err := io.Copy(io.Discard, archive); !errors.Is(err, errArchiveTooLarge) {
-		t.Fatalf("an oversized archive read %d bytes: %v", archive.n, err)
-	}
-}
-
-func strconvAtoi32(s string) (int32, error) {
-	var n int32
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
-}
-
-func (s *hostServer) CompleteSnapshot(_ context.Context, r *hostproto.CompleteSnapshotRequest) (*hostproto.CompleteSnapshotResponse, error) {
-	s.snapshots <- r
-	return &hostproto.CompleteSnapshotResponse{}, nil
-}
-
-func (s *hostServer) CompleteFilesystemImage(_ context.Context, r *hostproto.CompleteFilesystemImageRequest) (*hostproto.CompleteFilesystemImageResponse, error) {
-	s.filesystems <- r
-	return &hostproto.CompleteFilesystemImageResponse{}, nil
 }
 
 // podCommand starts a pod running command in the test image with the test
@@ -394,17 +59,11 @@ func (e *env) podCommand(pod *hostproto.PodWorkload) *hostproto.ServerMessage {
 	}}}
 }
 
-// containerLog joins the output the container logged outside attempts.
-func (s *hostServer) containerLog(container string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return strings.Join(s.containerLogs[container], "\n")
-}
-
 // A pod runs its command in the source workspace: its port answers through
 // the supervisor's tunnel and its files and processes through the control
 // API, and it never claims tasks.
 func TestPodServesItsPortAndControlAPI(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -448,6 +107,7 @@ func TestPodServesItsPortAndControlAPI(t *testing.T) {
 // its output in the container log; an empty command runs the image's own,
 // here python3 reading an empty stdin.
 func TestPodCommandExitReportsItsCode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -481,6 +141,7 @@ func TestPodCommandExitReportsItsCode(t *testing.T) {
 
 // A container learns its workspace from the environment the SDK reads.
 func TestContainersNameTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -502,6 +163,7 @@ func TestContainersNameTheirWorkspace(t *testing.T) {
 // allowing one address opens exactly that once the host reports it, and an
 // update for an exited container is ignored.
 func TestNetworkPolicyBlocksEgressUntilAllowed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -544,6 +206,7 @@ while True:
 // command keeps serving and its SSH server keeps its identity, whose host
 // key the agent kept out of the container's labels.
 func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	first := e.startAgent()
 	session := e.session()
@@ -579,6 +242,7 @@ func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
 // policy is in place before it runs and updates reach it through the
 // holder; a restarted agent adopts both, and a stop removes both.
 func TestCheckpointablePodsShareTheirHoldersNetwork(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	first := e.startAgent()
 	session := e.session()
@@ -672,6 +336,7 @@ const testDockerImage = "docker.io/library/docker:28.5.1-dind@sha256:ea9d20492ca
 // containers, nor one beside a network policy the nested containers would
 // bypass.
 func TestDockerPodsNeedPrivilegeAllowedAndNoPolicy(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent(func(c *Config) { c.OCIRuntime = "runc" })
 	session := e.session()
@@ -697,6 +362,7 @@ func TestDockerPodsNeedPrivilegeAllowedAndNoPolicy(t *testing.T) {
 
 // A pod with docker runs its command against a Docker daemon of its own.
 func TestDockerPodRunsADaemon(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent(func(c *Config) { c.AllowPrivilegedDocker = true })
 	session := e.session()
@@ -747,6 +413,7 @@ func waitLog(t *testing.T, s *hostServer, container, text string) {
 // the container keeps running. A probe that never answers fails the
 // snapshot instead.
 func TestSnapshotWithoutCheckpointSupportIsUnsupported(t *testing.T) {
+	t.Parallel()
 	if testRuntime() != "runc" {
 		t.Skip("this runtime checkpoints")
 	}
@@ -837,6 +504,7 @@ func lastCount(log string) int {
 // restores it, twice on the same host, into new pods whose count resumes
 // past the snapshot's, behind the restored pod's own block policy.
 func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
+	t.Parallel()
 	if testRuntime() != "runsc" {
 		t.Skip("needs LAZYCLOUD_TEST_OCI_RUNTIME=runsc")
 	}
@@ -944,6 +612,7 @@ func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 // An automatic snapshot that does not restore starts the container cold and
 // says so; a requested one fails the start.
 func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -991,6 +660,7 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 // A pod's filesystem becomes an image in the registry with the source
 // image's configuration, and the local copy is gone afterwards.
 func TestPublishFilesystemPushesAnImage(t *testing.T) {
+	t.Parallel()
 	registry := startTestRegistry(t)
 	e := newEnv(t)
 	e.startAgent()
@@ -1060,32 +730,4 @@ func tarOf(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return []byte(b.String())
-}
-
-// The handshake reader keeps bytes the supervisor sent right after its 101.
-func TestPortTunnelKeepsBytesSentWithTheUpgrade(t *testing.T) {
-	socket := filepath.Join(shortDir(t), controlSocketName)
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		_, _ = http.ReadRequest(bufio.NewReader(conn))
-		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: "+tunnelProtocol+"\r\nConnection: Upgrade\r\n\r\nearly")
-		_ = conn.Close()
-	}()
-	conn, err := dialPort(t.Context(), socket, 8000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-	got, _ := io.ReadAll(conn)
-	if string(got) != "early" {
-		t.Fatalf("read %q after the upgrade", got)
-	}
 }

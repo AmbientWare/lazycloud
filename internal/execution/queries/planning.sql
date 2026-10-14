@@ -128,10 +128,11 @@ order by r.id;
 -- name: CreatePendingContainers :many
 -- Placement records the GPU model and whose machine a container got. The
 -- first containers replace those @replaces names, one each.
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
-select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text,
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
+select @workspace_id, r.id, r.workload_id, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text,
        (@replaces::uuid[])[n]
-from generate_series(1, @count::int) n
+from releases r, generate_series(1, @count::int) n
+where r.id = @release_id
 returning id;
 
 -- name: LeavingContainers :many

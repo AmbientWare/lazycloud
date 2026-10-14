@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import threading
 from pathlib import Path
 
 from lazycloud.abstractions.workspace_sync import ContainerWorkspaceSyncer
@@ -8,21 +8,28 @@ from lazycloud.clients.api import ApiClient
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.terminal import Terminal
 
-from tests.api_server import TOKEN, FakeApi, Reply
+from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply
 
 CONTAINER = "0192f0a0-0000-7000-8000-0000000000c1"
 FILES = f"/v1/workspaces/team/containers/{CONTAINER}/files"
 
 
-def _no_content(_: object) -> Reply:
-    return 204, {}, b""
-
-
 def test_workspace_syncer_writes_the_filtered_tree_then_follows_changes(
     tmp_path: Path, fake_api: FakeApi
 ) -> None:
-    fake_api.route("PUT", f"{FILES}/content")(_no_content)
-    fake_api.route("DELETE", FILES)(_no_content)
+    rewritten, deleted = threading.Event(), threading.Event()
+
+    @fake_api.route("PUT", f"{FILES}/content")
+    def write(request: ApiRequest) -> Reply:
+        if request.body == b"print('changed')\n":
+            rewritten.set()
+        return 204, {}, b""
+
+    @fake_api.route("DELETE", FILES)
+    def delete(_: ApiRequest) -> Reply:
+        deleted.set()
+        return 204, {}, b""
+
     source = tmp_path / "source"
     (source / "pkg").mkdir(parents=True)
     (source / "__pycache__").mkdir()
@@ -58,13 +65,13 @@ def test_workspace_syncer_writes_the_filtered_tree_then_follows_changes(
     try:
         (source / "app.py").write_text("print('changed')\n", encoding="utf-8")
         (source / "pkg" / "worker.py").unlink()
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not (
-            fake_api.calls("DELETE", FILES) and len(fake_api.calls("PUT", f"{FILES}/content")) > 2
-        ):
-            time.sleep(0.05)
+        assert rewritten.wait(10) and deleted.wait(10)
     finally:
-        syncer.stop()
+        # A stop that does not wake the follow loop never returns.
+        stopping = threading.Thread(target=syncer.stop, daemon=True)
+        stopping.start()
+        stopping.join(10)
+    assert not stopping.is_alive(), "stop() did not wake the follow loop"
     syncer.raise_if_failed()
 
     assert [r.query["path"] for r in fake_api.calls("DELETE", FILES)] == [["pkg/worker.py"]]

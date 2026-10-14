@@ -16,9 +16,12 @@ import (
 // The platform's ECR login is minted from AWS credentials, reused while it
 // has more than ecrRefresh left and replaced before it expires.
 func TestPlatformECRLoginIsMintedAndReplacedBeforeItExpires(t *testing.T) {
+	t.Parallel()
 	var calls atomic.Int64
 	var lifetime atomic.Int64
-	lifetime.Store(int64(12 * time.Hour))
+	// The response shape of ECR GetAuthorizationToken in the AWS API
+	// reference: a base64 "AWS:<password>" token and its expiry in epoch
+	// seconds.
 	ecr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Amz-Target") != "AmazonEC2ContainerRegistry_V20150921.GetAuthorizationToken" {
 			http.Error(w, "unexpected call", http.StatusBadRequest)
@@ -40,29 +43,22 @@ func TestPlatformECRLoginIsMintedAndReplacedBeforeItExpires(t *testing.T) {
 		},
 	})
 
-	for range 2 {
-		auth, err := login.auth(t.Context())
-		if err != nil {
-			t.Fatal(err)
+	auth := func() string {
+		t.Helper()
+		a, err := login.auth(t.Context())
+		if err != nil || a.Username != "AWS" {
+			t.Fatalf("login %+v: %v", a, err)
 		}
-		if auth.Username != "AWS" || auth.Password != "token-1" {
-			t.Fatalf("login %+v, want the first minted token", auth)
-		}
+		return a.Password
 	}
-	if n := calls.Load(); n != 1 {
-		t.Fatalf("%d token requests for a fresh login, want 1", n)
+	// A token with less than ecrRefresh left is replaced on each use.
+	lifetime.Store(int64(ecrRefresh - time.Minute))
+	if first, second := auth(), auth(); first != "token-1" || second != "token-2" {
+		t.Fatalf("short-lived logins %s then %s, want a new token each time", first, second)
 	}
-
-	// A token with less than ecrRefresh left is replaced.
-	lifetime.Store(int64(time.Hour))
-	login.mu.Lock()
-	login.expires = time.Now().Add(ecrRefresh - time.Minute)
-	login.mu.Unlock()
-	auth, err := login.auth(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if auth.Password != "token-2" || calls.Load() != 2 {
-		t.Fatalf("login %+v after %d requests, want a second token", auth, calls.Load())
+	// A fresh one is reused.
+	lifetime.Store(int64(12 * time.Hour))
+	if first, second := auth(), auth(); first != "token-3" || second != "token-3" || calls.Load() != 3 {
+		t.Fatalf("fresh logins %s then %s after %d requests, want one new token reused", first, second, calls.Load())
 	}
 }

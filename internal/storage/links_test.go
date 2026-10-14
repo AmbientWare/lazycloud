@@ -15,6 +15,7 @@ import (
 // use is presigned afresh; HEAD follows it too. Links the server did not
 // sign, changed ones and expired ones open nothing.
 func TestDownloadLinksLastTheirLifetimeAndOnlyTheirs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -54,14 +55,7 @@ func TestDownloadLinksLastTheirLifetimeAndOnlyTheirs(t *testing.T) {
 
 	token := long.Url[strings.LastIndex(long.Url, "/")+1:]
 	body, signature, _ := strings.Cut(token, ".")
-	second := 1
-	short := read(apitypes.PresignVolumeFileRequestMethodGet, &second)
-	time.Sleep(1100 * time.Millisecond)
-	for name, token := range map[string]string{
-		"forged":  body + ".AAAA",
-		"changed": "e30." + signature,
-		"expired": short.Url[strings.LastIndex(short.Url, "/")+1:],
-	} {
+	for name, token := range map[string]string{"forged": body + ".AAAA", "changed": "e30." + signature} {
 		if _, err := s.OpenLink(ctx, token, false); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s link: %v, want ErrNotFound", name, err)
 		}
@@ -85,7 +79,20 @@ func TestDownloadLinksLastTheirLifetimeAndOnlyTheirs(t *testing.T) {
 			t.Errorf("%s: %d %q, want 404", name, status, body)
 		}
 	}
-	if status, body, _ := get(t, read(apitypes.PresignVolumeFileRequestMethodGet, nil).Url); status != http.StatusOK || string(body) != "replaced" {
+	second := 1
+	short := read(apitypes.PresignVolumeFileRequestMethodGet, &second)
+	current := read(apitypes.PresignVolumeFileRequestMethodGet, nil)
+	if status, body, _ := get(t, current.Url); status != http.StatusOK || string(body) != "replaced" {
 		t.Fatalf("a new link to the new file: %d %q", status, body)
+	}
+
+	// A link opens nothing once the expiry it was given passes; a longer
+	// link to the same file still opens.
+	<-time.After(time.Until(short.ExpiresAt))
+	if _, err := s.OpenLink(ctx, short.Url[strings.LastIndex(short.Url, "/")+1:], false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expired link: %v, want ErrNotFound", err)
+	}
+	if status, body, _ := get(t, current.Url); status != http.StatusOK || string(body) != "replaced" {
+		t.Fatalf("an unexpired link beside an expired one: %d %q", status, body)
 	}
 }

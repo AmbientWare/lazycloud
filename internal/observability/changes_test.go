@@ -14,13 +14,17 @@ import (
 )
 
 func smallHub() observability.ChangesConfig {
-	return observability.ChangesConfig{Retained: 64, Buffer: 8, MaxSubscribers: 10}
+	cfg := observability.DefaultChangesConfig()
+	cfg.Retained, cfg.Buffer, cfg.MaxSubscribers, cfg.MaxPerPrincipal = 64, 8, 10, 10
+	cfg.Reconnect = 10 * time.Millisecond
+	return cfg
 }
 
 // Committed task changes reach the workspace's subscribers once per
 // statement, in commit order; rolled-back ones and other workspaces'
 // changes never do.
 func TestChangeStreamDeliversCommittedChangesOfItsWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 5000}`)
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
 	hub, sub := runHub(t, f.pool, smallHub(), f.workspace)
@@ -60,13 +64,14 @@ func TestChangeStreamDeliversCommittedChangesOfItsWorkspace(t *testing.T) {
 		*cancelled.Changes[0].Status != "cancelled" || cancelled.Seq == created.Seq {
 		t.Fatalf("cancel event %+v", cancelled)
 	}
-	noEvent(t, other, 200*time.Millisecond)
+	f.quiet(other, otherWS)
 }
 
 // A reconnect naming the last event it saw receives what followed; one
 // naming an event the hub no longer holds, or a subscriber that falls
 // behind, is told to reset.
 func TestChangeStreamResumesAfterLastEventIDOrResets(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 5000}`)
 	hub, sub := runHub(t, f.pool, smallHub(), f.workspace)
 
@@ -120,6 +125,7 @@ func TestChangeStreamResumesAfterLastEventIDOrResets(t *testing.T) {
 // A statement that changes thousands of rows sends one notification under
 // PostgreSQL's 8000-byte limit, grouped with a count.
 func TestLargeStatementsPublishGroupedChanges(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 5000}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
 
@@ -144,6 +150,7 @@ func TestLargeStatementsPublishGroupedChanges(t *testing.T) {
 
 // Containers, apps and deployments publish their state changes too.
 func TestContainerAppAndDeploymentChangesArePublished(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 100}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
 
@@ -171,13 +178,14 @@ func TestContainerAppAndDeploymentChangesArePublished(t *testing.T) {
 	}
 	// Writes that change no published state send nothing.
 	f.exec1("update workloads set next_version = next_version + 1 where id = $1", f.workload)
-	noEvent(t, sub, 200*time.Millisecond)
+	f.quiet(sub, f.workspace)
 }
 
 // A claim sends no notification, so claims never queue on PostgreSQL's
 // notification lock; the started tasks reach the stream coalesced, with
 // their current status.
 func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 100}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
 	host, container := f.placedContainer(f.release)
@@ -185,7 +193,7 @@ func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
 	task := f.submit(1)[0]
 	nextEvent(t, sub) // the submit
 	claimed := f.claim(host, container)
-	noEvent(t, sub, 300*time.Millisecond)
+	f.quiet(sub, f.workspace)
 
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
@@ -201,6 +209,7 @@ func TestClaimsPublishStartedTasksOffTheClaimTransaction(t *testing.T) {
 // volume, a created disk or its holder's failure, and one usage change per
 // workspace for each batch of charges.
 func TestVolumeAndUsageChangesArePublished(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
 
@@ -249,6 +258,7 @@ from workspace_members m, generate_series(1, 3) g where m.workspace_id = $1`, uu
 // A batch of request records sends one change per deployment with its
 // count; a batch written again records nothing and sends nothing.
 func TestRequestRecordsPublishOneChangePerDeployment(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, _, api, apiRelease := f.addFunction("acme", "web", "api", `{}`)
 	_, sub := runHub(t, f.pool, smallHub(), f.workspace)
@@ -275,5 +285,5 @@ on conflict (id) do nothing`
 	}
 
 	f.exec1(insert, uuid.UUID(f.workspace), f.workload, f.release, api, apiRelease)
-	noEvent(t, sub, 200*time.Millisecond)
+	f.quiet(sub, f.workspace)
 }

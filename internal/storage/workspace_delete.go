@@ -15,7 +15,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// DeleteWorkspaceStorage deletes up to prefixChunk of the workspace's
+// DeleteWorkspaceStorage deletes up to Config.DeleteChunk of the workspace's
 // objects, with their multipart uploads: first those under its prefix of
 // the platform bucket, then those in its workspace bucket, in the platform
 // store or its connected account. Once that bucket is empty it deletes the

@@ -113,18 +113,18 @@ func (q *Queries) ContainerRoute(ctx context.Context, id uuid.UUID) (ContainerRo
 
 const createPendingPodContainers = `-- name: CreatePendingPodContainers :many
 insert into containers (
-    workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
     keep_warm_seconds, block_network, allow_list, traceparent
 )
-select $1, $2::uuid, 'pending', 1, $3, $4, $5, $6,
-       $7, $8, $9::text[], $10::text
-from generate_series(1, $11::int)
+select $1, r.id, r.workload_id, 'pending', 1, $2, $3, $4, $5,
+       $6, $7, $8::text[], $9::text
+from releases r, generate_series(1, $10::int)
+where r.id = $11
 returning id
 `
 
 type CreatePendingPodContainersParams struct {
 	WorkspaceID     uuid.UUID
-	ReleaseID       uuid.UUID
 	CpuMillis       cpu.Millis
 	MemoryBytes     int64
 	GpuCount        int32
@@ -134,12 +134,12 @@ type CreatePendingPodContainersParams struct {
 	AllowList       []string
 	Traceparent     *string
 	Count           int32
+	ReleaseID       uuid.UUID
 }
 
 func (q *Queries) CreatePendingPodContainers(ctx context.Context, arg CreatePendingPodContainersParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, createPendingPodContainers,
 		arg.WorkspaceID,
-		arg.ReleaseID,
 		arg.CpuMillis,
 		arg.MemoryBytes,
 		arg.GpuCount,
@@ -149,6 +149,7 @@ func (q *Queries) CreatePendingPodContainers(ctx context.Context, arg CreatePend
 		arg.AllowList,
 		arg.Traceparent,
 		arg.Count,
+		arg.ReleaseID,
 	)
 	if err != nil {
 		return nil, err
@@ -390,22 +391,20 @@ func (q *Queries) ExposePort(ctx context.Context, arg ExposePortParams) ([]int32
 
 const insertInstance = `-- name: InsertInstance :one
 insert into containers (
-    workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
     purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container,
     traceparent
 )
-values (
-    $1, $2, 'pending', 1, $3, $4, $5, $6,
-    $7, $8, $9::text[], $10,
-    $11, $12::text[], $13::int[], $14,
-    $15::text
-)
+select $1, r.id, r.workload_id, 'pending', 1, $2, $3, $4, $5,
+       $6, $7, $8::text[], $9,
+       $10, $11::text[], $12::int[], $13,
+       $14::text
+from releases r where r.id = $15
 returning id, created_at
 `
 
 type InsertInstanceParams struct {
 	WorkspaceID        uuid.UUID
-	ReleaseID          *uuid.UUID
 	CpuMillis          cpu.Millis
 	MemoryBytes        int64
 	GpuCount           int32
@@ -419,6 +418,7 @@ type InsertInstanceParams struct {
 	ExposedPorts       []int32
 	CreatedByContainer *uuid.UUID
 	Traceparent        *string
+	ReleaseID          uuid.UUID
 }
 
 type InsertInstanceRow struct {
@@ -429,7 +429,6 @@ type InsertInstanceRow struct {
 func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) (InsertInstanceRow, error) {
 	row := q.db.QueryRow(ctx, insertInstance,
 		arg.WorkspaceID,
-		arg.ReleaseID,
 		arg.CpuMillis,
 		arg.MemoryBytes,
 		arg.GpuCount,
@@ -443,6 +442,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.ExposedPorts,
 		arg.CreatedByContainer,
 		arg.Traceparent,
+		arg.ReleaseID,
 	)
 	var i InsertInstanceRow
 	err := row.Scan(&i.ID, &i.CreatedAt)

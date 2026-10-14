@@ -108,6 +108,7 @@ func (b *browser) signIn(returnTo string, account identitytest.Account) string {
 }
 
 func TestBrowserSessionAndDeviceLogin(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	b := e.browser()
 	landed := b.signIn("/activate?code=BCDF-GHJK", identitytest.Account{ID: 42, Login: "dana", Name: "Dana", Email: "dana@example.com", Verified: true})
@@ -187,6 +188,7 @@ func TestBrowserSessionAndDeviceLogin(t *testing.T) {
 }
 
 func TestSignInFailuresRedirect(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	b := e.browser()
 	cases := []struct{ path, want string }{
@@ -218,6 +220,7 @@ func TestSignInFailuresRedirect(t *testing.T) {
 }
 
 func TestIdentityOperationsOverHTTP(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var apiErr apitypes.Error
 	if status := e.do("GET", "/v1/tokens", "", nil, &apiErr); status != 401 || apiErr.Code != apitypes.Unauthenticated {
@@ -272,6 +275,7 @@ func TestIdentityOperationsOverHTTP(t *testing.T) {
 }
 
 func TestResendWebhook(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	if _, err := e.pool.Exec(t.Context(), `insert into email_outbox (recipient, subject, html, body_text, state, provider_message_id, settled_at)
 		values ('a@example.com', 's', 'h', 't', 'sent', 're_1', now())`); err != nil {

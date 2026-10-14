@@ -13,6 +13,7 @@ import (
 // Deployed URLs carry these labels, so the same identities must keep
 // minting them.
 func TestSubdomainLabelsAreStable(t *testing.T) {
+	t.Parallel()
 	ws := uuid.MustParse("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")
 	cases := []struct {
 		app, name string
@@ -42,6 +43,7 @@ func endpoint(name string, http apitypes.HttpSpec) apitypes.WorkloadSpec {
 }
 
 func TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 
@@ -97,6 +99,7 @@ func TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain(t *testing.T) {
 }
 
 func TestDeployRejectsRoutesAndMethodsOnASGI(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	route := "/api"
@@ -110,6 +113,7 @@ func TestDeployRejectsRoutesAndMethodsOnASGI(t *testing.T) {
 }
 
 func TestDeployCustomDomainNeedsAnOwnerRegistrationAndOneDeployment(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	domain := "api.acme.com"

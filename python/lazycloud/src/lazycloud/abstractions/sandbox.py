@@ -60,6 +60,7 @@ from lazycloud.contracts.api import SandboxStats as SandboxStatsResponse
 from lazycloud.control import ControlClientConfigMixin, workloads_client
 from lazycloud.exceptions import SdkError
 from lazycloud.json_contracts import validate_json_object
+from lazycloud.session.interrupts import uninterrupted
 from lazycloud.session.task import retry_transient
 from lazycloud.terminal import Terminal
 
@@ -1656,8 +1657,10 @@ class Sandbox(ControlClientConfigMixin):
                 self.checkpoint_id, timeout_seconds=timeout_seconds
             )
         selected_stub_id = stub_id or self.stub_id or self.prepare()
-        response = self._create_instance(CreateInstanceRequest(release_id=UUID(selected_stub_id)))
-        return self._instance_from_create_response(response, timeout_seconds=timeout_seconds)
+        return self._create_ready_instance(
+            CreateInstanceRequest(release_id=UUID(selected_stub_id)),
+            timeout_seconds=timeout_seconds,
+        )
 
     def create_from_memory_snapshot(
         self,
@@ -1668,8 +1671,9 @@ class Sandbox(ControlClientConfigMixin):
     ) -> SandboxInstance:
         """Start a sandbox from a memory snapshot; it runs the release the snapshot was taken of."""
         del stub_id
-        response = self._create_instance(CreateInstanceRequest(snapshot_id=UUID(snapshot_id)))
-        return self._instance_from_create_response(response, timeout_seconds=timeout_seconds)
+        return self._create_ready_instance(
+            CreateInstanceRequest(snapshot_id=UUID(snapshot_id)), timeout_seconds=timeout_seconds
+        )
 
     def connect(
         self,
@@ -1741,11 +1745,20 @@ class Sandbox(ControlClientConfigMixin):
             return self.control_client
         return WorkloadsClient(self.control_client.api, workspace)
 
-    def _create_instance(self, request: CreateInstanceRequest) -> Instance:
+    def _create_ready_instance(
+        self, request: CreateInstanceRequest, *, timeout_seconds: float | None
+    ) -> SandboxInstance:
+        """Create the container and wait until it is ready; Ctrl-C terminates it."""
         try:
-            return self.control_client.create_instance(request)
+            # Ctrl-C waits for the request, so a container it created is terminated.
+            response, interrupted = uninterrupted(
+                lambda: self.control_client.create_instance(request)
+            )
         except SdkError as exc:
             raise SandboxConnectionError(f"failed to create sandbox: {exc}") from exc
+        if interrupted is not None:
+            self._raise_interrupted_create(str(response.id), interrupted)
+        return self._instance_from_create_response(response, timeout_seconds=timeout_seconds)
 
     def _instance_from_create_response(
         self,
@@ -1833,10 +1846,11 @@ class Sandbox(ControlClientConfigMixin):
 
     def _raise_interrupted_create(self, container_id: str, interruption: BaseException) -> Never:
         try:
-            self._terminate(container_id)
+            # A further Ctrl-C waits for the termination already under way.
+            _, again = uninterrupted(lambda: self._terminate(container_id))
         except Exception as cleanup_error:
             raise interruption from cleanup_error
-        raise interruption
+        raise again or interruption
 
     def _raise_failed_create(
         self,
@@ -1844,7 +1858,8 @@ class Sandbox(ControlClientConfigMixin):
         readiness_error: SandboxConnectionError,
     ) -> Never:
         try:
-            self._terminate(container_id)
+            # Ctrl-C waits for the termination, then interrupts.
+            _, interrupted = uninterrupted(lambda: self._terminate(container_id))
         except (OSError, RuntimeError) as cleanup_error:
             raise SandboxConnectionError(
                 f"{readiness_error}; failed to terminate sandbox {container_id}: "
@@ -1853,6 +1868,8 @@ class Sandbox(ControlClientConfigMixin):
                 state=readiness_error.state,
                 cleanup_error=cleanup_error,
             ) from readiness_error
+        if interrupted is not None:
+            raise interrupted from readiness_error
         raise readiness_error
 
 

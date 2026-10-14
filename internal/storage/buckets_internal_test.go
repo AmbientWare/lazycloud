@@ -27,6 +27,7 @@ import (
 // 12-digit account id and any workspace id make a valid S3 bucket name
 // within 63 characters, distinct for every account and workspace.
 func TestBucketNamesFitS3(t *testing.T) {
+	t.Parallel()
 	prefix := strings.Repeat("p", maxPrefix)
 	if !prefixPattern.MatchString(prefix) || prefixPattern.MatchString(prefix+"p") {
 		t.Fatalf("prefix pattern does not stop at %d characters", maxPrefix)
@@ -54,6 +55,7 @@ func TestBucketNamesFitS3(t *testing.T) {
 // prefix, without one. Each holds only on a bucket the expected account
 // owns, so a bucket of the name in another account is out of reach.
 func TestHostPolicyReachesOnlyVolumeAndDiskObjects(t *testing.T) {
+	t.Parallel()
 	encoded, err := json.Marshal(hostPolicy("lc-ws-1", "123456789012"))
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +104,7 @@ func TestHostPolicyReachesOnlyVolumeAndDiskObjects(t *testing.T) {
 // an owner names it, presigned URLs included, except CreateBucket, which
 // S3 does not accept it on.
 func TestRequestsNameTheBucketOwner(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	owners := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +147,7 @@ func TestRequestsNameTheBucketOwner(t *testing.T) {
 // in its region, addressed by subdomain unless forced path-style or its
 // name holds a dot; deploy refuses an AWS bucket without a region.
 func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		endpoint, region, bucket string
 		force                    bool
@@ -174,6 +178,7 @@ func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 // prefix of key segments each ending in /, and refuses one that is
 // absolute, unterminated, or holds an empty, . or .. segment.
 func TestCloudBucketPrefixesStayBelowTheRoot(t *testing.T) {
+	t.Parallel()
 	for prefix, ok := range map[string]bool{
 		"": true, "data/": true, "data/2026/": true, "a.b/..c/": true,
 		"data": false, "/data/": false, "data//x/": false, "./": false, "data/./": false, "../": false, "data/../x/": false, "/": false,
@@ -192,6 +197,7 @@ func TestCloudBucketPrefixesStayBelowTheRoot(t *testing.T) {
 // *StoreRefusedError with its code; throttling, a timeout, a 5xx or a
 // failure to reach the store stays a plain error the caller retries.
 func TestOnlyTheStoresLastingRefusalsAreTyped(t *testing.T) {
+	t.Parallel()
 	aws := func(status int, code string) error {
 		return fmt.Errorf("create workspace bucket: %w", &smithy.OperationError{ServiceID: "S3", OperationName: "CreateBucket", Err: &awshttp.ResponseError{
 			ResponseError: &smithyhttp.ResponseError{

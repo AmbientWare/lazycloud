@@ -247,7 +247,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 		check := false
 		var recheck <-chan time.Time
 		if !any {
-			if wait := load.failureCheckIn(time.Now()); wait > 0 {
+			if wait := load.failureCheckIn(time.Now(), e.failureCheck); wait > 0 {
 				recheck = time.After(wait)
 			} else {
 				check = true

@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -16,9 +18,13 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -34,24 +40,23 @@ def hits() -> int:
     count = int(HITS.read_text()) + 1 if HITS.exists() else 1
     HITS.write_text(str(count))
     return count
-
-
-def peek() -> int:
-    return int(HITS.read_text())
 `
 
 // An agent of the release this change replaces, serving a workload that
 // holds a volume, updates itself to this tree's release when it becomes
-// the target. The workload's volume keeps its data through the update, and
-// a new container of the workspace mounts the same volume beside it.
+// the target. The workload's volume keeps its data through the update. A
+// redeploy then hands the volume over: the new release's container mounts it
+// beside the old one, reads its writes, and keeps working once the replaced
+// container and its mount stop.
 func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
+	t.Parallel()
 	old := oldRelease(t)
 	dist := t.TempDir()
+	head := offerHead(t, dist)
 	p := startServer(t, serverOptions{dist: dist})
 	if p.geesefs == "" {
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
 	}
-	head := buildRelease(t, dist)
 	agent := p.startHostAgent(p.installRelease(old))
 	p.awaitHost()
 	if v := p.agentVersion(); v != old.version {
@@ -63,22 +68,35 @@ func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	keepWarm := 600
 	live.KeepWarmSeconds = &keepWarm
 	live.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
-	p.deploy("live", live)
+	first := p.deploy("live", live)
 	hits := p.describe("live", apitypes.WorkloadKindEndpoint, "hits").Url
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "1" {
 		t.Fatalf("first request on the old agent: %d %s", status, body)
 	}
 
 	p.publish(head)
-	p.awaitAgentVersion(head.version, 3*time.Minute)
+	waitFor(t, "the host to run "+head.version, func() bool { return p.agentVersion() == head.version })
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "2" {
 		t.Fatalf("request after the update: %d %s", status, body)
 	}
-	peek := endpointSpec(source, "peek", "app:peek", "/")
-	peek.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
-	p.deploy("second", peek)
-	if status, _, body := p.call(http.MethodGet, p.describe("second", apitypes.WorkloadKindEndpoint, "peek").Url, ""); status != http.StatusOK || body != "2" {
-		t.Fatalf("second start on the updated agent: %d %s", status, body)
+
+	var replaced uuid.UUID
+	if err := p.pool.QueryRow(t.Context(), `select id from containers where release_id = $1 and state <> 'stopped'`, first.Releases[0].Id).Scan(&replaced); err != nil {
+		t.Fatal(err)
+	}
+	timeout := 90
+	live.TimeoutSeconds = &timeout
+	redeployed := p.deploy("live", live).Releases[0].Id
+	next := p.describe("live", apitypes.WorkloadKindEndpoint, "hits").ReleaseUrl
+	if status, _, body := p.call(http.MethodGet, next, ""); status != http.StatusOK || body != "3" {
+		t.Fatalf("the redeployed release beside the old one: %d %s", status, body)
+	}
+	p.awaitGone(replaced)
+	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "4" {
+		t.Fatalf("the redeployed release after the old one stopped: %d %s", status, body)
+	}
+	if started := p.containersOf(redeployed); started != 1 {
+		t.Fatalf("the redeployed release started %d containers; the handover should leave its first running", started)
 	}
 	agent.stop()
 }
@@ -87,13 +105,14 @@ func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 // target moved on, as a reserve resumed from an older release does, takes
 // no work until it runs the target, then runs it.
 func TestAnOldAgentRestartingAfterTheTargetChangedTakesNoWorkUntilItUpdates(t *testing.T) {
+	t.Parallel()
 	old := oldRelease(t)
 	dist := t.TempDir()
+	head := offerHead(t, dist)
 	p := startServer(t, serverOptions{dist: dist})
 	if p.geesefs == "" {
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
 	}
-	head := buildRelease(t, dist)
 	root, state := p.installRelease(old)
 	agent := p.startHostAgent(root, state)
 	p.awaitHost()
@@ -148,6 +167,7 @@ type release struct {
 	version string
 	dir     string
 	sha256  string
+	archive []byte
 }
 
 // oldRelease is the agent release this change replaces, built from the
@@ -165,21 +185,31 @@ func oldRelease(t *testing.T) release {
 	return release{version: strings.TrimSpace(string(out)), dir: dir}
 }
 
-// buildRelease builds this tree's agent and supervisor as a new release
-// and writes its archive into dist as the API serves it.
-func buildRelease(t *testing.T, dist string) release {
-	t.Helper()
+// headRelease is this tree's agent and supervisor as a release with its
+// archive, built once for every test that offers it.
+var headRelease = sync.OnceValues(buildHead) //nolint:gochecknoglobals // Built once per test binary.
+
+func buildHead() (release, error) {
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
-	r := release{version: "head-" + hex.EncodeToString(suffix), dir: t.TempDir()}
-	build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", filepath.Join(r.dir, "lazycloud-agent"), "../cmd/agent")
+	r := release{version: "head-" + hex.EncodeToString(suffix), dir: filepath.Join(filepath.Dir(supervisorBinary), "head")}
+	if err := os.MkdirAll(r.dir, 0o755); err != nil { //nolint:gosec // Test files.
+		return r, err
+	}
+	build := exec.CommandContext(context.Background(), "go", "build", "-trimpath", "-o", filepath.Join(r.dir, "lazycloud-agent"), "../cmd/agent")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build the agent: %v\n%s", err, out)
+		return r, fmt.Errorf("build the agent: %w\n%s", err, out)
 	}
-	copyFile(t, supervisorBinary, filepath.Join(r.dir, "supervisor"))
-	if err := os.WriteFile(filepath.Join(r.dir, "VERSION"), []byte(r.version+"\n"), 0o644); err != nil { //nolint:gosec // The release's version.
-		t.Fatal(err)
+	supervisor, err := os.ReadFile(supervisorBinary)
+	if err != nil {
+		return r, err
+	}
+	files := map[string][]byte{"VERSION": []byte(r.version + "\n"), "supervisor": supervisor}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(r.dir, name), data, 0o755); err != nil { //nolint:gosec // The release's files.
+			return r, err
+		}
 	}
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
@@ -187,25 +217,37 @@ func buildRelease(t *testing.T, dist string) release {
 	for _, name := range []string{"VERSION", "lazycloud-agent", "supervisor"} {
 		data, err := os.ReadFile(filepath.Join(r.dir, name)) //nolint:gosec // The test's own build.
 		if err != nil {
-			t.Fatal(err)
+			return r, err
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
-			t.Fatal(err)
+			return r, err
 		}
 		if _, err := tw.Write(data); err != nil {
-			t.Fatal(err)
+			return r, err
 		}
 	}
 	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
-		t.Fatal(err)
+		return r, err
 	}
 	sum := sha256.Sum256(archive.Bytes())
 	r.sha256 = hex.EncodeToString(sum[:])
+	r.archive = archive.Bytes()
+	return r, nil
+}
+
+// offerHead writes the head release's archive into dist as the API serves
+// it, and returns the release.
+func offerHead(t *testing.T, dist string) release {
+	t.Helper()
+	r, err := headRelease()
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dist, r.version, compute.ArchiveName(goruntime.GOARCH))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // Test files.
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, archive.Bytes(), 0o644); err != nil { //nolint:gosec // Test files.
+	if err := os.WriteFile(path, r.archive, 0o644); err != nil { //nolint:gosec // Test files.
 		t.Fatal(err)
 	}
 	return r
@@ -313,12 +355,32 @@ func (p *platform) agentVersion() string {
 	return version
 }
 
-// awaitAgentVersion waits until the online host runs version.
-func (p *platform) awaitAgentVersion(version string, within time.Duration) {
+// awaitGone waits until the host runs nothing of container: neither its
+// workload nor its volume mounts.
+func (p *platform) awaitGone(container uuid.UUID) {
 	p.t.Helper()
-	for deadline := time.Now().Add(within); p.agentVersion() != version; time.Sleep(200 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			p.t.Fatalf("the host runs %s %s after the target became %s", p.agentVersion(), within, version)
-		}
+	docker, err := client.New(client.FromEnv)
+	if err != nil {
+		p.t.Fatal(err)
 	}
+	defer func() { _ = docker.Close() }()
+	waitFor(p.t, "the host to remove "+container.String()+" and its mounts", func() bool {
+		list, err := docker.ContainerList(p.t.Context(), client.ContainerListOptions{
+			All: true, Filters: client.Filters{}.Add("label", "lazycloud.container-id="+container.String()),
+		})
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		return len(list.Items) == 0
+	})
+}
+
+// containersOf counts the containers release ever had.
+func (p *platform) containersOf(release uuid.UUID) int {
+	p.t.Helper()
+	var n int
+	if err := p.pool.QueryRow(p.t.Context(), `select count(*) from containers where release_id = $1`, release).Scan(&n); err != nil {
+		p.t.Fatal(err)
+	}
+	return n
 }

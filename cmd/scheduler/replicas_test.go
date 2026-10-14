@@ -10,17 +10,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
 const (
-	// settle lets a replica's start-up passes and first wakes finish.
-	settle = 2 * time.Second
-	// window is how long idle passes are counted.
+	// window is how long idle passes are counted: a cycle of the 5-second
+	// loops, so a replica that runs timed passes runs some.
 	window = 6 * time.Second
-	// idlePassLimit bounds idle passes a second across the deployment;
-	// running each loop every second makes over six.
+	// idlePassLimit bounds the idle passes a second across the deployment;
+	// running each quiet loop every second makes over six.
 	idlePassLimit = 1.5
+	// quietPoll is how long the replicas must run no pass for their start-up
+	// and leadership passes to count as done.
+	quietPoll = 300 * time.Millisecond
 )
 
 // An idle scheduler runs few passes, and a second replica adds none: only
@@ -35,7 +39,6 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 2)
 	var metrics []string
-	rates := make([]float64, 0, 2)
 	for range 2 {
 		health, scrape := freeAddr(t), freeAddr(t)
 		t.Setenv("LAZYCLOUD_HEALTH_ADDR", health)
@@ -45,19 +48,18 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 		// pass of every loop.
 		waitOK(t, "http://"+health+"/readyz")
 		metrics = append(metrics, "http://"+scrape+"/metrics")
-		time.Sleep(settle)
-		before := passes(t, metrics)
-		time.Sleep(window)
-		rates = append(rates, (passes(t, metrics)-before)/window.Seconds())
 	}
-	one, two := rates[0], rates[1]
-	t.Logf("idle passes a second: %.2f with one replica, %.2f with two", one, two)
-	if one > idlePassLimit {
-		t.Errorf("one idle replica runs %.2f passes a second, over %.1f", one, idlePassLimit)
+	before := settled(t, pool, metrics)
+	time.Sleep(window)
+	after := passes(t, metrics)
+	ran := [2]float64{after[0] - before[0], after[1] - before[1]}
+	t.Logf("idle passes in %s: %v by replica", window, ran)
+	if rate := (ran[0] + ran[1]) / window.Seconds(); rate > idlePassLimit {
+		t.Errorf("two idle replicas run %.2f passes a second, over %.1f", rate, idlePassLimit)
 	}
-	// The 5-second host loss loop lands in a window once or twice.
-	if two > one+0.5 {
-		t.Errorf("a second replica raised idle passes from %.2f to %.2f a second", one, two)
+	// Only the leader runs timed passes; a wake alone runs one elsewhere.
+	if min(ran[0], ran[1]) > 1 {
+		t.Errorf("both replicas ran idle passes, %v in %s", ran, window)
 	}
 
 	cancel()
@@ -73,11 +75,31 @@ func TestIdlePassesDoNotGrowWithReplicas(t *testing.T) {
 	}
 }
 
-// passes sums the finished passes the replicas behind urls report.
-func passes(t *testing.T, urls []string) float64 {
+// settled waits until a replica leads and the replicas behind urls run no
+// pass for quietPoll: a replica runs every loop when it takes the lead and
+// again when it finds no live work. It returns their finished passes.
+func settled(t *testing.T, pool *pgxpool.Pool, urls []string) [2]float64 {
 	t.Helper()
-	total := 0.0
-	for _, url := range urls {
+	for led := false; !led; time.Sleep(10 * time.Millisecond) {
+		if err := pool.QueryRow(t.Context(), "select exists (select 1 from pg_locks where locktype = 'advisory' and granted)").Scan(&led); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for before := passes(t, urls); ; {
+		time.Sleep(quietPoll)
+		now := passes(t, urls)
+		if now == before {
+			return now
+		}
+		before = now
+	}
+}
+
+// passes is the finished passes each replica behind urls reports.
+func passes(t *testing.T, urls []string) [2]float64 {
+	t.Helper()
+	var out [2]float64
+	for i, url := range urls {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -97,12 +119,12 @@ func passes(t *testing.T, urls []string) float64 {
 			if err != nil {
 				t.Fatal(err)
 			}
-			total += n
+			out[i] += n
 		}
 		_ = resp.Body.Close()
 		if err := scanner.Err(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return total
+	return out
 }

@@ -42,16 +42,16 @@ func (q *Queries) CancelQueuedTasks(ctx context.Context, ids []uuid.UUID) ([]uui
 }
 
 const createPendingContainers = `-- name: CreatePendingContainers :many
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
-select $1, $2::uuid, 'pending', $3, $4, $5, $6, $7, $8::text,
-       ($9::uuid[])[n]
-from generate_series(1, $10::int) n
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
+select $1, r.id, r.workload_id, 'pending', $2, $3, $4, $5, $6, $7::text,
+       ($8::uuid[])[n]
+from releases r, generate_series(1, $9::int) n
+where r.id = $10
 returning id
 `
 
 type CreatePendingContainersParams struct {
 	WorkspaceID uuid.UUID
-	ReleaseID   uuid.UUID
 	Slots       int32
 	CpuMillis   cpu.Millis
 	MemoryBytes int64
@@ -60,6 +60,7 @@ type CreatePendingContainersParams struct {
 	Traceparent *string
 	Replaces    []uuid.UUID
 	Count       int32
+	ReleaseID   uuid.UUID
 }
 
 // Placement records the GPU model and whose machine a container got. The
@@ -67,7 +68,6 @@ type CreatePendingContainersParams struct {
 func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePendingContainersParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, createPendingContainers,
 		arg.WorkspaceID,
-		arg.ReleaseID,
 		arg.Slots,
 		arg.CpuMillis,
 		arg.MemoryBytes,
@@ -76,6 +76,7 @@ func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePending
 		arg.Traceparent,
 		arg.Replaces,
 		arg.Count,
+		arg.ReleaseID,
 	)
 	if err != nil {
 		return nil, err

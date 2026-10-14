@@ -15,8 +15,8 @@ import (
 func (h *harness) replicate(container uuid.UUID, n int) {
 	h.t.Helper()
 	h.exec(`
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select workspace_id, release_id, 'starting', host_id, slots, cpu_millis, memory_bytes, now()
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+select workspace_id, release_id, (select workload_id from releases where id = release_id), 'starting', host_id, slots, cpu_millis, memory_bytes, now()
 from containers, generate_series(1, $2) where id = $1`, container, n)
 }
 
@@ -25,6 +25,7 @@ from containers, generate_series(1, $2) where id = $1`, container, n)
 // image as for one, their secrets among them, and sending the starts
 // adds only a fixed cost per container.
 func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
+	t.Parallel()
 	sending1, waiting1 := syncStatements(t, 1)
 	sending2, _ := syncStatements(t, 2)
 	sending4, waiting4 := syncStatements(t, 4)

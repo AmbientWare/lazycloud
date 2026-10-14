@@ -26,6 +26,7 @@ type policyStatement struct {
 // where it writes. Logins are reused per access while they outlast the
 // command, and never past the session.
 func TestHostLoginsAreScopedToTheCommandsRepositories(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var policies []string
 	sessionEnds := time.Now().Add(time.Hour).UTC()
@@ -132,6 +133,7 @@ func TestHostLoginsAreScopedToTheCommandsRepositories(t *testing.T) {
 }
 
 func TestRepositoryOfAReference(t *testing.T) {
+	t.Parallel()
 	c := Config{Registry: "123456789012.dkr.ecr.us-east-2.amazonaws.com", Repository: "lazycloud/workload-images"}
 	for reference, want := range map[string]string{
 		c.Registry + "/lazycloud/workload-images/images/ab@sha256:00":     "lazycloud/workload-images/images/ab",

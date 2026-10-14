@@ -11,6 +11,7 @@ import (
 // created; a caller cannot send a reference, and a later publish of the image
 // does not change the release.
 func TestDeployPinsTheImageReference(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := t.Context()
 	first := "registry.example.com/lazycloud/images@sha256:" + strings.Repeat("1", 64)

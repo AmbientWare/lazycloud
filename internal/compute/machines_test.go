@@ -51,6 +51,7 @@ func gpu1(t *testing.T, o owners, account identity.UserID) *compute.Machine {
 }
 
 func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -107,6 +108,7 @@ func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
 }
 
 func TestMachineFailingAPreflightCheckNeverTakesWork(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -154,6 +156,7 @@ func TestMachineFailingAPreflightCheckNeverTakesWork(t *testing.T) {
 }
 
 func TestPinnedWorkRunsOnlyOnItsMachineAndUnpinnedWorkNever(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev, prod := newWorkspace(t, o.pool, "dev", alice), newWorkspace(t, o.pool, "prod", alice)
@@ -185,6 +188,7 @@ func TestPinnedWorkRunsOnlyOnItsMachineAndUnpinnedWorkNever(t *testing.T) {
 }
 
 func TestMachineKeepsWorkspacesWhoseDeploymentsPinIt(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -207,6 +211,7 @@ func TestMachineKeepsWorkspacesWhoseDeploymentsPinIt(t *testing.T) {
 }
 
 func TestRemovingAMachineStopsItsWorkAndRevokesItsCredential(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")

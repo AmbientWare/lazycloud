@@ -40,7 +40,8 @@ type assumed struct {
 
 // connectedStorage is a storage owner whose connected account is a key of
 // the test Garage, reached through an STS stand-in that hands out that key
-// for the connection's role.
+// for the connection's role. The stand-in answers with the AssumeRole
+// response and the AccessDenied error body of the AWS STS API reference.
 type connectedStorage struct {
 	t       *testing.T
 	pool    *pgxpool.Pool
@@ -213,6 +214,7 @@ func (c *connectedStorage) deleteWorkspace(ws identity.WorkspaceID) {
 // workspace empties and deletes the bucket, after which the account can
 // be disconnected.
 func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	c := newConnectedStorage(t)
 	ws := c.workspace(&c.connection)
@@ -291,6 +293,7 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 // store, named for the platform's account, in the store's region, without
 // the connection's role; deleting the workspace deletes the bucket.
 func TestPlatformWorkspaceKeepsItsStorageInThePlatformAccount(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	c := newConnectedStorage(t)
 	ws := c.workspace(nil)
@@ -326,6 +329,7 @@ func TestPlatformWorkspaceKeepsItsStorageInThePlatformAccount(t *testing.T) {
 // A connection's credentials are assumed once for its buckets in every
 // region.
 func TestAConnectionsRegionsShareItsCredentials(t *testing.T) {
+	t.Parallel()
 	c := newConnectedStorage(t)
 	ctx := t.Context()
 	near, far := c.workspace(&c.connection), c.workspace(&c.connection)
@@ -353,6 +357,7 @@ func TestAConnectionsRegionsShareItsCredentials(t *testing.T) {
 // Servers that create a workspace's bucket at once use the bucket the
 // first one recorded.
 func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {
+	t.Parallel()
 	c := newConnectedStorage(t)
 	ws := c.workspace(nil)
 	ctx := t.Context()
@@ -372,6 +377,7 @@ func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {
 // stays in the customer's account, and the account can then be
 // disconnected.
 func TestARevokedConnectionRefusesStorageAndKeepsItsBuckets(t *testing.T) {
+	t.Parallel()
 	c := newConnectedStorage(t)
 	ctx := context.WithoutCancel(t.Context())
 	fresh, used := c.workspace(&c.connection), c.workspace(&c.connection)

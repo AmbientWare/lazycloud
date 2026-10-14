@@ -9,39 +9,41 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-
-type Workspace = Schemas["Workspace"];
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { updateWorkspace } from "@/lib/queries/workspace";
 
 import { useWorkspaceRenameController } from "./controller";
 import { WorkspaceRenameDialog } from "./Dialog";
 
-vi.mock("@/lib/queries/workspace", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/queries/workspace")>();
-  return {
-    ...actual,
-    updateWorkspace: vi.fn(),
-  };
-});
+type Workspace = Schemas["Workspace"];
+type Rename = { path: string; body: unknown };
 
-const updateWorkspaceMock = vi.mocked(updateWorkspace);
-
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+/**
+ * Answers each PATCH /v1/workspaces/{name} with `answer` and records it. The
+ * default answer is the server's: the same workspace under the new name.
+ */
+function serveRenames(
+  answer: (rename: Rename) => Response | Promise<Response> = (rename) =>
+    Response.json(workspace("workspace-1", (rename.body as { name: string }).name)),
+): Rename[] {
+  const renames: Rename[] = [];
+  vi.stubGlobal("fetch", async (request: Request) => {
+    if (request.method !== "PATCH") throw new Error(`Unexpected ${request.method}`);
+    const rename = { path: new URL(request.url).pathname, body: await request.json() };
+    renames.push(rename);
+    return answer(rename);
+  });
+  return renames;
+}
 
 describe("workspace identity controller", () => {
   it.each(["acme", "platform"])(
     "renames %s from the dialog while preserving the viewed resource's workspace",
     async (targetName) => {
       const target = workspace("workspace-1", targetName);
-      const accepted = { ...target, name: "renamed" };
-      const queryClient = testQueryClient();
-      updateWorkspaceMock.mockResolvedValue(accepted);
+      const renames = serveRenames();
       const root = createRootRoute();
       const workspaceRoute = createRoute({
         getParentRoute: () => root,
@@ -69,7 +71,7 @@ describe("workspace identity controller", () => {
       render(
         createElement(
           QueryClientProvider,
-          { client: queryClient },
+          { client: testQueryClient() },
           createElement(RouterProvider, { router }),
         ),
       );
@@ -78,54 +80,61 @@ describe("workspace identity controller", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
         target: { value: "renamed" },
       });
-      expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled();
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-      });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
       const expectedWorkspace = targetName === "acme" ? "renamed" : "acme";
-      expect(router.state.location.href).toBe(
-        `/w/${expectedWorkspace}/apps/app-1?settings=workspace#details`,
+      await waitFor(() =>
+        expect(router.state.location.href).toBe(
+          `/w/${expectedWorkspace}/apps/app-1?settings=workspace#details`,
+        ),
       );
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(updateWorkspaceMock).toHaveBeenCalledWith(targetName, "renamed");
+      expect(renames).toEqual([
+        { path: `/v1/workspaces/${targetName}`, body: { name: "renamed" } },
+      ]);
       router.history.destroy();
     },
   );
 
-  it("normalizes one rename and replaces only the matching directory entry", async () => {
+  it("sends one trimmed rename however often it is saved, and replaces only that directory entry", async () => {
     const target = workspace("workspace-1", "acme");
     const sibling = workspace("workspace-2", "platform");
-    const accepted = { ...target, name: "platform-team" };
     const queryClient = testQueryClient();
     const onRenamed = vi.fn();
     queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
       user: sessionUser(),
       workspaces: [target, sibling],
     });
-    updateWorkspaceMock.mockResolvedValue(accepted);
+    const renames = serveRenames();
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
     act(() => result.current.setDraftName("  platform-team  "));
-    act(() => result.current.save());
+    act(() => {
+      result.current.save();
+      result.current.save();
+    });
+    expect(result.current.mode).toBe("saving");
 
     await waitFor(() => expect(result.current.mode).toBe("saved"));
-    expect(updateWorkspaceMock).toHaveBeenCalledWith("acme", "platform-team");
+    expect(renames).toEqual([{ path: "/v1/workspaces/acme", body: { name: "platform-team" } }]);
     expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
       user: sessionUser(),
-      workspaces: [accepted, sibling],
+      workspaces: [workspace("workspace-1", "platform-team"), sibling],
     });
     expect(onRenamed).toHaveBeenCalledWith("platform-team");
   });
 
-  it("keeps a failed draft and exact error available for retry", async () => {
-    const target = workspace("workspace-1", "acme");
-    const failure = new Error("workspace name is already in use: platform");
-    updateWorkspaceMock.mockRejectedValue(failure);
+  it("keeps a failed draft and the server's error available for retry", async () => {
+    serveRenames(() =>
+      Response.json(
+        { code: "conflict", message: "workspace name is already in use: platform" },
+        { status: 409 },
+      ),
+    );
     const onRenamed = vi.fn();
     const { result } = renderController({
       queryClient: testQueryClient(),
-      workspace: target,
+      workspace: workspace("workspace-1", "acme"),
       onRenamed,
     });
 
@@ -134,38 +143,16 @@ describe("workspace identity controller", () => {
 
     await waitFor(() => expect(result.current.mode).toBe("error"));
     expect(result.current.draftName).toBe("platform");
-    expect(result.current.error).toBe(failure);
+    expect(result.current.error?.message).toBe("workspace name is already in use: platform");
     expect(result.current.canSave).toBe(true);
     expect(onRenamed).not.toHaveBeenCalled();
   });
 
-  it("rejects a duplicate submission synchronously", async () => {
-    const pending = deferred<Workspace>();
-    updateWorkspaceMock.mockReturnValue(pending.promise);
+  it("does not submit unchanged or invalid names", () => {
+    const renames = serveRenames();
     const { result } = renderController({
       queryClient: testQueryClient(),
       workspace: workspace("workspace-1", "acme"),
-      onRenamed: vi.fn(),
-    });
-
-    act(() => result.current.setDraftName("platform"));
-    act(() => {
-      result.current.save();
-      result.current.save();
-    });
-
-    expect(result.current.mode).toBe("saving");
-    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledOnce());
-
-    pending.resolve(workspace("workspace-1", "platform"));
-    await waitFor(() => expect(result.current.mode).toBe("saved"));
-  });
-
-  it("does not submit unchanged or invalid names", () => {
-    const target = workspace("workspace-1", "acme");
-    const { result } = renderController({
-      queryClient: testQueryClient(),
-      workspace: target,
       onRenamed: vi.fn(),
     });
 
@@ -181,23 +168,19 @@ describe("workspace identity controller", () => {
     act(() => result.current.setDraftName("  acme  "));
     expect(result.current.canSave).toBe(false);
     act(() => result.current.save());
-    expect(updateWorkspaceMock).not.toHaveBeenCalled();
+    expect(renames).toEqual([]);
   });
 
   it("drops another workspace's draft and error when the workspace changes", async () => {
-    const failure = new Error("rename failed");
-    updateWorkspaceMock.mockRejectedValue(failure);
-    const queryClient = testQueryClient();
-    const onRenamed = vi.fn();
+    serveRenames(() =>
+      Response.json({ code: "unavailable", message: "rename failed" }, { status: 503 }),
+    );
     const { result, rerender } = renderHook(
       ({ workspaceValue }: { workspaceValue: Workspace }) =>
-        useWorkspaceRenameController({
-          workspace: workspaceValue,
-          onRenamed,
-        }),
+        useWorkspaceRenameController({ workspace: workspaceValue, onRenamed: vi.fn() }),
       {
         initialProps: { workspaceValue: workspace("workspace-1", "acme") },
-        wrapper: controllerWrapper(queryClient),
+        wrapper: controllerWrapper(testQueryClient()),
       },
     );
     act(() => result.current.setDraftName("platform"));
@@ -252,12 +235,4 @@ function workspace(id: string, name: string): Workspace {
     role: "owner",
     created_at: "2026-07-21T10:00:00Z",
   };
-}
-
-function deferred<T>() {
-  let resolvePromise: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
 }

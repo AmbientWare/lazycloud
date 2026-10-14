@@ -12,6 +12,7 @@ import (
 // A synced module replaces its cached bytecode: Python would trust the old
 // cache when the edit keeps the size and lands in the same second.
 func TestSyncDropsTheBytecodeOfChangedModules(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, name := range []string{"app.py", "gone.py", "other.py",
 		"__pycache__/app.cpython-312.pyc", "__pycache__/app.cpython-312.opt-1.pyc",

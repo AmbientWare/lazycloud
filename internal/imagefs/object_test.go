@@ -21,6 +21,7 @@ import (
 // Frames read back from Garage through presigned range URLs, and a URL
 // swapped in after the first one expired serves the next read.
 func TestHTTPObjectReadsFramesThroughPresignedURLs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	body := make([]byte, 2*FrameSize+FrameSize/2)
 	_, _ = rand.Read(body)
@@ -48,7 +49,7 @@ func TestHTTPObjectReadsFramesThroughPresignedURLs(t *testing.T) {
 		return req.URL
 	}
 
-	current := presign(2 * time.Second)
+	current := presign(time.Second)
 	object := HTTPObject(http.DefaultClient, func() string { return current })
 	frames := map[int][]byte{}
 	if frames[0], err = frameReader(t).Read(ctx, ix, object, 0); err != nil {
@@ -92,6 +93,7 @@ func refusingStore(t *testing.T) *httptest.Server {
 // A refused read keeps the store's error code and drops the rest of its
 // answer, which echoes the URL's signature.
 func TestRefusedReadsKeepOnlyTheStoreErrorCode(t *testing.T) {
+	t.Parallel()
 	server := refusingStore(t)
 	url := server.URL + "/layer?X-Amz-Signature=secret"
 	ix, _ := roundTrip(t, fileTar(t, "app", []byte("hi")))
@@ -108,6 +110,7 @@ func TestRefusedReadsKeepOnlyTheStoreErrorCode(t *testing.T) {
 // A stored index may be larger than the decoded bound it is held to,
 // since zstd stores incompressible input with a few bytes of framing.
 func TestFetchIndexReadsAnIndexAtTheDecodedBound(t *testing.T) {
+	t.Parallel()
 	ix := Index{Layer: Digest("sha256:" + strings.Repeat("ab", 32))}
 	xattr := make([]byte, MaxIndexSize-200)
 	_, _ = rand.Read(xattr)

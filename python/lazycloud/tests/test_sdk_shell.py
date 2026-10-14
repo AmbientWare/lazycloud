@@ -20,7 +20,15 @@ from lazycloud.terminal_shell import (
 )
 from websockets.sync.server import ServerConnection, serve
 
-from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
+from tests.api_server import (
+    TOKEN,
+    ApiRequest,
+    FakeApi,
+    Reply,
+    error_reply,
+    json_reply,
+    press_ctrl_c,
+)
 
 CONTAINER = "0192f0a0-0000-7000-8000-0000000000c1"
 RELEASE = "0192f0a0-0000-7000-8000-0000000000a1"
@@ -132,7 +140,8 @@ def test_shell_waits_for_its_container_and_bridges_bytes_resizes_and_exit(
                 connector=redirect_to(url, opened),
                 terminal=terminal,
                 on_attached=lambda: attached.append(True),
-            )
+            ),
+            ready_retry_seconds=0,
         )
         status = shell.connect(ShellSession(container_id=CONTAINER, stub_id=RELEASE))
 
@@ -203,6 +212,42 @@ def test_standalone_shells_start_a_shell_instance_of_the_release(fake_api: FakeA
     }
     assert (standalone.container_id, standalone.stub_id) == (CONTAINER, RELEASE)
     assert (existing.container_id, existing.stub_id) == (CONTAINER, RELEASE)
+
+
+@pytest.mark.parametrize("pressed", ["create", "wait"])
+def test_ctrl_c_before_a_standalone_shell_attaches_stops_its_container(
+    fake_api: FakeApi, pressed: str
+) -> None:
+    team = "/v1/workspaces/team"
+
+    @fake_api.route("POST", f"{team}/instances")
+    def create(request: ApiRequest) -> Reply:
+        if pressed == "create":
+            press_ctrl_c()
+        return json_reply(instance("pending"), 201)
+
+    @fake_api.route("POST", f"{team}/containers/{CONTAINER}/connect")
+    def connect(request: ApiRequest) -> Reply:
+        press_ctrl_c()
+        return error_reply("unavailable", "container is starting", 503)
+
+    stopped: dict[str, object] = {
+        **instance("stopped"),
+        "function": "web",
+        "slots": 1,
+        "running_tasks": 0,
+        "cpu_millis": 1000,
+        "memory_mib": 128,
+    }
+    fake_api.route("POST", f"{team}/containers/{CONTAINER}/stop")(
+        lambda request: json_reply(stopped)
+    )
+    shell = Shell()
+
+    with pytest.raises(KeyboardInterrupt):
+        shell.connect(shell.create_standalone(RELEASE))
+
+    assert len(fake_api.calls("POST", f"{team}/containers/{CONTAINER}/stop")) == 1
 
 
 def test_local_shell_terminal_restores_tty_state() -> None:

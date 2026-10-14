@@ -70,9 +70,9 @@ with reclaimed as (
    app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id),
    wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
    rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-           select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-select ws.id, rel.id, 'ready', reclaimed.id, 1, 1000, 1 << 30, now(), now() from ws, rel, reclaimed
+           select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select ws.id, rel.id, rel.workload_id, 'ready', reclaimed.id, 1, 1000, 1 << 30, now(), now() from ws, rel, reclaimed
 returning id`).Scan(&container); err != nil {
 		t.Fatal(err)
 	}

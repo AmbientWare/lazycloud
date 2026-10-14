@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -26,13 +27,14 @@ import (
 )
 
 // upstream counts what the endpoint asks of the store, and runs before on
-// each request first.
+// each request first and after once the store answered it.
 type upstream struct {
 	mu      sync.Mutex
 	gets    int
 	heads   int
 	refused int
 	before  func(*http.Request)
+	after   func(*http.Request)
 }
 
 func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -43,6 +45,12 @@ func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
 		before(r)
 	}
 	resp, err := http.DefaultTransport.RoundTrip(r)
+	u.mu.Lock()
+	after := u.after
+	u.mu.Unlock()
+	if after != nil {
+		after(r)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if r.Method == http.MethodGet && !r.URL.Query().Has("list-type") {
@@ -142,6 +150,7 @@ func send(t *testing.T, method, url, byteRange, key string, header ...string) (a
 // If-Match, so the read fails rather than mix versions, and the next read
 // returns the new version.
 func TestVolumeReadsServeOneVersion(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	up := &upstream{}
 	// Objects over a quarter of the cache are read by frame, never whole.
@@ -195,11 +204,70 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 	}
 }
 
+// A read whose HEAD the store answered before an overwrite, but which
+// reached the endpoint only after a listing named the new version, answers
+// the new version: the client that listed it keeps what the read returns
+// as that version's bytes.
+func TestAReadAfterAListingAnswersTheListedVersion(t *testing.T) {
+	t.Parallel()
+	ts := newTestStore(t)
+	up := &upstream{}
+	_, base := volumeEndpoint(t, ts, up)
+	old, changed := randomBytes(5, 2<<20), randomBytes(6, 2<<20)
+	ts.put(t, "model.bin", old)
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	up.mu.Lock()
+	up.after = func(r *http.Request) {
+		if r.Method == http.MethodHead {
+			once.Do(func() {
+				close(held)
+				<-release
+			})
+		}
+	}
+	up.mu.Unlock()
+	type read struct {
+		status int
+		body   []byte
+		err    error
+	}
+	reads := make(chan read, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"model.bin", nil)
+		if err != nil {
+			reads <- read{err: err}
+			return
+		}
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+testKey+"/20261013/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			reads <- read{err: err}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		reads <- read{status: resp.StatusCode, body: body, err: err}
+	}()
+	<-held
+	ts.put(t, "model.bin", changed)
+	bucket := strings.TrimSuffix(base, ts.prefix)
+	if resp, body := get(t, bucket+"?list-type=2&prefix="+url.QueryEscape(ts.prefix), ""); resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("model.bin")) {
+		t.Fatalf("listing: %s %s", resp.Status, body)
+	}
+	close(release)
+	r := <-reads
+	if r.err != nil || r.status != http.StatusOK || !bytes.Equal(r.body, changed) {
+		t.Fatalf("the read after the listing answered %d, the new bytes %v: %v", r.status, bytes.Equal(r.body, changed), r.err)
+	}
+}
+
 // Writes reach the store intact through the endpoint, as GeeseFS makes
 // them: small files, a multipart upload, a copy in parts as a rename of a
 // large file makes, and a delete; and a read right after a write returns
 // what was written.
 func TestVolumeWritesPassThrough(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	_, base := volumeEndpoint(t, ts, &upstream{})
 	client := endpointClient(base, ts)
@@ -305,6 +373,7 @@ func endpointClient(base string, ts *testStore) *s3.Client {
 // Keys with spaces, plus signs and non-ASCII letters read through the
 // cache and write through the endpoint like any other.
 func TestVolumeKeysKeepTheirNames(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	_, base := volumeEndpoint(t, ts, &upstream{})
 	body := randomBytes(10, 2<<20)
@@ -332,6 +401,7 @@ func TestVolumeKeysKeepTheirNames(t *testing.T) {
 // Writes of other keys leave a cached object's version standing, so its
 // reads ask the store nothing.
 func TestCachedReadsHitUnderSteadyWrites(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	up := &upstream{}
 	_, base := volumeEndpoint(t, ts, up)
@@ -380,6 +450,7 @@ func TestCachedReadsHitUnderSteadyWrites(t *testing.T) {
 // workspace's mounts cannot reach another's bucket, and only for keys
 // under volumes/: a workspace's grant reaches its disks too.
 func TestTheVolumeEndpointRefusesOtherKeysAndPrefixes(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	v, base := volumeEndpoint(t, ts, &upstream{})
 	ts.put(t, "file", []byte("volume"))

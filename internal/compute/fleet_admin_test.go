@@ -13,6 +13,7 @@ import (
 // deleted platform hosts as with 1,000: they read live hosts, not host
 // history.
 func TestFleetAdminReadsStayFlatAsEndedHostsGrow(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	insert := func(n int, phase string) {
 		costExec(t, pool, `

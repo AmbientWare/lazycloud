@@ -40,6 +40,11 @@ const (
 	TaskCancelled TaskStatus = "cancelled"
 )
 
+// taskStatuses is every TaskStatus.
+func taskStatuses() []TaskStatus {
+	return []TaskStatus{TaskQueued, TaskRunning, TaskSucceeded, TaskFailed, TaskCancelled}
+}
+
 // Terminal reports whether no further attempt can run.
 func (s TaskStatus) Terminal() bool {
 	switch s {

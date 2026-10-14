@@ -21,6 +21,7 @@ func pod(name string, kind apitypes.PodKind) apitypes.WorkloadSpec {
 }
 
 func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		spec       func() apitypes.WorkloadSpec
@@ -38,6 +39,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			spec := c.spec()
 			out, err := Resolve(spec)
 			if err != nil {
@@ -54,6 +56,7 @@ func TestPodDefinitionsResolveTheirDefaults(t *testing.T) {
 }
 
 func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
+	t.Parallel()
 	withDisk := func(s apitypes.WorkloadSpec, name, path string) apitypes.WorkloadSpec {
 		s.Disks = &[]apitypes.DiskMountSpec{{Name: name, SizeBytes: 10 << 30, MountPath: path}}
 		return s
@@ -104,6 +107,7 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			_, err := Resolve(c.spec)
 			var invalid *InvalidSpecError
 			if !errors.As(err, &invalid) || !strings.Contains(invalid.Reason, c.reason) {
@@ -114,6 +118,7 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 }
 
 func TestWorkloadsOfEveryKindReadTheirActiveRelease(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	deploy(t, c, ws, false, pod("web", apitypes.PodKindPod), pod("scratch", apitypes.PodKindSandbox))
@@ -136,6 +141,7 @@ func TestWorkloadsOfEveryKindReadTheirActiveRelease(t *testing.T) {
 }
 
 func TestPodsDeployAndPrepareUnderTheirKind(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	d := deploy(t, c, ws, false, pod("web", apitypes.PodKindPod))

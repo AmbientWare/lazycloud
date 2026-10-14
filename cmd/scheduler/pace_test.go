@@ -10,6 +10,7 @@ import (
 // A pass that asks to run again runs then on a replica that does not lead,
 // without a wake, and only once.
 func TestAPassThatAsksToRunAgainRerunsOnAnyReplica(t *testing.T) {
+	t.Parallel()
 	p := newPace()
 	ctx, cancel := context.WithCancel(t.Context())
 	runs := make(chan struct{}, 3)

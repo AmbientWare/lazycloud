@@ -207,36 +207,31 @@ def test_endpoint_maps_body_and_query_to_arguments_and_models_to_json(serve: Any
     assert code == 0
 
 
-@pytest.mark.parametrize(
-    ("kind", "status", "content_type", "body"),
-    [
-        ("text", 200, "text/plain; charset=utf-8", b"hello"),
-        ("bytes", 200, "application/octet-stream", b"\x00\x01"),
-        ("created", 201, "application/json", b'{"made": true}'),
-        ("pair", 200, "application/json", b'["a", "b"]'),
-        (
-            "informational",
+def test_endpoint_results_map_to_responses(serve: Any) -> None:
+    runner = serve("handlers:shapes", "endpoint")
+    runner.reply()
+    expected = {
+        "text": (200, "text/plain; charset=utf-8", b"hello"),
+        "bytes": (200, "application/octet-stream", b"\x00\x01"),
+        "created": (201, "application/json", b'{"made": true}'),
+        "pair": (200, "application/json", b'["a", "b"]'),
+        "informational": (
             502,
             "application/json",
             b'{"error": "endpoint returned an informational response without a final response"}',
         ),
-        ("none", 200, "application/json", b"null"),
-        ("boom", 500, "application/json", b'{"error": "RuntimeError: exploded"}'),
-    ],
-)
-def test_endpoint_results_map_to_responses(
-    serve: Any, kind: str, status: int, content_type: str, body: bytes
-) -> None:
-    runner = serve("handlers:shapes", "endpoint")
-    runner.reply()
-    response = runner.client.get("/", params={"kind": kind})
-    assert (response.status_code, response.headers["content-type"], response.content) == (
-        status,
-        content_type,
-        body,
-    )
-    if kind == "created":
-        assert response.headers["x-made"] == "yes"
+        "none": (200, "application/json", b"null"),
+        "boom": (500, "application/json", b'{"error": "RuntimeError: exploded"}'),
+    }
+    for kind, (status, content_type, body) in expected.items():
+        response = runner.client.get("/", params={"kind": kind})
+        assert (response.status_code, response.headers["content-type"], response.content) == (
+            status,
+            content_type,
+            body,
+        ), kind
+        if kind == "created":
+            assert response.headers["x-made"] == "yes"
 
 
 def test_async_endpoint_is_awaited(serve: Any) -> None:

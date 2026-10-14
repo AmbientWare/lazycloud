@@ -1,9 +1,9 @@
 name: Ship
 
-# Cuts the next v<version> tag on main, runs every owner check on it,
-# publishes the server, scheduler and web images, the Python base images
-# and the Python package under that version, then records the version for
-# prod through Deploy. The server image carries the agent release of the
+# Requires every owner check's latest run on main to have passed, cuts the
+# next v<version> tag on main, publishes the server, scheduler and web
+# images, the Python base images and the Python package under that version,
+# then records the version for prod through Deploy. The server image carries the agent release of the
 # same version.
 
 on:
@@ -28,7 +28,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Each owner workflow runs on every push to main that changes what it
+  # checks, so its latest run on main covers this commit. A run still going
+  # is waited for.
+  checks:
+    name: Owner checks passed on main
+    runs-on: ubuntu-26.04
+    permissions:
+      actions: read
+    steps:
+      - name: Every owner workflow's latest run on main passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in go.yml python.yml web.yml deploy-checks.yml; do
+            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&event=push&per_page=1" --jq '.workflow_runs[0].id // empty')"
+            if [ -z "$run" ]; then
+              echo "::error::$workflow has no run on main."
+              exit 1
+            fi
+            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status >/dev/null || {
+              echo "::error::$workflow's latest run on main ($run) did not pass."
+              exit 1
+            }
+            echo "$workflow: run $run passed"
+          done
+
   version:
+    needs: checks
     name: Cut the version
     runs-on: ubuntu-26.04
     permissions:
@@ -94,30 +122,9 @@ jobs:
           git tag -a "v$VERSION" -m "Release $VERSION" "$COMMIT"
           git push origin "v$VERSION"
 
-  go:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/go.yml
-  python:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/python.yml
-  web:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/web.yml
-  checks:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-checks.yml
-
   images:
     name: Publish the images
-    needs: [version, go, python, web, checks]
+    needs: version
     runs-on: ubuntu-26.04
     # The image release role trusts only this workflow, from main, in this
     # environment.
@@ -176,7 +183,7 @@ jobs:
   # reusable workflow as a publisher, so the step lives here.
   python-package:
     name: Publish the Python package
-    needs: [version, go, python, web, checks]
+    needs: version
     runs-on: ubuntu-26.04
     environment: release
     permissions:
