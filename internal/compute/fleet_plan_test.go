@@ -642,18 +642,24 @@ func TestAWarmSlotBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
 	}
 }
 
-// A market without a stopped floor holds its largest shape within its
-// share of load: one running T4 keeps a stopped target of one card.
-func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
+// A market without a stopped floor holds its largest recent shape: on-demand
+// T4 work, running or done within the window, keeps a stopped target of
+// one card.
+func TestRecentCardWorkKeepsAStoppedTargetOfOneCard(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.GPU = DefaultPolicy().GPU
 	h := planHost(1, mustType(t, "g4dn.xlarge"), FleetServing)
 	h.GPU, h.Load, h.Containers = "T4", FleetCapacity{CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}, 1
-	s := planSnapshot(t, h)
-	s.Offers.Catalog = FleetCatalog()
-	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: h.Load}
-	if target := marketPlan(t, PlanFleet(p, s), ReserveMarket{GPU: "T4"}).StoppedTarget; target.GPUs != 1 {
-		t.Fatalf("T4 stopped target %+v, want one card", target)
+	for _, running := range []bool{true, false} {
+		s := planSnapshot(t)
+		if running {
+			s.Hosts = []FleetHost{h}
+		}
+		s.Offers.Catalog = FleetCatalog()
+		s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: h.Load}
+		if target := marketPlan(t, PlanFleet(p, s), ReserveMarket{GPU: "T4"}).StoppedTarget; target.GPUs != 1 {
+			t.Errorf("running %t: T4 stopped target %+v, want one card", running, target)
+		}
 	}
 }
 
@@ -801,7 +807,7 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
 	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(2000, 4)}, Stopped: HeadroomTarget{Floor: big.Usable(0)}}
-	under, over := p.IdleTimeout/2, p.IdleTimeout+time.Minute
+	under, over := p.IdleTimeout/2, max(p.IdleTimeout, p.ReturnWait)+time.Minute
 	resumed := planHost(1, big, FleetServing)
 	resumed.PhaseAt = offerNow.Add(-over)
 	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
@@ -1191,6 +1197,48 @@ func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
 		resumed := slices.Equal(hostsOf(actionsOf(plan, ActionResume)), []HostID{h.ID})
 		if resumed != c.resumes || resumed == (len(boughtForWork(plan)) == 1) {
 			t.Errorf("%s: resumed %t, bought %v; want a resume %t", c.name, resumed, boughtForWork(plan), c.resumes)
+		}
+	}
+}
+
+// GPU capacity bought for work is kept: once an L4 job's Spot host, on a
+// persistent request, idles, it stops into the reserve its market lacks
+// instead of the market buying one.
+func TestAnIdleGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
+	h := idle(planHost(1, mustType(t, "g6.4xlarge"), FleetServing))
+	h.Market, h.GPU = MarketSpot, "L4"
+	plan := PlanFleet(gpuPolicy(), gpuPlanSnapshot(t, h))
+	var bought []string
+	for _, a := range actionsOf(plan, ActionBuyReserve) {
+		if a.Market.GPU == "L4" {
+			bought = append(bought, a.Offer.Key())
+		}
+	}
+	if got := hostsOf(actionsOf(plan, ActionReturnToReserve)); !slices.Equal(got, []HostID{h.ID}) || len(bought) > 0 {
+		t.Fatalf("returned %v and bought L4 reserves %v, want the L4 host returned and none bought", got, bought)
+	}
+}
+
+// Recurring bursts keep their reserves: within the cost horizon of the
+// market's peak load, the reserves a burst needed stay stopped and a host
+// woken from the reserve for it goes back, so the next burst resumes them
+// rather than the market retiring and buying them again. Past the horizon
+// they retire and the host drains.
+func TestReservesForALoadPeakStayForTheCostHorizon(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.OnDemand.Stopped.LoadPercent = 50
+	woken := idle(planHost(3, planSmall, FleetServing))
+	woken.Slept = true
+	for _, c := range []struct {
+		ago   time.Duration
+		keeps bool
+	}{{10 * time.Minute, true}, {p.CostHorizon, false}} {
+		s := planSnapshot(t, planHost(1, planSmall, FleetStopped), planHost(2, planSmall, FleetStopped), woken)
+		s.Peaks = map[ReserveMarket]LoadPeak{onDemand: {Load: small.Times(6), At: offerNow.Add(-c.ago)}}
+		plan := PlanFleet(p, s)
+		retired, returned := actionsOf(plan, ActionRetireReserve), actionsOf(plan, ActionReturnToReserve)
+		if c.keeps && (len(retired) > 0 || len(returned) != 1) || !c.keeps && (len(retired) != 2 || len(actionsOf(plan, ActionDrain)) != 1) {
+			t.Errorf("peak %s ago: actions %+v", c.ago, plan.Actions)
 		}
 	}
 }

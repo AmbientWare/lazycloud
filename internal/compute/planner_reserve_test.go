@@ -460,7 +460,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 // The warm target shares the load containers hold now: what the market's
 // hosts run and what its pending containers ask for. The stopped target is
 // the floor beside the largest shape, 8 CPU by default, in Spot as well as
-// on-demand.
+// on-demand. The market's load peak carries to the passes after.
 func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -480,6 +480,14 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
+	}
+	// The load peak outlives the load: the next pass reads it back from the
+	// published plan, so reserves a burst needed wait for the next one.
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now()")
+	staleMarkets(t, o)
+	plan(t, o)
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 0 || spot.Peak.Load.CPUMillis != 48_000 {
+		t.Fatalf("Spot market once its work stopped %+v, want no load and the 48 CPU peak", spot)
 	}
 }
 
