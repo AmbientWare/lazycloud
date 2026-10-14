@@ -47,7 +47,7 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 			market := apitypes.FleetMarket{
 				Preemptible: m.Preemptible, GpuType: m.GPUType, WarmFree: fleetCapacityOut(m.WarmFree),
 				WarmTarget: fleetCapacityOut(m.WarmTarget), ReserveReady: fleetCapacityOut(m.ReserveReady),
-				ReserveTarget: fleetCapacityOut(m.StoppedTarget), States: []apitypes.FleetStateCapacity{}, Reason: string(m.Reason),
+				ReserveTarget: fleetCapacityOut(m.StoppedTarget), States: []apitypes.FleetStateCapacity{}, Reason: m.Reason.Message(),
 			}
 			// The plan's load also counts pending requests; allocated is
 			// what the market's hosts hold.

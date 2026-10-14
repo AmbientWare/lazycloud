@@ -52,14 +52,6 @@ func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	return fleetHost(t, o, compute.PhaseReady, typ, instance)
 }
 
-// lapseHolds ages every market's running hold and its last growth past
-// their windows, as when demand fell long ago.
-func lapseHolds(t *testing.T, o owners) {
-	t.Helper()
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(jsonb_set(plan, '{holds,running,at}', '"1970-01-01T00:00:00Z"'),
-    '{holds,grew}', '"1970-01-01T00:00:00Z"') where plan ? 'holds'`)
-}
-
 // Spot-tolerant containers on an on-demand host count as the Spot market's
 // load, and the rest as the on-demand market's, in the plan a pass
 // publishes.
@@ -107,11 +99,10 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gp
 	}
 }
 
-// The Spot market keeps warm what a steady stream of work placed within
-// the arrival window, less its largest batch: four batches of four
-// one-CPU containers 20 seconds apart keep twelve, while one burst of
-// sixteen, arriving over a second and a half across a clock's five-second
-// boundary, keeps only its share of load.
+// The Spot market keeps warm its floor and what a steady stream of work
+// placed within the arrival window, less its largest batch, while one
+// burst of sixteen one-CPU containers, arriving over a second and a half
+// across a clock's five-second boundary, keeps only the floor.
 func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -119,7 +110,7 @@ func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 		want    cpu.Millis
 	}{
 		{"steady", "now() - make_interval(secs => 20 * (n / 4))", 13_000},
-		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 4_000},
+		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 1_000},
 	} {
 		o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 		host := fleetHost(t, o, compute.PhaseReady, "c6a.8xlarge", "i-0000000000000b001")
@@ -441,7 +432,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		if d := m.ExpiresAt.Sub(m.GeneratedAt); d != 5*time.Minute {
 			t.Errorf("market %+v expires %s after it was generated", m, d)
 		}
-		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.ReasonNoOffer) {
+		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.WaitNoOffer) {
 			t.Errorf("CPU market %+v, want the 1 CPU warm floor short for want of an offer", m)
 		}
 	}
@@ -463,8 +454,10 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 	}
 }
 
-// The warm target shares the load containers hold now: what the market's
-// hosts run and what its pending containers ask for. The stopped target is
+// The running target follows the load containers hold now, what the
+// market's hosts run and what its pending containers ask for, and keeps
+// the floor beside it; a batch that arrived at once adds no arrival
+// headroom. The stopped target is
 // the floor beside the largest shape, 8 CPU by default, in Spot as well as
 // on-demand.
 func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
@@ -480,9 +473,9 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 		pendingContainer(t, o.pool, dev, release, 4000, 4*gib)
 	}
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 12_000 ||
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 1000 ||
 		spot.StoppedTarget.CPUMillis != 3000+8000 {
-		t.Fatalf("Spot market %+v, want warm 25%% of 16 running and 32 pending CPU and the stopped floors", spot)
+		t.Fatalf("Spot market %+v, want the floor beyond 16 running and 32 pending CPU and the stopped floors", spot)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
@@ -524,21 +517,16 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 }
 
 // A connected account keeps no headroom and no reserves: its idle hosts
-// stay through the first pass, as after a deploy, and leave once its
-// market's window passes.
-func TestAConnectedAccountsIdleHostsLeaveOnceTheirWindowPasses(t *testing.T) {
+// drain rather than return to a reserve.
+func TestAConnectedAccountsIdleHostsDrain(t *testing.T) {
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	hosts := []uuid.UUID{uuid.UUID(idleHost(t, o, "m7i.large", "i-0000000000000f901")), uuid.UUID(idleHost(t, o, "m7i.large", "i-0000000000000f902"))}
 	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, hosts)
 
-	if r := planCapacity(t, o); r.Drained != 0 {
-		t.Fatalf("first pass %+v, want the connection's hosts kept", r)
-	}
-	lapseHolds(t, o)
 	if r := planCapacity(t, o); r.Drained != 2 || r.Returned != 0 {
-		t.Fatalf("plan once the window passed %+v, want both idle connection hosts drained", r)
+		t.Fatalf("plan %+v, want both idle connection hosts drained", r)
 	}
 }
 
@@ -872,28 +860,5 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 	}
 	if r := plan(t, o); servingBought(t, o) != 0 {
 		t.Fatalf("plan once arrivals settled %+v, want nothing bought to serve", r)
-	}
-}
-
-// A build placed within the hour keeps a warm slot of its shape in its
-// market; an older one does not.
-func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	buildContainer(t, o, dev, "stopped", 2*time.Hour)
-	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("Spot warm target %+v after a build two hours ago, want the 1 CPU floor alone", spot.WarmTarget)
-	}
-	buildContainer(t, o, dev, "stopped", 10*time.Minute)
-	staleMarkets(t, o)
-	plan(t, o)
-	cpuMillis, memory := buildShape()
-	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
-		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
-	}
-	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)
 	}
 }

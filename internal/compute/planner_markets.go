@@ -20,7 +20,7 @@ type PublishedMarket struct {
 	WarmFree      FleetCapacity `json:"warm_free"`
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
-	Reason        MarketReason  `json:"reason"`
+	Reason        CapacityWait  `json:"reason"`
 	// Holds are the market's targets as the next pass reads them back.
 	Holds  MarketHolds          `json:"holds"`
 	States []FleetStateCapacity `json:"states"`

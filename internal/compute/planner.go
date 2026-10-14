@@ -39,10 +39,13 @@ const (
 	ownerPlatform = string(KindPlatform)
 )
 
-// CapacityWait says why a pending container waits for compute.
+// CapacityWait says why a pending container waits for compute, or why a
+// market falls short.
 type CapacityWait string
 
 const (
+	// WaitNone means nothing falls short.
+	WaitNone CapacityWait = ""
 	// WaitProvisioning means a host being bought or resumed will take it.
 	WaitProvisioning CapacityWait = "provisioning"
 	// WaitLimit means the fleet limit holds the purchase back.
@@ -51,6 +54,9 @@ const (
 	WaitBatch CapacityWait = "batch"
 	// WaitDeferred means the market's growth continues next pass.
 	WaitDeferred CapacityWait = "deferred"
+	// WaitDemand means a market's headroom and reserve purchases wait while
+	// its work does: the hosts bought for it come first.
+	WaitDemand CapacityWait = "demand"
 	// WaitCooldown means the offers that could host it cool after refusals.
 	WaitCooldown CapacityWait = "cooldown"
 	// WaitQuota means the vCPU quotas leave no room for an offer that could.
@@ -61,26 +67,31 @@ const (
 	WaitNoOffer CapacityWait = "no_offer"
 )
 
-// Message is the sentence a start failure names for the wait.
+// Message is the sentence a start failure or the fleet page names for the
+// wait.
 func (w CapacityWait) Message() string {
 	switch w {
+	case WaitNone:
+		return ""
 	case WaitProvisioning:
 		return "a host is being bought for it"
 	case WaitLimit:
-		return string(ReasonFleetLimit)
+		return "fleet host limit reached"
 	case WaitBatch:
-		return string(ReasonBatch)
+		return "purchases wait for arrivals to settle"
 	case WaitDeferred:
-		return string(ReasonActionCap)
+		return "growth continues next pass"
+	case WaitDemand:
+		return "headroom waits for pending work"
 	case WaitCooldown:
-		return string(ReasonCooldown)
+		return "offers cooling after refusals"
 	case WaitQuota:
-		return string(ReasonQuota)
+		return "vCPU quota reached"
 	case WaitMargin:
-		return string(ReasonMargin)
+		return "no offer keeps the purchase margin"
 	case WaitNoOffer:
 	}
-	return string(ReasonNoOffer)
+	return "no offer fits"
 }
 
 // PlanResult summarizes one planning pass.
@@ -337,9 +348,9 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
-	recent, builds, arrived, disks := shapesByMarket(ps.r.recent)
+	recent, arrived, disks := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Builds: builds, Arrived: arrived, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 		Holds: ps.holds(nil),
 	}

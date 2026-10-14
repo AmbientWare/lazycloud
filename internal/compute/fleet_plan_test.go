@@ -24,7 +24,7 @@ var (
 func planPolicy(floor, stopped FleetCapacity) Policy {
 	p := DefaultPolicy()
 	p.Spot = MarketReserve{}
-	p.OnDemand = MarketReserve{Running: HeadroomTarget{Floor: floor}, Stopped: HeadroomTarget{Floor: stopped}}
+	p.OnDemand = MarketReserve{Floor: floor, Stopped: HeadroomTarget{Floor: stopped}}
 	p.GPU = nil
 	return p
 }
@@ -32,18 +32,7 @@ func planPolicy(floor, stopped FleetCapacity) Policy {
 func planSnapshot(t *testing.T, hosts ...FleetHost) FleetSnapshot {
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{planSmall, planLarge}
-	return FleetSnapshot{Now: offerNow, Hosts: hosts, Offers: in, HostRoom: 100, ReserveRoom: 100, Holds: lapsed()}
-}
-
-// lapsed are holds every market carries from long ago, so a pass plans from
-// what it sees rather than keeping what the fleet holds, as the first pass
-// after a deploy does.
-func lapsed() map[ReserveMarket]MarketHolds {
-	holds := map[ReserveMarket]MarketHolds{}
-	for _, m := range DefaultPolicy().Markets() {
-		holds[m] = MarketHolds{}
-	}
-	return holds
+	return FleetSnapshot{Now: offerNow, Hosts: hosts, Offers: in, HostRoom: 100, ReserveRoom: 100}
 }
 
 func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
@@ -347,7 +336,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 
 	s.HostRoom = 0
 	plan = PlanFleet(p, s)
-	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonFleetLimit {
+	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != WaitLimit {
 		t.Fatalf("fleet limit: %+v %+v", plan.Actions, w)
 	}
 }
@@ -470,7 +459,7 @@ func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 
 func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 	p := DefaultPolicy()
-	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Running: p.OnDemand.Running}
+	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Floor: p.OnDemand.Floor}
 	snapshot := func(hosts ...FleetHost) FleetSnapshot {
 		s := planSnapshot(t, hosts...)
 		s.Offers.Catalog = FleetCatalog()
@@ -546,23 +535,6 @@ func TestOneRunningCardKeepsAStoppedTargetOfOneCard(t *testing.T) {
 	}
 }
 
-func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
-	p := planPolicy(FleetCapacity{}, FleetCapacity{})
-	p.GPU = DefaultPolicy().GPU
-	h := planHost(1, mustType(t, "g4dn.xlarge"), FleetServing)
-	h.GPU = "T4"
-	s := planSnapshot(t, h)
-	s.Offers.Catalog = FleetCatalog()
-	s.Builds = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
-	plan := PlanFleet(p, s)
-	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
-		t.Fatalf("actions %+v, want the idle T4 host to leave", plan.Actions)
-	}
-	if mp := marketPlan(t, plan, ReserveMarket{GPU: "T4"}); !mp.WarmTarget.Empty() {
-		t.Fatalf("T4 warm target %+v, want none", mp.WarmTarget)
-	}
-}
-
 func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
 	p := DefaultPolicy()
 	p.GPU = nil
@@ -581,7 +553,7 @@ func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
-	p.OnDemand = MarketReserve{Running: HeadroomTarget{Floor: cpuGiB(1000, 4)}, Stopped: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
+	p.OnDemand = MarketReserve{Floor: cpuGiB(1000, 4), Stopped: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
 	warm := planHost(1, big, FleetServing)
 	warm.RightsizeRefusedAt = ptr(offerNow)
 	s := planSnapshot(t, warm)
@@ -607,7 +579,7 @@ func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
 	s, id := batching()
 	plan := PlanFleet(p, s)
 	if w := waitOf(t, plan, id).Wait; len(plan.Actions) > 0 || plan.BatchWait != s.BatchWait || w == nil || *w != WaitBatch ||
-		marketPlan(t, plan, onDemand).Reason != ReasonBatch {
+		marketPlan(t, plan, onDemand).Reason != WaitBatch {
 		t.Fatalf("while arriving: actions %+v, batch %s, wait %+v, reason %q", plan.Actions, plan.BatchWait, waitOf(t, plan, id),
 			marketPlan(t, plan, onDemand).Reason)
 	}
@@ -713,35 +685,6 @@ func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 	s.Now, s.Offers.Now = offerNow.Add(3*time.Second), offerNow.Add(3*time.Second)
 	if bought := boughtForWork(PlanFleet(connectionPolicy(DefaultPolicy()), s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
 		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
-	}
-}
-
-// The first pass after a deploy finds no holds, so each market holds what
-// it holds now: none of its idle hosts leaves until its window passes, and
-// it buys nothing while its floor host updates its agent.
-func TestAMarketWithoutHoldsKeepsItsHostsForItsWindow(t *testing.T) {
-	p := planPolicy(small, FleetCapacity{})
-	updating := planHost(1, planSmall, FleetServing)
-	updating.UpdateDue = true
-	s := planSnapshot(t, updating)
-	s.Holds = nil
-	if plan := PlanFleet(p, s); len(plan.Actions) > 0 {
-		t.Fatalf("actions %+v while the floor host updates after a deploy", plan.Actions)
-	}
-	s = planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetServing))
-	s.Holds = nil
-	plan := PlanFleet(p, s)
-	if left := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(left) > 0 {
-		t.Fatalf("the first pass released %v", hostsOf(left))
-	}
-	s.Holds = map[ReserveMarket]MarketHolds{}
-	for _, mp := range plan.Markets {
-		s.Holds[mp.Market] = mp.Holds
-	}
-	s.Now = s.Now.Add(p.Window(onDemand))
-	plan = PlanFleet(p, s)
-	if left := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(left) != 1 {
-		t.Fatalf("once the window passed, released %v, want one host", hostsOf(left))
 	}
 }
 
@@ -911,7 +854,6 @@ func TestWorkStopsWaitingForAStoppingReserveStuckPastTheDisableBound(t *testing.
 // short beyond its floor buys it.
 func TestHeadroomIsBoughtOnlyWhatTheKeptHostsLack(t *testing.T) {
 	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
-	p.OnDemand.Running.LoadPercent = 25
 	h := planHost(1, planSmall, FleetServing)
 	h.Load, h.Containers = cpuGiB(4000, 8), 4
 	if plan := PlanFleet(p, planSnapshot(t, h)); len(boughtTypes(plan)) > 0 {
@@ -923,49 +865,53 @@ func TestHeadroomIsBoughtOnlyWhatTheKeptHostsLack(t *testing.T) {
 	}
 }
 
-// Within the window after work took the market's floor nothing is bought
-// for it, nor in the pass after one was bought; once the window passes,
-// the market buys a host with the floor free.
-func TestTheFloorHoldsForTheWindowAfterWorkTakesIt(t *testing.T) {
-	p := planPolicy(small, FleetCapacity{})
-	plan := PlanFleet(p, planSnapshot(t))
-	if bought := boughtTypes(plan); len(bought) != 1 {
-		t.Fatalf("an empty market bought %v, want its floor", bought)
+// Work that takes the market's floor buys a host with it free at once,
+// sized to the floor rather than the market's load.
+func TestWorkThatTakesTheFloorBuysAHostWithItFree(t *testing.T) {
+	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
+	busy := planHost(1, planLarge, FleetServing)
+	busy.Load, busy.Containers = large, 4
+	if bought := boughtTypes(PlanFleet(p, planSnapshot(t, busy))); !slices.Equal(bought, []string{planSmall.Name}) {
+		t.Fatalf("bought %v once work took the floor, want one %s", bought, planSmall.Name)
 	}
-	claimed := planHost(1, planSmall, FleetStarting)
-	claimed.Requested, claimed.Load, claimed.Containers = true, small, 1
-	s := planSnapshot(t, claimed)
-	s.Holds = carried(plan)
-	if bought := boughtTypes(PlanFleet(p, s)); len(bought) > 0 {
-		t.Fatalf("bought %v once work took the floor host just bought", bought)
-	}
-	busy := planHost(1, planSmall, FleetServing)
-	busy.Load, busy.Containers = small, 1
-	s = planSnapshot(t, busy)
-	s.Holds = map[ReserveMarket]MarketHolds{onDemand: {FloorTaken: offerNow.Add(-p.Window(onDemand))}}
-	if bought := boughtTypes(PlanFleet(p, s)); len(bought) != 1 {
-		t.Fatalf("bought %v once the floor was taken a window ago, want a floor host", bought)
+	busy.Load = large.Minus(cpuGiB(1000, 2))
+	if bought := boughtTypes(PlanFleet(p, planSnapshot(t, busy))); len(bought) > 0 {
+		t.Fatalf("bought %v while the busy host keeps the floor free", bought)
 	}
 }
 
-// Every host a market holds stays until its window has passed since the
-// last host it bought or resumed began to serve.
-func TestAMarketKeepsItsHostsForTheWindowAfterItsGrowthServes(t *testing.T) {
+// A market that buys keeps every host it holds for its window, then lets
+// what its target no longer holds leave.
+func TestAMarketKeepsItsHostsForTheWindowAfterItGrows(t *testing.T) {
 	p := planPolicy(small, FleetCapacity{})
-	s := planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetStarting))
-	plan := PlanFleet(p, s)
-	if left := actionsOf(plan, ActionDrain, ActionReturnToReserve, ActionCancel); len(left) > 0 {
-		t.Fatalf("released %v while a host starts", hostsOf(left))
+	busy := planHost(1, planSmall, FleetServing)
+	busy.Load, busy.Containers = small, 1
+	plan := PlanFleet(p, planSnapshot(t, busy))
+	if bought := boughtTypes(plan); len(bought) != 1 {
+		t.Fatalf("bought %v once work took the floor, want one host", bought)
 	}
-	s = planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetServing))
+	s := planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetServing))
 	s.Holds = carried(plan)
-	s.Now = s.Now.Add(p.Window(onDemand) - time.Second)
+	s.Now = s.Now.Add(p.Window(onDemand) - holdStep)
 	if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) > 0 {
-		t.Fatalf("released %v within the window after the growth served", hostsOf(left))
+		t.Fatalf("released %v within the window after the market grew", hostsOf(left))
 	}
-	s.Now = s.Now.Add(time.Second)
+	s.Now = s.Now.Add(holdStep)
 	if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) != 1 {
 		t.Fatalf("released %v once the window passed, want one host", hostsOf(left))
+	}
+}
+
+// A launch that walks refused pools raises no hold: past the window of the
+// purchase that made it, the market keeps only the idle hosts its target
+// holds, and the launch nothing waits for is cancelled.
+func TestALaunchStuckInRefusedPoolsKeepsNoIdleHost(t *testing.T) {
+	p := planPolicy(small, FleetCapacity{})
+	stuck := planHost(1, planSmall, FleetStarting)
+	stuck.Requested = true
+	plan := PlanFleet(p, planSnapshot(t, stuck, planHost(2, planSmall, FleetServing), planHost(3, planSmall, FleetServing)))
+	if left := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(left) != 1 || len(actionsOf(plan, ActionCancel)) != 1 {
+		t.Fatalf("actions %+v, want one idle host to leave and the launch cancelled", plan.Actions)
 	}
 }
 

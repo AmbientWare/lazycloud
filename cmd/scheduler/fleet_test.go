@@ -58,7 +58,7 @@ func TestALaunchHoldsUpNoPreemption(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	exec(`insert into agent_releases (version, sha256_amd64, target) values ('1.0.0', repeat('a', 64), true)`)
+	exec(`insert into agent_releases (version, sha256_amd64, build, target) values ('1.0.0', repeat('a', 64), repeat('b', 64), true)`)
 	exec(`insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
 values ('launching', 'offline', 'platform', 'aws', 'requested', 2000, 6442450944, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`)
 	var container uuid.UUID

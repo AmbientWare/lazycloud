@@ -51,28 +51,10 @@ func settle(t *testing.T, o owners) {
 	run(t, o.pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
 }
 
-// lapse gives every platform market without a published plan holds that
-// lapsed long ago, so a pass plans from what it sees rather than keeping
-// what the fleet holds, as the first pass after a deploy does.
-func lapse(t *testing.T, o owners) {
-	t.Helper()
-	run(t, o.pool, `
-insert into fleet_markets (market, plan, generated_at, expires_at)
-select m.key, jsonb_build_object('preemptible', m.preemptible, 'gpu_type', m.gpu,
-           'holds', jsonb_build_object('running', jsonb_build_object('at', 'epoch'::timestamptz),
-                                       'stopped', jsonb_build_object('at', 'epoch'::timestamptz))),
-       now() - interval '1 hour', now() - interval '1 hour'
-from (values ('spot:cpu', true, ''), ('on_demand:cpu', false, ''), ('spot:A10G', true, 'A10G'), ('on_demand:A10G', false, 'A10G'),
-             ('spot:L4', true, 'L4'), ('on_demand:L4', false, 'L4'), ('spot:T4', true, 'T4'), ('on_demand:T4', false, 'T4'))
-     as m(key, preemptible, gpu)
-on conflict (market) do nothing`)
-}
-
 // plan runs one fleet planning pass once arrivals have settled.
 func plan(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
 	settle(t, o)
-	lapse(t, o)
 	result, err := o.compute.Plan(t.Context(), discard())
 	if err != nil {
 		t.Fatalf("plan: %v", err)

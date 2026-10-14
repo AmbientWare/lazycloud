@@ -233,7 +233,7 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow, packed m
 	slices.SortStableFunc(order, func(a, b PendingContainersRow) int {
 		return cmp.Compare(boolRank(a.Preemptible), boolRank(b.Preemptible))
 	})
-	floor := compute.DefaultPolicy().OnDemand.Running.Floor
+	floor := compute.DefaultPolicy().OnDemand.Floor
 	for _, c := range order {
 		need := requirement(c)
 		best := compute.ChooseHost(free, need, floor)

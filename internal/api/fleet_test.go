@@ -124,7 +124,7 @@ select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); er
 		}
 		if got.WarmFree != capacity(want.WarmFree) || got.WarmTarget != capacity(want.WarmTarget) ||
 			got.ReserveReady != capacity(want.ReserveReady) || got.ReserveTarget != capacity(want.StoppedTarget) ||
-			got.Allocated != capacity(allocated) || got.Reason != string(want.Reason) || len(got.States) != len(want.States) {
+			got.Allocated != capacity(allocated) || got.Reason != want.Reason.Message() || len(got.States) != len(want.States) {
 			t.Errorf("market %s/%s: %+v, want the published %+v", map[bool]string{true: "spot", false: "on_demand"}[want.Preemptible], want.GPUType, got, want)
 		}
 		if want.Preemptible && want.GPUType == "" && (want.Load.CPUMillis != 8000 || got.Allocated != (apitypes.FleetCapacity{})) {

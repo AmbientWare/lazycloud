@@ -230,7 +230,7 @@ values ($1, $2, 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returnin
 		Scan(&reason, &message); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || reason != string(StopStartFailed) || !strings.Contains(message, string(compute.ReasonCooldown)) {
+	if n != 1 || reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
 		t.Fatalf("stopped %d, reason %q message %q; want the stale container stopped as start_failed naming its wait", n, reason, message)
 	}
 	var status, kind string

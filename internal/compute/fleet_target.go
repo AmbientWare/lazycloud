@@ -21,37 +21,33 @@ func (h Hold) after(v FleetCapacity, now time.Time, window time.Duration) Hold {
 	return Hold{Value: h.Value.Upper(v), At: h.At}
 }
 
-// MarketHolds are what a market's targets carry from one pass to the next:
-// the running and stopped targets, when work took the floor from the hosts
-// the market keeps, zero while one keeps it free, and when the market last
-// grew, after which it keeps every host it holds for its window. A market
-// without them, as after a deploy, holds what it holds now.
-type MarketHolds struct {
-	Running    Hold      `json:"running"`
-	Stopped    Hold      `json:"stopped"`
-	FloorTaken time.Time `json:"floor_taken"`
-	Grew       time.Time `json:"grew"`
+// raised is the hold once its market grows to hold v: at least v, its
+// window restarted.
+func (h Hold) raised(v FleetCapacity, now time.Time) Hold {
+	return Hold{Value: h.Value.Upper(v), At: now.Truncate(holdStep)}
 }
 
 func (h Hold) equal(o Hold) bool { return h.Value == o.Value && h.At.Equal(o.At) }
 
-// equal reports whether the holds are the same, growth to the step, so a
-// growing market republishes at most once a step.
+// MarketHolds are the running and stopped targets a market carries from
+// one pass to the next.
+type MarketHolds struct {
+	Running Hold `json:"running"`
+	Stopped Hold `json:"stopped"`
+}
+
 func (h MarketHolds) equal(o MarketHolds) bool {
-	return h.Running.equal(o.Running) && h.Stopped.equal(o.Stopped) && h.FloorTaken.Equal(o.FloorTaken) &&
-		h.Grew.Truncate(holdStep).Equal(o.Grew.Truncate(holdStep))
+	return h.Running.equal(o.Running) && h.Stopped.equal(o.Stopped)
 }
 
 // MarketTarget is what a market keeps. Running is the capacity its serving,
-// starting and requested hosts hold: its load, running and pending, and
-// beyond it its floor and what arrived within the arrival window, less the
-// largest batch, or its share of load, whichever is larger, held for the
-// market's window. A build that ended within the build window adds its
-// shape, and Floor, the room one of those hosts keeps free, is the
-// market's floor or that shape, so the next build starts at once. Stopped
-// is what its reserves hold: its stopped floor or share of load, and at
-// least that floor beside Largest, the shape one reserve fits with a disk
-// slot for each of LargestDisks, held for the cost horizon.
+// starting and requested hosts hold: its load, running and pending, and in
+// a CPU market its floor and what arrived within the arrival window less
+// the largest batch, held for the market's window. Floor is the room one of
+// those hosts keeps free. Stopped is what its reserves hold: its stopped
+// floor or share of load, and at least that floor beside Largest, the shape
+// one reserve fits with a disk slot for each of LargestDisks, held for the
+// cost horizon.
 type MarketTarget struct {
 	Load, Running, Floor, Stopped, Largest FleetCapacity
 	LargestDisks                           int
@@ -61,42 +57,29 @@ type MarketTarget struct {
 }
 
 // targetInputs are what a market's target follows: its load, its arrivals
-// less the largest batch, the largest recent build, the largest shape its
-// work reserved and the most disks one attached, what its hosts hold now,
-// and the holds the last pass carried, nil for none.
+// less the largest batch, the largest shape its work reserved and the most
+// disks one attached, and the holds the last pass carried.
 type targetInputs struct {
-	load, arrived, build, largest FleetCapacity
-	disks                         int
-	held                          FleetCapacity
-	carried                       *MarketHolds
+	load, arrived, largest FleetCapacity
+	disks                  int
+	carried                MarketHolds
 }
 
 // target is market m's target at now.
 func (p Policy) target(m ReserveMarket, in targetInputs, now time.Time) MarketTarget {
 	r := p.Reserve(m)
-	t := MarketTarget{Load: in.load, Floor: r.Running.Floor}
-	var build FleetCapacity
+	t := MarketTarget{Load: in.load, Floor: r.Floor, Want: in.load}
 	if !t.Floor.Empty() {
-		build = in.build.Lower(p.LargestShape.Cap)
-		t.Floor = t.Floor.Upper(build)
+		t.Want = t.Want.Plus(t.Floor).Plus(in.arrived)
 	}
 	stopped := r.Stopped.Of(in.load)
 	if r.FitLargest {
 		t.Largest, t.LargestDisks = p.LargestShape.of(m, in.largest, in.disks)
 		stopped = stopped.Upper(r.Stopped.Floor.Plus(t.Largest))
 	}
-	holds := MarketHolds{Running: Hold{Value: in.held, At: now}}
-	if in.carried != nil {
-		holds = *in.carried
-	}
-	t.Want = in.load
-	if !t.Floor.Empty() {
-		t.Want = t.Want.Plus(r.Running.Floor.Plus(in.arrived).Upper(in.load.Percent(r.Running.LoadPercent))).Plus(build)
-	}
 	t.Holds = MarketHolds{
-		Running:    holds.Running.after(t.Want, now, p.Window(m)),
-		Stopped:    holds.Stopped.after(stopped, now, p.CostHorizon),
-		FloorTaken: holds.FloorTaken, Grew: holds.Grew,
+		Running: in.carried.Running.after(t.Want, now, p.Window(m)),
+		Stopped: in.carried.Stopped.after(stopped, now, p.CostHorizon),
 	}
 	t.Running, t.Stopped = t.Holds.Running.Value, t.Holds.Stopped.Value
 	return t

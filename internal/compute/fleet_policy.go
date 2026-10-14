@@ -117,11 +117,10 @@ func (t HeadroomTarget) Of(load FleetCapacity) FleetCapacity {
 	return t.Floor.Upper(load.Percent(t.LoadPercent))
 }
 
-// MarketReserve is the headroom a market keeps: Running beyond its load on
-// its running hosts, its floor free on one of them, and Stopped as stopped
-// machines.
+// MarketReserve is the headroom a market keeps: its Floor free on one of
+// its running hosts, and Stopped as stopped machines.
 type MarketReserve struct {
-	Running HeadroomTarget
+	Floor   FleetCapacity
 	Stopped HeadroomTarget
 	// FitLargest raises the stopped target to at least the floor beside the
 	// market's largest recent shape (Policy.LargestShape), and one of the
@@ -190,10 +189,10 @@ type Policy struct {
 	GPU          map[string]GPUReserve
 	LargestShape LargestShape
 	Batch        BatchWindow
-	// BuildWindow is how long a market keeps the shape of a build that ran
-	// in it free; LongestBuild is the most an image build runs, the images
-	// owner's build timeout.
-	BuildWindow, LongestBuild time.Duration
+	// ArrivalWindow is how far back a CPU market counts what arrived in
+	// it, less its largest batch, as running headroom: work that arrives at
+	// a steady rate finds room, while one burst buys none.
+	ArrivalWindow time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
@@ -233,17 +232,16 @@ func (p Policy) Window(m ReserveMarket) time.Duration {
 	return 2 * p.Starts.Launch
 }
 
-// ArrivalWindow is the span a CPU market's arrivals are counted over, two
-// of its windows: work that arrives in batches up to a launch time apart,
-// less the largest batch, still holds the room the next batch takes.
-func (p Policy) ArrivalWindow() time.Duration { return 2 * p.Window(ReserveMarket{}) }
-
 // DefaultPolicy is the policy the planner runs.
 func DefaultPolicy() Policy {
 	cpuMarket := MarketReserve{
-		Running:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib}, LoadPercent: 25},
+		Floor:      FleetCapacity{CPUMillis: 1000, MemoryBytes: 4 * gib},
 		Stopped:    HeadroomTarget{Floor: FleetCapacity{CPUMillis: 3000, MemoryBytes: 12 * gib}, LoadPercent: 50},
 		FitLargest: true,
+	}
+	starts := StartTimes{
+		Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
+		SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second, Update: 10 * time.Second,
 	}
 	// Spot keeps only the floor stopped: its launches serve in about 25 s,
 	// so reserves sized to load cost more than the starts they speed up.
@@ -273,16 +271,12 @@ func DefaultPolicy() Policy {
 		LargestShape: LargestShape{
 			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
 		},
-		Batch:        BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		BuildWindow:  time.Hour,
-		LongestBuild: time.Hour,
-		SpotPriceAge: time.Hour,
-		SpotWait:     2 * time.Minute,
-		QueueTimeout: 20 * time.Minute,
-		Starts: StartTimes{
-			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
-			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second, Update: 10 * time.Second,
-		},
+		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		ArrivalWindow: 2 * starts.Launch,
+		SpotPriceAge:  time.Hour,
+		SpotWait:      2 * time.Minute,
+		QueueTimeout:  20 * time.Minute,
+		Starts:        starts,
 	}
 }
 

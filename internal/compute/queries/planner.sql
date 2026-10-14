@@ -108,18 +108,15 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- By purchase market and GPU model: the largest CPU, memory and GPUs placed
 -- platform containers reserved, the most disks one attached, and the bytes
 -- of platform volumes they read with how many started, among the newest
--- containers created within the window, up to the sample (recent); the
--- same among the build containers that stopped within the build window
--- (build), since a market keeps a recent build's shape free; and, by CPU
--- market, what its platform containers of the sample placed within the
+-- containers created within the window, up to the sample (recent); and, by
+-- CPU market, what its platform containers of the sample placed within the
 -- arrival window reserve, less their largest batch (arrived): a steady
 -- rate of work, which a single burst is not, counted when placed so work
 -- that waited for a host still counts. A batch is arrivals less than
 -- batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
--- builds read are those created within build_scan, the window and the
--- longest a build runs. Both reads follow primary keys, so they read at
--- most sample_size containers and the scan's builds whatever the history;
--- the subqueries make their bounds constants the indexes can use.
+-- read follows the primary key, so it reads at most sample_size containers
+-- whatever the history; the subquery makes its bound a constant the index
+-- can use.
 with recent as (
     select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.billing_owner, c.assigned_at,
            c.rate_class in ('auto', 'pinned') as preemptible,
@@ -134,23 +131,12 @@ with recent as (
         limit @sample_size
     ) c
     left join releases r on r.id = c.release_id
-), builds as (
-    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class in ('auto', 'pinned') as preemptible
-    from image_builds b
-    join containers c on c.image_build_id = b.id
-    where b.id > (select uuidv7(- make_interval(secs => @build_scan_seconds::float8)))
-      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.state = 'stopped'
-      and c.stopped_at > now() - make_interval(secs => @build_window_seconds::float8)
 )
 select 'recent'::text as kind, preemptible::bool, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
        max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 2, 3
-union all
-select 'build', preemptible, gpu_type, max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
-from builds
 group by 2, 3
 union all
 select 'arrived', preemptible, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0

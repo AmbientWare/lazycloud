@@ -351,7 +351,7 @@ func (s *sim) place() {
 				serving, rooms = append(serving, h), append(rooms, s.load(h))
 			}
 		}
-		i := ChooseHost(rooms, c.need, s.p.OnDemand.Running.Floor)
+		i := ChooseHost(rooms, c.need, s.p.OnDemand.Floor)
 		if i < 0 {
 			return false
 		}
@@ -500,7 +500,7 @@ func (s *sim) plan() (time.Duration, bool) {
 	// run is arrivals less than the batch's quiet apart, cut into batches of
 	// its max from the run's first; containers placed earlier drop out of
 	// the log.
-	window := s.p.ArrivalWindow()
+	window := s.p.ArrivalWindow
 	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.started) >= window })
 	arrived := map[ReserveMarket]FleetCapacity{}
 	for _, m := range []ReserveMarket{{Preemptible: true}, {}} {
