@@ -173,10 +173,10 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	}
 }
 
-// A fleet container that no launched host took within the queue timeout
-// stops as a start failure naming why it waited, and its queued work fails
-// at once; one younger, one a launched host will take and one pinned to a
-// joined machine keep waiting.
+// A platform fleet container that no launched host took within the queue
+// timeout stops as a start failure naming why it waited, and its queued
+// work fails at once; one younger, one a launched host will take, one
+// pinned to a joined machine and a connected account's keep waiting.
 func TestPendingWorkFailsAfterTheQueueTimeout(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
@@ -199,6 +199,20 @@ values ($1, $2, 'pending', 1, 1000, 1 << 29, now() - make_interval(secs => $3), 
 	launched := newHost(t, pool)
 	exec(t, pool, "update hosts set provider = 'aws', phase = 'booting' where id = $1", launched)
 	coming := pending(timeout+time.Minute, string(compute.WaitProvisioning), &launched)
+	connected := newRelease(t, pool, `{}`)
+	var account uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+with u as (insert into users (email) values ('c-' || gen_random_uuid() || '@example.com') returning id),
+     conn as (insert into cloud_connections (account_id, aws_account_id, phase) select id, '111122223333', 'ready' from u returning id)
+update workspaces set connection_id = conn.id from conn where workspaces.id = $1 returning conn.id`, connected.workspace).Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	var theirs uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
+values ($1, $2, 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
+		t.Fatal(err)
+	}
 	machine := newRelease(t, pool, `{"placement": {"machine": "studio"}}`)
 	var pinned uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
@@ -227,7 +241,7 @@ values ($1, $2, 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returnin
 	if status != string(TaskFailed) || kind != string(FailureStartFailed) {
 		t.Fatalf("queued task %s (%s), want failed as start_failed", status, kind)
 	}
-	for _, c := range []uuid.UUID{young, coming, pinned} {
+	for _, c := range []uuid.UUID{young, coming, pinned, theirs} {
 		if state := containerState(t, pool, c); state != ContainerPending {
 			t.Errorf("container %s is %s, want pending", c, state)
 		}
