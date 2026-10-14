@@ -1116,15 +1116,12 @@ func (ps *pass) lendable(h FleetHost) bool {
 	return ps.reserved(v, h.ID, FleetHost.resumable).Covers(v.Stopped) && ps.leavesLarge(h)
 }
 
-// demandClass is pending containers that can share offers, by shape, and
-// the running headroom of their market that the hosts bought for them
-// hold too.
+// demandClass is pending containers that can share offers, by shape.
 type demandClass struct {
-	need     Requirement
-	key      string
-	market   ReserveMarket
-	groups   []itemGroup
-	headroom FleetCapacity
+	need   Requirement
+	key    string
+	market ReserveMarket
+	groups []itemGroup
 }
 
 // itemGroup is a class's containers of one shape and disk count.
@@ -1135,13 +1132,9 @@ type itemGroup struct {
 }
 
 // coverNeed is what is left of the class's groups, of those only keeps
-// when it is set, with the class's headroom when it is not, and the index
-// of each need item's group.
+// when it is set, and the index of each need item's group.
 func coverNeed(c *demandClass, only func(coverItem) bool) (CoverNeed, []int) {
 	var need CoverNeed
-	if only == nil {
-		need.Aggregate = c.headroom
-	}
 	var at []int
 	for i, g := range c.groups {
 		if len(g.items) == 0 || only != nil && !only(g.items[0]) {
@@ -1156,30 +1149,14 @@ func coverNeed(c *demandClass, only func(coverItem) bool) (CoverNeed, []int) {
 // buyFor covers what no running host or resumed reserve holds with new
 // hosts, per class of containers that share offers, unless containers are
 // still arriving or the fleet limit is reached, and records why each
-// container left waits. In the CPU Spot market, whose headroom follows its
-// arrivals, the first class buys what the market's target lacks beyond
-// the work and the floor too, so the next arrivals find the room rather
-// than wait for a launch.
+// container left waits.
 func (ps *pass) buyFor(items []coverItem) {
-	spotCPU := ReserveMarket{Preemptible: true}
-	var headroom FleetCapacity
-	if v := ps.byMarket[spotCPU]; v != nil && !v.Floor.Empty() {
-		headroom = v.Running.Minus(ps.held(v)).Minus(v.Floor).Clamp()
-		for _, it := range items {
-			if it.market == spotCPU {
-				headroom = headroom.Minus(reservedShape(it.need)).Clamp()
-			}
-		}
-	}
 	var classes []*demandClass
 	for _, it := range items {
 		need, key := ps.classKey(it.need)
 		n := slices.IndexFunc(classes, func(c *demandClass) bool { return c.key == key })
 		if n < 0 {
 			classes = append(classes, &demandClass{need: need, key: key, market: it.market})
-			if it.market == spotCPU {
-				classes[len(classes)-1].headroom, headroom = headroom, FleetCapacity{}
-			}
 			n = len(classes) - 1
 		}
 		c := classes[n]
@@ -1225,7 +1202,6 @@ func (ps *pass) buyFor(items []coverItem) {
 func (ps *pass) buyClass(c *demandClass, r ranking) {
 	m, offers := c.market, r.offers
 	if m.GPU == "" {
-		ps.coverClass(c, m, ps.atLeastHeadroom(ps.byMarket[m], offers), r, nil)
 		ps.coverClass(c, m, offers, r, nil)
 		return
 	}
@@ -1292,8 +1268,6 @@ func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer,
 			holds = holds.Plus(reservedShape(it.need))
 			ids[n] = it.id
 		}
-		// The headroom rides: a walk that refuses the pool keeps the work.
-		c.headroom = c.headroom.Minus(node.Offer.Usable.Minus(holds).Clamp()).Clamp()
 		action := ps.buy(m, node.Offer, ActionBuy, holds, ids, nil)
 		for _, it := range taken {
 			ps.provisioning(it, nil, ptr(action))
@@ -1505,11 +1479,7 @@ func (ps *pass) grow(v *marketView, kept FleetCapacity, floorHeld bool) bool {
 		return grew
 	}
 	r := ps.marketRanking(v.m, false)
-	offers := r.offers
-	if big := ps.atLeastHeadroom(v, offers); len(big) > 0 {
-		offers = big
-	}
-	result := Cover(offers, need, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom), r))
+	result := Cover(r.offers, need, servingCost(ps.p), ps.limits(min(ps.room(v.m), ps.hostRoom), r))
 	for _, node := range result.Nodes {
 		holds := node.Offer.Usable.Lower(need.Aggregate)
 		if len(node.Placed) > 0 && node.Placed[0] > 0 {
@@ -1526,19 +1496,6 @@ func (ps *pass) grow(v *marketView, kept FleetCapacity, floorHeld bool) bool {
 		v.warmReason = ps.shortReason(v.m, shapeNeed(v.m, v.shortfall.Lower(ps.p.LargestShape.Cap)), false)
 	}
 	return grew
-}
-
-// atLeastHeadroom are the CPU Spot market's Spot offers whose hosts hold
-// at least its running headroom, up to the size cap: Spot costs less per
-// core on larger hosts, so a growing market buys hosts that grow with it,
-// and the room they leave serves its next arrivals. Other markets buy
-// what their purchase needs; none for them.
-func (ps *pass) atLeastHeadroom(v *marketView, offers []FleetOffer) []FleetOffer {
-	if v.m != (ReserveMarket{Preemptible: true}) || v.Floor.Empty() {
-		return nil
-	}
-	least := v.Want.Minus(v.Load).Clamp().Lower(ps.p.LargestShape.Cap)
-	return slices.DeleteFunc(slices.Clone(offers), func(o FleetOffer) bool { return o.Market != MarketSpot || !o.Usable.Covers(least) })
 }
 
 // headroomReserve is the cheapest reserve of market v on the target agent
