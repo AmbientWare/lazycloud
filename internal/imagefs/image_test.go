@@ -7,20 +7,17 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
+
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // Every layer of python:3.12-slim reads back as the tar holds it, and its
 // index names the layer by the image's diff_id.
 func TestPythonLayersRoundTrip(t *testing.T) {
 	t.Parallel()
-	ref, err := name.ParseReference("python:3.12-slim")
-	if err != nil {
-		t.Fatal(err)
-	}
-	img, err := remote.Image(ref, remote.WithContext(t.Context()), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}))
+	const image = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+	img, err := imagefstest.Image(t.Context(), image, v1.Platform{OS: "linux", Architecture: runtime.GOARCH})
 	if err != nil {
 		t.Fatal(err)
 	}

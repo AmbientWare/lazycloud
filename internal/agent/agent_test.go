@@ -268,7 +268,7 @@ func TestAgentReconnectsAfterServerRestart(t *testing.T) {
 // A start grants its image's layers to the snapshotter, then pulls the
 // image lazily: no layer blob downloads.
 func TestAgentPullsAMissingImage(t *testing.T) {
-	const image = "python:3.12-alpine"
+	const image = alpineImage
 	e := newEnv(t)
 	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatal(err)
@@ -293,7 +293,7 @@ func TestAgentPullsAMissingImage(t *testing.T) {
 // A start without its image's grants fails: the snapshotter makes no
 // layer present without one, so no start pulls a workload image unread.
 func TestAStartWithoutGrantsFails(t *testing.T) {
-	const image = "python:3.11-alpine"
+	const image = ungrantedImage
 	e := newEnv(t)
 	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatal(err)

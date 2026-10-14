@@ -29,7 +29,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-const testImage = "python:3.12-slim"
+// The images tests start, pinned so that the image cache serves them.
+const (
+	testImage   = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+	alpineImage = "docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4"
+	// ungrantedImage is pulled by no test, so no grant of it exists.
+	ungrantedImage = "docker.io/library/python:3.11-alpine@sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929"
+)
 
 // supervisorBinary is built once per test binary by TestMain.
 var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain

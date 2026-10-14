@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -59,11 +61,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	// Registered first, so it runs after the cleanups that use the client.
 	t.Cleanup(func() { _ = ctrd.Close() })
 
-	parsed, err := name.ParseReference(platformimages.Mount)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, err := remote.Image(parsed, remote.WithContext(ctx), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
+	base, err := imagefstest.Image(ctx, platformimages.Mount, v1.Platform{OS: "linux", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}

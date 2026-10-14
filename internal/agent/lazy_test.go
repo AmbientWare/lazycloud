@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -20,9 +22,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -36,7 +36,7 @@ import (
 // registry. Every host reads images through its snapshotter, so TestMain
 // converts their layers into layerBucket, as the server does, and start
 // commands and sessions carry the grants it would send.
-var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
+var lazyImages = []string{testImage, alpineImage, testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
 var imageLayers = map[string][]*imagefsproto.LayerGrant{}
@@ -54,13 +54,9 @@ func convertLazyImages(ctx context.Context) error {
 	presign := s3.NewPresignClient(store)
 	expires := time.Now().Add(12 * time.Hour)
 	for _, ref := range lazyImages {
-		r, err := name.ParseReference(ref)
+		img, err := imagefstest.Image(ctx, ref, v1.Platform{OS: "linux", Architecture: runtime.GOARCH})
 		if err != nil {
 			return err
-		}
-		img, err := remote.Image(r, remote.WithContext(ctx), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}))
-		if err != nil {
-			return fmt.Errorf("resolve %s: %w", ref, err)
 		}
 		layers, err := img.Layers()
 		if err != nil {
@@ -166,7 +162,7 @@ func noLayerSince(t *testing.T, image string, since time.Time) {
 // and reads reach FUSE.
 func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
 	t.Parallel()
-	const image = "python:3.12-alpine"
+	const image = alpineImage
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
