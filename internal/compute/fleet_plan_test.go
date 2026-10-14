@@ -1036,6 +1036,31 @@ func TestSpotGPUWorkBuysOnDemandOnceItHasWaitedTheSpotWait(t *testing.T) {
 	}
 }
 
+// Spot-tolerant GPU work whose Spot offers only fail the margin buys Spot
+// at a loss once it has waited the Spot wait, where Spot costs less than
+// on-demand.
+func TestSpotGPUWorkAtALossBuysSpotFirst(t *testing.T) {
+	s := gpuPlanSnapshot(t)
+	s.Offers.Spot = nil
+	for _, typ := range FleetCatalog() {
+		if typ.GPU == "L4" || typ.GPU == "A10G" {
+			price, _ := typ.OnDemandMicros("us-east-2")
+			s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ.Name, HourlyMicros: price * 95 / 100, ObservedAt: offerNow})
+		}
+	}
+	s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
+		Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow.Add(-gpuPolicy().SpotWait)}}}}
+	var markets []Market
+	for _, a := range actionsOf(PlanFleet(gpuPolicy(), s), ActionBuy) {
+		if len(a.Containers) > 0 {
+			markets = append(markets, a.Offer.Market)
+		}
+	}
+	if !slices.Equal(markets, []Market{MarketSpot}) {
+		t.Fatalf("bought %v for the work, want one Spot host", markets)
+	}
+}
+
 // A Spot GPU market whose reserve serves waits for it to return rather than
 // buy another, however long it has been short; the CPU Spot market buys
 // once the return wait passes.

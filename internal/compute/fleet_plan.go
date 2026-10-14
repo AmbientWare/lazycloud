@@ -1368,8 +1368,8 @@ func (ps *pass) buyFor(items []coverItem) {
 // prices scale with size, so on-demand hosts hold what the cover needs.
 // GPU work buys its models in its preference order: Spot-tolerant work on
 // Spot, on-demand only what no Spot offer of any model can host, and, once
-// it has waited the Spot wait, an on-demand host of its own whatever the
-// margin.
+// it has waited the Spot wait, a host of its own whatever the margin
+// (buyAtLoss).
 func (ps *pass) buyClass(c *demandClass, r ranking) {
 	m, offers := c.market, r.offers
 	if m.GPU != "" {
@@ -1400,8 +1400,9 @@ func (ps *pass) buyClass(c *demandClass, r ranking) {
 }
 
 // buyAtLoss buys each container of Spot-tolerant GPU class c that waited
-// the Spot wait while no Spot offer of a model it accepts can host it an
-// on-demand host of its own, the purchase margin set aside.
+// the Spot wait while no Spot offer of a model it accepts can host it
+// within the margin a host of its own with the margin set aside: Spot of
+// any model it accepts first, then on-demand.
 func (ps *pass) buyAtLoss(c *demandClass) {
 	waited := func(it coverItem) bool {
 		return !it.slot && ps.s.Now.Sub(it.since) >= ps.p.SpotWait && !ps.spotOffered(it.need)
@@ -1420,10 +1421,12 @@ func (ps *pass) buyAtLoss(c *demandClass) {
 				continue
 			}
 			alone := &demandClass{need: c.need, key: c.key, market: c.market, groups: []itemGroup{{shape: g.shape, disks: g.disks, items: []coverItem{it}}}}
-			for _, model := range ps.gpuModels(c.need, r.offers) {
-				ps.coverClass(alone, ReserveMarket{Preemptible: true, GPU: model}, slices.DeleteFunc(slices.Clone(r.offers), func(o FleetOffer) bool {
-					return o.Type.GPU != model || o.Market != MarketOnDemand
-				}), r, nil, true)
+			for _, market := range []Market{MarketSpot, MarketOnDemand} {
+				for _, model := range ps.gpuModels(c.need, r.offers) {
+					ps.coverClass(alone, ReserveMarket{Preemptible: true, GPU: model}, slices.DeleteFunc(slices.Clone(r.offers), func(o FleetOffer) bool {
+						return o.Type.GPU != model || o.Market != market
+					}), r, nil, true)
+				}
 			}
 			if len(alone.groups[0].items) == 0 {
 				g.items = slices.DeleteFunc(g.items, func(o coverItem) bool { return o.id == it.id })

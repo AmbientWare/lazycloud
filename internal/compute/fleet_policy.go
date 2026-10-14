@@ -222,8 +222,8 @@ type Policy struct {
 	// able to hold it waits for that work to end before it buys a host.
 	FloorHold time.Duration
 	// SpotWait is how long Spot-tolerant GPU work waits while no Spot offer
-	// of a model it accepts can host it before it buys an on-demand host of
-	// its own, the purchase margin set aside for that host.
+	// of a model it accepts can host it within the purchase margin before it
+	// buys a host of its own with the margin set aside, Spot first.
 	SpotWait time.Duration
 	// QueueTimeout is how long pending fleet work waits for a host that has
 	// not launched before execution ends it as a start failure.
