@@ -193,3 +193,54 @@ func TestAGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
 		t.Errorf("the L4 market ends without a reserve, or the job did not run (%d)", len(r.fnWaits["gpu"]))
 	}
 }
+
+// gpusmall is the on-demand A10G function prodcheck6 ran on 2026-10-14.
+var gpusmall = Requirement{GPUs: []string{"A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 20 * gib}
+
+// One on-demand A10G job holds one serving GPU host: GPU markets keep no
+// running headroom, so no second host idles beside the one it runs on.
+func TestAnOnDemandGPUJobHoldsOneServingHost(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	a10g := ReserveMarket{GPU: "A10G"}
+	s.recent = map[ReserveMarket]FleetCapacity{a10g: reservedShape(gpusmall)}
+	r := s.run(30*time.Minute, []simArrival{{at: time.Minute, need: gpusmall, count: 1, runs: 7 * time.Minute, fn: "gpu"}})
+	if len(r.fnWaits["gpu"]) != 1 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 1, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+	if n := r.mostServing[a10g]; n > 1 || r.idleGPU > 0 {
+		t.Errorf("served the job on up to %d GPU hosts, with an idle one beside it in %d passes", n, r.idleGPU)
+	}
+}
+
+// A job that arrives two seconds after the last one ended takes its host:
+// the market releases nothing it buys back.
+func TestAJobArrivingAsTheLastEndsTakesItsHost(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	a10g := ReserveMarket{GPU: "A10G"}
+	s.recent = map[ReserveMarket]FleetCapacity{a10g: reservedShape(gpusmall)}
+	s.run(6*time.Minute, []simArrival{{at: time.Minute, need: gpusmall, count: 1, runs: 7 * time.Minute, fn: "gpu"}})
+	var ends time.Time
+	for _, h := range s.hosts {
+		for _, c := range h.containers {
+			ends = c.ends
+		}
+	}
+	if ends.IsZero() {
+		t.Fatal("the first job never started")
+	}
+	s.start = s.now
+	s.run(ends.Sub(s.now), nil)
+	s.start = s.now
+	r := s.run(20*time.Minute, []simArrival{{at: 2 * time.Second, need: gpusmall, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
+	if len(r.fnWaits["gpu"]) != 2 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 2, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+	if r.rebought > 0 {
+		t.Errorf("bought back %d times within %s of a release", r.rebought, simRebuy)
+	}
+	if w := r.fnWaits["gpu"][1]; w > simTick {
+		t.Errorf("the second job waited %s", w)
+	}
+}

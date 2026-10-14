@@ -195,6 +195,31 @@ type simResult struct {
 	// seconds GPU hosts ran.
 	cpuLaunches, evicted, evictedAgain int
 	gpuHostSec                         float64
+	// unusedBy counts by market the serving hosts that left without running
+	// a container, and mostServing the most hosts of each that served at
+	// once.
+	unusedBy, mostServing map[ReserveMarket]int
+	// idleGPU counts the passes that left a market's serving GPU host
+	// without a container while the market had load.
+	idleGPU int
+	// growth and releases are each market's resumes and purchases to serve
+	// and its serving hosts' drains and returns to the reserve; rebought
+	// counts growth within simRebuy of a release there.
+	growth, releases []simEvent
+	rebought         int
+	// headroomBuys counts purchases for no container in a market whose
+	// serving and starting hosts held its load and warm target already.
+	headroomBuys int
+}
+
+// simRebuy is how soon growth after a release counts as buying it back.
+const simRebuy = 2 * time.Minute
+
+// simEvent is a pass's move in a market, naming the host it moved.
+type simEvent struct {
+	at     time.Time
+	market ReserveMarket
+	host   HostID
 }
 
 // simPurchase is one reserve purchase: its market and each pool its launch
@@ -454,16 +479,28 @@ func (s *sim) advance() {
 		gone := h.State == FleetDraining && len(h.containers) == 0
 		if gone && !h.served {
 			s.r.unused++
+			if s.r.unusedBy == nil {
+				s.r.unusedBy = map[ReserveMarket]int{}
+			}
+			s.r.unusedBy[h.market()]++
 		}
 		return gone
 	})
-	serving := 0
+	serving := map[ReserveMarket]int{}
 	for _, h := range s.hosts {
 		if h.State == FleetServing {
-			serving++
+			serving[h.market()]++
 		}
 	}
-	s.r.mostHosts = max(s.r.mostHosts, serving)
+	if s.r.mostServing == nil {
+		s.r.mostServing = map[ReserveMarket]int{}
+	}
+	total := 0
+	for m, n := range serving {
+		s.r.mostServing[m] = max(s.r.mostServing[m], n)
+		total += n
+	}
+	s.r.mostHosts = max(s.r.mostHosts, total)
 }
 
 // place puts pending containers on serving hosts as placement does: the
@@ -722,6 +759,7 @@ func (s *sim) plan() time.Duration {
 		}
 	}
 	s.check(snapshot, plan)
+	s.watch(snapshot, plan)
 	s.apply(plan)
 	held := map[ReserveMarket]int{}
 	for _, h := range s.hosts {
@@ -736,6 +774,77 @@ func (s *sim) plan() time.Duration {
 		s.mostReserves[m] = max(s.mostReserves[m], n)
 	}
 	return plan.BatchWait
+}
+
+// watch records each market's moves in a pass: growth, releases of
+// serving hosts, growth within simRebuy of a release, purchases for
+// headroom the market's serving and starting hosts held already, and
+// passes that left a GPU host idle beside its market's work.
+func (s *sim) watch(snapshot FleetSnapshot, plan FleetPlan) {
+	hosts := map[HostID]FleetHost{}
+	busy := map[ReserveMarket]bool{}
+	for _, h := range snapshot.Hosts {
+		hosts[h.ID] = h
+		if h.Containers > 0 {
+			busy[h.market()] = true
+		}
+	}
+	for _, a := range plan.Actions {
+		switch a.Kind {
+		case ActionBuy:
+			m := reserveMarketOf(a.Offer.Market, a.Offer.Type.GPU)
+			if len(a.Containers) == 0 && s.held(snapshot, plan, m) {
+				s.r.headroomBuys++
+			}
+			s.grew(m, HostID{})
+		case ActionResume:
+			s.grew(hosts[*a.Host].market(), *a.Host)
+		case ActionDrain, ActionReturnToReserve:
+			if h := hosts[*a.Host]; h.State == FleetServing {
+				s.r.releases = append(s.r.releases, simEvent{at: s.now, market: h.market(), host: h.ID})
+			}
+		case ActionBuyReserve, ActionRightsize, ActionCancel, ActionRetireReserve, ActionHandBack, ActionLend:
+		}
+	}
+	for _, h := range snapshot.Hosts {
+		if h.State == FleetServing && h.GPU != "" && h.Containers == 0 && !h.UpdateDue && busy[h.market()] {
+			s.r.idleGPU++
+		}
+	}
+}
+
+// held reports whether market m's serving and starting hosts in the
+// snapshot hold its load and warm target as the pass published them.
+func (s *sim) held(snapshot FleetSnapshot, plan FleetPlan, m ReserveMarket) bool {
+	i := slices.IndexFunc(plan.Markets, func(mp MarketPlan) bool { return mp.Market == m })
+	if i < 0 {
+		return false
+	}
+	var held FleetCapacity
+	for _, h := range snapshot.Hosts {
+		if h.market() == m && (h.State == FleetServing || h.State == FleetStarting) {
+			held = held.Plus(h.Usable)
+		}
+	}
+	return held.Covers(plan.Markets[i].Load.Plus(plan.Markets[i].WarmTarget))
+}
+
+// grew records growth in market m, and growth within simRebuy of a release
+// there.
+func (s *sim) grew(m ReserveMarket, host HostID) {
+	if r := lastEvent(s.r.releases, m); r != nil && s.now.Sub(r.at) < simRebuy {
+		s.r.rebought++
+	}
+	s.r.growth = append(s.r.growth, simEvent{at: s.now, market: m, host: host})
+}
+
+func lastEvent(events []simEvent, m ReserveMarket) *simEvent {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].market == m {
+			return &events[i]
+		}
+	}
+	return nil
 }
 
 // check asserts every action names its reason, no purchase serves a
