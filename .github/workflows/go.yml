@@ -21,6 +21,10 @@ on:
       - "deploy/local/garage-bootstrap.sh"
       - "deploy/local/install-snapshotter.sh"
       - "deploy/local/acceptance.sh"
+      # The supervisor's HTTP runner tests run the Python runner.
+      - "python/**"
+      - "pyproject.toml"
+      - "uv.lock"
   push:
     branches: [main]
 
@@ -37,11 +41,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      # Test images, pinned by digest, from the run that last pulled them.
-      - uses: actions/cache@v6
-        with:
-          path: .lazycloud/test-images
-          key: test-images-${{ hashFiles('internal/agent/harness_test.go', 'internal/agent/lazy_test.go', 'internal/agent/workloads_test.go', 'internal/imagefs/image_test.go', 'internal/platformimages/*.go') }}
       - name: PostgreSQL, stripe-mock and the object store
         run: docker compose -f compose.test.yaml up -d --wait
       - name: GeeseFS for volume mount tests
@@ -82,14 +81,14 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: .lazycloud/test-images
-          key: test-images-${{ hashFiles('internal/agent/harness_test.go', 'internal/agent/lazy_test.go', 'internal/agent/workloads_test.go', 'internal/imagefs/image_test.go', 'internal/platformimages/*.go') }}
+          key: test-images-${{ hashFiles('internal/agent/*_test.go', 'internal/imagefs/*_test.go', 'internal/platformimages/*.go') }}
       - name: Install the snapshotter as hosts do
         run: deploy/local/install-snapshotter.sh
       - name: Object store for layers and volumes
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race -tags hostruntime ./internal/imagefs/...
+      - run: go test -race -tags hostruntime ./internal/imagefs ./internal/imagefs/layersource
       # The agent binds volumes and the snapshotter mounts FUSE and overlay
       # filesystems as root, as on hosts, and a join installs as root. A
       # skipped volume mount test fails the job.
