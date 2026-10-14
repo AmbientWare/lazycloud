@@ -13,6 +13,7 @@ import (
 )
 
 func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -70,6 +71,7 @@ func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
 }
 
 func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -113,6 +115,7 @@ func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
 // on that model alone. Work pinned to a joined machine, or in a connected
 // account's workspace, runs any model.
 func TestAdmitRefusesGPUModelsTheFleetDoesNotOffer(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -153,6 +156,7 @@ update workspaces set connection_id = (select id from conn) where id = $2`, owne
 }
 
 func TestStorageIsMeteredAndShownOnTheUsagePage(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -247,6 +251,7 @@ func TestStorageIsMeteredAndShownOnTheUsagePage(t *testing.T) {
 }
 
 func TestEgressIsPricedOncePerClosedQuarter(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -283,6 +288,7 @@ func TestEgressIsPricedOncePerClosedQuarter(t *testing.T) {
 }
 
 func TestHeldDisksPayForTheirSizeAndRetainedDataIsFree(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)

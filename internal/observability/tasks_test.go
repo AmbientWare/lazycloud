@@ -27,6 +27,7 @@ func (f *fixture) claim(host compute.HostID, container execution.ContainerID) ex
 // Any task of a call graph returns the whole graph from its root, parents
 // before children, with dependencies; other workspaces cannot read it.
 func TestCallGraphReadsTheWholeGraphFromAnyTask(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 100}`)
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
 	root := f.submit(1)[0]
@@ -76,6 +77,7 @@ func TestCallGraphReadsTheWholeGraphFromAnyTask(t *testing.T) {
 // so the host's attempt span joins that trace; an untraced submit stores
 // none.
 func TestClaimCarriesTheSubmittingTrace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 100}`)
 	host, container := f.placedContainer(f.release)
 	sc := trace.NewSpanContext(trace.SpanContextConfig{

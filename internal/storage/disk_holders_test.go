@@ -31,6 +31,7 @@ func (f *fixture) containerOn(host compute.HostID) uuid.UUID {
 // TestGenerationsNameTheirIndexBySHA256: a generation's index key is built
 // from its sha256, so one that is not a sha256 is refused.
 func TestGenerationsNameTheirIndexBySHA256(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	container := f.container()
@@ -48,6 +49,7 @@ func TestGenerationsNameTheirIndexBySHA256(t *testing.T) {
 // TestHolderOnALostHostReleasesTheDisk: a holder that stopped normally but
 // never released keeps the disk only while its host can still release it.
 func TestHolderOnALostHostReleasesTheDisk(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	s := f.storage
@@ -88,6 +90,7 @@ func TestHolderOnALostHostReleasesTheDisk(t *testing.T) {
 // TestDeletingTheHolderContainerEndsTheLease: the lease's holder and token
 // clear together, so the row check holds.
 func TestDeletingTheHolderContainerEndsTheLease(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	container := f.container()
@@ -107,6 +110,7 @@ func TestDeletingTheHolderContainerEndsTheLease(t *testing.T) {
 // on a replay, until it collects its index; the recorded index stays
 // uncollectable.
 func TestSupersededUploadsGoToTheHolder(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	s := f.storage

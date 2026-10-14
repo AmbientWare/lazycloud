@@ -19,7 +19,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,11 +46,18 @@ const (
 	// platformAccount is the account id the platform's workspace buckets
 	// are named with.
 	platformAccount = "100000000000"
-	// staleAfter outlasts any test binary. Open removes test buckets older
-	// than that, left by a binary that panicked or timed out before its
-	// cleanup ran.
+	// staleAfter outlasts any test binary. A binary's first Open removes
+	// test buckets older than that, left by a binary that panicked or timed
+	// out before its cleanup ran.
 	staleAfter = 24 * time.Hour
 )
+
+// swept is the removal of stale test buckets, which the first Open of a
+// binary runs.
+var swept struct { //nolint:gochecknoglobals // One sweep per test binary.
+	sync.Once
+	err error
+}
 
 // Config returns buckets made for t alone: a platform bucket, a layer bucket
 // and a workspace bucket prefix, all named after one random prefix.
@@ -77,11 +86,16 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 	// workspace id within S3's 63.
 	prefix := namePrefix + hex.EncodeToString(suffix)
 	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
-	stale := time.Now().Add(-staleAfter)
-	if err := admin.removeBuckets(ctx, func(alias string, created time.Time) bool {
-		return strings.HasPrefix(alias, namePrefix) && created.Before(stale)
-	}); err != nil {
-		return storage.Config{}, nil, fmt.Errorf("test object store (docker compose -f compose.test.yaml up -d --wait): %w", err)
+	swept.Do(func() {
+		stale := time.Now().Add(-staleAfter)
+		// A bucket without an alias is out of every key's reach: a
+		// connected account's whose key a test deleted.
+		swept.err = admin.removeBuckets(ctx, func(alias string, created time.Time) bool {
+			return (alias == "" || strings.HasPrefix(alias, namePrefix)) && created.Before(stale)
+		})
+	})
+	if swept.err != nil {
+		return storage.Config{}, nil, fmt.Errorf("test object store (docker compose -f compose.test.yaml up -d --wait): %w", swept.err)
 	}
 	cfg = storage.Config{
 		Endpoint:        endpoint(),
@@ -299,12 +313,17 @@ func (g garage) createBucket(ctx context.Context, bucket string) error {
 }
 
 // removeBuckets removes every bucket whose alias and creation time match,
-// reporting every failure.
+// reporting every failure. A bucket a key created through the S3 API has
+// only that key's local alias, and none once the key is gone, which match
+// sees as "".
 func (g garage) removeBuckets(ctx context.Context, match func(alias string, created time.Time) bool) error {
 	var buckets []struct {
 		ID            string    `json:"id"`
 		Created       time.Time `json:"created"`
 		GlobalAliases []string  `json:"globalAliases"`
+		LocalAliases  []struct {
+			Alias string `json:"alias"`
+		} `json:"localAliases"`
 	}
 	if err := g.call(ctx, http.MethodGet, "ListBuckets", nil, nil, &buckets); err != nil {
 		return err
@@ -312,10 +331,17 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 	objects := Client()
 	var errs []error
 	for _, bucket := range buckets {
-		for _, alias := range bucket.GlobalAliases {
+		aliases := slices.Clone(bucket.GlobalAliases)
+		for _, local := range bucket.LocalAliases {
+			aliases = append(aliases, local.Alias)
+		}
+		if len(aliases) == 0 {
+			aliases = []string{""}
+		}
+		for _, alias := range aliases {
 			if match(alias, bucket.Created) {
-				if err := g.removeBucket(ctx, objects, bucket.ID, alias); err != nil {
-					errs = append(errs, fmt.Errorf("remove bucket %s: %w", alias, err))
+				if err := g.removeBucket(ctx, objects, bucket.ID, alias, len(bucket.GlobalAliases) > 0); err != nil {
+					errs = append(errs, fmt.Errorf("remove bucket %s %s: %w", bucket.ID, alias, err))
 				}
 				break
 			}
@@ -326,21 +352,17 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 
 // removeBucket deletes the keys granted on a bucket other than the
 // development key, then its objects and the bucket. What another caller
-// removed first counts as removed.
-func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string) error {
+// removed first counts as removed. A bucket without a global alias gets
+// one, so that the development key can empty it.
+func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string, global bool) error {
 	var info struct {
 		Keys []struct {
 			AccessKeyID string `json:"accessKeyId"`
 		} `json:"keys"`
+		Objects           int64 `json:"objects"`
+		UnfinishedUploads int64 `json:"unfinishedUploads"`
 	}
 	if err := g.call(ctx, http.MethodGet, "GetBucketInfo", url.Values{"id": {id}}, nil, &info); err != nil {
-		return present(err)
-	}
-	// A bucket another key created through the S3 API admits the
-	// development key only once allowed.
-	if err := g.call(ctx, http.MethodPost, "AllowBucketKey", nil, map[string]any{
-		"bucketId": id, "accessKeyId": accessKeyID, "permissions": map[string]bool{"read": true, "write": true, "owner": true},
-	}, nil); err != nil {
 		return present(err)
 	}
 	var errs []error
@@ -351,6 +373,28 @@ func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias 
 		if err := g.call(ctx, http.MethodPost, "DeleteKey", url.Values{"id": {key.AccessKeyID}}, nil, nil); present(err) != nil {
 			errs = append(errs, err)
 		}
+	}
+	// Garage refuses to delete a bucket that holds objects or uploads, so
+	// a bucket its counters show empty is deleted at once, and emptied
+	// first when they lag.
+	if info.Objects == 0 && info.UnfinishedUploads == 0 &&
+		present(g.call(ctx, http.MethodPost, "DeleteBucket", url.Values{"id": {id}}, nil, nil)) == nil {
+		return errors.Join(errs...)
+	}
+	if !global {
+		if alias == "" {
+			alias = namePrefix + "orphan-" + id[:20]
+		}
+		if err := g.call(ctx, http.MethodPost, "AddBucketAlias", nil, map[string]string{"bucketId": id, "globalAlias": alias}, nil); err != nil {
+			return errors.Join(append(errs, present(err))...)
+		}
+	}
+	// A bucket another key created through the S3 API admits the
+	// development key only once allowed.
+	if err := g.call(ctx, http.MethodPost, "AllowBucketKey", nil, map[string]any{
+		"bucketId": id, "accessKeyId": accessKeyID, "permissions": map[string]bool{"read": true, "write": true, "owner": true},
+	}, nil); err != nil {
+		return errors.Join(append(errs, present(err))...)
 	}
 	if err := empty(ctx, objects, alias); present(err) != nil {
 		return errors.Join(append(errs, err)...)

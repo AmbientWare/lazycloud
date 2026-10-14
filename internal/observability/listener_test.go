@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/observability"
@@ -14,6 +15,7 @@ import (
 
 // One caller may hold MaxPerPrincipal streams; closing one frees its place.
 func TestStreamsPerCallerAreCapped(t *testing.T) {
+	t.Parallel()
 	cfg := observability.ChangesConfig{Retained: 8, Buffer: 8, MaxSubscribers: 10, MaxPerPrincipal: 2}
 	hub := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
 	ws := identity.WorkspaceID(uuid.New())
@@ -40,19 +42,37 @@ func TestStreamsPerCallerAreCapped(t *testing.T) {
 // connection resets every stream, and changes flow again after the hub
 // reconnects.
 func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{"max_pending_tasks": 100}`)
 	cfg := smallHub()
 	cfg.Idle = 50 * time.Millisecond
 	_, sub := runHub(t, f.pool, cfg, f.workspace)
-	time.Sleep(300 * time.Millisecond)
+	// listener waits for the hub's connection, other than not, to have
+	// last run a statement like query and be idle, and returns its pid.
+	listener := func(query string, not int) int {
+		t.Helper()
+		for {
+			var pid int
+			err := f.pool.QueryRow(t.Context(), `select pid from pg_stat_activity
+				where datname = current_database() and pid not in (pg_backend_pid(), $2) and query like $1 and state = 'idle'`, query, not).Scan(&pid)
+			if err == nil {
+				return pid
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal(err)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	// The connection checks itself once idle.
+	pid := listener("select 1", 0)
 	f.submit(1)
 	nextEvent(t, sub)
 	if reason := sub.TakeReset(); reason != "" {
 		t.Fatalf("idle checks reset the stream: %s", reason)
 	}
 
-	f.exec1(`select pg_terminate_backend(pid) from pg_stat_activity
-where datname = current_database() and pid <> pg_backend_pid() and (query = 'select 1' or query like 'listen%')`)
+	f.exec1("select pg_terminate_backend($1)", pid)
 	select {
 	case <-sub.Reset():
 	case <-time.After(10 * time.Second):
@@ -61,17 +81,8 @@ where datname = current_database() and pid <> pg_backend_pid() and (query = 'sel
 	if reason := sub.TakeReset(); reason != observability.ResetMissed {
 		t.Fatalf("reset reason %q", reason)
 	}
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		f.submit(1)
-		select {
-		case <-sub.Events():
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-		sub.TakeReset()
-		if time.Now().After(deadline) {
-			t.Fatal("no change after the hub reconnected")
-		}
-	}
+	// Changes committed once the hub listens again reach the stream.
+	listener("listen %", pid)
+	f.submit(1)
+	nextEvent(t, sub)
 }

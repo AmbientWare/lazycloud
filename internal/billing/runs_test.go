@@ -13,6 +13,7 @@ import (
 // ran for, so the usage page can open it; the time no run used stays with
 // the workload, and the rows still add up to the window's total.
 func TestCostsByTaskSplitContainerTimeAmongItsRuns(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)

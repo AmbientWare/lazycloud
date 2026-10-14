@@ -32,7 +32,10 @@ type Account struct {
 }
 
 // GitHub redeems a code only with the PKCE verifier whose challenge the
-// authorize URL carried, and only for the expected redirect URI.
+// authorize URL carried, and only for the expected redirect URI. It answers
+// as GitHub's OAuth web flow and REST API documentation records: a refused
+// code exchange is HTTP 200 with error bad_verification_code, and
+// /user/emails lists every address with its primary and verified flags.
 type GitHub struct {
 	t           *testing.T
 	URL         string
