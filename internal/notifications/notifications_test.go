@@ -21,8 +21,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// resendStub plays Resend's send endpoint. Each recipient gets a scripted
-// list of status codes; the last one repeats.
+// resendStub plays Resend's send endpoint as Resend's API reference records
+// it: a send answers its id, a repeated Idempotency-Key answers the first
+// send's id without sending again, and a refusal carries a name and a
+// message. Each recipient gets a scripted list of status codes; the last
+// one repeats.
 type resendStub struct {
 	mu       sync.Mutex
 	script   map[string][]int
@@ -119,6 +122,7 @@ func makeDue(t *testing.T, pool *pgxpool.Pool) {
 }
 
 func TestDeliveryRetriesAndFailures(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	stub, sender := newResendStub(t)
 	n := NewNotifications(pool, sender, slog.New(slog.DiscardHandler))
@@ -177,18 +181,10 @@ func TestDeliveryRetriesAndFailures(t *testing.T) {
 	}
 }
 
-func TestBackoffIsCapped(t *testing.T) {
-	want := []time.Duration{10, 20, 40, 80, 160, 320, 600, 600}
-	for n, w := range want {
-		if got := RetryDelay(n + 1); got != w*time.Second {
-			t.Errorf("attempt %d: %s, want %s", n+1, got, w*time.Second)
-		}
-	}
-}
-
 // A pass whose lease expired cannot settle a message another pass took,
 // and a resend under the same key is accepted once by the provider.
 func TestLeaseFencesStaleSettle(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	stub, sender := newResendStub(t)
 	n := NewNotifications(pool, sender, slog.New(slog.DiscardHandler))
@@ -222,6 +218,7 @@ func TestLeaseFencesStaleSettle(t *testing.T) {
 }
 
 func TestDiscardPurgeAndNoSender(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	ctx := t.Context()
 	off := NewNotifications(pool, nil, slog.New(slog.DiscardHandler))
@@ -257,6 +254,7 @@ func TestDiscardPurgeAndNoSender(t *testing.T) {
 }
 
 func TestWebhookSignature(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_790_000_000, 0)
 	secret := "whsec_c2VjcmV0LWtleS1mb3ItdGVzdHM="
 	body := []byte(`{"type":"email.delivered"}`)

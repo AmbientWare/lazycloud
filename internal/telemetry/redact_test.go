@@ -23,6 +23,7 @@ const presigned = "https://bucket.s3.amazonaws.com/layers/data?X-Amz-Algorithm=A
 // request's error, an error recorded by other instrumentation or an
 // attribute holds it.
 func TestSpansCarryNoPresignedQuery(t *testing.T) {
+	t.Parallel()
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 // A key file loads when only its owner, or also its group with this process
 // in that group, can read it; any write or other access refuses it.
 func TestKeyFilePermissions(t *testing.T) {
+	t.Parallel()
 	key := make([]byte, masterKeyBytes)
 	_, _ = rand.Read(key)
 	for _, tc := range []struct {
