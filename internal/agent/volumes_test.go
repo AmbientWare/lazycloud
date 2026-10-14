@@ -503,7 +503,7 @@ func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 
 // TestMountsVerifyTheirStoreAgainstTheTrustBundle: a mount that reaches its
 // store itself, as a cloud bucket's does, trusts only the agent's CA
-// bundle: a store it does not trust fails the start, with the
+// bundle: a store it does not trust fails the start at once, with the
 // certificate's error, and one it trusts mounts.
 func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
 	t.Parallel()
@@ -535,9 +535,14 @@ func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
 	began := time.Now()
 	s.send(t, untrusted)
 	exit := s.phase(t, untrusted.GetStart().GetContainerId(), exited).GetExit()
-	t.Logf("start on an untrusted store failed after %s: %s", time.Since(began), exit.GetMessage())
+	took := time.Since(began)
 	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "certificate") {
 		t.Fatalf("start on an untrusted store: %v", exit)
+	}
+	// GeeseFS retries every failed request; the start ends at the first
+	// certificate failure it prints, not when the mount's wait runs out.
+	if took > 10*time.Second {
+		t.Fatalf("start on an untrusted store failed after %s", took)
 	}
 	e.eventually("the mount that never mounted is removed", func() bool {
 		return len(e.mounters(true, untrusted.GetStart().GetContainerId())) == 0
