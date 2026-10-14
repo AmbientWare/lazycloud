@@ -1101,3 +1101,22 @@ func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
 	}
 }
+
+// An idle work host larger than the size cap drains rather than stop into
+// the reserve its market lacks, which buys a reserve within the cap.
+func TestAWorkHostAboveTheCapDrainsRatherThanJoinTheReserve(t *testing.T) {
+	p := gpuPolicy()
+	h := idle(planHost(1, mustType(t, "g5.8xlarge"), FleetServing))
+	h.GPU = "A10G"
+	s := gpuPlanSnapshot(t, h)
+	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "A10G"}: {CPUMillis: 1000, MemoryBytes: 20 * gib, GPUs: 1}}
+	plan := PlanFleet(p, s)
+	if got := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(got) != 1 || got[0].Kind != ActionDrain {
+		t.Fatalf("actions %+v, want the g5.8xlarge drained", plan.Actions)
+	}
+	for _, a := range actionsOf(plan, ActionBuyReserve) {
+		if !p.LargestShape.Cap.Covers(a.Offer.Usable) {
+			t.Errorf("bought reserve %s above the size cap", a.Offer.Type.Name)
+		}
+	}
+}

@@ -61,18 +61,26 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 	return out
 }
 
-// leave returns a leaving host to the reserve when EC2 can stop it, it is
-// not misplaced, and the market's placed reserves fall short, hold nothing
+// returnable reports whether host h of market v may stop into the reserve:
+// EC2 can stop it, its type is known, it is no interruption's, it lies
+// where the market's starts read, and a GPU host fits the size cap, as GPU
+// purchases do.
+func (ps *pass) returnable(v *marketView, h FleetHost) bool {
+	_, catalogued := ps.typeNamed(h.InstanceType)
+	return catalogued && h.Stoppable && !h.Protected && (h.GPU == "" || ps.p.LargestShape.Cap.Covers(h.Usable)) && !ps.misplaced(v, h.Region)
+}
+
+// leave returns a leaving host to the reserve when it is returnable and the
+// market's placed reserves fall short, hold nothing
 // that fits the largest shape while the host does, or the host slept there
 // before and they hold less than its share of the peak, so a reserve woken
 // for a burst waits stopped for the next. A host launched able to
 // hibernate does where hibernates allows. Any other leaving host drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
-	t, catalogued := ps.typeNamed(h.InstanceType)
 	placed := ps.placed(v)
 	var short *ActionReason
 	switch {
-	case ps.misplaced(v, h.Region):
+	case !ps.returnable(v, *h):
 	case !ps.floor(v, HostID{}, placed).Covers(v.stopped):
 		short = ptr(ReasonReserve)
 	case ps.fitsLargest(v, *h) && !ps.holdsLargest(v, HostID{}):
@@ -80,9 +88,9 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 	case h.Slept && !ps.floor(v, HostID{}, placed).Covers(v.peakShare):
 		short = ptr(ReasonPeak)
 	}
-	if ps.reserveRoom > 0 && catalogued && h.Stoppable && short != nil {
+	if ps.reserveRoom > 0 && short != nil {
 		mode := ReserveStop
-		if h.HibernationConfigured && hibernates(t) {
+		if t, _ := ps.typeNamed(h.InstanceType); h.HibernationConfigured && hibernates(t) {
 			mode = ReserveHibernate
 		}
 		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
@@ -125,18 +133,15 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 // lacksLargest, a host that fits the largest shape: while any host could
 // return and the reserve has lacked it for less than the return wait or
 // the market awaits returns, or while hosts due back soon cover it. A host
-// could return when EC2 can stop it, it serves or starts, and it is not
-// misplaced. It is due back soon when it starts, became ready within the
+// could return when it serves or starts and is returnable. It is due back
+// soon when it starts, became ready within the
 // return wait, as a reserve resumed for a burst does, or idles holding no
 // warm slot, slots a cheaper type will take over, or only a build's slot
 // with room for the largest shape, which it holds warm until the slot
 // lapses.
 func (ps *pass) returning(v *marketView, short FleetCapacity, lacksLargest bool) bool {
 	leaving := ps.leavers(v)
-	could := ps.inMarket(v.m, func(h FleetHost) bool {
-		_, catalogued := ps.typeNamed(h.InstanceType)
-		return (serving(h) || starting(h)) && h.Stoppable && !h.Protected && catalogued && !ps.misplaced(v, h.Region)
-	})
+	could := ps.inMarket(v.m, func(h FleetHost) bool { return (serving(h) || starting(h)) && ps.returnable(v, h) })
 	if len(could) > 0 && (ps.p.Reserve(v.m).AwaitReturn || ps.s.Now.Sub(*v.floorShortSince) < ps.p.ReturnWait) {
 		return true
 	}
