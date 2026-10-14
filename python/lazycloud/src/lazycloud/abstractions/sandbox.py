@@ -1846,10 +1846,11 @@ class Sandbox(ControlClientConfigMixin):
 
     def _raise_interrupted_create(self, container_id: str, interruption: BaseException) -> Never:
         try:
-            self._terminate(container_id)
+            # A further Ctrl-C waits for the termination already under way.
+            _, again = uninterrupted(lambda: self._terminate(container_id))
         except Exception as cleanup_error:
             raise interruption from cleanup_error
-        raise interruption
+        raise again or interruption
 
     def _raise_failed_create(
         self,
@@ -1857,7 +1858,8 @@ class Sandbox(ControlClientConfigMixin):
         readiness_error: SandboxConnectionError,
     ) -> Never:
         try:
-            self._terminate(container_id)
+            # Ctrl-C waits for the termination, then interrupts.
+            _, interrupted = uninterrupted(lambda: self._terminate(container_id))
         except (OSError, RuntimeError) as cleanup_error:
             raise SandboxConnectionError(
                 f"{readiness_error}; failed to terminate sandbox {container_id}: "
@@ -1866,6 +1868,8 @@ class Sandbox(ControlClientConfigMixin):
                 state=readiness_error.state,
                 cleanup_error=cleanup_error,
             ) from readiness_error
+        if interrupted is not None:
+            raise interrupted from readiness_error
         raise readiness_error
 
 
