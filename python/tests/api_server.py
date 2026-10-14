@@ -69,6 +69,9 @@ class FakeApi:
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Headers and body are separate writes; with Nagle on, the body waits for
+    # the client's delayed acknowledgement of the headers.
+    disable_nagle_algorithm = True
     api: ClassVar[FakeApi]
 
     def log_message(self, format: str, *args: object) -> None:
