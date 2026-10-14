@@ -993,58 +993,85 @@ func full(id byte) FleetHost {
 	return h
 }
 
-// As load ramps up, each step buys what the market then lacks, sized to
-// it, and releases nothing; once the load falls, the hosts the ramp bought
+// As load ramps up, the work each step brings buys at once, and the floor
+// the ramp took grows back once its shortfall has lasted the window; nothing
+// leaves during the ramp. Once the load falls, the hosts the ramp bought
 // stay for the window after the last purchase, then what the target no
 // longer holds leaves.
-func TestARampBuysEachStepsShortfallAndReleasesOnlyAfterTheWindow(t *testing.T) {
+func TestARampBuysItsWorkAtOnceAndItsHeadroomOnceTheShortfallLasts(t *testing.T) {
 	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
-	step := func(s FleetSnapshot, at time.Duration, bought, left int) FleetPlan {
+	w := p.Window(onDemand)
+	step := func(s FleetSnapshot, at time.Duration, work, headroom, left int) FleetPlan {
 		t.Helper()
 		s.Now = offerNow.Add(at)
 		plan := PlanFleet(p, s)
-		if b, l := boughtTypes(plan), actionsOf(plan, ActionDrain, ActionReturnToReserve); len(b) != bought || len(l) != left ||
-			slices.ContainsFunc(b, func(n string) bool { return n != planSmall.Name }) {
-			t.Fatalf("at %s bought %v and released %v, want %d %s and %d released", at, b, hostsOf(l), bought, planSmall.Name, left)
+		bought, forWork, l := boughtTypes(plan), boughtForWork(plan), actionsOf(plan, ActionDrain, ActionReturnToReserve)
+		if len(forWork) != work || len(bought)-len(forWork) != headroom || len(l) != left ||
+			slices.ContainsFunc(bought, func(n string) bool { return n != planSmall.Name }) {
+			t.Fatalf("at %s bought %v, %v for work, and released %v; want %d for work, %d for headroom and %d released",
+				at, bought, forWork, hostsOf(l), work, headroom, left)
 		}
 		return plan
 	}
-	plan := step(planSnapshot(t, full(1)), 0, 1, 0)
+	plan := step(planSnapshot(t, full(1)), 0, 0, 1, 0)
 	s := planSnapshot(t, full(1), full(2))
+	g, _ := pendingOne(Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}, nil)
+	s.Pending, s.Holds = []DemandGroup{g}, carried(plan)
+	plan = step(s, 20*time.Second, 1, 0, 0)
+	s = planSnapshot(t, full(1), full(2), full(3))
 	s.Holds = carried(plan)
-	plan = step(s, 20*time.Second, 1, 0)
-	s = planSnapshot(t, full(1), planHost(2, planSmall, FleetServing), planHost(3, planSmall, FleetServing))
+	plan = step(s, 20*time.Second+w, 0, 1, 0)
+	s = planSnapshot(t, full(1), planHost(2, planSmall, FleetServing), planHost(3, planSmall, FleetServing), planHost(4, planSmall, FleetServing))
 	s.Holds = carried(plan)
-	plan = step(s, 40*time.Second, 0, 0)
+	plan = step(s, 30*time.Second+w, 0, 0, 0)
 	s.Holds = carried(plan)
-	step(s, 20*time.Second+p.Window(onDemand), 0, 1)
+	step(s, 20*time.Second+2*w, 0, 0, 2)
 }
 
-// A job that recurs every few minutes and fills the market's floor host
-// starts on that host each time; the market restores its floor while the
-// job runs and holds one host again once the window after it passes.
-func TestARecurringJobStartsOnTheFloorEachTimeAndTheMarketSettlesBetweenRuns(t *testing.T) {
+// A job every three minutes that fills the market's floor host for 40
+// seconds starts on that host each time and buys nothing: the floor it
+// takes frees within the window, so the running target never rises.
+func TestARecurringJobOnTheFloorBuysNothing(t *testing.T) {
 	p := planPolicy(small, FleetCapacity{})
 	job := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
-	for cycle := range 3 {
-		start := offerNow.Add(time.Duration(cycle) * 3 * time.Minute)
-		s := planSnapshot(t, planHost(1, planSmall, FleetServing))
-		s.Now = start
-		g, id := pendingOne(job, nil)
-		s.Pending = []DemandGroup{g}
+	settled := planSnapshot(t, planHost(1, planSmall, FleetServing))
+	settled.Now = offerNow.Add(-holdStep)
+	holds := carried(PlanFleet(p, settled))
+	for at := time.Duration(0); at < 9*time.Minute; at += holdStep {
+		into := at % (3 * time.Minute)
+		host := planHost(1, planSmall, FleetServing)
+		if into > 0 && into <= 40*time.Second {
+			host.Load, host.Containers = small, 1
+		}
+		s := planSnapshot(t, host)
+		s.Now, s.Holds = offerNow.Add(at), holds
+		var id uuid.UUID
+		if into == 0 {
+			var g DemandGroup
+			g, id = pendingOne(job, nil)
+			s.Pending = []DemandGroup{g}
+		}
 		plan := PlanFleet(p, s)
-		if w := waitOf(t, plan, id); w.Wait != nil || len(boughtForWork(plan)) > 0 || len(boughtTypes(plan)) != 1 {
-			t.Fatalf("cycle %d: wait %+v, actions %+v; want the job on the floor host and the floor bought back", cycle, w, plan.Actions)
+		if into == 0 && waitOf(t, plan, id).Wait != nil || len(plan.Actions) > 0 {
+			t.Fatalf("at %s: waits %+v, actions %+v; want the job on the floor host and nothing bought", at, plan.Waits, plan.Actions)
 		}
-		s = planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetServing))
-		s.Holds = carried(plan)
-		s.Now = start.Add(p.Window(onDemand) - holdStep)
-		if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) > 0 {
-			t.Fatalf("cycle %d: released %v within the window after the floor was bought", cycle, hostsOf(left))
-		}
-		s.Now = start.Add(p.Window(onDemand))
-		if left := actionsOf(PlanFleet(p, s), ActionDrain, ActionReturnToReserve); len(left) != 1 {
-			t.Fatalf("cycle %d: released %v once the window passed, want one host", cycle, hostsOf(left))
-		}
+		holds = carried(plan)
+	}
+}
+
+// A headroom shortfall smaller than the market's smallest host buys
+// nothing on its own; one beyond a host buys.
+func TestASubHostHeadroomShortfallBuysNothing(t *testing.T) {
+	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
+	busy := planHost(1, planSmall, FleetServing)
+	busy.Load, busy.Containers = cpuGiB(6500, 8), 1
+	s := planSnapshot(t, busy)
+	s.Arrived = map[ReserveMarket]FleetCapacity{onDemand: cpuGiB(1000, 1)}
+	if plan := PlanFleet(p, s); len(plan.Actions) > 0 {
+		t.Fatalf("actions %+v for a half-CPU shortfall, want none", plan.Actions)
+	}
+	s.Arrived[onDemand] = cpuGiB(9000, 16)
+	if bought := boughtTypes(PlanFleet(p, s)); len(bought) == 0 {
+		t.Fatalf("bought nothing for a shortfall beyond a host")
 	}
 }

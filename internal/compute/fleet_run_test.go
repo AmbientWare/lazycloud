@@ -240,9 +240,11 @@ const replayWindow = 65 * time.Minute
 const containerStart = 2500 * time.Millisecond
 
 // TestFleetReplayOfAMixedCPURun replays run2, which saw no reclaims,
-// without them, as a cost check: every container runs and the planner
-// spends no more above the idle rate than the planner prod ran did. Its
-// launches and start waits are logged beside prod's.
+// without them, as a cost check: every container runs, the planner spends
+// no more above the idle rate than the planner prod ran did, and no host
+// it buys for headroom leaves without running a container. A host bought
+// for work whose containers took room that freed before it served is
+// logged, as are its launches and start waits beside prod's.
 func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
@@ -262,6 +264,10 @@ func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 	}
 	if cost > run.Main.CostAboveIdle {
 		t.Errorf("cost above idle $%.2f, main $%.2f", cost, run.Main.CostAboveIdle)
+	}
+	t.Logf("Spot CPU hosts that never ran a container %d, of them bought for headroom %d", r.unusedBy[ReserveMarket{Preemptible: true}], r.unusedHeadroom)
+	if r.unusedHeadroom > 0 {
+		t.Errorf("%d hosts bought for headroom never ran a container", r.unusedHeadroom)
 	}
 }
 

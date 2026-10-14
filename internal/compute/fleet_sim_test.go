@@ -45,8 +45,9 @@ type simHost struct {
 
 	until      time.Time
 	containers []*simContainer
-	// served is set once a container ran on the host.
-	served bool
+	// served is set once a container ran on the host, and headroom on one
+	// bought for no pending work.
+	served, headroom bool
 	// failAt, when set, is when the host fails without serving, as one whose
 	// bootstrap timed out.
 	failAt *time.Time
@@ -137,9 +138,10 @@ type simResult struct {
 	// tried.
 	bought []simPurchase
 	// unusedBy counts by market the serving hosts that left without running
-	// a container, and mostServing the most hosts of each that served at
-	// once.
+	// a container, unusedHeadroom those of them bought for headroom, and
+	// mostServing the most hosts of each market that served at once.
 	unusedBy, mostServing map[ReserveMarket]int
+	unusedHeadroom        int
 	// violations are placements no host may take, and breaches the
 	// reserves the passes left above the size cap.
 	violations, breaches []string
@@ -319,6 +321,9 @@ func (s *sim) advance() {
 				s.r.unusedBy = map[ReserveMarket]int{}
 			}
 			s.r.unusedBy[h.market()]++
+			if h.headroom {
+				s.r.unusedHeadroom++
+			}
 		}
 		return gone
 	})
@@ -632,6 +637,7 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	if reserve {
 		h.State, h.ReserveMode, h.Slept = FleetPreparing, a.Mode, true
 	}
+	h.headroom = a.Kind == ActionBuy && len(a.Containers) == 0
 	h.walk = &simWalk{row: row, waiters: waiters, kind: a.Kind,
 		purchase: &simPurchase{at: s.now, market: a.Market, holds: a.Holds, containers: len(a.Containers)}}
 	s.hosts = append(s.hosts, h)
