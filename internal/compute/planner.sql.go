@@ -158,8 +158,8 @@ func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.
 
 const failPreparing = `-- name: FailPreparing :many
 update hosts
-set phase = 'failed', failure = 'service_lost', phase_message = $1, phase_at = now(), state = 'retired',
-    token_hash = null, launch_lease_until = null, updated_at = now()
+set phase = 'terminating', failure = 'service_lost', phase_message = $1, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
 where id = any($2::uuid[]) and phase = 'preparing' and phase_at < now() - make_interval(secs => $3::float8)
   and (updating_until is null or updating_until < now())
 returning id
@@ -171,8 +171,8 @@ type FailPreparingParams struct {
 	Seconds float64
 }
 
-// Reserves whose agent never proved them within the limit fail, and
-// reconcile terminates their instances. An agent update in flight waits.
+// Reserves whose agent never proved them within the limit terminate with
+// the failure recorded. An agent update in flight waits.
 func (q *Queries) FailPreparing(ctx context.Context, arg FailPreparingParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, failPreparing, arg.Message, arg.Ids, arg.Seconds)
 	if err != nil {

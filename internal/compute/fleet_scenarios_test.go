@@ -85,7 +85,7 @@ type simRelease struct{ version, build int }
 // the containers waiting for it, its purchase record and the end its
 // refused pools share.
 type simWalk struct {
-	row      ClaimLaunchesRow
+	row      ClaimHostActionsRow
 	waiters  []HostWaitersRow
 	purchase *simPurchase
 	kind     FleetActionKind
@@ -824,7 +824,7 @@ func (s *sim) host(id HostID) *simHost {
 func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	o := *a.Offer
 	reserve := a.Kind == ActionBuyReserve
-	row := ClaimLaunchesRow{
+	row := ClaimHostActionsRow{
 		Market: ptr(string(o.Market)), GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount),
 		CpuMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		HoldsCpuMillis: ptr(a.Holds.CPUMillis), HoldsMemoryBytes: ptr(a.Holds.MemoryBytes),

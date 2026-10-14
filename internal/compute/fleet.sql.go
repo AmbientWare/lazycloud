@@ -50,139 +50,6 @@ func (q *Queries) CancelConnectionLaunches(ctx context.Context) error {
 	return err
 }
 
-const claimLaunches = `-- name: ClaimLaunches :many
-update hosts h
-set launch_lease_until = now() + make_interval(secs => $1::float8),
-    launch_attempts = launch_attempts + 1, updated_at = now()
-where h.id in (
-    select r.id from hosts r
-    where r.provider = 'aws' and r.phase = 'requested'
-      and (r.launch_lease_until is null or r.launch_lease_until < now())
-    order by r.created_at
-    limit $2
-    for update skip locked
-)
-returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
-          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks
-`
-
-type ClaimLaunchesParams struct {
-	LeaseSeconds float64
-	BatchSize    int32
-}
-
-type ClaimLaunchesRow struct {
-	ID               uuid.UUID
-	Name             string
-	Kind             string
-	ConnectionID     *uuid.UUID
-	Region           string
-	AvailabilityZone string
-	InstanceType     string
-	Market           *string
-	GpuType          string
-	GpuCount         int32
-	CpuMillis        cpu.Millis
-	MemoryBytes      int64
-	LaunchAttempts   int32
-	LaunchPools      int16
-	ReserveMode      *string
-	Replaces         *uuid.UUID
-	HoldsCpuMillis   *cpu.Millis
-	HoldsMemoryBytes *int64
-	HoldsDisks       *int16
-}
-
-// Requested hosts whose launch is not held by another launcher. The lease
-// outlasts one pool's RunInstances call and each move to a next pool
-// renews it; a launcher that dies leaves it to expire.
-func (q *Queries) ClaimLaunches(ctx context.Context, arg ClaimLaunchesParams) ([]ClaimLaunchesRow, error) {
-	rows, err := q.db.Query(ctx, claimLaunches, arg.LeaseSeconds, arg.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ClaimLaunchesRow
-	for rows.Next() {
-		var i ClaimLaunchesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Kind,
-			&i.ConnectionID,
-			&i.Region,
-			&i.AvailabilityZone,
-			&i.InstanceType,
-			&i.Market,
-			&i.GpuType,
-			&i.GpuCount,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.LaunchAttempts,
-			&i.LaunchPools,
-			&i.ReserveMode,
-			&i.Replaces,
-			&i.HoldsCpuMillis,
-			&i.HoldsMemoryBytes,
-			&i.HoldsDisks,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const claimTerminations = `-- name: ClaimTerminations :many
-update hosts h
-set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired',
-    token_hash = null, updated_at = now()
-where h.provider = 'aws' and h.phase = 'draining' and h.instance_id is not null
-  and (h.interruption_at is null
-       or h.interruption_at < now() - make_interval(secs => $1::float8))
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-returning h.id, h.connection_id, h.region, h.instance_id
-`
-
-type ClaimTerminationsRow struct {
-	ID           uuid.UUID
-	ConnectionID *uuid.UUID
-	Region       string
-	InstanceID   *string
-}
-
-// Draining cloud hosts that run nothing move to terminating. An interrupted
-// host is left for the provider to reclaim until @reclaim_grace_seconds
-// past its reclaim time.
-func (q *Queries) ClaimTerminations(ctx context.Context, reclaimGraceSeconds float64) ([]ClaimTerminationsRow, error) {
-	rows, err := q.db.Query(ctx, claimTerminations, reclaimGraceSeconds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ClaimTerminationsRow
-	for rows.Next() {
-		var i ClaimTerminationsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ConnectionID,
-			&i.Region,
-			&i.InstanceID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const clearCooldown = `-- name: ClearCooldown :exec
 delete from capacity_cooldowns
 where connection_key = $1 and region = $2 and availability_zone_id in ($3, '')
@@ -272,6 +139,36 @@ func (q *Queries) DrainConnectionHosts(ctx context.Context) ([]uuid.UUID, error)
 	return items, nil
 }
 
+const endHost = `-- name: EndHost :execrows
+update hosts
+set phase = 'terminating', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
+where id = $3 and phase = $4
+`
+
+type EndHostParams struct {
+	Failure   *string
+	Message   string
+	ID        uuid.UUID
+	FromPhase string
+}
+
+// A host still in the phase its caller read whose instance must end
+// terminates with its failure recorded; the actuator terminates the
+// instance, and the host fails once EC2 reports it gone.
+func (q *Queries) EndHost(ctx context.Context, arg EndHostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endHost,
+		arg.Failure,
+		arg.Message,
+		arg.ID,
+		arg.FromPhase,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failHost = `-- name: FailHost :execrows
 update hosts
 set phase = 'failed', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
@@ -286,7 +183,7 @@ type FailHostParams struct {
 	FromPhase string
 }
 
-// Fails a host still in the phase its caller read.
+// Fails a host still in the phase its caller read whose instance is gone.
 func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, error) {
 	result, err := q.db.Exec(ctx, failHost,
 		arg.Failure,
@@ -300,9 +197,37 @@ func (q *Queries) FailHost(ctx context.Context, arg FailHostParams) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const failLaunch = `-- name: FailLaunch :execrows
+update hosts
+set phase = 'failed', failure = $1, phase_message = $2, phase_at = now(), state = 'retired',
+    token_hash = null, launch_lease_until = null, updated_at = now()
+where id = $3 and action_token = $4 and phase = 'requested'
+`
+
+type FailLaunchParams struct {
+	Failure *string
+	Message string
+	ID      uuid.UUID
+	Token   uuid.UUID
+}
+
+// Fails a requested host the claim holds that could not launch.
+func (q *Queries) FailLaunch(ctx context.Context, arg FailLaunchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failLaunch,
+		arg.Failure,
+		arg.Message,
+		arg.ID,
+		arg.Token,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
-       interruption_at
+select id, phase, phase_message, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
+       interruption_at, failure
 from hosts
 where provider = 'aws' and region = $1
   and connection_id is not distinct from $2::uuid
@@ -318,6 +243,7 @@ type FleetHostsInRegionParams struct {
 type FleetHostsInRegionRow struct {
 	ID              uuid.UUID
 	Phase           string
+	PhaseMessage    string
 	State           string
 	InstanceID      *string
 	LaunchedAt      *time.Time
@@ -326,6 +252,7 @@ type FleetHostsInRegionRow struct {
 	UpdatingUntil   *time.Time
 	StopRequestedAt *time.Time
 	InterruptionAt  *time.Time
+	Failure         *string
 }
 
 // Cloud hosts of one owner and region the provider should know about.
@@ -341,6 +268,7 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 		if err := rows.Scan(
 			&i.ID,
 			&i.Phase,
+			&i.PhaseMessage,
 			&i.State,
 			&i.InstanceID,
 			&i.LaunchedAt,
@@ -349,6 +277,7 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.UpdatingUntil,
 			&i.StopRequestedAt,
 			&i.InterruptionAt,
+			&i.Failure,
 		); err != nil {
 			return nil, err
 		}
@@ -490,24 +419,31 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 	return err
 }
 
-const knownHostIDs = `-- name: KnownHostIDs :many
-select id from hosts where id = any($1::uuid[]) and phase not in ('deleted', 'failed')
+const liveHosts = `-- name: LiveHosts :many
+select id, instance_id, spot_request_id from hosts where id = any($1::uuid[]) and phase not in ('deleted', 'failed')
 `
 
-// Which of these hosts still exist and are not failed or deleted.
-func (q *Queries) KnownHostIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, knownHostIDs, ids)
+type LiveHostsRow struct {
+	ID            uuid.UUID
+	InstanceID    *string
+	SpotRequestID *string
+}
+
+// Which of these hosts are neither failed nor deleted, with the instance and
+// Spot request each records.
+func (q *Queries) LiveHosts(ctx context.Context, ids []uuid.UUID) ([]LiveHostsRow, error) {
+	rows, err := q.db.Query(ctx, liveHosts, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []LiveHostsRow
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var i LiveHostsRow
+		if err := rows.Scan(&i.ID, &i.InstanceID, &i.SpotRequestID); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -576,7 +512,7 @@ set instance_type = $1, region = $2, availability_zone = $3,
     cpu_millis = $6, memory_bytes = $7, launch_pools = launch_pools + 1, launch_attempts = 0,
     launch_lease_until = now() + make_interval(secs => $8::float8),
     updated_at = now()
-where id = $9 and phase = 'requested' and launch_pools = $10
+where id = $9 and action_token = $10 and phase = 'requested'
 `
 
 type MoveLaunchPoolParams struct {
@@ -589,14 +525,13 @@ type MoveLaunchPoolParams struct {
 	MemoryBytes        int64
 	LeaseSeconds       float64
 	ID                 uuid.UUID
-	LaunchPools        int16
+	Token              uuid.UUID
 }
 
 // Moves a requested host whose pool EC2 refused to the next pool at that
 // pool's cost and capacity, with its attempts counted afresh there, and
-// renews the launcher's lease for lease_seconds, which 0 releases. Every
-// pool it moves to holds what it was bought to hold. A host another
-// launcher moved on since it was claimed stays where that one put it.
+// renews the claim's lease for lease_seconds, which 0 releases. Every pool
+// it moves to holds what it was bought to hold.
 func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) (int64, error) {
 	result, err := q.db.Exec(ctx, moveLaunchPool,
 		arg.InstanceType,
@@ -608,7 +543,7 @@ func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) 
 		arg.MemoryBytes,
 		arg.LeaseSeconds,
 		arg.ID,
-		arg.LaunchPools,
+		arg.Token,
 	)
 	if err != nil {
 		return 0, err
@@ -624,7 +559,7 @@ set instance_id = $1, availability_zone = $2, availability_zone_id = $3,
     authorization_id = $4, node_role_arn = $5,
     spot_request_id = $6, node_image = $7,
     hibernation_configured = $8
-where id = $9 and phase = 'requested' and launch_pools = $10
+where id = $9 and action_token = $10 and phase = 'requested'
 `
 
 type RecordLaunchParams struct {
@@ -637,11 +572,11 @@ type RecordLaunchParams struct {
 	NodeImage             *string
 	HibernationConfigured bool
 	ID                    uuid.UUID
-	LaunchPools           int16
+	Token                 uuid.UUID
 }
 
-// Records the instance launched in the pool the launcher holds; a host
-// another launcher moved on records nothing, and its instance ends.
+// Records the instance launched in the pool the claim holds; a host the
+// claim no longer holds records nothing, and its instance ends.
 func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordLaunch,
 		arg.InstanceID,
@@ -653,7 +588,7 @@ func (q *Queries) RecordLaunch(ctx context.Context, arg RecordLaunchParams) (int
 		arg.NodeImage,
 		arg.HibernationConfigured,
 		arg.ID,
-		arg.LaunchPools,
+		arg.Token,
 	)
 	if err != nil {
 		return 0, err

@@ -90,10 +90,12 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 		return HostID{}, "", &IdentityError{Message: "the proof does not match the host's instance and role"}
 	}
 	if failed := failedChecks(report.Preflight); len(failed) > 0 {
-		// The instance cannot serve; reconciliation terminates it as an
-		// orphan of a failed host.
+		// The instance cannot serve; the actuator terminates it.
 		message := strings.Join(failed, "; ")
-		if _, err := c.queries.FailHost(ctx, FailHostParams{
+		if err := transition(Phase(row.Phase), PhaseTerminating); err != nil {
+			return HostID{}, "", err
+		}
+		if _, err := c.queries.EndHost(ctx, EndHostParams{
 			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: ptr(string(FailurePreflight)), Message: truncate(message),
 		}); err != nil {
 			return HostID{}, "", fmt.Errorf("fail host: %w", err)

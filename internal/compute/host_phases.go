@@ -22,9 +22,9 @@ var ErrPhaseTransition = errors.New("host phase transition not allowed")
 //	preparing -> draining    a pass retires a reserve still preparing
 //	stopping -> resuming     work waits for a Spot reserve EC2 cannot start yet,
 //	                         or the agent says Hello before EC2 reports it stopped
-//	stopping -> terminating  EC2 refused the stop
 //	stopped -> terminating   a reserve retires
-//	resuming -> terminating  EC2 refused the start for capacity
+//	any launched -> terminating  its instance must end: a failure is recorded
+//	                         with it, and the host fails once the instance is gone
 //	any -> failed
 //
 // Machines an account joins also go requested -> joining, failed ->
@@ -36,6 +36,9 @@ func (p Phase) CanBecome(next Phase) bool {
 	}
 	if next == PhaseDeleted {
 		return p != PhaseDeleted
+	}
+	if next == PhaseTerminating {
+		return p != PhaseRequested && p != PhaseTerminating && p != PhaseFailed && p != PhaseDeleted
 	}
 	switch p {
 	case PhaseRequested:
@@ -49,15 +52,15 @@ func (p Phase) CanBecome(next Phase) bool {
 	case PhaseReady:
 		return next == PhaseDraining || next == PhasePreparing
 	case PhaseDraining:
-		return next == PhaseReady || next == PhaseTerminating
+		return next == PhaseReady
 	case PhasePreparing:
 		return next == PhaseStopping || next == PhaseReady || next == PhaseDraining
 	case PhaseStopping:
-		return next == PhaseStopped || next == PhaseResuming || next == PhaseTerminating
+		return next == PhaseStopped || next == PhaseResuming
 	case PhaseStopped:
-		return next == PhaseResuming || next == PhaseTerminating
+		return next == PhaseResuming
 	case PhaseResuming:
-		return next == PhaseJoining || next == PhaseStopped || next == PhaseTerminating
+		return next == PhaseJoining || next == PhaseStopped
 	case PhaseFailed:
 		return next == PhaseRequested
 	case PhaseTerminating, PhaseDeleted:

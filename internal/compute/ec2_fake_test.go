@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// fakeEC2 is a small EC2 region on the emulator: instances and Spot
+// fakeEC2 is a small EC2 region, us-east-2, on the emulator: instances and Spot
 // requests that StopInstances, StartInstances, TerminateInstances,
 // CancelSpotInstanceRequests and RunInstances change, and the describe
 // calls with the filters compute sends. A refuse hook answers a call with
@@ -22,6 +22,9 @@ type fakeEC2 struct {
 	requests  map[string]*fakeSpotRequest
 	refuse    func(call awsCall) (awsReply, bool)
 	launched  int
+	// lag is how long DescribeInstances keeps reporting an instance's state
+	// from before its last change, as EC2's eventually consistent reads do.
+	lag time.Duration
 }
 
 type fakeInstance struct {
@@ -33,6 +36,29 @@ type fakeInstance struct {
 	SpotRequest string
 	StateReason string
 	Tags        map[string]string
+	// Was is the state before the last change, at Changed.
+	Was     string
+	Changed time.Time
+}
+
+// empty answers a call to a region the fake does not hold: describe calls
+// list nothing.
+func (f *fakeEC2) empty(call awsCall) awsReply {
+	switch call.Action {
+	case "DescribeInstances":
+		return describeInstancesReply()
+	case "DescribeSpotInstanceRequests":
+		return ok(`<DescribeSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet/></DescribeSpotInstanceRequestsResponse>`)
+	}
+	return ec2Error(http.StatusBadRequest, "InvalidInstanceID.NotFound", "no such instance in the region")
+}
+
+// shown is the state DescribeInstances reports for i.
+func (f *fakeEC2) shown(i *fakeInstance) string {
+	if f.lag > 0 && i.Was != "" && time.Since(i.Changed) < f.lag {
+		return i.Was
+	}
+	return i.State
 }
 
 type fakeSpotRequest struct {
@@ -56,6 +82,10 @@ func newFakeEC2(e *awsEmulator) *fakeEC2 {
 		e.on(action, func(call awsCall) awsReply {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+				// Another region holds none of the fake's instances.
+				return f.empty(call)
+			}
 			if f.refuse != nil {
 				if reply, refused := f.refuse(call); refused {
 					return reply
@@ -158,7 +188,7 @@ func (f *fakeEC2) describeInstances(call awsCall) awsReply {
 		fmt.Fprintf(&b, `<item><reservationId>r-%s</reservationId><ownerId>111122223333</ownerId><instancesSet><item>`+
 			`<instanceId>%s</instanceId><instanceType>%s</instanceType><instanceState><code>%d</code><name>%s</name></instanceState>`+
 			`<launchTime>%s</launchTime><hibernationOptions><configured>%t</configured></hibernationOptions>`,
-			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(i.State), esc(i.State),
+			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(f.shown(i)), esc(f.shown(i)),
 			i.Launched.UTC().Format(time.RFC3339), i.Hibernation)
 		if i.SpotRequest != "" {
 			fmt.Fprintf(&b, `<spotInstanceRequestId>%s</spotInstanceRequestId><instanceLifecycle>spot</instanceLifecycle>`, esc(i.SpotRequest))
@@ -197,6 +227,9 @@ func (f *fakeEC2) stateChanges(call awsCall, response string, move func(*fakeIns
 		}
 		before := i.State
 		move(i)
+		if i.State != before {
+			i.Was, i.Changed = before, time.Now()
+		}
 		fmt.Fprintf(&b, `<item><instanceId>%s</instanceId><currentState><code>%d</code><name>%s</name></currentState>`+
 			`<previousState><code>%d</code><name>%s</name></previousState></item>`,
 			esc(id), instanceStateCode(i.State), esc(i.State), instanceStateCode(before), esc(before))

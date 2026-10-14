@@ -590,7 +590,7 @@ func (ps *fleetPass) note(msg string, attrs ...any) {
 // commits. Each move is guarded by the phase the snapshot saw.
 func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	for _, t := range [][2]Phase{
-		{PhasePreparing, PhaseFailed}, {PhaseStopped, PhaseResuming}, {PhaseStopping, PhaseResuming}, {PhaseReady, PhasePreparing},
+		{PhasePreparing, PhaseTerminating}, {PhaseStopped, PhaseResuming}, {PhaseStopping, PhaseResuming}, {PhaseReady, PhasePreparing},
 		{PhaseReady, PhaseDraining}, {PhasePreparing, PhaseReady}, {PhasePreparing, PhaseDraining}, {PhaseStopped, PhaseTerminating},
 		{PhaseRequested, PhaseDeleted},
 	} {

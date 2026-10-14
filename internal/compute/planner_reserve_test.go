@@ -289,8 +289,8 @@ func TestGrowthStopsAtSixteenActionsPerMarketAndPass(t *testing.T) {
 	}
 }
 
-// A return to the reserve whose agent never answers fails after the limit
-// and reconcile ends its instance; an agent update in flight waits.
+// A return to the reserve whose agent never answers terminates with its
+// failure after the limit; an agent update in flight waits.
 func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	stuck := fleetHost(t, o, compute.PhasePreparing, "m7i.large", "i-0000000000000f601")
@@ -305,10 +305,10 @@ func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 		t.Fatalf("plan %+v, want one reserve failed", r)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		stuck: compute.PhaseFailed, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
+		stuck: compute.PhaseTerminating, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
 	} {
 		phase, failure := hostPhase(t, o.pool, host)
-		if phase != string(want) || (want == compute.PhaseFailed && (failure == nil || *failure != string(compute.FailureServiceLost))) {
+		if phase != string(want) || (want == compute.PhaseTerminating && (failure == nil || *failure != string(compute.FailureServiceLost))) {
 			t.Errorf("host %s is %s (%v), want %s", host, phase, failure, want)
 		}
 	}

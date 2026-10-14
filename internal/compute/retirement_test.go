@@ -1,8 +1,10 @@
 package compute_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,10 +39,12 @@ func terminated(e *awsEmulator) []string {
 
 // Idle hosts leave only once idle past the idle timeout and while the
 // market's free room beyond its warm target covers them; a one-time Spot
-// host cannot stop, so it drains and terminates.
+// host cannot stop, so it drains, and the actuator terminates it once.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
-	o, emulator, _ := launchFleet(t, compute.Fleet{})
-	emulator.on("TerminateInstances", terminateInstancesReply)
+	o, emulator, ec2 := reserveFleet(t)
+	for n := 1; n <= 5; n++ {
+		ec2.add(fakeInstance{ID: fmt.Sprintf("i-0000000000000a00%d", n), State: "running"}, "")
+	}
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	oldest := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a001")
@@ -61,12 +65,8 @@ values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now()
 	if result := plan(t, o); result.Drained != 2 {
 		t.Fatalf("plan %+v, want two hosts drained", result)
 	}
-	result, err := o.compute.Retire(t.Context(), discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Terminated != 2 {
-		t.Fatalf("retire %+v, want the two drained hosts terminated", result)
+	if result := actuate(t, o); result.Terminated != 2 {
+		t.Fatalf("actuate %+v, want the two drained hosts terminated", result)
 	}
 	if got := terminated(emulator); !slices.Equal(got, []string{"i-0000000000000a001", "i-0000000000000a002"}) {
 		t.Fatalf("terminated %v, want the hosts idle past the wait beyond the warm target", got)
@@ -104,21 +104,41 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	tags := func(host string) map[string]string {
 		return map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": host, "Name": "lazycloud"}
 	}
+	var mu sync.Mutex
+	ended := map[string]bool{}
 	emulator.on("DescribeInstances", func(call awsCall) awsReply {
 		if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
 			return describeInstancesReply()
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		state := func(id, s string) string {
+			if ended[id] {
+				return "shutting-down"
+			}
+			return s
+		}
 		return describeInstancesReply(
-			ec2Instance{ID: "i-0000000000000b003", State: "running", Tags: tags(slow.String())},
+			ec2Instance{ID: "i-0000000000000b003", State: state("i-0000000000000b003", "running"), Tags: tags(slow.String())},
 			ec2Instance{ID: "i-0000000000000b004", State: "running", Tags: tags(starting.String())},
-			ec2Instance{ID: "i-0000000000000b005", State: "running", Tags: tags(uuid.NewString())},
+			ec2Instance{ID: "i-0000000000000b005", State: state("i-0000000000000b005", "running"), Tags: tags(uuid.NewString())},
 			ec2Instance{ID: "i-0000000000000b006", State: "pending", Tags: tags(unanswered.String())},
-			ec2Instance{ID: "i-0000000000000b007", State: "stopped", Tags: tags(stopped.String())},
+			ec2Instance{ID: "i-0000000000000b007", State: state("i-0000000000000b007", "stopped"), Tags: tags(stopped.String())},
 			ec2Instance{ID: "i-0000000000000b008", State: "terminated", Tags: tags(uuid.NewString())},
 			ec2Instance{ID: "i-0000000000000b009", State: "terminated", Tags: tags(reclaimed.String())},
+			// A launch a stale claim made for a host that has since
+			// recorded another instance.
+			ec2Instance{ID: "i-0000000000000b00a", State: state("i-0000000000000b00a", "running"), Tags: tags(starting.String())},
 		)
 	})
-	emulator.on("TerminateInstances", terminateInstancesReply)
+	emulator.on("TerminateInstances", func(call awsCall) awsReply {
+		mu.Lock()
+		for _, id := range list(call.Form, "InstanceId") {
+			ended[id] = true
+		}
+		mu.Unlock()
+		return terminateInstancesReply(call)
+	})
 
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
@@ -133,25 +153,38 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 			t.Fatalf("DescribeInstances call %v, want it filtered by the fleet tag", call.Form)
 		}
 	}
-	if got, want := terminated(emulator), []string{"i-0000000000000b003", "i-0000000000000b005", "i-0000000000000b007"}; !slices.Equal(got, want) {
-		t.Fatalf("terminated %v, want the timed-out, orphaned and stopped instances %v", got, want)
+	// Reconcile ends only the orphan; the hosts whose instance must end
+	// terminate with their failure, for the actuator.
+	if got, want := terminated(emulator), []string{"i-0000000000000b005", "i-0000000000000b00a"}; !slices.Equal(got, want) {
+		t.Fatalf("reconcile terminated %v, want the orphans %v", got, want)
 	}
-	for host, want := range map[compute.HostID]struct {
-		phase   compute.Phase
-		failure compute.Failure
-	}{
-		gone:       {compute.PhaseDeleted, ""},
-		vanished:   {compute.PhaseFailed, compute.FailureProviderGone},
-		reclaimed:  {compute.PhaseDeleted, ""},
-		slow:       {compute.PhaseFailed, compute.FailureBootstrapTimedOut},
-		starting:   {compute.PhaseBooting, ""},
-		stopped:    {compute.PhaseFailed, compute.FailureProviderStopped},
-		unanswered: {compute.PhaseRequested, ""},
-	} {
-		phase, failure := hostPhase(t, o.pool, host)
-		if phase != string(want.phase) || (failure == nil) != (want.failure == "") || (failure != nil && *failure != string(want.failure)) {
-			t.Errorf("host %s is %s (%v), want %s (%s)", host, phase, failure, want.phase, want.failure)
+	expect := func(want map[compute.HostID]compute.Phase, failures map[compute.HostID]compute.Failure) {
+		t.Helper()
+		for host, phase := range want {
+			got, failure := hostPhase(t, o.pool, host)
+			wantFailure := failures[host]
+			if got != string(phase) || (failure == nil) != (wantFailure == "") || (failure != nil && *failure != string(wantFailure)) {
+				t.Errorf("host %s is %s (%v), want %s (%s)", host, got, failure, phase, wantFailure)
+			}
 		}
 	}
+	failures := map[compute.HostID]compute.Failure{
+		vanished: compute.FailureProviderGone, slow: compute.FailureBootstrapTimedOut, stopped: compute.FailureProviderStopped,
+	}
+	expect(map[compute.HostID]compute.Phase{
+		gone: compute.PhaseDeleted, vanished: compute.PhaseFailed, reclaimed: compute.PhaseDeleted, slow: compute.PhaseTerminating,
+		starting: compute.PhaseBooting, stopped: compute.PhaseTerminating, unanswered: compute.PhaseRequested,
+	}, failures)
 	assertRetried(t, o.pool, w)
+
+	if r := actuate(t, o); r.Terminated != 2 {
+		t.Fatalf("actuate %+v, want the timed-out and stopped instances terminated", r)
+	}
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := terminated(emulator), []string{"i-0000000000000b003", "i-0000000000000b005", "i-0000000000000b007", "i-0000000000000b00a"}; !slices.Equal(got, want) {
+		t.Fatalf("terminated %v, want each of %v once", got, want)
+	}
+	expect(map[compute.HostID]compute.Phase{slow: compute.PhaseFailed, stopped: compute.PhaseFailed}, failures)
 }

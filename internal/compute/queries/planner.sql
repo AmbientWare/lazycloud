@@ -351,11 +351,11 @@ on conflict (connection_key, region, availability_zone_id, instance_type, market
 do update set until = excluded.until, reason = excluded.reason;
 
 -- name: FailPreparing :many
--- Reserves whose agent never proved them within the limit fail, and
--- reconcile terminates their instances. An agent update in flight waits.
+-- Reserves whose agent never proved them within the limit terminate with
+-- the failure recorded. An agent update in flight waits.
 update hosts
-set phase = 'failed', failure = 'service_lost', phase_message = @message, phase_at = now(), state = 'retired',
-    token_hash = null, launch_lease_until = null, updated_at = now()
+set phase = 'terminating', failure = 'service_lost', phase_message = @message, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
 where id = any(@ids::uuid[]) and phase = 'preparing' and phase_at < now() - make_interval(secs => @seconds::float8)
   and (updating_until is null or updating_until < now())
 returning id;
