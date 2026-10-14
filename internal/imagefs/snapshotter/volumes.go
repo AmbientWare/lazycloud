@@ -71,13 +71,16 @@ type volumes struct {
 
 // bucket is one workspace's granted bucket: its grant, the key requests
 // for it name, and the versions HEADs reported, each kept only while no
-// write of its key, or of the bucket, ended after the HEAD was sent.
-// Guarded by volumes.mu.
+// write of its key, or of the bucket, ended after the HEAD was sent, and
+// no listing of its prefix sent after the HEAD named another version.
+// listed holds when each prefix was last listed, so a HEAD sent before a
+// listing and answered after it records nothing. Guarded by volumes.mu.
 type bucket struct {
 	grant   volumeGrant
 	key     string
 	seen    map[string]observation
 	written map[string]time.Time
+	listed  map[string]time.Time
 	cleared time.Time
 }
 
@@ -145,7 +148,7 @@ func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) erro
 	}
 	b := v.buckets[vg.name]
 	if b == nil {
-		b = &bucket{seen: map[string]observation{}, written: map[string]time.Time{}}
+		b = &bucket{seen: map[string]observation{}, written: map[string]time.Time{}, listed: map[string]time.Time{}}
 		v.buckets[vg.name] = b
 	}
 	if b.key != key || !b.grant.creds.Expires.After(creds.Expires) {
@@ -353,6 +356,11 @@ func (v *volumes) observe(resp *http.Response) error {
 	if b == nil || !f.sent.After(b.cleared) || !f.sent.After(b.written[f.key]) {
 		return nil
 	}
+	for prefix, sent := range b.listed {
+		if strings.HasPrefix(f.key, prefix) && !f.sent.After(sent) {
+			return nil
+		}
+	}
 	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength}
 	b.seen[f.key] = observation{version: ver, header: header, at: f.sent}
 	return nil
@@ -393,8 +401,10 @@ func (l *listing) Close() error {
 
 // listed forgets the observations under prefix made before the listing was
 // sent whose ETag the listing contradicts, all of them when it could not
-// be read: a client that saw a newer version in a listing must not be
-// answered with the older one's bytes, which it would keep as the newer's.
+// be read, and marks the prefix listed: a client that saw a newer version
+// in a listing must not be answered with the older one's bytes, which it
+// would keep as the newer's. A mark outlives any HEAD sent before it,
+// which fetchTimeout bounds.
 func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
 	var doc struct {
 		Contents []struct {
@@ -402,26 +412,35 @@ func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
 			ETag string
 		}
 	}
-	listed := map[string]string{}
-	if whole && xml.Unmarshal(body, &doc) == nil {
-		for _, c := range doc.Contents {
-			listed[c.Key] = c.ETag
-		}
-	} else {
-		listed = nil
-	}
+	parsed := whole && xml.Unmarshal(body, &doc) == nil
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	b := v.buckets[f.grant.name]
 	if b == nil {
 		return
 	}
-	for key, o := range b.seen {
-		if !strings.HasPrefix(key, prefix) || !o.at.Before(f.sent) {
-			continue
-		}
-		if etag, ok := listed[key]; listed == nil || ok && etag != o.version.etag {
+	outdated := func(key, etag string) {
+		if o, ok := b.seen[key]; ok && o.at.Before(f.sent) && o.version.etag != etag {
 			delete(b.seen, key)
+		}
+	}
+	if parsed {
+		for _, c := range doc.Contents {
+			outdated(c.Key, c.ETag)
+		}
+	} else {
+		for key := range b.seen {
+			if strings.HasPrefix(key, prefix) {
+				outdated(key, "")
+			}
+		}
+	}
+	if f.sent.After(b.listed[prefix]) {
+		b.listed[prefix] = f.sent
+	}
+	for p, sent := range b.listed {
+		if time.Since(sent) > fetchTimeout {
+			delete(b.listed, p)
 		}
 	}
 }

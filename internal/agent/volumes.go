@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	securerand "crypto/rand"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
@@ -578,6 +580,7 @@ func mounted(path string) bool {
 // release removes it after a failure, which carries the end of what it
 // printed.
 func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
+	since := time.Now()
 	if err := v.runMount(ctx, m, image, spec); err != nil {
 		return err
 	}
@@ -595,10 +598,11 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 		}
 		select {
 		case <-poll.C:
-		case <-printed.C:
-			if strings.Contains(v.a.containerOutput(ctx, m.name), certificateFailure) {
+		case now := <-printed.C:
+			if v.printedSince(ctx, m.name, since, certificateFailure) {
 				failure = "cannot verify its store's certificate"
 			}
+			since = now
 		case <-m.exited:
 			failure = "exited before it mounted"
 		case <-timer.C:
@@ -609,6 +613,21 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 	}
 	output := cmp.Or(v.a.containerOutput(context.WithoutCancel(ctx), m.name), "it printed nothing")
 	return fmt.Errorf("%s %s: %s", spec.what, failure, output)
+}
+
+// printedSince reports whether the container printed text at or after
+// since, reading all it printed since then.
+func (v *volumes) printedSince(ctx context.Context, name string, since time.Time, text string) bool {
+	logs, err := v.a.docker.ContainerLogs(ctx, name, client.ContainerLogsOptions{
+		ShowStdout: true, ShowStderr: true, Since: fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()),
+	})
+	if err != nil {
+		return false
+	}
+	defer func() { _ = logs.Close() }()
+	var out bytes.Buffer
+	_, _ = stdcopy.StdCopy(&out, &out, logs)
+	return bytes.Contains(out.Bytes(), []byte(text))
 }
 
 // mountSpec is what one GeeseFS mount container mounts.

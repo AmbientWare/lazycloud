@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -26,13 +27,14 @@ import (
 )
 
 // upstream counts what the endpoint asks of the store, and runs before on
-// each request first.
+// each request first and after once the store answered it.
 type upstream struct {
 	mu      sync.Mutex
 	gets    int
 	heads   int
 	refused int
 	before  func(*http.Request)
+	after   func(*http.Request)
 }
 
 func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -43,6 +45,12 @@ func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
 		before(r)
 	}
 	resp, err := http.DefaultTransport.RoundTrip(r)
+	u.mu.Lock()
+	after := u.after
+	u.mu.Unlock()
+	if after != nil {
+		after(r)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if r.Method == http.MethodGet && !r.URL.Query().Has("list-type") {
@@ -193,6 +201,64 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 	resp, body = get(t, base+key, fmt.Sprintf("%d-%d", volumeFrame, volumeFrame+99))
 	if resp.StatusCode != http.StatusPartialContent || !bytes.Equal(body, changed[volumeFrame:volumeFrame+100]) {
 		t.Fatalf("the read after the change: %s, new bytes %v", resp.Status, bytes.Equal(body, changed[volumeFrame:volumeFrame+100]))
+	}
+}
+
+// A read whose HEAD the store answered before an overwrite, but which
+// reached the endpoint only after a listing named the new version, answers
+// the new version: the client that listed it keeps what the read returns
+// as that version's bytes.
+func TestAReadAfterAListingAnswersTheListedVersion(t *testing.T) {
+	t.Parallel()
+	ts := newTestStore(t)
+	up := &upstream{}
+	_, base := volumeEndpoint(t, ts, up)
+	old, changed := randomBytes(5, 2<<20), randomBytes(6, 2<<20)
+	ts.put(t, "model.bin", old)
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	up.mu.Lock()
+	up.after = func(r *http.Request) {
+		if r.Method == http.MethodHead {
+			once.Do(func() {
+				close(held)
+				<-release
+			})
+		}
+	}
+	up.mu.Unlock()
+	type read struct {
+		status int
+		body   []byte
+		err    error
+	}
+	reads := make(chan read, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"model.bin", nil)
+		if err != nil {
+			reads <- read{err: err}
+			return
+		}
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+testKey+"/20261013/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			reads <- read{err: err}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		reads <- read{status: resp.StatusCode, body: body, err: err}
+	}()
+	<-held
+	ts.put(t, "model.bin", changed)
+	bucket := strings.TrimSuffix(base, ts.prefix)
+	if resp, body := get(t, bucket+"?list-type=2&prefix="+url.QueryEscape(ts.prefix), ""); resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("model.bin")) {
+		t.Fatalf("listing: %s %s", resp.Status, body)
+	}
+	close(release)
+	r := <-reads
+	if r.err != nil || r.status != http.StatusOK || !bytes.Equal(r.body, changed) {
+		t.Fatalf("the read after the listing answered %d, the new bytes %v: %v", r.status, bytes.Equal(r.body, changed), r.err)
 	}
 }
 
