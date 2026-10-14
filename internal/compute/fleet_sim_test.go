@@ -394,6 +394,7 @@ func (s *sim) place() {
 			return true
 		}
 		wait := s.now.Sub(c.arrived)
+		if wait > 20*time.Second { fmt.Printf("DBG wait %s %s arrived %s placed on %s %s\n", c.fn, wait, c.arrived.Sub(s.start), best.InstanceType, best.ID) }
 		s.r.waits = append(s.r.waits, wait)
 		if s.r.fnWaits == nil {
 			s.r.fnWaits = map[string][]time.Duration{}
@@ -820,6 +821,13 @@ func maxTime(a, b time.Time) time.Time {
 
 func (s *sim) apply(plan FleetPlan) {
 	bought := map[int]HostID{}
+	for _, a := range plan.Actions {
+		name := ""
+		if a.Host != nil { if h := s.host(*a.Host); h != nil { name = h.InstanceType + " " + string(h.State) } }
+		if a.Offer != nil { name = a.Offer.Type.Name + " holds " + describe(a.Holds) + fmt.Sprintf(" for %d", len(a.Containers)) }
+		fmt.Printf("DBG %s %s %s %s\n", s.now.Sub(s.start), a.Market, a.Kind, name)
+	}
+	for _, w := range plan.Waits { if w.Wait != nil && *w.Wait != WaitProvisioning { fmt.Printf("DBG waitwhy %s %s\n", s.now.Sub(s.start), *w.Wait) } }
 	for i, a := range plan.Actions {
 		switch a.Kind {
 		case ActionBuy, ActionRightsize, ActionBuyReserve:

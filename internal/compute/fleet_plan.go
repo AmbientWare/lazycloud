@@ -1391,19 +1391,17 @@ func (ps *pass) grew(m ReserveMarket) bool {
 // raise holds market v's running target at what it holds now, its window
 // restarted.
 func (ps *pass) raise(v *marketView) {
-	v.Holds.Running = v.Holds.Running.raised(ps.held(v), v.Want, ps.s.Now)
+	v.Holds.Running = v.Holds.Running.raised(ps.held(v), ps.s.Now)
 	v.Running = v.Holds.Running.Value
 }
 
 // grow resumes, then buys, what market v's kept hosts lack of its running
 // target, with a host that has its floor free when none of them has it, in
-// a market that keeps running headroom, and reports whether it did. The
-// running target rises only once its want has stayed above it for the
-// market's window, so headroom that work takes and frees again within it
-// grows nothing. Each host it resumes or buys is one the shortfall fills
-// (fills): less than a host is left to pending work, which buys at once. A
-// resume serves sooner than any purchase and waits for no batch; a
-// purchase waits while containers keep arriving.
+// a market that keeps running headroom, and reports whether it did. Each
+// host it resumes or buys is one the shortfall fills (fills): less than a
+// host is left to pending work, which buys at once. A resume serves sooner
+// than any purchase and waits for no batch; a purchase waits while
+// containers keep arriving.
 func (ps *pass) grow(v *marketView, kept FleetCapacity, floorFree bool) bool {
 	need := CoverNeed{Aggregate: v.Running.Minus(kept).Clamp()}
 	if v.Floor.Empty() || need.Aggregate.Empty() {

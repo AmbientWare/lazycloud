@@ -189,6 +189,10 @@ type Policy struct {
 	GPU          map[string]GPUReserve
 	LargestShape LargestShape
 	Batch        BatchWindow
+	// Keep is the least time a market keeps running capacity after it last
+	// needed it: longer than the gap recurring work leaves between bursts,
+	// so a burst that recurs finds the hosts the last one left.
+	Keep time.Duration
 	// ArrivalWindow is how far back a CPU market counts what arrived in
 	// it, less its largest batch, as running headroom: work that arrives at
 	// a steady rate finds room, while one burst buys none.
@@ -222,14 +226,15 @@ type StartTimes struct {
 }
 
 // Window is how long market m keeps capacity once it no longer needs it:
-// what keeping an idle host is worth is what replacing it costs, its
+// at least Keep, the gap recurring work leaves between its bursts, and at
+// least what keeping an idle host is worth, what replacing it costs: its
 // purchase's time to serve twice, once billed while it boots and once as
 // the start wait it puts on the next arrival.
 func (p Policy) Window(m ReserveMarket) time.Duration {
 	if m.GPU != "" {
-		return 2 * p.Starts.GPULaunch
+		return max(p.Keep, 2*p.Starts.GPULaunch)
 	}
-	return 2 * p.Starts.Launch
+	return max(p.Keep, 2*p.Starts.Launch)
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -271,7 +276,12 @@ func DefaultPolicy() Policy {
 		LargestShape: LargestShape{
 			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
 		},
-		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		Batch: BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		// Recurring work measured 140 s from one burst's end to the next
+		// (a 40 s job every 3 minutes, run2) and bursts every 20 to 180 s
+		// (run2, run3, prodcheck6); GPU markets keep their 300 s window,
+		// past the A10G work's 240 s gaps (run3).
+		Keep:          3 * time.Minute,
 		ArrivalWindow: 2 * starts.Launch,
 		SpotPriceAge:  time.Hour,
 		SpotWait:      2 * time.Minute,
