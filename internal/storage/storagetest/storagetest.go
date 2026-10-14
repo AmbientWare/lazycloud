@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -87,8 +88,10 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
 	swept.Do(func() {
 		stale := time.Now().Add(-staleAfter)
+		// A bucket without an alias is out of every key's reach: a
+		// connected account's whose key a test deleted.
 		swept.err = admin.removeBuckets(ctx, func(alias string, created time.Time) bool {
-			return strings.HasPrefix(alias, namePrefix) && created.Before(stale)
+			return (alias == "" || strings.HasPrefix(alias, namePrefix)) && created.Before(stale)
 		})
 	})
 	if swept.err != nil {
@@ -310,12 +313,17 @@ func (g garage) createBucket(ctx context.Context, bucket string) error {
 }
 
 // removeBuckets removes every bucket whose alias and creation time match,
-// reporting every failure.
+// reporting every failure. A bucket a key created through the S3 API has
+// only that key's local alias, and none once the key is gone, which match
+// sees as "".
 func (g garage) removeBuckets(ctx context.Context, match func(alias string, created time.Time) bool) error {
 	var buckets []struct {
 		ID            string    `json:"id"`
 		Created       time.Time `json:"created"`
 		GlobalAliases []string  `json:"globalAliases"`
+		LocalAliases  []struct {
+			Alias string `json:"alias"`
+		} `json:"localAliases"`
 	}
 	if err := g.call(ctx, http.MethodGet, "ListBuckets", nil, nil, &buckets); err != nil {
 		return err
@@ -323,10 +331,17 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 	objects := Client()
 	var errs []error
 	for _, bucket := range buckets {
-		for _, alias := range bucket.GlobalAliases {
+		aliases := slices.Clone(bucket.GlobalAliases)
+		for _, local := range bucket.LocalAliases {
+			aliases = append(aliases, local.Alias)
+		}
+		if len(aliases) == 0 {
+			aliases = []string{""}
+		}
+		for _, alias := range aliases {
 			if match(alias, bucket.Created) {
-				if err := g.removeBucket(ctx, objects, bucket.ID, alias); err != nil {
-					errs = append(errs, fmt.Errorf("remove bucket %s: %w", alias, err))
+				if err := g.removeBucket(ctx, objects, bucket.ID, alias, len(bucket.GlobalAliases) > 0); err != nil {
+					errs = append(errs, fmt.Errorf("remove bucket %s %s: %w", bucket.ID, alias, err))
 				}
 				break
 			}
@@ -337,8 +352,9 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 
 // removeBucket deletes the keys granted on a bucket other than the
 // development key, then its objects and the bucket. What another caller
-// removed first counts as removed.
-func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string) error {
+// removed first counts as removed. A bucket without a global alias gets
+// one, so that the development key can empty it.
+func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string, global bool) error {
 	var info struct {
 		Keys []struct {
 			AccessKeyID string `json:"accessKeyId"`
@@ -364,6 +380,14 @@ func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias 
 	if info.Objects == 0 && info.UnfinishedUploads == 0 &&
 		present(g.call(ctx, http.MethodPost, "DeleteBucket", url.Values{"id": {id}}, nil, nil)) == nil {
 		return errors.Join(errs...)
+	}
+	if !global {
+		if alias == "" {
+			alias = namePrefix + "orphan-" + id[:20]
+		}
+		if err := g.call(ctx, http.MethodPost, "AddBucketAlias", nil, map[string]string{"bucketId": id, "globalAlias": alias}, nil); err != nil {
+			return errors.Join(append(errs, present(err))...)
+		}
 	}
 	// A bucket another key created through the S3 API admits the
 	// development key only once allowed.
