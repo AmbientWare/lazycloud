@@ -993,14 +993,12 @@ func full(id byte) FleetHost {
 	return h
 }
 
-// As load ramps up, the work each step brings buys at once, and the floor
-// the ramp took grows back once its shortfall has lasted the window; nothing
-// leaves during the ramp. Once the load falls, the hosts the ramp bought
-// stay for the window after the last purchase, then what the target no
-// longer holds leaves.
-func TestARampBuysItsWorkAtOnceAndItsHeadroomOnceTheShortfallLasts(t *testing.T) {
+// As load ramps up, each step buys its work and the floor it took at once
+// and releases nothing. Once the load falls, the hosts the ramp bought stay
+// past twice a launch's window, for the keep window that spans recurring
+// bursts, then what the target no longer holds leaves.
+func TestARampBuysAtOnceAndKeepsItsHostsForTheKeepWindow(t *testing.T) {
 	p := planPolicy(cpuGiB(1000, 2), FleetCapacity{})
-	w := p.Window(onDemand)
 	step := func(s FleetSnapshot, at time.Duration, work, headroom, left int) FleetPlan {
 		t.Helper()
 		s.Now = offerNow.Add(at)
@@ -1017,33 +1015,43 @@ func TestARampBuysItsWorkAtOnceAndItsHeadroomOnceTheShortfallLasts(t *testing.T)
 	s := planSnapshot(t, full(1), full(2))
 	g, _ := pendingOne(Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}, nil)
 	s.Pending, s.Holds = []DemandGroup{g}, carried(plan)
-	plan = step(s, 20*time.Second, 1, 0, 0)
-	s = planSnapshot(t, full(1), full(2), full(3))
-	s.Holds = carried(plan)
-	plan = step(s, 20*time.Second+w, 0, 1, 0)
+	plan = step(s, 20*time.Second, 1, 1, 0)
 	s = planSnapshot(t, full(1), planHost(2, planSmall, FleetServing), planHost(3, planSmall, FleetServing), planHost(4, planSmall, FleetServing))
 	s.Holds = carried(plan)
-	plan = step(s, 30*time.Second+w, 0, 0, 0)
+	plan = step(s, 20*time.Second+4*p.Starts.Launch, 0, 0, 0)
 	s.Holds = carried(plan)
-	step(s, 20*time.Second+2*w, 0, 0, 2)
+	plan = step(s, 20*time.Second+p.Window(onDemand)-holdStep, 0, 0, 0)
+	s.Holds = carried(plan)
+	step(s, 20*time.Second+p.Window(onDemand), 0, 0, 2)
 }
 
 // A job every three minutes that fills the market's floor host for 40
-// seconds starts on that host each time and buys nothing: the floor it
-// takes frees within the window, so the running target never rises.
-func TestARecurringJobOnTheFloorBuysNothing(t *testing.T) {
+// seconds starts on held room each time. The floor its first run takes is
+// bought back at once and stays through the gaps between runs, so no later
+// run buys and nothing leaves.
+func TestARecurringJobBuysTheFloorBackOnceAndKeepsIt(t *testing.T) {
 	p := planPolicy(small, FleetCapacity{})
 	job := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
 	settled := planSnapshot(t, planHost(1, planSmall, FleetServing))
 	settled.Now = offerNow.Add(-holdStep)
 	holds := carried(PlanFleet(p, settled))
+	var bought *time.Duration
+	buys := 0
 	for at := time.Duration(0); at < 9*time.Minute; at += holdStep {
 		into := at % (3 * time.Minute)
-		host := planHost(1, planSmall, FleetServing)
+		busy := planHost(1, planSmall, FleetServing)
 		if into > 0 && into <= 40*time.Second {
-			host.Load, host.Containers = small, 1
+			busy.Load, busy.Containers = small, 1
 		}
-		s := planSnapshot(t, host)
+		hosts := []FleetHost{busy}
+		if bought != nil {
+			floor := planHost(2, planSmall, FleetServing)
+			if at < *bought+p.Starts.Launch {
+				floor.State = FleetStarting
+			}
+			hosts = append(hosts, floor)
+		}
+		s := planSnapshot(t, hosts...)
 		s.Now, s.Holds = offerNow.Add(at), holds
 		var id uuid.UUID
 		if into == 0 {
@@ -1052,10 +1060,20 @@ func TestARecurringJobOnTheFloorBuysNothing(t *testing.T) {
 			s.Pending = []DemandGroup{g}
 		}
 		plan := PlanFleet(p, s)
-		if into == 0 && waitOf(t, plan, id).Wait != nil || len(plan.Actions) > 0 {
-			t.Fatalf("at %s: waits %+v, actions %+v; want the job on the floor host and nothing bought", at, plan.Waits, plan.Actions)
+		if into == 0 && waitOf(t, plan, id).Wait != nil {
+			t.Fatalf("at %s the job waits %+v, want it on held room", at, waitOf(t, plan, id))
+		}
+		if left := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(left) > 0 {
+			t.Fatalf("at %s released %v between runs", at, hostsOf(left))
+		}
+		if n := len(boughtTypes(plan)); n > 0 {
+			buys += n
+			bought = ptr(at)
 		}
 		holds = carried(plan)
+	}
+	if buys != 1 {
+		t.Fatalf("bought %d hosts over three runs, want the floor once", buys)
 	}
 }
 
