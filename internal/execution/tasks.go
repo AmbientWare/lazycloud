@@ -266,10 +266,13 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 	if filter.Version != nil && filter.Function == nil {
 		return TaskPage{}, fmt.Errorf("%w: version needs function", ErrInvalidFilter)
 	}
-	var status *string
+	statuses := []string{string(TaskQueued), string(TaskRunning), string(TaskSucceeded), string(TaskFailed), string(TaskCancelled)}
 	if filter.Status != nil {
-		s := string(*filter.Status)
-		status = &s
+		statuses = []string{string(*filter.Status)}
+	}
+	roots := []bool{true, false}
+	if filter.RootOnly {
+		roots = []bool{true}
 	}
 	var search *string
 	low, high := uuid.Nil, uuid.Max
@@ -281,10 +284,8 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 	}
 	size := pageSize(limit)
 	var rows []TaskViewRow
-	if filter.App == nil && search == nil {
-		r, err := e.queries.ListTasks(ctx, ListTasksParams{
-			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Before: before, MaxRows: size + 1,
-		})
+	if filter == (TaskFilter{}) {
+		r, err := e.queries.ListTasks(ctx, ListTasksParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: size + 1})
 		if err != nil {
 			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
 		}
@@ -304,8 +305,8 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 			app = &id
 		}
 		r, err := e.queries.ListWorkloadTasks(ctx, ListWorkloadTasksParams{
-			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
-			RootOnly: filter.RootOnly, Search: search, IDLow: low, IDHigh: high, Version: int32Of(filter.Version),
+			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Statuses: statuses,
+			Roots: roots, Search: search, IDLow: low, IDHigh: high, Version: int32Of(filter.Version),
 			Before: before, MaxRows: size + 1,
 		})
 		if err != nil {

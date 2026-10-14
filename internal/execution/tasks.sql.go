@@ -147,17 +147,13 @@ join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
 where t.workspace_id = $1
-  and ($2::text is null or t.status = $2::text)
-  and (not $3::bool or t.parent_task_id is null)
-  and t.id < $4
+  and t.id < $2
 order by t.id desc
-limit $5
+limit $3
 `
 
 type ListTasksParams struct {
 	WorkspaceID uuid.UUID
-	Status      *string
-	RootOnly    bool
 	Before      uuid.UUID
 	MaxRows     int32
 }
@@ -183,15 +179,10 @@ type ListTasksRow struct {
 	ContainerIds []uuid.UUID
 }
 
-// Newest first below the cursor, from the workspace's recent index.
+// Newest first below the cursor, from the workspace's recent index, with no
+// filter: a filter would walk the history it leaves out.
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
-	rows, err := q.db.Query(ctx, listTasks,
-		arg.WorkspaceID,
-		arg.Status,
-		arg.RootOnly,
-		arg.Before,
-		arg.MaxRows,
-	)
+	rows, err := q.db.Query(ctx, listTasks, arg.WorkspaceID, arg.Before, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -240,11 +231,13 @@ select t.id, a.name as app_name, w.name as function_name, t.release_id, r.versio
              where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from workloads w
 join apps a on a.id = w.app_id
+cross join unnest($1::text[]) as s(status)
+cross join unnest($2::bool[]) as k(root)
 cross join lateral (
     select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent, preemptions from tasks t
     where t.workload_id = w.id
-      and ($1::text is null or t.status = $1::text)
-      and (not $2::bool or t.parent_task_id is null)
+      and t.status = s.status
+      and (t.parent_task_id is null) = k.root
       and t.id >= case when strpos(lower(w.name), $3::text) > 0
                        then '00000000-0000-0000-0000-000000000000'::uuid else $4::uuid end
       and t.id <= case when strpos(lower(w.name), $3::text) > 0
@@ -263,8 +256,8 @@ limit $7
 `
 
 type ListWorkloadTasksParams struct {
-	Status      *string
-	RootOnly    bool
+	Statuses    []string
+	Roots       []bool
 	Search      *string
 	IDLow       uuid.UUID
 	IDHigh      uuid.UUID
@@ -297,15 +290,15 @@ type ListWorkloadTasksRow struct {
 	ContainerIds []uuid.UUID
 }
 
-// Like ListTasks, for the workspace's functions or one app's: each
-// workload's recent index yields at most a page, and the pages merge. A
-// search reads all of a workload whose name contains it, and otherwise
-// only the ids between id_low and id_high, so a search that matches little
-// reads little.
+// Like ListTasks, for the workspace's functions or one app's, through
+// tasks_listing: each workload, status in statuses and rootness in roots
+// yields at most a page, and the pages merge, so a filter that matches
+// little reads little. A search reads all of a workload whose name contains
+// it, and otherwise only the ids between id_low and id_high.
 func (q *Queries) ListWorkloadTasks(ctx context.Context, arg ListWorkloadTasksParams) ([]ListWorkloadTasksRow, error) {
 	rows, err := q.db.Query(ctx, listWorkloadTasks,
-		arg.Status,
-		arg.RootOnly,
+		arg.Statuses,
+		arg.Roots,
 		arg.Search,
 		arg.IDLow,
 		arg.IDHigh,
