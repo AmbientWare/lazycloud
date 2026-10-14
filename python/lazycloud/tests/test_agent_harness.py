@@ -36,7 +36,11 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[Registry]:
             return httpx.Response(404, json="Not Found", request=request)
         version = versions[package]
         tarball = f"https://registry.npmjs.org/{package}/-/{package.split('/')[-1]}-{version}.tgz"
-        document = {"name": package, "version": version, "dist": {"tarball": tarball}}
+        document: dict[str, object] = {
+            "name": package,
+            "version": version,
+            "dist": {"tarball": tarball},
+        }
         return httpx.Response(200, json=document, request=request)
 
     monkeypatch.setattr("httpx.get", get)

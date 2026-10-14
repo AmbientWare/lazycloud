@@ -32,34 +32,34 @@ def job() -> int:
 
 
 def _serve(api: FakeApi) -> None:
-    image = {"id": "img_0123456789abcdef01234567", "architecture": "amd64", "ready": True}
-    api.route("POST", f"{TEAM}/images/resolve")(
-        lambda request: json_reply(
-            {
-                "image": {
-                    **image,
-                    "python_version": request.json()["python_version"],
-                    "created_at": NOW,
-                }
-            }
-        )
-    )
-    api.route("POST", f"{TEAM}/sources")(
-        lambda request: json_reply({"sha256": request.json()["sha256"], "present": True})
-    )
+    @api.route("POST", f"{TEAM}/images/resolve")
+    def resolve(request: ApiRequest) -> Reply:
+        image: dict[str, object] = {
+            "id": "img_0123456789abcdef01234567",
+            "python_version": request.json()["python_version"],
+            "architecture": "amd64",
+            "ready": True,
+            "created_at": NOW,
+        }
+        return json_reply({"image": image})
+
+    @api.route("POST", f"{TEAM}/sources")
+    def sources(request: ApiRequest) -> Reply:
+        return json_reply({"sha256": request.json()["sha256"], "present": True})
 
     @api.route("POST", f"{TEAM}/apps/[^/]+/deployment-plan")
     def plan(request: ApiRequest) -> Reply:
-        items = [
+        listed: list[dict[str, Any]] = request.json()["workloads"]
+        items: list[dict[str, object]] = [
             {"kind": item["kind"], "name": item["name"], "action": "add", "versions": 0}
-            for item in request.json()["workloads"]
+            for item in listed
         ]
         return json_reply({"app": request.path.split("/")[5], "prune": True, "items": items})
 
     @api.route("POST", f"{TEAM}/apps/[^/]+/deployments")
     def deploy(request: ApiRequest) -> Reply:
         workloads: list[dict[str, Any]] = request.json()["workloads"]
-        app = {
+        app: dict[str, object] = {
             "id": "0192f0a0-0000-7000-8000-000000000001",
             "name": request.path.split("/")[5],
             "state": "active",
@@ -67,7 +67,7 @@ def _serve(api: FakeApi) -> None:
             "running_containers": 0,
             "created_at": NOW,
         }
-        releases = [
+        releases: list[dict[str, object]] = [
             {
                 "id": "0192f0a0-0000-7000-8000-000000000002",
                 "name": spec["name"],

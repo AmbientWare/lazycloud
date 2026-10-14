@@ -111,9 +111,10 @@ def test_ls_reads_plain_and_scheme_volume_paths_and_follows_pages(fake_api: Fake
 
     @fake_api.route("GET", files)
     def listing(request: ApiRequest) -> Reply:
-        entry = {"path": "subdir/a.txt", "is_dir": False, "size_bytes": 3}
+        entry: dict[str, object] = {"path": "subdir/a.txt", "is_dir": False, "size_bytes": 3}
         if "cursor" in request.query:
-            return json_reply({"files": [{**entry, "path": "subdir/b.txt"}]})
+            second: dict[str, object] = {**entry, "path": "subdir/b.txt"}
+            return json_reply({"files": [second]})
         return json_reply({"files": [entry], "next_cursor": "c2"})
 
     plain = CliRunner().invoke(client_cli, ["--json", "ls", "myvol/subdir"])
