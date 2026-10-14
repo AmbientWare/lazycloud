@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -659,17 +660,33 @@ func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
 
 // Where the disk stores no volume frames, a read that starts an object
 // fetches the frames after it into memory, so the reads that follow it
-// reach no store, and a read that jumps elsewhere fetches nothing ahead.
+// reach no store, a read that jumps elsewhere fetches nothing past itself,
+// and the frames one read spans are fetched in parallel.
 func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
 	ts := newTestStore(t)
 	var mu sync.Mutex
 	fetched := map[int]int{}
+	// A fetch of frame 6 waits for one of frame 7 to begin.
+	seven := make(chan struct{})
+	var parallel atomic.Bool
 	up := &upstream{before: func(r *http.Request) {
 		var first int64
-		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-", &first); err == nil && r.Header.Get("If-Match") != "" {
-			mu.Lock()
-			fetched[int(first/volumeFrame)]++
-			mu.Unlock()
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-", &first); err != nil || r.Header.Get("If-Match") == "" {
+			return
+		}
+		frame := int(first / volumeFrame)
+		mu.Lock()
+		fetched[frame]++
+		mu.Unlock()
+		switch frame {
+		case 7:
+			close(seven)
+		case 6:
+			select {
+			case <-seven:
+				parallel.Store(true)
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}}
 	c := newTestCache(t, up, 256<<20)
@@ -696,5 +713,9 @@ func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
 	read(volumeFrame, 5*volumeFrame-1)
 	if got := frames(); !maps.Equal(got, map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 10: 1}) {
 		t.Fatalf("after a jump and a read of the frames fetched ahead, the store sent frames %v", got)
+	}
+	read(6*volumeFrame+100, 7*volumeFrame+100)
+	if !parallel.Load() {
+		t.Fatal("a read across two frames fetched them one after the other")
 	}
 }

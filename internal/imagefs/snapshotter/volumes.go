@@ -42,8 +42,9 @@ const (
 	minCachedObject = 1 << 20
 	// readAheadFrames is how far past a sequential read the frames it will
 	// want are fetched into memory where the disk stores no volume frames,
-	// and readAheadFetches bounds those fetches across the host: a few
-	// fetches in parallel bring a reader to the store's full speed.
+	// and readAheadFetches bounds those fetches, and the parallel fetches of
+	// the frames one read spans, across the host: a few fetches in parallel
+	// bring a reader to the store's full speed.
 	readAheadFrames  = 4
 	readAheadFetches = 16
 	// observationLife is how long a HEAD's answer names an object's
@@ -567,9 +568,10 @@ func (v *volumes) fill(ver objectVersion) {
 	v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
 }
 
-// readAhead fetches into memory the readAheadFrames frames after a read of
-// from to to that starts an object or follows the mount's last read of it,
-// as GeeseFS reads a file in order, using the fetch slots reads use.
+// readAhead fetches into memory, in parallel, the frames a read of from to
+// to spans past its first, and when it starts an object or follows the
+// mount's last read of it, as GeeseFS reads a file in order, the
+// readAheadFrames after it. The fetches use the slots reads use.
 func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
 	v.mu.Lock()
 	last, seen := m.last[ver.name]
@@ -578,11 +580,12 @@ func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
 	}
 	m.last[ver.name] = to
 	v.mu.Unlock()
-	if seen && (from < last-1 || from > last+1) || !seen && from > 0 {
-		return
+	end := to
+	if seen && from >= last-1 && from <= last+1 || !seen && from == 0 {
+		end += readAheadFrames
 	}
 	frames := int((ver.size + volumeFrame - 1) / volumeFrame)
-	for frame := to + 1; frame < min(frames, to+1+readAheadFrames); frame++ {
+	for frame := from + 1; frame < min(frames, end+1); frame++ {
 		if _, ok := v.cache.fromMemory(ver.key(frame)); ok {
 			continue
 		}
