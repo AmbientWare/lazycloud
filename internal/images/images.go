@@ -106,6 +106,10 @@ type Config struct {
 	// bytecode compiles and layer compression scale with cores, and a build
 	// lands only on a host with this much free.
 	BuildCPU cpu.Millis
+	// PlatformTransferBackoff is the wait before the first retry of a
+	// platform image's registry read or store write, doubling after; nil
+	// waits a second.
+	PlatformTransferBackoff *time.Duration
 }
 
 // Repositories under Repository, by what they hold. A built image has a
@@ -176,6 +180,9 @@ type Images struct {
 	login    *platformLogin
 	// transfer stores the layer pairs of platform images.
 	transfer *http.Client
+	// transferBackoff is the first wait between tries of a platform
+	// image's transfers.
+	transferBackoff time.Duration
 
 	// managed holds the managed sources read, by Python version. The
 	// source managed_images records for a version under
@@ -186,10 +193,14 @@ type Images struct {
 
 // NewImages returns the images owner.
 func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) *Images {
-	return &Images{
+	i := &Images{
 		pool: pool, queries: New(pool), execution: exec, secrets: vault, storage: store, resolver: newResolver(config.Registry), config: config,
-		login: newPlatformLogin(config), transfer: &http.Client{}, managed: map[string]string{},
+		login: newPlatformLogin(config), transfer: &http.Client{}, transferBackoff: platformTransferBackoff, managed: map[string]string{},
 	}
+	if config.PlatformTransferBackoff != nil {
+		i.transferBackoff = *config.PlatformTransferBackoff
+	}
+	return i
 }
 
 // Image is a resolved image.

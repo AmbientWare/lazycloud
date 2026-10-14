@@ -500,7 +500,9 @@ func TestCutDownloadsAreTransientAndTruncatedLayersAreContent(t *testing.T) {
 	}
 
 	registry := cuttingRegistry(t, f.registry)
-	cut := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	cut := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, PlatformTransferBackoff: ptr(time.Millisecond),
+	})
 	img, err := random.Image(64<<10, 1)
 	if err != nil {
 		t.Fatal(err)

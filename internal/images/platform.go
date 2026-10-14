@@ -60,7 +60,8 @@ const (
 	// fresh grants, which come with a fresh login.
 	platformPullWindow = 30 * time.Minute
 	// platformTransferAttempts bounds the tries of one registry read or
-	// store write that fails for the network or the service.
+	// store write that fails for the network or the service, the first
+	// retry after platformTransferBackoff unless Config sets another.
 	platformTransferAttempts = 3
 	platformTransferBackoff  = time.Second
 )
@@ -335,7 +336,7 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 	}
 	if _, err := remote.Head(target, remote.WithContext(ctx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport)); err != nil {
 		copyCtx, span := telemetry.Start(ctx, "images.copy_platform_image", trace.WithAttributes(attribute.Int64("lazycloud.bytes", size)))
-		err = retryPlatform(copyCtx, func() error {
+		err = i.retryPlatform(copyCtx, func() error {
 			return remote.Write(target, img, remote.WithContext(copyCtx), remote.WithAuth(auth.authenticator()), remote.WithTransport(i.resolver.transport))
 		})
 		telemetry.Fail(span, err)
@@ -434,7 +435,7 @@ func (i *Images) convertPlatformLayers(ctx context.Context, image name.Digest, a
 			blob := image.Context().Digest(o.blob)
 			layerCtx, span := telemetry.Start(ctx, "images.convert_layer", trace.WithAttributes(
 				attribute.String(telemetry.AttrLayer, o.diffID), attribute.Int64("lazycloud.bytes", blobBytes[o.blob])))
-			err := retryPlatform(layerCtx, func() error {
+			err := i.retryPlatform(layerCtx, func() error {
 				l, err := i.convertPlatformLayer(layerCtx, blob, auth, dir, o.diffID, blobBytes[o.blob])
 				out[n] = l
 				return err
@@ -545,7 +546,7 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 		g.Go(func() error {
 			uploadCtx, span := telemetry.Start(ctx, "images.upload_layer", trace.WithAttributes(
 				attribute.String(telemetry.AttrLayer, u.DiffID), attribute.Int64("lazycloud.bytes", l.DataBytes+int64(len(l.Index)))))
-			etags, err := l.Upload(uploadCtx, i.transfer, u.DataParts, u.PartBytes, u.Index, retryPlatform)
+			etags, err := l.Upload(uploadCtx, i.transfer, u.DataParts, u.PartBytes, u.Index, i.retryPlatform)
 			telemetry.Fail(span, err)
 			if err != nil {
 				return fmt.Errorf("upload layer %s: %w", u.Blob, err)
@@ -562,10 +563,10 @@ func (i *Images) uploadPlatformLayers(ctx context.Context, uploads []LayerUpload
 
 // retryPlatform runs fn until it succeeds, fails for the image, the
 // server's disk or the store's refusal, or uses its attempts.
-func retryPlatform(ctx context.Context, fn func() error) error {
+func (i *Images) retryPlatform(ctx context.Context, fn func() error) error {
 	final := func(err error) bool {
 		var unconvertible *ConversionError
 		return errors.As(err, &unconvertible) || errors.Is(err, ErrServerDisk)
 	}
-	return imagefs.Retry(ctx, platformTransferAttempts, platformTransferBackoff, final, fn) //nolint:wrapcheck // fn's error.
+	return imagefs.Retry(ctx, platformTransferAttempts, i.transferBackoff, final, fn) //nolint:wrapcheck // fn's error.
 }
