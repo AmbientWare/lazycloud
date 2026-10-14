@@ -123,7 +123,8 @@ func TestSupervisorAdmitsWorkersTimesConcurrencyAndAnswersBusy(t *testing.T) {
 			}
 		})
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Output outside attempts reaches the agent without an attempt id.
+	output := h.handling(t, 2)
 	status, header, _ := h.get(t, "")
 	if status != http.StatusServiceUnavailable || header.Get(BusyHeader) != BusyFull {
 		t.Fatalf("third request: %d busy=%q; want 503 full", status, header.Get(BusyHeader))
@@ -132,14 +133,23 @@ func TestSupervisorAdmitsWorkersTimesConcurrencyAndAnswersBusy(t *testing.T) {
 	if status, _, _ := h.get(t, ""); status != http.StatusOK {
 		t.Fatalf("after the slow requests: %d", status)
 	}
-
-	// Output outside attempts reaches the agent without an attempt id.
-	_, output := h.link.until(t, func(m *hostproto.SupervisorMessage) bool {
-		return strings.Contains(m.GetOutput().GetData(), "handling hello")
-	})
-	if !strings.Contains(output[""], "handling hello") {
-		t.Fatalf("container output %q", output[""])
+	if !strings.Contains(output, "handling hello") {
+		t.Fatalf("container output %q", output)
 	}
+}
+
+// handling reads the container output outside attempts until n requests
+// for the default word are being handled, and returns it.
+func (h *httpHarness) handling(t *testing.T, n int) string {
+	t.Helper()
+	var output strings.Builder
+	h.link.until(t, func(m *hostproto.SupervisorMessage) bool {
+		if m.GetOutput() != nil && m.GetOutput().GetAttemptId() == "" {
+			output.WriteString(m.GetOutput().GetData())
+		}
+		return strings.Count(output.String(), "handling VERSION") >= n
+	})
+	return output.String()
 }
 
 func TestSupervisorStreamsResponsesAsTheyAreWritten(t *testing.T) {
@@ -177,11 +187,17 @@ func TestSupervisorDrainFinishesRequestsAndRefusesNewOnes(t *testing.T) {
 		status, _, _ := h.get(t, "seconds=1")
 		done <- status
 	}()
-	time.Sleep(300 * time.Millisecond)
+	h.handling(t, 1)
 	h.link.send(t, &hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Drain{Drain: &hostproto.Drain{}}})
-	time.Sleep(100 * time.Millisecond)
-	if status, header, _ := h.get(t, ""); status != http.StatusServiceUnavailable || header.Get(BusyHeader) != BusyDraining {
-		t.Fatalf("request while draining: %d busy=%q", status, header.Get(BusyHeader))
+	// Requests the supervisor took before the drain reached it succeed.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		status, header, _ := h.get(t, "word=probe")
+		if status == http.StatusServiceUnavailable && header.Get(BusyHeader) == BusyDraining {
+			break
+		}
+		if status != http.StatusOK || time.Now().After(deadline) {
+			t.Fatalf("request while draining: %d busy=%q", status, header.Get(BusyHeader))
+		}
 	}
 	if status := <-done; status != http.StatusOK {
 		t.Fatalf("request in flight at the drain: %d", status)
@@ -204,7 +220,7 @@ func TestSupervisorReloadServesNewSourceAfterRequestsFinish(t *testing.T) {
 		_, _, body := h.get(t, "seconds=1")
 		done <- body
 	}()
-	time.Sleep(300 * time.Millisecond)
+	h.handling(t, 1)
 	edited := strings.Replace(httpApp, `word: str = "VERSION"`, `word: str = "EDITED"`, 1)
 	if err := os.WriteFile(filepath.Join(h.workspace, "app.py"), []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
