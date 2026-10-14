@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -56,6 +57,8 @@ func TestSweepDeletesLargePrefixesInChunks(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
+	f.cfg.DeleteChunk = 10
+	f.storage = NewStorage(f.pool, f.cfg, compute.NewCompute(f.pool, nil, compute.Config{}))
 	s := f.storage
 	volume, err := s.CreateVolume(ctx, f.ws, "data")
 	if err != nil {
@@ -64,7 +67,7 @@ func TestSweepDeletesLargePrefixesInChunks(t *testing.T) {
 	putFile(t, s, f, "first", []byte("x"))
 	bucket := bucketOf(t, f)
 	prefix := "volumes/" + volume.Id.String() + "/"
-	putObjects(t, bucket, prefix, 1000)
+	putObjects(t, bucket, prefix, int(f.cfg.DeleteChunk))
 	if err := s.DeleteVolume(ctx, f.ws, "data"); err != nil {
 		t.Fatal(err)
 	}

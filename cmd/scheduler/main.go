@@ -475,6 +475,7 @@ func objectStoreFromEnv(fleet compute.Fleet) (storage.Config, error) {
 		LayerBucket:     os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
 		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
+		DeleteChunk:     storage.DefaultDeleteChunk,
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
 			Prefix:           fleet.BucketPrefix,

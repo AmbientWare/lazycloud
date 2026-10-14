@@ -249,6 +249,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	cfg.compute.Fleet = fleet
 	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
+	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}

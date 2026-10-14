@@ -125,8 +125,9 @@ func TestHostGrantMountsAVolume(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storage.Config{
-		Region:     e.region,
-		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+		Region:      e.region,
+		DeleteChunk: storage.DefaultDeleteChunk,
+		Workspaces:  storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
 	}, compute.NewCompute(pool, nil, compute.Config{}))
 	var ws uuid.UUID
 	if err := pool.QueryRow(ctx, "insert into workspaces (name) values ('aws-check') returning id").Scan(&ws); err != nil {
@@ -226,8 +227,9 @@ func TestConnectedAccountKeepsTheWorkspaceBucket(t *testing.T) {
 	}
 	comp := compute.NewCompute(pool, nil, compute.Config{Fleet: compute.Fleet{AWS: awsConfig}})
 	store := storage.NewStorage(pool, storage.Config{
-		Region:     e.region,
-		Workspaces: storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
+		Region:      e.region,
+		DeleteChunk: storage.DefaultDeleteChunk,
+		Workspaces:  storage.WorkspaceBuckets{Provider: storage.ProviderAWS, Prefix: e.prefix, AccountID: e.account, RoleARN: e.role},
 	}, comp)
 	var ws uuid.UUID
 	if err := pool.QueryRow(ctx, `with owner as (
