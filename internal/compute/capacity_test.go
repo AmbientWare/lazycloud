@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -153,5 +154,28 @@ func TestASleepingReserveIsNotLost(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// GPU work takes a fleet GPU host with room of its own before one where it
+// would evict packed CPU work, so CPU work evicted once and retried onto
+// another GPU host is not evicted again while room elsewhere fits the GPU
+// work, though evicting there would leave the tighter fit.
+func TestGPUWorkEvictsPackedWorkOnlyWhereNoHostHasRoom(t *testing.T) {
+	t.Parallel()
+	gpuHost := func(id byte, freeCPU cpu.Millis, packed FleetCapacity) HostCapacity {
+		return HostCapacity{
+			Host: HostID{id}, Kind: KindPlatform, Provider: ProviderAWS, Market: MarketSpot, GPUType: "T4", GPUCount: 2,
+			CPUMillis: 8000, MemoryBytes: 32 * gib, FreeCPUMillis: freeCPU, FreeMemoryBytes: 16 * gib, FreeGPUs: 1, Packed: packed,
+		}
+	}
+	retried := gpuHost(1, 500, cpuGiB(2000, 2))
+	roomy := gpuHost(2, 6000, FleetCapacity{})
+	gpu := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 4 * gib}
+	if i := ChooseHost([]HostCapacity{retried, roomy}, gpu, FleetCapacity{}); i != 1 {
+		t.Fatalf("GPU work went to host %d, want the host it need not evict from", i)
+	}
+	if i := ChooseHost([]HostCapacity{retried}, gpu, FleetCapacity{}); i != 0 {
+		t.Fatalf("GPU work went to host %d, want the packed host, evicting, when no other fits", i)
 	}
 }
