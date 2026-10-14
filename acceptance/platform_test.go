@@ -376,7 +376,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		t.Fatal(err)
 	}
 	p.newEdge = func(url, relay string) (*edge.Edge, error) {
-		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay, FailureCheckInterval: edge.FailureCheckInterval}, logger)
+		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay, FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
 	}
 	p.edge, err = p.newEdge("http://lazycloud.localhost:"+port, relayListener.Addr().String())
 	if err != nil {

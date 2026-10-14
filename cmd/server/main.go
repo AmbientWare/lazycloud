@@ -403,7 +403,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		relayURL = cfg.relayAddr
 	}
 	edgeConfig := edge.Config{
-		URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session, FailureCheckInterval: edge.FailureCheckInterval,
+		URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session, FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush,
 	}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {

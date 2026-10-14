@@ -30,9 +30,8 @@ const (
 	// maxPendingCallbacks bounds the callbacks of one release that wait at
 	// once; the edge records later ones as failed with the reason.
 	maxPendingCallbacks = 1000
-	// requestBatch and requestFlush bound one write.
+	// requestBatch bounds one write.
 	requestBatch = 500
-	requestFlush = time.Second
 	// callbackFlush is how soon a record owing a callback is written, so
 	// the callback leaves within about this much of the response.
 	callbackFlush = 50 * time.Millisecond
@@ -155,7 +154,7 @@ func (e *Edge) queueRecord(rec requestRecord) {
 // writeRequests writes queued records in batches and prunes old records
 // and request output until ctx ends, then writes what it still holds.
 func (e *Edge) writeRequests(ctx context.Context) {
-	flush := time.NewTicker(requestFlush)
+	flush := time.NewTicker(e.requestFlush)
 	defer flush.Stop()
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
@@ -177,7 +176,7 @@ func (e *Edge) writeRequests(ctx context.Context) {
 			}
 			// Kept for the next flush, the oldest dropped past the queue's
 			// bound.
-			retryAt = time.Now().Add(requestFlush)
+			retryAt = time.Now().Add(e.requestFlush)
 			if over := len(batch) - requestQueue; over > 0 {
 				batch = append(batch[:0], batch[over:]...)
 				e.droppedRecords.Add(int64(over))

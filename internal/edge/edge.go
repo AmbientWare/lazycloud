@@ -39,15 +39,24 @@ type Config struct {
 	// FailureCheckInterval bounds how often waiting requests of one
 	// release ask whether it can start; FailureCheckInterval in production.
 	FailureCheckInterval time.Duration
+	// RequestFlush bounds how long a request record waits to be written
+	// with others; RequestFlush in production.
+	RequestFlush time.Duration
 }
 
 // FailureCheckInterval is Config.FailureCheckInterval in production.
 const FailureCheckInterval = time.Second
 
+// RequestFlush is Config.RequestFlush in production.
+const RequestFlush = time.Second
+
 // Validate refuses settings the edge cannot run with.
 func (c Config) Validate() error {
 	if c.FailureCheckInterval <= 0 {
 		return fmt.Errorf("edge: the failure check interval must be positive, not %s", c.FailureCheckInterval)
+	}
+	if c.RequestFlush <= 0 {
+		return fmt.Errorf("edge: the request flush must be positive, not %s", c.RequestFlush)
 	}
 	return nil
 }
@@ -67,6 +76,8 @@ type Edge struct {
 	logger    *slog.Logger
 	// failureCheck is Config.FailureCheckInterval.
 	failureCheck time.Duration
+	// requestFlush is Config.RequestFlush.
+	requestFlush time.Duration
 
 	routes atomic.Pointer[routeTable]
 	// reloading serializes route reloads; reloadStarted is when the last
@@ -117,7 +128,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 	}
 	e := &Edge{
 		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
-		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: cfg.FailureCheckInterval,
+		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: cfg.FailureCheckInterval, requestFlush: cfg.RequestFlush,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},

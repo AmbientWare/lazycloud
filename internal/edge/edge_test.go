@@ -37,10 +37,16 @@ const testFailureCheck = 200 * time.Millisecond
 
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
 	t.Helper()
+	return newTestEdgeFlushing(t, pool, RequestFlush)
+}
+
+// newTestEdgeFlushing is newTestEdge writing request records every flush.
+func newTestEdgeFlushing(t *testing.T, pool *pgxpool.Pool, flush time.Duration) *Edge {
+	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
 		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
-			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck,
+			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck, RequestFlush: flush,
 		}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -525,13 +531,14 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 	}
 }
 
-// A request owing a callback is written and wakes delivery well inside the
-// batch flush, so its callback leaves about callbackFlush after the response
-// rather than up to a second later.
+// A request owing a callback is written and wakes delivery without waiting
+// for the batch flush, so its callback leaves about callbackFlush after the
+// response.
 func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
-	e := newTestEdge(t, pool)
+	const flush = time.Hour
+	e := newTestEdgeFlushing(t, pool, flush)
 	ws, wl, rel, _ := releaseFixture(t, pool)
 	if _, err := pool.Exec(t.Context(), `update releases set spec = '{"callback_url": "https://hooks.example.com/r"}' where id = $1`, rel); err != nil {
 		t.Fatal(err)
@@ -563,8 +570,8 @@ func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
 	})
 	select {
 	case <-wake:
-	case <-time.After(requestFlush / 2):
-		t.Fatalf("no callback wake within %s of the response", requestFlush/2)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no callback wake within 10s of the response; the batch flushes every %s", flush)
 	}
 	var pending int
 	if err := pool.QueryRow(t.Context(), `select count(*) from task_callbacks where release_id = $1 and state = 'pending'`, rel).Scan(&pending); err != nil {
@@ -625,7 +632,7 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -805,13 +812,19 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 	}
 }
 
-// A config without a positive failure check interval is refused when the
-// edge is built, not discovered as waiting requests asking without pause.
-func TestEdgesNeedAPositiveFailureCheckInterval(t *testing.T) {
+// A config without positive intervals is refused when the edge is built,
+// not discovered as waiting requests asking without pause or records
+// written one at a time.
+func TestEdgesNeedPositiveIntervals(t *testing.T) {
 	t.Parallel()
 	for _, interval := range []time.Duration{0, -time.Second} {
-		if _, err := NewEdge(nil, nil, nil, nil, Config{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: interval}, slog.New(slog.DiscardHandler)); err == nil {
-			t.Errorf("a failure check interval of %s was accepted", interval)
+		for _, cfg := range []Config{
+			{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: interval, RequestFlush: RequestFlush},
+			{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: FailureCheckInterval, RequestFlush: interval},
+		} {
+			if _, err := NewEdge(nil, nil, nil, nil, cfg, slog.New(slog.DiscardHandler)); err == nil {
+				t.Errorf("config %+v was accepted", cfg)
+			}
 		}
 	}
 }
