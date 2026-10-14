@@ -56,6 +56,9 @@ type Config struct {
 	// ReplicaRecheck is how often a check of a regional layer copy looks
 	// again; ReplicaRecheck in production.
 	ReplicaRecheck time.Duration
+	// GrantAckWait is how long a host may take to confirm a storage grant
+	// before it is sent again; GrantAckWait in production.
+	GrantAckWait time.Duration
 	// Secrets resolves the secrets each start carries.
 	Secrets *secrets.Secrets
 	// ContainerAPI serves container API requests; see api.NewContainerHandler.

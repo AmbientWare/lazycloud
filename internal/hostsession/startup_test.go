@@ -60,6 +60,7 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	srv := hostsession.NewServer(compute.NewCompute(pool, e, compute.Config{}), e, store, im,
 		database.NewListener(pool, logger, database.ChannelImageBuild), hostsession.Config{
 			TouchInterval: time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+			GrantAckWait: hostsession.GrantAckWait,
 		}, logger)
 	srv.ConvertAtStart(nil, compute.FleetArchitectures())
 	// With no session open, Wait returns once the start's conversions end.

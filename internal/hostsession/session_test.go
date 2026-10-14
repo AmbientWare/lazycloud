@@ -155,6 +155,7 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 		TouchInterval:  100 * time.Millisecond,
 		LayerLifetime:  hostsession.LayerLifetime,
 		ReplicaRecheck: hostsession.ReplicaRecheck,
+		GrantAckWait:   hostsession.GrantAckWait,
 		Secrets:        vault,
 		ContainerAPI:   containerAPI,
 		Observability:  obs,
