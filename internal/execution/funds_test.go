@@ -89,9 +89,9 @@ with ws as (insert into workspaces (id, name) values ($1, 'other') returning id)
      app as (insert into apps (workspace_id, name, state) select id, 'busy', 'active' from ws returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}'::jsonb, sha256('busy'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select ws.id, rel.id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(1, 10)`, uuid.UUID(other), uuid.UUID(f.workspace))
+             select id, 1, '{}'::jsonb, sha256('busy'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select ws.id, rel.id, rel.workload_id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(1, 10)`, uuid.UUID(other), uuid.UUID(f.workspace))
 	var limit *billing.LimitError
 	if err := submit(); !errors.As(err, &limit) {
 		t.Fatalf("cold submit at the limit: %v", err)
@@ -115,8 +115,8 @@ func TestUnfundedAccountsStopTheirContainers(t *testing.T) {
 	host := newHost(t, pool)
 	container := readyContainer(t, pool, f, host, 0)
 	attempt := attemptOn(t, pool, f, container, 0)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-		select $1, $2, case when n = 0 then 'draining' else 'ready' end, $3, 1, 1000, 1 << 29, now(), now()
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+		select $1, $2, (select workload_id from releases where id = $2), case when n = 0 then 'draining' else 'ready' end, $3, 1, 1000, 1 << 29, now(), now()
 		from generate_series(0, $4) n`, f.workspace, f.release, host, unfundedBatch)
 
 	// Credit runs out while the containers run: the metering pass records

@@ -34,8 +34,8 @@ with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::
              select id, 1, $1::jsonb, sha256('spec'), sha256('src') from wl returning id, workload_id),
      host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256(random()::text::bytea), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-             select ws.id, rel.id, 'ready', host.id, 1, 1000, 1 << 28 from ws, rel, host returning id),
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+             select ws.id, rel.id, rel.workload_id, 'ready', host.id, 1, 1000, 1 << 28 from ws, rel, host returning id),
      task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
               select ws.id, rel.workload_id, rel.id, 'running', 1, $2, now() from ws, rel returning id),
      att as (insert into attempts (task_id, number, container_id, state, deadline_at)

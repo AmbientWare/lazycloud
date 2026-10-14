@@ -190,8 +190,8 @@ select 'h', sha256(n::text::bytea), 'online', now(), 'platform', 'aws', 'ready',
        'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.4xlarge', 'i-' || lpad(to_hex(n), 17, '0'), now() - interval '1 hour', 1
 from generate_series($1::int, $2::int) n`, hosts+1, to)
 		costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-select a.workspace_id, w.active_release_id, 'ready', h.id, 1, 1000, 2::bigint << 30, now(), now()
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'ready', h.id, 1, 1000, 2::bigint << 30, now(), now()
 from hosts h cross join generate_series(1, 4) n
 join lateral (select w.id, w.active_release_id, w.app_id from workloads w order by w.id offset n limit 1) w on true
 join apps a on a.id = w.app_id
@@ -203,15 +203,15 @@ where h.name = 'h' and not exists (select 1 from containers c where c.host_id = 
 	history := 0
 	grow := func(toPending, toHistory int) {
 		costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
 join apps a on a.id = w.app_id`, toPending-pending)
 		costExec(t, pool, `
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, stop_reason,
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, stop_reason,
                         assigned_at, ready_at, stopped_at)
-select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, 'stopped', null, 1, 1000, 2::bigint << 30, 'stopped',
+select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'stopped', null, 1, 1000, 2::bigint << 30, 'stopped',
        now() - interval '2 days', now() - interval '2 days', now() - interval '2 days'
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
@@ -296,15 +296,15 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 	grow(10_000, 20_000)
 	// A deep backlog on one function too.
 	costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30
 from (select active_release_id, app_id from workloads order by id limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 10000)`)
 	// And the oldest backlog created in one statement, so thousands of
 	// pending containers share one created_at.
 	costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
 from (select active_release_id, app_id from workloads order by id offset 1 limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 	large := measure("25,000 pending, 20,000 finished")

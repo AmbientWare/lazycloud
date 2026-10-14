@@ -250,8 +250,8 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 		h.t.Fatal(err)
 	}
 	err = h.pool.QueryRow(ctx, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 2, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 2, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
 	if err != nil {
 		h.t.Fatal(err)
 	}

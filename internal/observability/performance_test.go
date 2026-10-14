@@ -36,8 +36,8 @@ func (f *fixture) container(release uuid.UUID, state string, created time.Time, 
 	// A placed container that has not stopped needs a host.
 	f.exec1(`with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
                      values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 64000, 1 << 40) returning id)
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
-select uuidv7($3::timestamptz - now()), a.workspace_id, $1, $2,
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
+select uuidv7($3::timestamptz - now()), a.workspace_id, $1, (select workload_id from releases where id = $1), $2,
        case when $2 not in ('pending', 'stopped') then host.id end, 1, $6, 1 << 30, $3, $4, $5,
        case when $2 = 'stopped' then 'stopped' end
 from host, releases r join workloads w on w.id = r.workload_id join apps a on a.id = w.app_id where r.id = $1`,

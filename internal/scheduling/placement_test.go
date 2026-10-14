@@ -65,8 +65,8 @@ func pendingContainer(t testing.TB, pool *pgxpool.Pool, r release, cpu, memory i
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
-values ($1, $2, 'pending', 1, $3, $4, now() - make_interval(secs => $5)) returning id`,
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, $3, $4, now() - make_interval(secs => $5)) returning id`,
 		r.workspace, r.id, cpu, memory, age.Seconds()).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -142,8 +142,8 @@ func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
 	exec(t, pool, `update releases set spec = '{"disks":[{"name":"root","size_bytes":1073741824,"mount_path":"/"}]}' where id = $1`, r.id)
 	var holder uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
-values ($1, $2, 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, pool, `insert into disks (workspace_id, name, size_bytes, holder_container_id, lease_token, released_at)
@@ -181,8 +181,8 @@ func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
 	exec(t, pool, `update releases set spec = '{"kind": "function", "volumes":[{"name":"models","mount_path":"/models"}]}' where id = $1`, mounts.id)
 	exec(t, pool, `update releases set spec = '{"kind": "function"}' where id = $1`, plain.id)
 	exec(t, pool, `update releases set spec = '{"kind": "function", "resources": {"gpu": ["T4"]}}' where id = $1`, gpu.id)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace, gpu.id, west)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace, gpu.id, west)
 	exec(t, pool, "insert into workspace_buckets (workspace_id, bucket, region) select id, 'ws-' || id, 'us-east-1' from workspaces where id = $1", mounts.workspace)
 	exec(t, pool, "insert into volumes (workspace_id, name, size_bytes) values ($1, 'models', 16000000000)", mounts.workspace)
 	reads := pendingContainer(t, pool, mounts, 2000, gib, time.Minute)
@@ -396,8 +396,8 @@ func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
 	live := func(ago time.Duration) (container, task uuid.UUID) {
 		t.Helper()
 		if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
 			t.Fatal(err)
 		}
 		if ago == 0 {

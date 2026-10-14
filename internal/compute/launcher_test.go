@@ -551,8 +551,8 @@ values ('w', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 4*gib)
 	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
 	release := newRelease(t, o.pool, ws, `{"disks": [{}, {}, {}, {}, {}, {}]}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, rate_class, capacity_host_id)
-values ($1, $2, 'pending', 1, 2000, 4 << 30, 'auto', $3)`, ws, release, host)
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, rate_class, capacity_host_id)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 2000, 4 << 30, 'auto', $3)`, ws, release, host)
 	if n := launch(t, o); n != 1 {
 		t.Fatalf("launched %d, want the host in its next pool", n)
 	}

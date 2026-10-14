@@ -352,9 +352,9 @@ with ws as (insert into workspaces (name) values ('ws') returning id),
      a as (insert into apps (workspace_id, name, state) select id, 'shop', 'active' from ws returning id),
      w as (insert into workloads (app_id, kind, name, desired_state) select id, 'endpoint', 'web', 'active' from a returning id),
      r as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-           select id, 1, '{}'::jsonb, sha256('spec'), sha256('src') from w returning id),
-     c as (insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-           select ws.id, r.id, 'stopped', 1, 1000, 1 << 28 from ws, r returning id)
+           select id, 1, '{}'::jsonb, sha256('spec'), sha256('src') from w returning id, workload_id),
+     c as (insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+           select ws.id, r.id, r.workload_id, 'stopped', 1, 1000, 1 << 28 from ws, r returning id)
 select ws.id, w.id, r.id, c.id from ws, w, r, c`).Scan(&workspace, &workload, &release, &container)
 	if err != nil {
 		t.Fatal(err)
@@ -756,8 +756,8 @@ func TestARequestRetriesAReleaseThatStoppedStarting(t *testing.T) {
 		t.Helper()
 		if _, err := pool.Exec(ctx, `
 with stopped as (
-    insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, stop_reason, exit_message, stopped_at)
-    values ($1, $2, 'stopped', 1, 1000, 1 << 28, 'start_failed', $4, now() - make_interval(secs => $3))
+    insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, stop_reason, exit_message, stopped_at)
+    values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, 1 << 28, 'start_failed', $4, now() - make_interval(secs => $3))
 )
 update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), message); err != nil {
 			t.Fatal(err)

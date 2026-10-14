@@ -740,8 +740,8 @@ values ('oldest-source', 'amd64', 'oldest-amd64'), ('old-source', 'amd64', 'old-
        ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, image_reference)
-		values ($1, 'ready', 1, 100, 100, $2, $3, 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
+	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, workload_id, image_reference)
+		values ($1, 'ready', 1, 100, 100, $2, $3, (select workload_id from releases where id = $3), 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
 		t.Fatal(err)
 	}
 	superseded, newest, onlyArm, running := pair("old-amd64"), pair("new-amd64"), pair("old-arm64"), pair("oldest-amd64")

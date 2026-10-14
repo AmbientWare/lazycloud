@@ -371,8 +371,8 @@ update workspaces set connection_id = (select id from conn) where id = $2`, uuid
 		{"ready room", func(t *testing.T, o owners, owner identity.UserID) {
 			ws := newWorkspace(t, o.pool, "warm", owner)
 			host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Region: "us-east-2", CPU: 4000, Memory: 16 * gib})
-			run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t, o.pool, ws, `{}`), uuid.UUID(host))
+			run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t, o.pool, ws, `{}`), uuid.UUID(host))
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

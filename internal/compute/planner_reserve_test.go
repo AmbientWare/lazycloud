@@ -69,18 +69,18 @@ func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
 		class string
 		cpu   int64
 	}{{"auto", 1000}, {"pinned", 500}, {"non_preemptible", 2000}} {
-		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
+		run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
 	}
 	// Spot-tolerant L4 work on an on-demand L4 host is the L4 Spot market's.
 	gpuHost := fleetHost(t, o, compute.PhaseReady, "g6.xlarge", "i-0000000000000a002")
 	run(t, o.pool, "update hosts set gpu_type = 'L4', gpu_count = 1 where id = $1", uuid.UUID(gpuHost))
 	gpuRelease := newRelease(t, o.pool, ws, `{"resources": {"gpu": ["L4"], "gpu_count": 1}}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
 	// CPU work packed on a GPU host is the CPU Spot market's.
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 250, 1 << 30, 'auto', now(), now())`, ws, release, uuid.UUID(gpuHost))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 250, 1 << 30, 'auto', now(), now())`, ws, release, uuid.UUID(gpuHost))
 	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +127,8 @@ func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 		alice := newUser(t, o.pool, "alice@example.com")
 		ws := newWorkspace(t, o.pool, "dev", alice)
 		release := newRelease(t, o.pool, ws, `{}`)
-		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
-select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
+		run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
+select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
 from generate_series(0, 15) n`, ws, release, uuid.UUID(host))
 		if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 			t.Fatal(err)
@@ -486,8 +486,8 @@ func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
 	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16_000, Memory: 64 * gib})
 	release := newRelease(t, o.pool, dev, `{}`)
 	run(t, o.pool, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate_series(1, 4)`, dev, release, uuid.UUID(host))
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate_series(1, 4)`, dev, release, uuid.UUID(host))
 	for range 8 {
 		pendingContainer(t, o.pool, dev, release, 4000, 4*gib)
 	}
@@ -745,9 +745,9 @@ func TestTheLargeShapeReserveHoldsTheDisksRecentWorkAttached(t *testing.T) {
 	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
 	disks := strings.TrimSuffix(strings.Repeat("{}, ", 12), ", ")
 	release := newRelease(t, o.pool, ws, `{"disks": [`+disks+`]}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, rate_class, billing_owner,
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, rate_class, billing_owner,
     assigned_at, ready_at, stopped_at)
-values ($1, $2, 'stopped', 1, 1000, 1 << 30, 'auto', 'platform_fleet', now(), now(), now())`, ws, release)
+values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, 1 << 30, 'auto', 'platform_fleet', now(), now(), now())`, ws, release)
 	plan(t, o)
 	if cpus := scan[int64](t, o.pool, `select coalesce(max(cpu_millis), 0) from hosts
 where reserve_mode is not null and market = 'spot' and gpu_count = 0`); cpus < 12000 {

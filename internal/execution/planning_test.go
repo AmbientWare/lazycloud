@@ -93,8 +93,8 @@ func readyContainer(t *testing.T, pool *pgxpool.Pool, f releaseFixture, host uui
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 29, now() - make_interval(secs => $4), now() - make_interval(secs => $4))
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 29, now() - make_interval(secs => $4), now() - make_interval(secs => $4))
 returning id`, f.workspace, f.release, host, readyFor.Seconds()).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -606,8 +606,8 @@ func TestALeavingContainerTheAccountHasNoRoomToReplaceDrains(t *testing.T) {
 	old := readyContainer(t, pool, f, onDemand, time.Minute)
 	// Nine more containers of the account fill its limit of ten.
 	other := newVersion(t, pool, f, `{"kind": "function"}`)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select $1, $2, 'pending', 1, 1000, 1 << 29 from generate_series(1, 9)`, f.workspace, other.release)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29 from generate_series(1, 9)`, f.workspace, other.release)
 
 	plan(t, e)
 	if state := containerState(t, pool, old); state != ContainerDraining || len(replacements(t, pool, old)) != 0 {

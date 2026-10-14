@@ -41,9 +41,9 @@ with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-select ws.id, rel.id, s.state, $1, 1, 1000, 1::bigint << 30
+             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+select ws.id, rel.id, rel.workload_id, s.state, $1, 1, 1000, 1::bigint << 30
 from ws, rel, (select unnest($2::text[]) as state union all select 'stopped' from generate_series(1, $3)) s`,
 		uuid.UUID(host), states, history)
 	exec(t, pool, "analyze")

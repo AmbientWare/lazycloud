@@ -73,8 +73,8 @@ func (f *fixture) placedContainer(release uuid.UUID) (compute.HostID, execution.
 	err := f.pool.QueryRow(f.t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h1', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             select r.workspace_id, $1, 'ready', host.id, 4, 1000, 1 << 28, now(), now()
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             select r.workspace_id, $1, (select workload_id from releases where id = $1), 'ready', host.id, 4, 1000, 1 << 28, now(), now()
              from host, (select a.workspace_id from releases rr join workloads w on w.id = rr.workload_id
                          join apps a on a.id = w.app_id where rr.id = $1) r returning id)
 select host.id, ctr.id from host, ctr`, release).Scan(&host, &container)

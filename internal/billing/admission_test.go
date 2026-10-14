@@ -26,8 +26,8 @@ func (f *fixture) admit(req Request) (Grant, error) {
 func (f *fixture) live(workspace uuid.UUID, n int) {
 	f.t.Helper()
 	rel := f.release(workspace)
-	f.exec(`insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-		select $1, $2, 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, workspace, rel.id, n)
+	f.exec(`insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+		select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, workspace, rel.id, n)
 }
 
 func (f *fixture) setAccount(user uuid.UUID, assignments string, args ...any) {
@@ -130,8 +130,8 @@ func TestConcurrentStartsCountEachOther(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				_, err = tx.Exec(t.Context(), `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-					select $1, $2, 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, ws, rel.id, grant.Start)
+				_, err = tx.Exec(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+					select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, ws, rel.id, grant.Start)
 				return err
 			})
 			if err != nil {

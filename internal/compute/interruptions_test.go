@@ -24,8 +24,8 @@ func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
 	soon := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib,
 		InstanceID: "i-soon"})
 	running := runningAttempt(t, o.pool, dev, release, later)
-	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
+	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
 	doomed := runningAttempt(t, o.pool, dev, release, soon)
 
 	reclaim := time.Now().Add(2 * time.Minute).Truncate(time.Microsecond)
