@@ -16,7 +16,8 @@ import (
 // One caller may hold MaxPerPrincipal streams; closing one frees its place.
 func TestStreamsPerCallerAreCapped(t *testing.T) {
 	t.Parallel()
-	cfg := observability.ChangesConfig{Retained: 8, Buffer: 8, MaxSubscribers: 10, MaxPerPrincipal: 2}
+	cfg := observability.DefaultChangesConfig()
+	cfg.MaxPerPrincipal = 2
 	hub := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
 	ws := identity.WorkspaceID(uuid.New())
 	first, _, err := hub.Subscribe(ws, "user:a", nil)
@@ -35,6 +36,30 @@ func TestStreamsPerCallerAreCapped(t *testing.T) {
 	first.Close()
 	if _, _, err := hub.Subscribe(ws, "user:a", nil); err != nil {
 		t.Fatalf("after a close: %v", err)
+	}
+}
+
+// A hub's bounds and intervals are all set: none of them stands for
+// unlimited or a default when zero.
+func TestChangesConfigNeedsEveryField(t *testing.T) {
+	t.Parallel()
+	if err := observability.DefaultChangesConfig().Validate(); err != nil {
+		t.Fatalf("the default: %v", err)
+	}
+	for name, unset := range map[string]func(*observability.ChangesConfig){
+		"retained":   func(c *observability.ChangesConfig) { c.Retained = 0 },
+		"buffer":     func(c *observability.ChangesConfig) { c.Buffer = 0 },
+		"per server": func(c *observability.ChangesConfig) { c.MaxSubscribers = 0 },
+		"per caller": func(c *observability.ChangesConfig) { c.MaxPerPrincipal = 0 },
+		"idle":       func(c *observability.ChangesConfig) { c.Idle = 0 },
+		"reconnect":  func(c *observability.ChangesConfig) { c.Reconnect = 0 },
+		"negative":   func(c *observability.ChangesConfig) { c.Reconnect = -time.Second },
+	} {
+		cfg := observability.DefaultChangesConfig()
+		unset(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: accepted %+v", name, cfg)
+		}
 	}
 }
 

@@ -37,26 +37,43 @@ type ChangesConfig struct {
 	MaxSubscribers  int
 	MaxPerPrincipal int
 	// Idle is how long the listener waits without a notification before
-	// it checks the connection; zero means 30 s.
+	// it checks the connection.
 	Idle time.Duration
 	// Reconnect is how long the listener waits to connect again after
 	// losing its connection.
 	Reconnect time.Duration
 }
 
-func (c ChangesConfig) idle() time.Duration {
-	if c.Idle <= 0 {
-		return 30 * time.Second
-	}
-	return c.Idle
-}
-
 // DefaultChangesConfig keeps 4,096 events: a few seconds of a busy cluster,
 // enough to resume after a reconnect. Frames are typically under 1 KiB and
 // at most 8 KiB, so the ring holds 32 MiB at worst; subscribers share its
-// frames. A lost listener connects again after a second.
+// frames. An idle listener checks its connection every 30 s, and a lost
+// one connects again after a second.
 func DefaultChangesConfig() ChangesConfig {
-	return ChangesConfig{Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32, Reconnect: time.Second}
+	return ChangesConfig{
+		Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32,
+		Idle: 30 * time.Second, Reconnect: time.Second,
+	}
+}
+
+// Validate checks that every bound and interval of cfg is positive.
+func (c ChangesConfig) Validate() error {
+	for _, field := range []struct {
+		name  string
+		value int64
+	}{
+		{"retained events", int64(c.Retained)},
+		{"subscriber buffer", int64(c.Buffer)},
+		{"streams per server", int64(c.MaxSubscribers)},
+		{"streams per caller", int64(c.MaxPerPrincipal)},
+		{"idle check interval", int64(c.Idle)},
+		{"reconnect delay", int64(c.Reconnect)},
+	} {
+		if field.value <= 0 {
+			return fmt.Errorf("the change hub's %s must be positive", field.name)
+		}
+	}
+	return nil
 }
 
 var (
@@ -224,7 +241,7 @@ func (c *Changes) listen(ctx context.Context) error {
 // half-open connection that stopped delivering is otherwise silent forever.
 func (c *Changes) waitAlive(ctx context.Context, conn *pgx.Conn) (*pgconn.Notification, error) {
 	for {
-		waitCtx, cancel := context.WithTimeout(ctx, c.cfg.idle())
+		waitCtx, cancel := context.WithTimeout(ctx, c.cfg.Idle)
 		n, err := conn.WaitForNotification(waitCtx)
 		cancel()
 		if err == nil {
@@ -416,7 +433,7 @@ func (c *Changes) Subscribe(ws identity.WorkspaceID, principal string, after *in
 	if c.count >= c.cfg.MaxSubscribers {
 		return nil, Resume{}, ErrTooManySubscribers
 	}
-	if c.cfg.MaxPerPrincipal > 0 && c.streams[principal] >= c.cfg.MaxPerPrincipal {
+	if c.streams[principal] >= c.cfg.MaxPerPrincipal {
 		return nil, Resume{}, ErrTooManyStreams
 	}
 	c.streams[principal]++
