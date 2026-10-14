@@ -1,12 +1,14 @@
 package storage_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
@@ -70,5 +72,33 @@ func TestVolumeTracesStayWithTheirWorkload(t *testing.T) {
 	}
 	if reads, record, _ := s.VolumeTrace(ctx, f.ws, workload); record || !slices.Equal(paths(reads), []string{"newer.bin"}) {
 		t.Fatalf("the trace recorded again: %v record=%v", paths(reads), record)
+	}
+}
+
+// A report of more reads than a trace holds stores its first
+// MaxVolumeReads, in their order.
+func TestAVolumeTraceKeepsItsFirstReads(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, volumeSpec)
+	container := f.container()
+	mounts, err := f.storage.MountVolumes(ctx, f.ws, container, []apitypes.VolumeMountSpec{{Name: "data"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workload uuid.UUID
+	f.exec(`select workload_id from releases where id = $1`, &workload, f.release)
+	reads := make([]*imagefsproto.VolumeRead, hostproto.MaxVolumeReads+44)
+	for n := range reads {
+		reads[n] = &imagefsproto.VolumeRead{VolumeId: mounts[0].Volume.String(), Path: fmt.Sprintf("shard-%03d", n)}
+	}
+	if err := f.storage.RecordVolumeTrace(ctx, f.ws, workload, container, reads); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, err := f.storage.VolumeTrace(ctx, f.ws, workload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != hostproto.MaxVolumeReads || stored[0].GetPath() != "shard-000" || stored[len(stored)-1].GetPath() != fmt.Sprintf("shard-%03d", hostproto.MaxVolumeReads-1) {
+		t.Fatalf("the trace stored %d reads", len(stored))
 	}
 }
