@@ -150,7 +150,7 @@ type FleetSnapshot struct {
 	// largest batch.
 	Recent, Arrived map[ReserveMarket]FleetCapacity
 	RecentDisks     map[ReserveMarket]int
-	Offers                  OfferInputs
+	Offers          OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
