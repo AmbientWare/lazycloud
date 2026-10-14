@@ -11,16 +11,15 @@ where r.id = @release_id and a.workspace_id = @workspace_id;
 
 -- name: InsertInstance :one
 insert into containers (
-    workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
     purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container,
     traceparent
 )
-values (
-    @workspace_id, @release_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
-    @purpose, sqlc.narg('keep_warm_seconds'), sqlc.narg('command')::text[], sqlc.narg('snapshot_id'),
-    @block_network, @allow_list::text[], @exposed_ports::int[], sqlc.narg('created_by_container'),
-    sqlc.narg('traceparent')::text
-)
+select @workspace_id, r.id, r.workload_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
+       @purpose, sqlc.narg('keep_warm_seconds'), sqlc.narg('command')::text[], sqlc.narg('snapshot_id'),
+       @block_network, @allow_list::text[], @exposed_ports::int[], sqlc.narg('created_by_container'),
+       sqlc.narg('traceparent')::text
+from releases r where r.id = @release_id
 returning id, created_at;
 
 -- name: InstanceView :one
@@ -187,12 +186,13 @@ order by r.id;
 
 -- name: CreatePendingPodContainers :many
 insert into containers (
-    workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
     keep_warm_seconds, block_network, allow_list, traceparent
 )
-select @workspace_id, @release_id::uuid, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
+select @workspace_id, r.id, r.workload_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
        sqlc.narg('keep_warm_seconds'), @block_network, @allow_list::text[], sqlc.narg('traceparent')::text
-from generate_series(1, @count::int)
+from releases r, generate_series(1, @count::int)
+where r.id = @release_id
 returning id;
 
 -- name: DrainPodContainers :many

@@ -1,4 +1,5 @@
--- name: TaskView :one
+-- name: TaskViews :many
+-- The workspace's tasks of ids, newest first.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
@@ -11,68 +12,89 @@ from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-where t.id = @id and t.workspace_id = @workspace_id;
+where t.id = any(@ids::uuid[]) and t.workspace_id = @workspace_id
+order by t.id desc;
 
--- name: ListTasks :many
--- Newest first below the cursor, from the workspace's recent index.
-select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
-       -- The latest attempt's container, as zero or one element: a scalar
-       -- subquery keeps the per-row index lookup, and the array keeps sqlc
-       -- from reading it as non-null.
-       array(select at.container_id from attempts at
-             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
-from tasks t
-join workloads w on w.id = t.workload_id
-join apps a on a.id = w.app_id
-join releases r on r.id = t.release_id
-where t.workspace_id = @workspace_id
-  and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
-  and (not @root_only::bool or t.parent_task_id is null)
-  and t.id < @before
-order by t.id desc
+-- Listings take the ids of a page below the cursor, newest first, from one
+-- index range per key, and TaskViews loads them.
+
+-- name: WorkspaceTaskIDs :many
+select id from tasks
+where workspace_id = @workspace_id and id < @before
+order by id desc
 limit @max_rows;
 
--- name: ListWorkloadTasks :many
--- Like ListTasks, for the workspace's functions or one app's: each
--- workload's recent index yields at most a page, and the pages merge. A
--- search reads all of a workload whose name contains it, and otherwise
--- only the ids between id_low and id_high, so a search that matches little
--- reads little.
-select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
-       t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
-       -- The latest attempt's container, as zero or one element: a scalar
-       -- subquery keeps the per-row index lookup, and the array keeps sqlc
-       -- from reading it as non-null.
-       array(select at.container_id from attempts at
-             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
-from workloads w
-join apps a on a.id = w.app_id
+-- name: WorkspaceTaskIDsByStatus :many
+-- One range per status and spawned flag.
+select k.id
+from unnest(@statuses::text[]) s(status)
+cross join unnest(@spawned::bool[]) p(spawned)
 cross join lateral (
-    select * from tasks t
-    where t.workload_id = w.id
-      and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
-      and (not @root_only::bool or t.parent_task_id is null)
-      and t.id >= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
-                       then '00000000-0000-0000-0000-000000000000'::uuid else @id_low::uuid end
-      and t.id <= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
-                       then 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid else @id_high::uuid end
-      and t.id < @before
+    select t.id from tasks t
+    where t.workspace_id = @workspace_id and t.status = s.status and t.spawned = p.spawned and t.id < @before
     order by t.id desc
     limit @max_rows
-) t
-join releases r on r.id = t.release_id
-where a.workspace_id = @workspace_id
-  and (sqlc.narg(app_id)::uuid is null or a.id = sqlc.narg(app_id)::uuid)
-  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
-  and (sqlc.narg(version)::int is null or r.version = sqlc.narg(version)::int)
-order by t.id desc
+) k
+order by k.id desc
 limit @max_rows;
 
--- name: LiveAppID :one
-select id from apps where workspace_id = @workspace_id and name = @name and state <> 'deleted';
+-- name: WorkloadTaskIDs :many
+-- One range per workload, of the ids from its id_low to its id_high.
+select k.id
+from (select unnest(@workload_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) w
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.id between w.low and w.high and t.id < @before
+    order by t.id desc
+    limit @max_rows
+) k
+order by k.id desc
+limit @max_rows;
+
+-- name: WorkloadTaskIDsByStatus :many
+-- One range per workload, status and spawned flag, of the ids from the
+-- workload's id_low to its id_high.
+select k.id
+from (select unnest(@workload_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) w
+cross join unnest(@statuses::text[]) s(status)
+cross join unnest(@spawned::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned
+      and t.id between w.low and w.high and t.id < @before
+    order by t.id desc
+    limit @max_rows
+) k
+order by k.id desc
+limit @max_rows;
+
+-- name: ReleaseTaskIDs :many
+-- One range per release, status and spawned flag, of the ids from the
+-- release's id_low to its id_high.
+select k.id
+from (select unnest(@release_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) r
+cross join unnest(@statuses::text[]) s(status)
+cross join unnest(@spawned::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned
+      and t.id between r.low and r.high and t.id < @before
+    order by t.id desc
+    limit @max_rows
+) k
+order by k.id desc
+limit @max_rows;
+
+-- name: ListingWorkloads :many
+-- The workspace's workloads, narrowed to its live app of a name and to a
+-- function name; with a version, each one's release of that version.
+select w.id, w.name, r.id as release_id
+from workloads w
+join apps a on a.id = w.app_id
+left join releases r on r.workload_id = w.id and r.version = sqlc.narg(version)::int
+where a.workspace_id = @workspace_id
+  and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text and a.state <> 'deleted')
+  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text);
 
 -- name: PendingFacts :many
 -- What a queued task waits for, from the release's live containers: the

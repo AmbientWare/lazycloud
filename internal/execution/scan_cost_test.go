@@ -20,9 +20,9 @@ func addHistory(t *testing.T, pool *pgxpool.Pool, f releaseFixture, host uuid.UU
 	t.Helper()
 	exec(t, pool, `
 with ctr as (
-    insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes,
+    insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes,
                             stop_reason, assigned_at, ready_at, stopped_at)
-    select $1, $2, 'stopped', $3, 1, 1000, 1 << 29, 'stopped', now() - interval '2 days', now() - interval '2 days', now() - interval '1 day'
+    select $1, $2, $4, 'stopped', $3, 1, 1000, 1 << 29, 'stopped', now() - interval '2 days', now() - interval '2 days', now() - interval '1 day'
     from generate_series(1, $5 / 10)
     returning id
 ), numbered as (

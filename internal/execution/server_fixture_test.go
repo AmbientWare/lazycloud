@@ -55,8 +55,8 @@ func placedContainer(t *testing.T, pool *pgxpool.Pool, f functionFixture, state 
 	err := pool.QueryRow(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-             select $1, $2, $3, host.id, $4, 1000, 1 << 28, now() from host returning id)
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+             select $1, r.id, r.workload_id, $3, host.id, $4, 1000, 1 << 28, now() from host, releases r where r.id = $2 returning id)
 select host.id, ctr.id from host, ctr`, uuid.UUID(f.workspace), f.release, string(state), slots).Scan(&host, &container)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)

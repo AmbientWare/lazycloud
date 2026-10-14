@@ -161,6 +161,26 @@ func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
 	}
 }
 
+// A version's page holds its own tasks, however many a newer version ran
+// since.
+func TestListTasksOfAVersionBeneathNewerOnes(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	older := submit(t, e, f, 2)
+	exec(t, pool, `
+with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select workload_id, 2, spec, spec_digest, source_sha256 from releases where id = $1 returning id, workload_id)
+insert into tasks (workspace_id, workload_id, release_id, status, max_attempts)
+select $2, rel.workload_id, rel.id, 'queued', 1 from rel, generate_series(1, 3)`, f.release, uuid.UUID(f.workspace))
+	app, fn, one := "reports", "summarize", 1
+	page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{App: &app, Function: &fn, Version: &one}, 2, "")
+	if err != nil || len(page.Tasks) != 2 || page.Tasks[0].ID != older[1].ID || page.Tasks[1].ID != older[0].ID {
+		t.Fatalf("version 1 tasks %+v %v, want both of its tasks", page.Tasks, err)
+	}
+}
+
 func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
