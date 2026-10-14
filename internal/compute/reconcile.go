@@ -215,19 +215,20 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 	if len(orphans) == 0 {
 		return nil
 	}
-	// A launch whose answer was lost has a live host that records no
-	// instance yet: spare it. One a stale claim made for a host that has
-	// recorded another ends.
+	// A live host keeps the instance it records, read after EC2 listed it
+	// so a launch recorded meanwhile keeps its own, or any while it records
+	// none, as when its launch's answer was lost. One a stale claim made
+	// for a host that has recorded another ends.
 	live, err := c.queries.LiveHosts(ctx, tagged)
 	if err != nil {
 		return fmt.Errorf("read live hosts: %w", err)
 	}
-	awaiting := map[string]bool{}
+	keeps := map[string]*string{}
 	for _, h := range live {
-		awaiting[h.ID.String()] = h.InstanceID == nil
+		keeps[h.ID.String()] = h.InstanceID
 	}
 	for _, instance := range orphans {
-		if awaiting[observed[instance].host] {
+		if recorded, alive := keeps[observed[instance].host]; alive && (recorded == nil || *recorded == instance) {
 			continue
 		}
 		if err := c.terminate(ctx, scope, region, instance); err != nil {

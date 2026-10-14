@@ -1,6 +1,7 @@
 package compute_test
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -187,4 +188,31 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 		t.Fatalf("terminated %v, want each of %v once", got, want)
 	}
 	expect(map[compute.HostID]compute.Phase{slow: compute.PhaseFailed, stopped: compute.PhaseFailed}, failures)
+}
+
+// A launch recorded while reconcile lists EC2 keeps its instance: reconcile
+// read the host before it recorded one, and reads it again before it ends
+// an instance as an orphan.
+func TestReconcileSparesALaunchRecordedWhileItListsEC2(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseRequested, Region: "us-east-2"})
+	const instance = "i-0000000000000b101"
+	emulator.on("DescribeInstances", func(call awsCall) awsReply {
+		if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+			return describeInstancesReply()
+		}
+		if _, err := o.pool.Exec(context.Background(), "update hosts set phase = 'provisioning', instance_id = $2, launched_at = now() where id = $1",
+			uuid.UUID(host), instance); err != nil {
+			t.Error(err)
+		}
+		return describeInstancesReply(ec2Instance{ID: instance, State: "pending",
+			Tags: map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": uuid.UUID(host).String()}})
+	})
+	emulator.on("TerminateInstances", terminateInstancesReply)
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	if got := terminated(emulator); len(got) > 0 {
+		t.Fatalf("terminated %v, the instance its host recorded", got)
+	}
 }
