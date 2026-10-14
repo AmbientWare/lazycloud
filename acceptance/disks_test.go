@@ -18,30 +18,24 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 )
 
-// A devbox's writes outlive its container: written on one host, stopped,
-// and started on another host whose engine holds nothing of the disk, its
-// root disk reads back the same bytes. It needs root and the nbd module, as
-// hosts run the disk engine. It runs before the parallel tests: an agent
-// that starts recovers every disk under the host's disk root that it does
-// not run, as the one agent of a host does after a restart.
-func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
+// A devbox's root disk outlives its agent and its host: written on a host
+// whose agent then updates to this tree's release, the running devbox still
+// reads the bytes, and stopped and started on another host whose engine
+// holds nothing of the disk, it reads them again. It needs root and the nbd
+// module, as hosts run the disk engine. It runs before the parallel tests:
+// an agent that starts recovers every disk under the host's disk root that
+// it does not run, as the one agent of a host does after a restart.
+func TestDevboxDiskSurvivesAnAgentUpdateAndMovesBetweenHosts(t *testing.T) {
 	if err := diskengine.Check(); err != nil {
 		t.Skip(err)
 	}
-	p := startPlatform(t)
+	old := oldRelease(t)
+	dist := t.TempDir()
+	head := offerHead(t, dist)
+	p := startServer(t, serverOptions{dist: dist})
 	ctx := t.Context()
-	var err error
-	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	p.runAgent()
-	waitFor(t, "the second host to join", func() bool {
-		var online int
-		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {
-			t.Fatal(err)
-		}
-		return online == 2
-	})
+	p.startHostAgent(p.installRelease(old))
+	p.awaitHost()
 	// Disks come with paid plans; the account is waived, as the local
 	// stack's is.
 	var owner uuid.UUID
@@ -81,7 +75,29 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 
 	first, firstHost := p.readyDevbox(uuid.Nil)
 	written := p.shell(first, "head -c 33554432 /dev/urandom > /root/moved && sha256sum /root/moved")
+	p.publish(head)
+	waitFor(t, "the host to run "+head.version, func() bool { return p.agentVersion() == head.version })
+	if running, _ := p.readyDevbox(uuid.Nil); running != first {
+		t.Fatalf("the update replaced the devbox's container %s with %s", first, running)
+	}
+	if read := p.shell(first, "sha256sum /root/moved"); read != written {
+		t.Fatalf("after the update the disk holds %s, written %s", read, written)
+	}
 	stop()
+
+	// The second host joins once the disk is released.
+	var err error
+	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p.startHostAgent(p.installRelease(head))
+	waitFor(t, "the second host to join", func() bool {
+		var online int
+		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {
+			t.Fatal(err)
+		}
+		return online == 2
+	})
 	if _, err := p.pool.Exec(ctx, "update hosts set capacity_state = 'cordoned' where id = $1", firstHost); err != nil {
 		t.Fatal(err)
 	}
