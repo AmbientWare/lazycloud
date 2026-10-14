@@ -342,16 +342,6 @@ where c.id = w.id and c.state = 'pending'
   and (c.capacity_wait is distinct from nullif(w.wait, '')
        or c.capacity_host_id is distinct from nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid));
 
--- name: CoolOffers :exec
--- Offers whose bought host joined and still could not take its container
--- cool in every zone of their region.
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => @seconds::float8),
-       'the host bought for a container could not take it'
-from jsonb_to_recordset(@offers::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason;
-
 -- name: FailPreparing :many
 -- Reserves whose agent never proved them within the limit terminate with
 -- the failure recorded. An agent update in flight waits.

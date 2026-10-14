@@ -96,27 +96,6 @@ func (q *Queries) BatchWaits(ctx context.Context, arg BatchWaitsParams) ([]Batch
 	return items, nil
 }
 
-const coolOffers = `-- name: CoolOffers :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
-       'the host bought for a container could not take it'
-from jsonb_to_recordset($2::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason
-`
-
-type CoolOffersParams struct {
-	Seconds float64
-	Offers  []byte
-}
-
-// Offers whose bought host joined and still could not take its container
-// cool in every zone of their region.
-func (q *Queries) CoolOffers(ctx context.Context, arg CoolOffersParams) error {
-	_, err := q.db.Exec(ctx, coolOffers, arg.Seconds, arg.Offers)
-	return err
-}
-
 const drainHosts = `-- name: DrainHosts :many
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,

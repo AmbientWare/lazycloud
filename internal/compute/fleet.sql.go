@@ -400,7 +400,8 @@ type InsertCooldownParams struct {
 }
 
 // Cools an offer in one zone, or in its whole region for the zone ”, for
-// seconds, and records the launch walk that refused it, if any. Refused
+// seconds, and records the launch walk that refused it, if any. Every
+// cooldown of an offer is written here. Refused
 // again while it cools, it keeps its end and the walk that refused it
 // first, so no walk moves another walk's end; refused after its cooldown
 // ended, it cools twice as long as that cooldown lasted, up to max_seconds.

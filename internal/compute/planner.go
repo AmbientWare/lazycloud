@@ -273,11 +273,10 @@ type idleRow struct {
 	IdleSince *time.Time `json:"idle_since"`
 }
 
+// coolRow is an offer a pass cools in every zone of its region, and why.
 type coolRow struct {
-	ConnectionKey string `json:"connection_key"`
-	Region        string `json:"region"`
-	InstanceType  string `json:"instance_type"`
-	Market        Market `json:"market"`
+	connectionKey, region, instanceType, reason string
+	market                                      Market
 }
 
 func newFleetPass(c *Compute, p Policy, r fleetRead) *fleetPass {
@@ -349,7 +348,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		})
 	}
 	in.Cooldowns = append(in.Cooldowns, unproven...)
-	ps.cool(ownerPlatform, unproven, "offer cooled: its host could not prove a stop into the reserve")
+	ps.cool(ownerPlatform, unproven, "its host could not prove a stop into the reserve")
 	// A reserve being prepared or stopping runs, so it holds host room as
 	// well as reserve room.
 	held, reserves := 0, 0
@@ -368,7 +367,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	}
 	s.FloorShortSince, s.Peaks = ps.carried()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
-	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
+	ps.cool(ownerPlatform, cools, "the host bought for a container could not take it")
 	bought, err := ps.apply(plan, nil)
 	if err != nil {
 		return err
@@ -414,7 +413,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		}
 		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held), BatchWait: ps.r.connectionWaits[conn.ID]}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
-		ps.cool(conn.ID.String(), cools, "offer cooled: its host could not take the container bought for")
+		ps.cool(conn.ID.String(), cools, "the host bought for a container could not take it")
 		bought, err := ps.apply(plan, &conn.ID)
 		if err != nil {
 			return err
@@ -451,8 +450,8 @@ func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []
 // cool writes the pass's own cooldowns.
 func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 	for _, c := range cools {
-		ps.w.cools = append(ps.w.cools, coolRow{ConnectionKey: owner, Region: c.Region, InstanceType: c.InstanceType, Market: c.Market})
-		ps.note(why, "owner", owner, "region", c.Region, "instance_type", c.InstanceType, "market", c.Market)
+		ps.w.cools = append(ps.w.cools, coolRow{connectionKey: owner, region: c.Region, instanceType: c.InstanceType, market: c.Market, reason: why})
+		ps.note("offer cooled", "reason", why, "owner", owner, "region", c.Region, "instance_type", c.InstanceType, "market", c.Market)
 	}
 }
 
@@ -769,13 +768,12 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	if err := ps.writeWaits(ctx, q); err != nil {
 		return err
 	}
-	if len(ps.w.cools) > 0 {
-		raw, err := json.Marshal(ps.w.cools)
-		if err != nil {
-			return fmt.Errorf("encode cooldowns: %w", err)
-		}
-		if err := q.CoolOffers(ctx, CoolOffersParams{Offers: raw, Seconds: ps.c.fleet.CapacityCooldown.Seconds()}); err != nil {
-			return fmt.Errorf("cool offers: %w", err)
+	for _, c := range ps.w.cools {
+		if err := q.InsertCooldown(ctx, InsertCooldownParams{
+			ConnectionKey: c.connectionKey, Region: c.region, InstanceType: c.instanceType, Market: string(c.market),
+			Seconds: ps.c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * ps.c.fleet.CapacityCooldown).Seconds(), Reason: c.reason,
+		}); err != nil {
+			return fmt.Errorf("cool offer: %w", err)
 		}
 	}
 	if len(ps.w.markets) > 0 {
