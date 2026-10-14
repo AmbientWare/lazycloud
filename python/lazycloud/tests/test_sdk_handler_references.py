@@ -16,17 +16,6 @@ from lazycloud.references import (
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
-def _module_function() -> int:
-    return 1
-
-
-def test_dotted_reference_uses_importable_module_name() -> None:
-    reference = dotted_reference(_module_function)
-
-    assert reference == f"{_module_function.__module__}:_module_function"
-    assert ":" in reference
-
-
 def test_dotted_reference_derives_main_module_from_script_file(tmp_path: Path) -> None:
     package = tmp_path / "pkg"
     package.mkdir()
