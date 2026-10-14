@@ -51,7 +51,7 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 	// last run a statement like query and be idle, and returns its pid.
 	listener := func(query string, not int) int {
 		t.Helper()
-		for {
+		for deadline := time.Now().Add(10 * time.Second); ; {
 			var pid int
 			err := f.pool.QueryRow(t.Context(), `select pid from pg_stat_activity
 				where datname = current_database() and pid not in (pg_backend_pid(), $2) and query like $1 and state = 'idle'`, query, not).Scan(&pid)
@@ -60,6 +60,9 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 			}
 			if !errors.Is(err, pgx.ErrNoRows) {
 				t.Fatal(err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no idle listener connection that last ran %q", query)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

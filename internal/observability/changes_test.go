@@ -14,7 +14,7 @@ import (
 )
 
 func smallHub() observability.ChangesConfig {
-	return observability.ChangesConfig{Retained: 64, Buffer: 8, MaxSubscribers: 10}
+	return observability.ChangesConfig{Retained: 64, Buffer: 8, MaxSubscribers: 10, Reconnect: 10 * time.Millisecond}
 }
 
 // Committed task changes reach the workspace's subscribers once per
