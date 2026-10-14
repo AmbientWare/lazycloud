@@ -124,9 +124,7 @@ func TestTransitionsRecordCallbacksInTheirTransaction(t *testing.T) {
 	// A retried failure, then a final one.
 	f := runningAttempt(t, pool, callbackSpec, 2)
 	failure := &Failure{Kind: FailureUserError, Type: "ValueError", Message: "nope"}
-	if err := finish(ctx, e, &f.host, AttemptOutcome{Attempt: f.attempt, State: AttemptFailed, Failure: failure}); err != nil {
-		t.Fatal(err)
-	}
+	finish(t, e, f, AttemptFailed, failure)
 	if got := callbackEvents(t, pool, f.task); len(got) != 1 || got[0] != "retry:1" {
 		t.Fatalf("after a retried failure: %v", got)
 	}
@@ -145,11 +143,7 @@ func TestTransitionsRecordCallbacksInTheirTransaction(t *testing.T) {
 
 	// A release without callback_url records nothing.
 	quiet := runningAttempt(t, pool, `{}`, 1)
-	if err := finish(ctx, e, &quiet.host, AttemptOutcome{
-		Attempt: quiet.attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	finish(t, e, quiet, AttemptSucceeded, nil)
 	if got := callbackEvents(t, pool, quiet.task); len(got) != 0 {
 		t.Fatalf("without callback_url: %v", got)
 	}

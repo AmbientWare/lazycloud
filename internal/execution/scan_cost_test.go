@@ -43,28 +43,6 @@ from task_numbered tn join numbered c on c.n = (tn.n - 1) / 10 + 1`,
 
 var errRollback = errors.New("rollback") //nolint:gochecknoglobals // Test sentinel.
 
-// explain runs EXPLAIN ANALYZE on query in a transaction it rolls back.
-func explain(t *testing.T, pool *pgxpool.Pool, query string, args ...any) string {
-	t.Helper()
-	var plan string
-	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+query, args...)
-		if err != nil {
-			return err
-		}
-		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		plan = strings.Join(lines, "\n")
-		return errRollback
-	})
-	if !errors.Is(err, errRollback) {
-		t.Fatalf("explain: %v", err)
-	}
-	return plan
-}
-
 // summary is a plan's execution time and top-level buffer use, which is
 // empty when execution touched no buffer.
 func summary(plan string) string {
@@ -246,6 +224,7 @@ func constantCost(t *testing.T, small, large map[string]int, slack int, grown st
 // partial indexes of live rows, so their cost does not grow with retained
 // history.
 func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
 	host := newHost(t, pool)

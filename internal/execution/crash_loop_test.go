@@ -56,6 +56,7 @@ func planPods(t *testing.T, e *Execution) PlanResult {
 // the release keeps no warm minimum. A stop by request or an exit after
 // ready does not count.
 func TestExitsBeforeReadyCountAsStartFailures(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10,
@@ -107,6 +108,7 @@ func TestExitsBeforeReadyCountAsStartFailures(t *testing.T) {
 // After a failed start the next container waits, longer after each
 // consecutive failure, and the plan names when it may start.
 func TestFailedStartsBackOff(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "pod", 600)
@@ -144,6 +146,7 @@ func TestFailedStartsBackOff(t *testing.T) {
 // a starting one drains and its host is told to stop it, and neither an
 // earlier scale nor always-on starts another until the next wake.
 func TestParkStopsStartingAndCrashLoopingPods(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", -1)
@@ -200,6 +203,7 @@ values ($1, $2, 'starting', $3, 1, 500, 1 << 28, now()) returning id`, uuid.UUID
 // with its error, and a task submitted within the backoff after it fails
 // with that error without another start.
 func TestATaskRetriesAReleaseThatStoppedStarting(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10}`)

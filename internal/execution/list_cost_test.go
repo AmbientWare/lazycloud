@@ -1,7 +1,6 @@
 package execution
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -10,9 +9,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// Listings read one page through an index whose leading columns match the
-// filter, so their cost does not grow with retained history.
+// Listings read one page, so their cost does not grow with retained
+// history: 10,000 more finished tasks on 1,000 more stopped containers leave
+// each listing's reads where they were.
 func TestListingsReadOnePageOfAnIndex(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
 	host := newHost(t, pool)
@@ -24,13 +25,9 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 	}
 
 	page := int32(101)
-	listings := []struct {
-		name  string
-		query string
-		args  []any
-	}{
+	scans := []scan{
 		{"tasks", listTasks, []any{f.workspace, nil, false, nil, uuid.Max, page}},
-		{"root tasks searched", listTasks, []any{f.workspace, nil, true, "fn", uuid.Max, page}},
+		{"root tasks", listTasks, []any{f.workspace, nil, true, nil, uuid.Max, page}},
 		{"app tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, nil, nil}},
 		{"version tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, "fn", 1}},
 		{"containers", listContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
@@ -40,26 +37,11 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 		{"sandboxes", listSandboxes, []any{f.workspace, uuid.Max, nil, nil, page}},
 		{"sandboxes searched", listSandboxes, []any{f.workspace, uuid.Max, nil, "box", page}},
 	}
-	for _, history := range []int{0, 10_000} {
-		if history > 0 {
-			addHistory(t, pool, f, host, history)
-		}
-		exec(t, pool, "analyze")
-		for _, listing := range listings {
-			plan := explain(t, pool, listing.query, listing.args...)
-			t.Logf("%d finished tasks, %s: %s", history, listing.name, summary(plan))
-			if history == 0 {
-				continue
-			}
-			for _, table := range []string{"tasks", "attempts", "containers"} {
-				if strings.Contains(plan, "Seq Scan on "+table) {
-					t.Errorf("%s scans every row of %s:\n%s", listing.name, table, plan)
-				}
-			}
-			// Sandboxes are instances; the workspace's other containers stay unread.
-			if strings.HasPrefix(listing.name, "sandboxes") && !strings.Contains(plan, "containers_instances_recent") {
-				t.Errorf("%s reads the workspace's container history:\n%s", listing.name, plan)
-			}
-		}
-	}
+	addHistory(t, pool, f, host, 1_000)
+	exec(t, pool, "analyze")
+	small := costAt(t, pool, scans, "1,000 finished tasks", 0)
+	addHistory(t, pool, f, host, 10_000)
+	exec(t, pool, "analyze")
+	large := costAt(t, pool, scans, "11,000 finished tasks", 500)
+	constantCost(t, small, large, 20, "10,000 finished tasks and 1,000 stopped containers")
 }

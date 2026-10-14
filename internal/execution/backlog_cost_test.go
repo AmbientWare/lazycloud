@@ -16,6 +16,7 @@ import (
 // statistics taken before the queue filled, which is what production has
 // between autovacuum runs and what made the planner walk the queued index.
 func TestPerCompletionCostIgnoresBacklog(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 4, "tasks_per_container": 4}}`)
 	host := newHost(t, pool)

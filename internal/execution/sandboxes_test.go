@@ -10,6 +10,7 @@ import (
 // Search finds sandboxes by part of their name, their app's name or their
 // container id, ignoring case, so the dashboard's global search reaches them.
 func TestSandboxSearchMatchesNameAppAndContainerID(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{}`)

@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ type podFixture struct {
 
 const podSpec = `{"name": "web", "source": {"sha256": "00"}, "image": {"python_version": "3.12"},
  "resources": {"cpu_millis": 500, "memory_mib": 256}, "keep_warm_seconds": %d,
- "pod": {"kind": "%s", "command": ["python", "-m", "http.server", "8080"], "ports": {"http": 8080}}}`
+ "pod": {"kind": %q, "command": ["python", "-m", "http.server", "8080"], "ports": {"http": 8080}}}`
 
 // deployedPod inserts an active pod "tools/web" of kind (pod, devbox or
 // sandbox) with keepWarm.
@@ -38,7 +39,7 @@ func deployedPod(t *testing.T, pool *pgxpool.Pool, kind string, keepWarm int) po
 	if kind == "sandbox" {
 		workloadKind = "sandbox"
 	}
-	spec := strings.Replace(strings.Replace(podSpec, "%d", itoa(keepWarm), 1), "%s", kind, 1)
+	spec := fmt.Sprintf(podSpec, keepWarm, kind)
 	err := pool.QueryRow(t.Context(), `
 with ws as (insert into workspaces (name) values ('ws') returning id),
      app as (insert into apps (workspace_id, name, state) select id, 'tools', 'active' from ws returning id),
@@ -55,20 +56,6 @@ select ws.id, rel.workload_id, rel.id from ws, rel`, spec, workloadKind).Scan(&w
 	}
 	f.workspace = identity.WorkspaceID(ws)
 	return f
-}
-
-func itoa(n int) string {
-	if n < 0 {
-		return "-" + itoa(-n)
-	}
-	digits := ""
-	for {
-		digits = string(rune('0'+n%10)) + digits
-		n /= 10
-		if n == 0 {
-			return digits
-		}
-	}
 }
 
 // readyOnHost places container on a new host and marks it ready.
@@ -102,6 +89,7 @@ func age(t *testing.T, pool *pgxpool.Pool, container ContainerID, by time.Durati
 }
 
 func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "sandbox", 600)
@@ -184,6 +172,7 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 }
 
 func TestInstancesNeedAPodOrAShell(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	fn := deployedFunction(t, pool, `{"name": "summarize", "handler": "reports:summarize", "source": {"sha256": "00"},
@@ -215,6 +204,7 @@ func TestInstancesNeedAPodOrAShell(t *testing.T) {
 }
 
 func TestPodsFollowConnectionsScalesAndParks(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	logger := slog.New(slog.DiscardHandler)
@@ -326,6 +316,7 @@ where r.workload_id = $1 and c.purpose = 'serve' and c.state in ('pending', 'sta
 // start, and one within the backoff after that start failed is held with
 // its error.
 func TestWakeRetriesAPodWhoseStartsFailed(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", 600)
@@ -387,6 +378,7 @@ update releases set start_failures = $2 where id = $1`, f.release, failures, ago
 
 // A woken devbox that billing will not start says why instead of queueing.
 func TestAWokenDevboxBillingRefusesSaysWhy(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "devbox", 600)
@@ -403,6 +395,7 @@ func TestAWokenDevboxBillingRefusesSaysWhy(t *testing.T) {
 }
 
 func TestAlwaysOnPodsRefuseScalingToZero(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "pod", -1)
@@ -419,6 +412,7 @@ func TestAlwaysOnPodsRefuseScalingToZero(t *testing.T) {
 }
 
 func TestSnapshotsAreReportedOnceByTheirHost(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "sandbox", 600)
@@ -476,6 +470,7 @@ func TestSnapshotsAreReportedOnceByTheirHost(t *testing.T) {
 }
 
 func TestSSHCertificatesAreSignedByTheWorkspaceAuthority(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	f := deployedPod(t, pool, "devbox", 1800)
 	keys := NewSSHKeys(pool, plainSealer{})
@@ -545,6 +540,7 @@ Ptp/zWkhxkBBzlbQQ3ESAAAAB3Rlc3RrZXkBAgMEBQY=
 `
 
 func TestInstancesEndWithTheirWorkload(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedPod(t, pool, "sandbox", 600)
