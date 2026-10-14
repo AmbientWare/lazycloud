@@ -1084,3 +1084,113 @@ func demandOnly() Policy {
 	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
 	return p
 }
+
+// l4Job is the Spot-tolerant L4 function prod ran on 2026-10-13.
+var l4Job = Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 13056 << 20}
+
+// spotQuoted adds a Spot quote of each type in the plan zone.
+func spotQuoted(s FleetSnapshot, micros int64, types ...string) FleetSnapshot {
+	for _, typ := range types {
+		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ, HourlyMicros: micros, ObservedAt: offerNow})
+	}
+	return s
+}
+
+// cooling cools the Spot pools of each type in the plan region for an hour.
+func cooling(types ...string) []OfferCooldown {
+	var out []OfferCooldown
+	for _, typ := range types {
+		out = append(out, OfferCooldown{Region: "us-east-2", InstanceType: typ, Market: MarketSpot, Until: offerNow.Add(time.Hour)})
+	}
+	return out
+}
+
+// An L4 job's purchase keeps the size rule while L4 Spot pools refuse, as
+// every one did on 2026-10-13: it steps up one size while the smallest
+// cools, though a larger one quotes less, and never past the size cap or
+// to a type of more cards, however many smaller sizes cool.
+func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
+	for _, c := range []struct {
+		cooled []string
+		want   []string
+	}{
+		{[]string{"g6.xlarge"}, []string{"g6.2xlarge/spot"}},
+		{[]string{"g6.xlarge", "g6.2xlarge", "g6.4xlarge"}, []string{"g6.xlarge/on_demand"}},
+	} {
+		s := planSnapshot(t)
+		s.Offers.Catalog, s.Offers.OwnerPays = FleetCatalog(), true
+		s = spotQuoted(spotQuoted(s, 300_000, "g6.xlarge", "g6.2xlarge", "g6.8xlarge", "g6.12xlarge", "g6.16xlarge", "g6.48xlarge"), 250_000, "g6.4xlarge")
+		s.Offers.Cooldowns = cooling(c.cooled...)
+		g, _ := pendingOne(l4Job, nil)
+		s.Pending = []DemandGroup{g}
+		var got []string
+		for _, a := range actionsOf(PlanFleet(gpuPolicy(), s), ActionBuy) {
+			got = append(got, a.Offer.Type.Name+"/"+string(a.Offer.Market))
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%v cooling: bought %v, want %v", c.cooled, got, c.want)
+		}
+	}
+}
+
+// No GPU reserve is bought above the size cap while the pools within it
+// cool, as every GPU Spot pool refused on 2026-10-12: the Spot L4 market
+// waits for them, though larger types quote far less.
+func TestAGPUReserveStaysWithinTheCapWhileSmallerPoolsCool(t *testing.T) {
+	spotL4 := ReserveMarket{Preemptible: true, GPU: "L4"}
+	s := spotQuoted(spotQuoted(planSnapshot(t), 300_000, "g6.xlarge", "g6.2xlarge", "g6.4xlarge"), 50_000, "g6.8xlarge", "g6.12xlarge", "g6.16xlarge", "g6.48xlarge")
+	s.Offers.Catalog = FleetCatalog()
+	s.Offers.Cooldowns = cooling("g6.xlarge", "g6.2xlarge", "g6.4xlarge")
+	plan := PlanFleet(gpuPolicy(), s)
+	for _, a := range actionsOf(plan, ActionBuyReserve) {
+		if a.Market == spotL4 {
+			t.Errorf("bought reserve %s", a.Offer.Key())
+		}
+	}
+	if mp := marketPlan(t, plan, spotL4); mp.Reason != ReasonCooldown {
+		t.Errorf("the Spot L4 market's reason %q, want %q", mp.Reason, ReasonCooldown)
+	}
+}
+
+// Work resumes a reserve that cannot serve at once only when it serves
+// sooner than a purchase. EC2 starts a stopped Spot instance only once it
+// disables the persistent request, 38-165 s after the stop (2026-10-13):
+// L4 work waits for a Spot L4 reserve that stopped 33 s ago, since the
+// rest of that wait and a GPU resume beat a GPU launch, while CPU work
+// buys past a CPU one; past SpotDisableMax the L4 work stops waiting and
+// buys. A reserve stopped on an older agent build updates it first, which
+// a GPU launch still outlasts.
+func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
+	p := gpuPolicy()
+	cpuSpot := Requirement{Preemptible: true, CPUMillis: 4000, MemoryBytes: 8 * gib}
+	for _, c := range []struct {
+		name    string
+		gpu     bool
+		state   FleetState
+		stopped time.Duration
+		stale   bool
+		resumes bool
+	}{
+		{"L4, request active", true, FleetStopping, 33 * time.Second, false, true},
+		{"CPU, request active", false, FleetStopping, 33 * time.Second, false, false},
+		{"L4, request active past the bound", true, FleetStopping, p.Starts.SpotDisableMax + time.Second, false, false},
+		{"L4, older agent build", true, FleetStopped, time.Hour, true, true},
+	} {
+		h := planHost(1, planSmall, c.state)
+		need := cpuSpot
+		if c.gpu {
+			h = gpuReserve(t, 1, MarketSpot)
+			h.State, need = c.state, l4Job
+		}
+		h.Market, h.StoppedAt, h.Current = MarketSpot, ptr(offerNow.Add(-c.stopped)), !c.stale
+		s := spotQuoted(gpuPlanSnapshot(t, h), 200_000, "m.small")
+		s.Offers.Catalog = append(s.Offers.Catalog, planSmall)
+		g, _ := pendingOne(need, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(p, s)
+		resumed := slices.Equal(hostsOf(actionsOf(plan, ActionResume)), []HostID{h.ID})
+		if resumed != c.resumes || resumed == (len(boughtForWork(plan)) == 1) {
+			t.Errorf("%s: resumed %t, bought %v; want a resume %t", c.name, resumed, boughtForWork(plan), c.resumes)
+		}
+	}
+}
