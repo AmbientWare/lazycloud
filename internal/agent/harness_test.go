@@ -62,6 +62,16 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("convert the test images: %v", err))
 	}
 	code := m.Run()
+	// The images the tests pulled read their layers from the test store,
+	// whose buckets go next; left behind, they would serve later runs of
+	// other tests unreadable files.
+	for _, image := range lazyImages {
+		out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", image).CombinedOutput()
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", image).Run() == nil {
+			fmt.Fprintf(os.Stderr, "remove %s: %v: %s\n", image, err, out)
+			code = max(code, 1)
+		}
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)

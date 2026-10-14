@@ -75,8 +75,9 @@ func runContainer(t *testing.T, args ...string) string {
 	if runtime == "" {
 		runtime = "runc"
 	}
-	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
+	// A run that fails may leave the container created.
 	t.Cleanup(func() { _, _ = docker(t, "rm", "-f", name) })
+	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
 	return name
 }
 
