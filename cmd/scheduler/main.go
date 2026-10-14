@@ -184,7 +184,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("LAZYCLOUD_BUILD_CPU: %w", err)
 	}
-	im := images.NewImages(pool, exec, vault, store, images.Config{BuildCPU: buildCPU})
+	im, err := images.NewImages(pool, exec, vault, store, images.Config{BuildCPU: buildCPU, PlatformTransferBackoff: images.PlatformTransferBackoff})
+	if err != nil {
+		return err
+	}
 	listener := database.NewListener(session, logger, database.ChannelExecution, database.ChannelImageBuild,
 		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute, schedules.Channel, database.ChannelCallback)
 	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")

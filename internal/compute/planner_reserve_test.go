@@ -1010,8 +1010,13 @@ and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 're
 
 // buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
 // default of 4 CPUs.
-func buildShape() (cpuMillis, memoryBytes int64) {
-	reserved, memory, _ := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
+func buildShape(t *testing.T) (cpuMillis, memoryBytes int64) {
+	t.Helper()
+	im, err := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000, PlatformTransferBackoff: images.PlatformTransferBackoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, memory, _ := im.BuildResources()
 	return int64(reserved), memory
 }
 
@@ -1028,7 +1033,7 @@ func pendingBuild(t *testing.T, o owners, workspace uuid.UUID) uuid.UUID {
 func buildContainer(t *testing.T, o owners, workspace uuid.UUID, state string, age time.Duration) uuid.UUID {
 	t.Helper()
 	seed := uuid.NewString()
-	cpuMillis, memory := buildShape()
+	cpuMillis, memory := buildShape(t)
 	return scan[uuid.UUID](t, o.pool, `
 with image as (
     insert into images (digest, id, dockerfile, python_version, architecture)
@@ -1087,7 +1092,7 @@ func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
 	buildContainer(t, o, dev, "stopped", 10*time.Minute)
 	staleMarkets(t, o)
 	plan(t, o)
-	cpuMillis, memory := buildShape()
+	cpuMillis, memory := buildShape(t)
 	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
 		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
 	}

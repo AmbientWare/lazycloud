@@ -54,13 +54,21 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
-	im := images.NewImages(pool, e, secrets.NewSecrets(pool, key), store, images.Config{
+	im, err := images.NewImages(pool, e, secrets.NewSecrets(pool, key), store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/library/python:{version}-slim",
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
 	})
-	srv := hostsession.NewServer(compute.NewCompute(pool, e, compute.Config{}), e, store, im,
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := hostsession.NewServer(compute.NewCompute(pool, e, compute.Config{}), e, store, im,
 		database.NewListener(pool, logger, database.ChannelImageBuild), hostsession.Config{
 			TouchInterval: time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
+			GrantAckWait: hostsession.GrantAckWait,
 		}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.ConvertAtStart(nil, compute.FleetArchitectures())
 	// With no session open, Wait returns once the start's conversions end.
 	srv.Wait()
@@ -82,5 +90,18 @@ func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
 	var builds int
 	if err := pool.QueryRow(t.Context(), "select count(*) from image_builds").Scan(&builds); err != nil || builds != 0 {
 		t.Fatalf("%d builds ran for it (%v)", builds, err)
+	}
+}
+
+// A config without a positive grant acknowledgement wait is refused when the
+// server is built, not discovered as grants sent again at every sync.
+func TestServersNeedAPositiveGrantAckWait(t *testing.T) {
+	t.Parallel()
+	for _, wait := range []time.Duration{0, -time.Second} {
+		if _, err := hostsession.NewServer(nil, nil, nil, nil, nil, hostsession.Config{
+			TouchInterval: time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck, GrantAckWait: wait,
+		}, slog.New(slog.DiscardHandler)); err == nil {
+			t.Errorf("a grant acknowledgement wait of %s was accepted", wait)
+		}
 	}
 }

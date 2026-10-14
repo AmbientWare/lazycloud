@@ -24,10 +24,11 @@ const (
 	// grantRefresh is how long before expiry a host gets a fresh storage
 	// grant.
 	grantRefresh = 30 * time.Minute
-	// grantAckWait is how long a host may take to confirm it stored a
-	// grant; a later sync sends it again.
-	grantAckWait = 2 * time.Second
 )
+
+// GrantAckWait is how long a host may take to confirm it stored a storage
+// grant before a later sync sends it again.
+const GrantAckWait = 2 * time.Second
 
 // storageRefusal is storage a start needs that the storage owner refused:
 // a cloud bucket or the workspace's storage grant. The container fails
@@ -153,7 +154,7 @@ func (g *hostGrant) held() bool {
 }
 
 // ensureGrant keeps a storage grant for workspace on the host. A grant the
-// host has not confirmed within grantAckWait is sent again, and one close
+// host has not confirmed within Config.GrantAckWait is sent again, and one close
 // to expiry is replaced. A storage refusal while the host holds no grant
 // is a *storageRefusal. Any other failure to issue one is logged and tried
 // again at the next sync: the host keeps using a grant it holds, and a
@@ -161,7 +162,7 @@ func (g *hostGrant) held() bool {
 func (sess *session) ensureGrant(ctx context.Context, workspace identity.WorkspaceID) error {
 	g := sess.grants[workspace]
 	if g != nil && time.Until(g.expires) > grantRefresh {
-		if g.acked || time.Since(g.sentAt) < grantAckWait {
+		if g.acked || time.Since(g.sentAt) < sess.server.config.GrantAckWait {
 			return nil
 		}
 		return sess.sendGrant(workspace, g)

@@ -60,7 +60,7 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 		done <- serveWith(ctx, pool, pool, cfg, tel, slog.New(slog.DiscardHandler), ls)
 	}()
 
-	waitFor(t, probes+"/readyz", http.StatusOK)
+	waitFor(t, probes+"/readyz", http.StatusOK, done)
 	if status := get(t, probes+"/healthz", ""); status != http.StatusOK {
 		t.Fatalf("healthz = %d, want 200", status)
 	}
@@ -75,7 +75,7 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 
 	stopped := time.Now()
 	cancel()
-	waitFor(t, probes+"/readyz", http.StatusServiceUnavailable)
+	waitFor(t, probes+"/readyz", http.StatusServiceUnavailable, nil)
 	// Still serving during the drain delay.
 	if status := get(t, api+"/v1/me", token); status != http.StatusOK {
 		t.Fatalf("API while draining = %d, want 200", status)
@@ -133,12 +133,20 @@ func get(t *testing.T, url, token string) int {
 	return resp.StatusCode
 }
 
-// waitFor polls url until it answers status, for up to 10 seconds.
-func waitFor(t *testing.T, url string, status int) {
+// waitFor polls url until it answers status, for up to 10 seconds, failing
+// at once if serving ends first.
+func waitFor(t *testing.T, url string, status int, serving <-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		req, err := http.NewRequestWithContext(context.WithoutCancel(t.Context()), http.MethodGet, url, nil)
+		select {
+		case err := <-serving:
+			t.Fatalf("serving ended before GET %s returned %d: %v", url, status, err)
+		default:
+		}
+		// A listener nothing serves yet accepts and never answers.
+		poll, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
+		req, err := http.NewRequestWithContext(poll, http.MethodGet, url, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,9 +155,11 @@ func waitFor(t *testing.T, url string, status int) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode == status {
+				cancel()
 				return
 			}
 		}
+		cancel()
 		if time.Now().After(deadline) {
 			t.Fatalf("GET %s did not return %d within 10s (last error %v)", url, status, err)
 		}

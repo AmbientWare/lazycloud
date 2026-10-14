@@ -30,9 +30,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
-func (f fixture) replica() *images.Images {
-	return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
-		Registry: f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
+func (f fixture) replica(t *testing.T) *images.Images {
+	return newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
 	})
 }
 
@@ -72,7 +73,7 @@ func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, "update platform_images set leased_until = now() - interval '1 second'"); err != nil {
 		t.Fatal(err)
 	}
-	replicas := []*images.Images{f.images, f.replica()}
+	replicas := []*images.Images{f.images, f.replica(t)}
 	var wg sync.WaitGroup
 	for n := range 6 {
 		wg.Go(func() {
@@ -174,7 +175,7 @@ func TestPlatformImageFailuresAreTypedAndRetried(t *testing.T) {
 		t.Fatalf("past its retry period the image is tried again: %v", err)
 	}
 
-	dead := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", Insecure: true})
+	dead := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: "127.0.0.1:1", Repository: "lazycloud", Insecure: true})
 	unreachable := "127.0.0.1:1/tools/builder@sha256:" + strings.Repeat("e", 64)
 	if err := dead.ConvertPlatformImage(ctx, unreachable, "amd64"); errors.As(err, &unconvertible) || !errors.Is(err, images.ErrRegistryUnavailable) {
 		t.Fatalf("an unreachable registry is a transient failure: %v", err)
@@ -338,7 +339,7 @@ func TestADataFileTheServerCannotWriteIsItsDiskFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	registry := strings.TrimPrefix(server.URL, "http://")
-	im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	im := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: registry, Repository: "lazycloud", Insecure: true})
 	reference := registry + "/tools/disk:1@" + pushImage(t, f.registry+"/tools/disk:1", img)
 	err = im.ConvertPlatformImage(ctx, reference, "amd64")
 	var unconvertible *images.ConversionError
@@ -376,7 +377,7 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 	ctx := t.Context()
 	registry := hangingRegistry(t)
 	replica := func() *images.Images {
-		return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+		return newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: registry, Repository: "lazycloud", Insecure: true})
 	}
 	owner, other := replica(), replica()
 	const lease = 600 * time.Millisecond
@@ -500,7 +501,9 @@ func TestCutDownloadsAreTransientAndTruncatedLayersAreContent(t *testing.T) {
 	}
 
 	registry := cuttingRegistry(t, f.registry)
-	cut := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	cut := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, PlatformTransferBackoff: time.Millisecond,
+	})
 	img, err := random.Image(64<<10, 1)
 	if err != nil {
 		t.Fatal(err)

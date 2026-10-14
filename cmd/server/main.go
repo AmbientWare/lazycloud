@@ -385,7 +385,11 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, exec, vault, store, cfg.images)
+	cfg.images.PlatformTransferBackoff = images.PlatformTransferBackoff
+	im, err := images.NewImages(pool, exec, vault, store, cfg.images)
+	if err != nil {
+		return err
+	}
 	ident := identity.NewIdentity(pool, cfg.identity)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
@@ -398,7 +402,9 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session}
+	edgeConfig := edge.Config{
+		URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session, FailureCheckInterval: edge.FailureCheckInterval,
+	}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {
 		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {
@@ -436,11 +442,14 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if err != nil {
 		return err
 	}
-	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
+	hosts, err := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		TouchInterval: 10 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 		Registerer: tel.Registry, Tracer: tel.Tracer(), Traces: hostTraces,
 	}, logger)
+	if err != nil {
+		return err
+	}
 	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures()) //nolint:contextcheck // Conversions run under the host service's lifetime.
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {

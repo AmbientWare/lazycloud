@@ -136,8 +136,9 @@ func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
 	t.Cleanup(registry.Close)
 	host := strings.TrimPrefix(registry.URL, "http://")
 	pool := dbtest.New(t)
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), nil, images.Config{
-		Registry: host, Repository: "lazycloud", Insecure: true, ManagedBase: host + "/library/python:{version}-slim",
+	im := newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), nil, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                host, Repository: "lazycloud", Insecure: true, ManagedBase: host + "/library/python:{version}-slim",
 	})
 	ws := fixture{pool: pool}.workspace(t, "a")
 	_, err := im.Resolve(t.Context(), ws, apitypes.ImageDefinition{PythonVersion: "3.12"})

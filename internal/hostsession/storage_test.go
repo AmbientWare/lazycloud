@@ -136,7 +136,8 @@ from containers where id = $1`, container).Scan(&state, &reason, &message); err 
 // not.
 func TestUnacknowledgedGrantsAreSentAgain(t *testing.T) {
 	t.Parallel()
-	h := start(t)
+	const ackWait = 200 * time.Millisecond
+	h := start(t, func(c *hostsession.Config) { c.GrantAckWait = ackWait })
 	host, ctx := h.enroll()
 	h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
 		"volumes": [{"name": "data", "mount_path": "data"}]}`)
@@ -161,11 +162,11 @@ func TestUnacknowledgedGrantsAreSentAgain(t *testing.T) {
 			got <- msg
 		}
 	}()
-	// An unacknowledged grant goes again two seconds after it was sent.
+	// An unacknowledged grant would go again ackWait after it was sent.
 	select {
 	case msg := <-got:
 		t.Fatalf("sent %v after the host acknowledged its grant", msg)
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * ackWait):
 	}
 }
 

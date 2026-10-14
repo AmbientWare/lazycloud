@@ -148,13 +148,19 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 	if err != nil {
 		t.Fatal(err)
 	}
-	im := images.NewImages(pool, e, vault, store, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate})
+	im, err := images.NewImages(pool, e, vault, store, images.Config{
+		Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate, PlatformTransferBackoff: images.PlatformTransferBackoff,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	publishManagedImage(t, pool, "3.12")
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 	config := hostsession.Config{
 		TouchInterval:  100 * time.Millisecond,
 		LayerLifetime:  hostsession.LayerLifetime,
 		ReplicaRecheck: hostsession.ReplicaRecheck,
+		GrantAckWait:   hostsession.GrantAckWait,
 		Secrets:        vault,
 		ContainerAPI:   containerAPI,
 		Observability:  obs,
@@ -162,7 +168,10 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 	for _, c := range configure {
 		c(&config)
 	}
-	srv := hostsession.NewServer(c, e, store, im, listener, config, logger)
+	srv, err := hostsession.NewServer(c, e, store, im, listener, config, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spans := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
 	g := grpc.NewServer(append(srv.ServerOptions(), grpc.StatsHandler(otelgrpc.NewServerHandler(

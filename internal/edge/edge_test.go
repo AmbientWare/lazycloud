@@ -31,11 +31,17 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
+// testFailureCheck is how often the test edge's waiting requests ask
+// whether their release can start.
+const testFailureCheck = 200 * time.Millisecond
+
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082"}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
+			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck,
+		}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +625,7 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +688,7 @@ select d.id, r.id from d, r`).Scan(&deployed, &workingTree)
 	}
 }
 
-// A load error recorded within failureCheckInterval of a waiting request's
+// A load error recorded within the failure check interval of a waiting request's
 // last check fails the request once the next check is due, not at its
 // deadline: the change that woke it early is checked again.
 func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
@@ -723,7 +729,7 @@ update releases set load_error = 'no database configured' where id = $1`, rel); 
 		if !errors.As(err, &failed) || !strings.Contains(failed.reason, "no database configured") {
 			t.Fatalf("the waiting request ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the load error was not checked once the next check was due")
 	}
 }
@@ -785,7 +791,7 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 		if !errors.As(err, &failed) || failed.reason != want {
 			t.Fatalf("the request whose fresh start failed ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the request did not fail once its fresh start failed")
 	}
 
@@ -796,5 +802,16 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 	}
 	if n := failures(); n != 3 {
 		t.Fatalf("a request within the backoff left %d start failures; want the release held at 3", n)
+	}
+}
+
+// A config without a positive failure check interval is refused when the
+// edge is built, not discovered as waiting requests asking without pause.
+func TestEdgesNeedAPositiveFailureCheckInterval(t *testing.T) {
+	t.Parallel()
+	for _, interval := range []time.Duration{0, -time.Second} {
+		if _, err := NewEdge(nil, nil, nil, nil, Config{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: interval}, slog.New(slog.DiscardHandler)); err == nil {
+			t.Errorf("a failure check interval of %s was accepted", interval)
+		}
 	}
 }

@@ -104,15 +104,21 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		t.Fatal(err)
 	}
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
-	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test"}, logger)
+	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", FailureCheckInterval: edge.FailureCheckInterval}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := storage.NewStorage(pool, storagetest.Config(t), comp)
+	im, err := images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{
+		Registry: "registry.example.com", Repository: "lazycloud", PlatformTransferBackoff: images.PlatformTransferBackoff,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
-		Images:        images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Images:        im,
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)

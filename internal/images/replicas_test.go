@@ -102,7 +102,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 	pool := dbtest.New(t)
 	cfg := replicated(t)
 	store := storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{}))
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
+	im := newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
 	reference := "registry.test/lazycloud/images/regional@sha256:" + hex64("1")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("base layer"), []byte("app layer")})
 	regional, elsewhere := hostIn(t, pool, replicaRegion), hostIn(t, pool, "us-west-2")
@@ -176,8 +176,8 @@ func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
 	cfg := replicated(t)
 	store := storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{}))
 	servers := []*images.Images{
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{}),
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{})), images.Config{}),
+		newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff}),
+		newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{})), images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff}),
 	}
 	reference := "registry.test/lazycloud/images/deduped@sha256:" + hex64("2")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("one"), []byte("two"), []byte("three")})
