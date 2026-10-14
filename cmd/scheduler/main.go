@@ -228,7 +228,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 		p.setLeading(leading)
 	}
-	group.Go(func() error { return database.Lead(ctx, session, leaderLock, leaderCheck, database.DefaultLeadRetry, leading, logger) })
+	group.Go(func() error {
+		return database.Lead(ctx, session, leaderLock, leaderCheck, database.DefaultLeadRetry, leading, logger)
+	})
 	group.Go(func() error { return p.watch(ctx, exec.HasLiveWork, liveWake, logger) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
