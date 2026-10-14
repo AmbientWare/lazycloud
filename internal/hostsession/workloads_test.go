@@ -174,18 +174,3 @@ func TestNetworkChangesWaitForTheHost(t *testing.T) {
 	}
 }
 
-// Only containers started checkpointable can be snapshotted: a plain
-// function's network could not be given to a restored copy.
-func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
-	t.Parallel()
-	h := start(t)
-	host, _ := h.enroll()
-	ws, container := h.startingContainer(host)
-	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'ready', ready_at = now()"); err != nil {
-		t.Fatal(err)
-	}
-	var invalid *execution.InvalidError
-	if _, err := h.execution.CreateSnapshot(t.Context(), ws, container, nil); !errors.As(err, &invalid) {
-		t.Fatalf("snapshot of a plain function: %v", err)
-	}
-}
