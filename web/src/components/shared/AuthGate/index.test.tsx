@@ -87,14 +87,16 @@ it("keeps authorization failures distinct from an expired session", async () => 
   expect(screen.queryByRole("link", { name: "Continue with GitHub" })).not.toBeInTheDocument();
 });
 
-it("redeems a callback once under StrictMode and clears the previous account cache", async () => {
+it("redeems a callback once under StrictMode, decodes its destination once and clears the previous account cache", async () => {
   queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
     user: { ...session.user, id: "previous-user" },
     workspaces: [],
   });
   queryClient.setQueryData(["apps", "previous-workspace"], { private: true });
   clearStoredAuthToken();
-  const callback = `/callback#code=${encodeURIComponent("/dashboard?settings=workspace#logs")}`;
+  // The destination's own query holds the literal text `%41`; decoding it twice
+  // would turn that into `A`.
+  const callback = `/callback#code=${encodeURIComponent("/dashboard?q=%2541#logs")}`;
   window.history.replaceState(null, "", callback);
   // The read that confirms the cookie the server set is also the shell's session.
   fetchMock.mockImplementation(async () => Response.json(session));
@@ -104,21 +106,10 @@ it("redeems a callback once under StrictMode and clears the previous account cac
   expect(queryClient.getQueryData(["apps", "previous-workspace"])).toBeUndefined();
   expect(getStoredAuthToken()).toBe(SESSION_MARKER);
   expect(window.location.hash).toBe("");
-  expect(router.state.location.href).toBe("/dashboard?settings=workspace#logs");
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-});
-
-it("decodes the callback destination once", async () => {
-  clearStoredAuthToken();
-  // The destination's own query holds the literal text `%41`. Decoding it twice
-  // would turn that into `A`.
-  const callback = `/callback#code=${encodeURIComponent("/dashboard?q=%2541")}`;
-  window.history.replaceState(null, "", callback);
-  fetchMock.mockImplementation(async () => Response.json(session));
-  const router = await renderSession(callback);
-
-  await screen.findByText("Account user-1");
+  expect(router.state.location.pathname).toBe("/dashboard");
   expect(router.state.location.search).toEqual({ q: "%41" });
+  expect(router.state.location.hash).toBe("logs");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 it("signs out by ending the session and clearing every cached answer", async () => {
