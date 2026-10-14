@@ -15,7 +15,9 @@ select l.id from (
 where l.status = 'queued';
 
 -- name: SatisfyDependencies :many
--- Each upstream succeeds once, so each dependency row counts once.
+-- Each upstream succeeds once, so each dependency row counts once. The
+-- dependents are queued tasks the caller locked, read by key alone as
+-- FailQueuedTasksOfRelease reads them.
 update tasks t
 set unmet_dependencies = t.unmet_dependencies - c.n
 from (
@@ -24,7 +26,7 @@ from (
     where d.depends_on = any(@upstream::uuid[])
     group by d.task_id
 ) c
-where t.id = c.task_id and t.id = any(@dependents::uuid[]) and t.status = 'queued'
+where t.id = c.task_id and t.id = any(@dependents::uuid[])
 returning t.id, t.release_id, t.unmet_dependencies,
           (select octet_length(i.data) from task_inputs i where i.task_id = t.id)::bigint
           + coalesce((select sum(octet_length(r.data))
@@ -50,9 +52,11 @@ select l.id, l.release_id from (
 where l.status = 'queued';
 
 -- name: FailTasks :exec
+-- The ids are queued tasks the caller locked or inserted, read by key alone
+-- as FailQueuedTasksOfRelease reads them.
 update tasks
 set status = 'failed', failure = @failure, finished_at = now(), current_attempt_id = null
-where id = any(@ids::uuid[]) and status = 'queued';
+where id = any(@ids::uuid[]);
 
 -- name: DependencyResults :many
 -- The upstream results of claimed tasks, for the runner to resolve.
