@@ -107,6 +107,9 @@ run() {
 # and snapshotter grants naming test buckets since deleted.
 fresh() {
   [ -z "$(shell docker ps --quiet)" ] || return 0
+  # BuildKit's leases outlive the build that took them and keep its
+  # snapshots, which may read layers through grants on deleted buckets.
+  shell sh -c "ctr -n moby leases ls -q | xargs -r ctr -n moby leases rm --sync >/dev/null"
   shell docker builder prune --all --force >/dev/null
   shell sh -c "ctr -n moby images ls -q | grep -E '/lazycloud/|^moby-dangling@' | xargs -r ctr -n moby images rm --sync >/dev/null"
   shell systemctl restart lazycloud-snapshotter
@@ -136,6 +139,7 @@ mountType: virtiofs"
   acceptance)
     shift
     ready
+    fresh
     deploy/local/acceptance.sh prepare
     run deploy/local/acceptance.sh run "$@"
     ;;
