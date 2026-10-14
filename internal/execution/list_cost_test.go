@@ -79,14 +79,24 @@ select $1, $2, $3, 'ready', $4, 1, 1000, 1 << 28, now(), now() from generate_ser
 	// Vacuum runs where the history says so, and not over the recent churn.
 	exec(t, pool, "alter table tasks set (autovacuum_enabled = off)")
 	exec(t, pool, "alter table containers set (autovacuum_enabled = off)")
-	grow := func(tasks int) {
+	// grow adds tasks of history, then churn that vacuum has not reached:
+	// 2,000 tasks run through queued, running and succeeded, and 200
+	// containers start and stop. A transaction open since before the churn,
+	// as any concurrent statement may be, keeps every version the churn
+	// replaced from being marked dead in the indexes until the returned
+	// release ends it, so listings walk them as they may in production.
+	grow := func(tasks int) (release func()) {
 		addHistory(t, pool, busy, host, tasks)
 		exec(t, pool, `update tasks set parent_task_id = $1, root_task_id = $1
 where workload_id = $2 and parent_task_id is null and id > $1 and right(id::text, 1) <> '0'`, spawner, f.workload)
-		exec(t, pool, "vacuum analyze")
-		// Recent churn that autovacuum has not reached: 2,000 tasks run
-		// through queued, running and succeeded, and 200 containers start
-		// and stop.
+		settle(t, pool)
+		held, err := pool.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := held.Exec(t.Context(), "select 1"); err != nil {
+			t.Fatal(err)
+		}
 		exec(t, pool, `insert into tasks (workspace_id, workload_id, release_id, status, max_attempts)
 select $1, $2, $3, 'queued', 1 from generate_series(1, 2000)`, f.workspace, f.workload, busy.release)
 		exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
@@ -96,6 +106,11 @@ select $1, $2, $3, 'pending', 1, 1000, 1 << 28 from generate_series(1, 200)`, f.
 		exec(t, pool, `update tasks set status = 'succeeded', finished_at = now() where status = 'running' and release_id = $1`, busy.release)
 		exec(t, pool, `update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where state = 'starting' and release_id = $1`, busy.release)
 		exec(t, pool, "analyze")
+		return func() {
+			if err := held.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	ws := identity.WorkspaceID(f.workspace)
@@ -156,10 +171,12 @@ order by id desc offset (select count(*) / 2 from tasks where workload_id = $1) 
 			return err
 		}},
 	}
-	grow(3_000)
+	release := grow(3_000)
 	small := listingCost(t, pool, listings, "3,000 finished tasks", 0)
-	grow(10_000)
+	release()
+	release = grow(10_000)
 	large := listingCost(t, pool, listings, "13,000 finished tasks", 500)
+	release()
 	constantCost(t, small, large, "10,000 finished tasks and 1,000 stopped containers")
 }
 
@@ -209,4 +226,28 @@ func listingCost(t *testing.T, pool *pgxpool.Pool, listings []listing, label str
 		}
 	}
 	return costAt(t, pool, scans, label, limit)
+}
+
+// settle vacuums until every page of tasks and containers is all-visible, as
+// the history autovacuum has passed over is in production. One vacuum right
+// after the writes does not always mark every page.
+func settle(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for {
+		exec(t, pool, "vacuum analyze")
+		var settled bool
+		err := pool.QueryRow(t.Context(), `select bool_and(relallvisible = relpages) from pg_class
+where relname in ('tasks', 'containers')`).Scan(&settled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled {
+			return
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatal("tasks and containers never became all-visible")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }

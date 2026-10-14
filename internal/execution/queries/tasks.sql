@@ -39,12 +39,12 @@ order by k.id desc
 limit @max_rows;
 
 -- name: WorkloadTaskIDs :many
--- One range per workload, of the ids from its id_low to its id_high.
+-- One range per workload.
 select k.id
-from (select unnest(@workload_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) w
+from unnest(@workload_ids::uuid[]) w(id)
 cross join lateral (
     select t.id from tasks t
-    where t.workload_id = w.id and t.id between w.low and w.high and t.id < @before
+    where t.workload_id = w.id and t.id < @before
     order by t.id desc
     limit @max_rows
 ) k
@@ -52,16 +52,14 @@ order by k.id desc
 limit @max_rows;
 
 -- name: WorkloadTaskIDsByStatus :many
--- One range per workload, status and spawned flag, of the ids from the
--- workload's id_low to its id_high.
+-- One range per workload, status and spawned flag.
 select k.id
-from (select unnest(@workload_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) w
+from unnest(@workload_ids::uuid[]) w(id)
 cross join unnest(@statuses::text[]) s(status)
 cross join unnest(@spawned::bool[]) p(spawned)
 cross join lateral (
     select t.id from tasks t
-    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned
-      and t.id between w.low and w.high and t.id < @before
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned and t.id < @before
     order by t.id desc
     limit @max_rows
 ) k
@@ -69,16 +67,32 @@ order by k.id desc
 limit @max_rows;
 
 -- name: ReleaseTaskIDs :many
--- One range per release, status and spawned flag, of the ids from the
--- release's id_low to its id_high.
+-- One range per release, status and spawned flag.
 select k.id
-from (select unnest(@release_ids::uuid[]) as id, unnest(@id_lows::uuid[]) as low, unnest(@id_highs::uuid[]) as high) r
+from unnest(@release_ids::uuid[]) r(id)
 cross join unnest(@statuses::text[]) s(status)
 cross join unnest(@spawned::bool[]) p(spawned)
 cross join lateral (
     select t.id from tasks t
-    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned
-      and t.id between r.low and r.high and t.id < @before
+    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned and t.id < @before
+    order by t.id desc
+    limit @max_rows
+) k
+order by k.id desc
+limit @max_rows;
+
+-- name: WorkloadTaskIDsInRange :many
+-- One range per workload, status and spawned flag, of the ids from id_low to
+-- id_high that a search's id prefix spans; with releases, only theirs.
+select k.id
+from unnest(@workload_ids::uuid[]) w(id)
+cross join unnest(@statuses::text[]) s(status)
+cross join unnest(@spawned::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned
+      and t.id between @id_low and @id_high and t.id < @before
+      and (sqlc.narg(release_ids)::uuid[] is null or t.release_id = any(sqlc.narg(release_ids)::uuid[]))
     order by t.id desc
     limit @max_rows
 ) k
