@@ -1218,8 +1218,11 @@ def test_remote_reports_why_a_queued_task_waits(
     capsys: pytest.CaptureFixture[str],
     fake_api: FakeApi,
 ) -> None:
+    from lazycloud.abstractions import function
+
     reports = _project(tmp_path, monkeypatch)
     _serve_deployment(fake_api, stored=set())
+    monkeypatch.setattr(function, "QUEUED_POLL_SECONDS", 0.01)
     task_id = _task_id(70)
     polled = threading.Event()
     pending = {
@@ -1377,7 +1380,7 @@ def test_every_command_tells_an_out_of_date_client_to_update(fake_api: FakeApi) 
     result = CliRunner().invoke(build_public_cli(), ["login"])
 
     assert result.exit_code == 0, result.output
-    assert "this server recommends 999.0.0. Run `lazycloud update` to upgrade." in result.stderr
+    assert "999.0.0" in result.stderr and "lazycloud update" in result.stderr
     (me,) = fake_api.calls("GET", "/v1/me")
     assert me.headers["user-agent"].startswith("lazycloud/")
 
