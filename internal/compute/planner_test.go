@@ -60,7 +60,7 @@ func lapse(t *testing.T, o owners) {
 insert into fleet_markets (market, plan, generated_at, expires_at)
 select m.key, jsonb_build_object('preemptible', m.preemptible, 'gpu_type', m.gpu,
            'holds', jsonb_build_object('running', jsonb_build_object('at', 'epoch'::timestamptz),
-                                       'stopped', jsonb_build_object('at', 'epoch'::timestamptz), 'floor', 'epoch'::timestamptz)),
+                                       'stopped', jsonb_build_object('at', 'epoch'::timestamptz))),
        now() - interval '1 hour', now() - interval '1 hour'
 from (values ('spot:cpu', true, ''), ('on_demand:cpu', false, ''), ('spot:A10G', true, 'A10G'), ('on_demand:A10G', false, 'A10G'),
              ('spot:L4', true, 'L4'), ('on_demand:L4', false, 'L4'), ('spot:T4', true, 'T4'), ('on_demand:T4', false, 'T4'))
