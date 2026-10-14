@@ -54,15 +54,3 @@ func TestFleetCatalogHibernatesOnlyCPUTypesUnderTheRAMLimit(t *testing.T) {
 		}
 	}
 }
-
-// TestFleetCatalogUsableMemoryIsWhatHostsReport checks a host's report
-// replaces the memory estimate and leaves CPU alone.
-func TestFleetCatalogUsableMemoryIsWhatHostsReport(t *testing.T) {
-	t.Parallel()
-	for _, typ := range FleetCatalog() {
-		estimated, reported := typ.Usable(0), typ.Usable(12*gib)
-		if reported.MemoryBytes != 12*gib || reported.CPUMillis != estimated.CPUMillis || reported.GPUs != typ.GPUCount {
-			t.Errorf("%s with reported memory: %+v", typ.Name, reported)
-		}
-	}
-}

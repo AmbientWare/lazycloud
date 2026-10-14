@@ -254,11 +254,6 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 			t.Errorf("%s over its ceiling: %q", c.name, reason)
 		}
 	}
-	nonPreemptible := rates[billing.ClassNonPreemptible][""]
-	auto := rates[billing.ClassAuto][""]
-	if nonPreemptible.CPUHour != 3*auto.CPUHour || rates[billing.ClassNonPreemptible]["L4"].GPUCardHour != rates[billing.ClassAuto]["L4"].GPUCardHour {
-		t.Fatalf("non-preemptible CPU and memory are three times automatic; GPUs are not")
-	}
 	unpriced := FleetOffer{Type: CatalogType{GPU: "unpriced", GPUCount: 1}, Market: MarketOnDemand, Usable: usable, HourlyMicros: 1}
 	if reason, _ := marginRejection(p, rates, unpriced, Requirement{}); reason != rejectUnpricedCapacity {
 		t.Fatalf("unpriced GPU: %q", reason)

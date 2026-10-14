@@ -596,8 +596,6 @@ values ('new', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', '
 	}
 }
 
-// A refused pool answers at once: the next pool is the retry, not the
-// SDK's.
 // A capacity refusal cools only the zone it tried: the launch moves to the
 // same type in the region's next zone.
 func TestACapacityRefusalMovesToTheSameTypeInTheNextZone(t *testing.T) {
@@ -688,6 +686,8 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 	}
 }
 
+// A refused pool answers at once: the next pool is the retry, not the
+// SDK's.
 func TestAPoolRefusalIsNotRetriedBeforeTheNextPool(t *testing.T) {
 	t.Parallel()
 	emulator := newAWS(t)
