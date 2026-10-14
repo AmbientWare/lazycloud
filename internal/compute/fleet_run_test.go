@@ -137,9 +137,11 @@ func (r fleetRun) quotes(t *testing.T) func(time.Time) []SpotQuote {
 // newRunSim is the platform fleet as run found it: its four regions and
 // zone offerings, its Spot prices and starting fleet, at prod's fleet limit.
 func newRunSim(t *testing.T, run fleetRun) *sim {
-	s := newSim(t, DefaultPolicy())
-	s.now, s.start, s.maxHosts = run.Start, run.Start, 250
-	s.in.Now, s.in.Networks = run.Start, prodNetworks()
+	p := DefaultPolicy()
+	s := &sim{
+		t: t, p: p, now: run.Start, start: run.Start, maxHosts: 250, provision: p.Starts.Launch,
+		in: OfferInputs{Now: run.Start, Catalog: FleetCatalog(), Networks: prodNetworks(), Rates: fleetRates(t), StorageRegion: "us-east-1"},
+	}
 	readTestJSON(t, "zones.json", &s.in.ZoneTypes)
 	s.prices = run.quotes(t)
 	s.in.Spot = s.prices(run.Start)

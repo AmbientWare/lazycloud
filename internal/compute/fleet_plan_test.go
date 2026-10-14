@@ -1076,3 +1076,11 @@ func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
 	}
 }
+
+// demandOnly is the policy without headroom or reserves: the fleet buys
+// only for pending work.
+func demandOnly() Policy {
+	p := DefaultPolicy()
+	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
+	return p
+}
