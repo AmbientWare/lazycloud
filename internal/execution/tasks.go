@@ -272,38 +272,44 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		status = &s
 	}
 	var search *string
+	low, high := uuid.Nil, uuid.Max
 	if filter.Search != nil && *filter.Search != "" {
 		// LIKE wildcards in the search are literal characters.
 		lowered := strings.ToLower(*filter.Search)
 		search = &lowered
+		low, high = idPrefixRange(lowered)
 	}
 	size := pageSize(limit)
 	var rows []TaskViewRow
-	if filter.App != nil {
-		app, err := e.queries.LiveAppID(ctx, LiveAppIDParams{WorkspaceID: uuid.UUID(workspace), Name: *filter.App})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return TaskPage{Tasks: []Task{}}, nil
-		}
-		if err != nil {
-			return TaskPage{}, fmt.Errorf("find app: %w", err)
-		}
-		r, err := e.queries.ListAppTasks(ctx, ListAppTasksParams{
-			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
-			RootOnly: filter.RootOnly, Search: search, Version: int32Of(filter.Version), Before: before, MaxRows: size + 1,
+	if filter.App == nil && search == nil {
+		r, err := e.queries.ListTasks(ctx, ListTasksParams{
+			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
-			return TaskPage{}, fmt.Errorf("list app tasks: %w", err)
+			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
 		}
 		for _, row := range r {
 			rows = append(rows, TaskViewRow(row))
 		}
 	} else {
-		r, err := e.queries.ListTasks(ctx, ListTasksParams{
-			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Search: search,
+		var app *uuid.UUID
+		if filter.App != nil {
+			id, err := e.queries.LiveAppID(ctx, LiveAppIDParams{WorkspaceID: uuid.UUID(workspace), Name: *filter.App})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return TaskPage{Tasks: []Task{}}, nil
+			}
+			if err != nil {
+				return TaskPage{}, fmt.Errorf("find app: %w", err)
+			}
+			app = &id
+		}
+		r, err := e.queries.ListWorkloadTasks(ctx, ListWorkloadTasksParams{
+			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
+			RootOnly: filter.RootOnly, Search: search, IDLow: low, IDHigh: high, Version: int32Of(filter.Version),
 			Before: before, MaxRows: size + 1,
 		})
 		if err != nil {
-			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
+			return TaskPage{}, fmt.Errorf("list workload tasks: %w", err)
 		}
 		for _, row := range r {
 			rows = append(rows, TaskViewRow(row))
@@ -325,6 +331,27 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 		return TaskPage{}, err
 	}
 	return page, nil
+}
+
+// idPrefixRange is the range of task ids whose text form starts with
+// prefix, and an empty range when no id's can.
+func idPrefixRange(prefix string) (uuid.UUID, uuid.UUID) {
+	const zeros = "00000000-0000-0000-0000-000000000000"
+	if len(prefix) > len(zeros) {
+		return uuid.Max, uuid.Nil
+	}
+	for i, c := range prefix {
+		if (zeros[i] == '-') != (c == '-') || c != '-' && !strings.ContainsRune("0123456789abcdef", c) {
+			return uuid.Max, uuid.Nil
+		}
+	}
+	rest := zeros[len(prefix):]
+	low, errLow := uuid.Parse(prefix + rest)
+	high, errHigh := uuid.Parse(prefix + strings.ReplaceAll(rest, "0", "f"))
+	if errLow != nil || errHigh != nil {
+		return uuid.Max, uuid.Nil
+	}
+	return low, high
 }
 
 // maxPage bounds every page of a listing.

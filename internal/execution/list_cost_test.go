@@ -26,10 +26,14 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 
 	page := int32(101)
 	scans := []scan{
-		{"tasks", listTasks, []any{f.workspace, nil, false, nil, uuid.Max, page}},
-		{"root tasks", listTasks, []any{f.workspace, nil, true, nil, uuid.Max, page}},
-		{"app tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, nil, nil}},
-		{"version tasks", listAppTasks, []any{nil, false, nil, uuid.Max, page, f.workspace, f.app, "fn", 1}},
+		{"tasks", listTasks, []any{f.workspace, nil, false, uuid.Max, page}},
+		{"root tasks", listTasks, []any{f.workspace, nil, true, uuid.Max, page}},
+		{"app tasks", listWorkloadTasks, workloadTasks(f, f.app, nil, nil, nil)},
+		{"version tasks", listWorkloadTasks, workloadTasks(f, f.app, "f", 1, nil)},
+		{"tasks searched by function", listWorkloadTasks, workloadTasks(f, nil, nil, nil, "f")},
+		{"tasks searched by id", listWorkloadTasks, workloadTasks(f, nil, nil, nil, queued.String()[:8])},
+		{"tasks searched for nothing", listWorkloadTasks, workloadTasks(f, nil, nil, nil, "zz")},
+		{"app tasks searched for nothing", listWorkloadTasks, workloadTasks(f, f.app, nil, nil, "zz")},
 		{"containers", listContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
 		{"app containers", listContainers, []any{f.workspace, "app", uuid.Max, nil, page}},
 		{"live containers", listLiveContainers, []any{f.workspace, nil, uuid.Max, nil, page}},
@@ -44,4 +48,13 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 	exec(t, pool, "analyze")
 	large := costAt(t, pool, scans, "11,000 finished tasks", 500)
 	constantCost(t, small, large, "10,000 finished tasks and 1,000 stopped containers")
+}
+
+// workloadTasks are ListWorkloadTasks' arguments for a first page of 101.
+func workloadTasks(f releaseFixture, app, function, version, search any) []any {
+	low, high := uuid.Nil, uuid.Max
+	if search != nil {
+		low, high = idPrefixRange(search.(string))
+	}
+	return []any{nil, false, search, low, high, uuid.Max, int32(101), f.workspace, app, function, version}
 }

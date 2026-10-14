@@ -30,16 +30,16 @@ join releases r on r.id = t.release_id
 where t.workspace_id = @workspace_id
   and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
   and (not @root_only::bool or t.parent_task_id is null)
-  and (sqlc.narg(search)::text is null
-       or starts_with(t.id::text, sqlc.narg(search)::text)
-       or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
   and t.id < @before
 order by t.id desc
 limit @max_rows;
 
--- name: ListAppTasks :many
--- Like ListTasks for one app's functions: each workload's recent index
--- yields at most a page, and the pages merge.
+-- name: ListWorkloadTasks :many
+-- Like ListTasks, for the workspace's functions or one app's: each
+-- workload's recent index yields at most a page, and the pages merge. A
+-- search reads all of a workload whose name contains it, and otherwise
+-- only the ids between id_low and id_high, so a search that matches little
+-- reads little.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.preemptions, t.parent_task_id, t.root_task_id, t.available_at,
        t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
@@ -55,15 +55,17 @@ cross join lateral (
     where t.workload_id = w.id
       and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
       and (not @root_only::bool or t.parent_task_id is null)
-      and (sqlc.narg(search)::text is null
-           or starts_with(t.id::text, sqlc.narg(search)::text)
-           or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
+      and t.id >= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
+                       then '00000000-0000-0000-0000-000000000000'::uuid else @id_low::uuid end
+      and t.id <= case when strpos(lower(w.name), sqlc.narg(search)::text) > 0
+                       then 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid else @id_high::uuid end
       and t.id < @before
     order by t.id desc
     limit @max_rows
 ) t
 join releases r on r.id = t.release_id
-where a.workspace_id = @workspace_id and a.id = @app_id
+where a.workspace_id = @workspace_id
+  and (sqlc.narg(app_id)::uuid is null or a.id = sqlc.narg(app_id)::uuid)
   and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
   and (sqlc.narg(version)::int is null or r.version = sqlc.narg(version)::int)
 order by t.id desc
