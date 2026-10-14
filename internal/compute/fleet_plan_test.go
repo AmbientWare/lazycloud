@@ -544,7 +544,8 @@ func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 
 // At zero load the warm floor converges on the cheapest host that meets it:
 // an idle c6a.2xlarge ($0.32/h) is replaced by an m7i.large ($0.12/h) and
-// leaves once the replacement serves. A host running work is not replaced.
+// leaves once the replacement serves. A host running work is not replaced,
+// nor one whose replacement EC2 refused within the cost horizon.
 func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 	p := DefaultPolicy()
 	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
@@ -570,6 +571,11 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 	busy.Load, busy.Containers = cpuGiB(1000, 1), 1
 	if plan := PlanFleet(p, snapshot(busy)); len(plan.Actions) > 0 {
 		t.Fatalf("a serving host was replaced: %+v", plan.Actions)
+	}
+	refused := big
+	refused.RightsizeRefusedAt = ptr(offerNow.Add(-p.CostHorizon + time.Minute))
+	if plan := PlanFleet(p, snapshot(refused)); len(plan.Actions) > 0 {
+		t.Fatalf("a host whose replacement EC2 refused within the cost horizon: %+v", plan.Actions)
 	}
 }
 
@@ -1240,5 +1246,33 @@ func TestReservesForALoadPeakStayForTheCostHorizon(t *testing.T) {
 		if c.keeps && (len(retired) > 0 || len(returned) != 1) || !c.keeps && (len(retired) != 2 || len(actionsOf(plan, ActionDrain)) != 1) {
 			t.Errorf("peak %s ago: actions %+v", c.ago, plan.Actions)
 		}
+	}
+}
+
+// Spot headroom that follows the arrival rate is bought with the work it
+// arrives beside rather than after it, so a ramp's next arrivals find
+// room instead of waiting a launch: eight pending 1-CPU containers and a
+// steady 12 CPU of arrivals buy hosts that hold the work and the 13 CPU
+// warm target at once.
+func TestSpotHeadroomIsBoughtWithTheWork(t *testing.T) {
+	spot := ReserveMarket{Preemptible: true}
+	p := planPolicy(FleetCapacity{}, FleetCapacity{})
+	p.Spot = MarketReserve{Warm: DefaultPolicy().Spot.Warm}
+	s := spotQuoted(planSnapshot(t), 100_000, "c6a.xlarge", "c6a.2xlarge", "c6a.4xlarge", "c6a.8xlarge")
+	s.Offers.Catalog = FleetCatalog()
+	s.Arrived = map[ReserveMarket]FleetCapacity{spot: cpuGiB(12_000, 24)}
+	work := DemandGroup{Need: Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: 2 * gib}}
+	for range 8 {
+		work.Containers = append(work.Containers, PendingContainer{ID: uuid.New()})
+	}
+	s.Pending = []DemandGroup{work}
+	plan := PlanFleet(p, s)
+	var held FleetCapacity
+	for _, a := range actionsOf(plan, ActionBuy) {
+		held = held.Plus(a.Holds)
+	}
+	mp := marketPlan(t, plan, spot)
+	if !mp.Shortfall.Empty() || held.CPUMillis != 8000+mp.WarmTarget.CPUMillis {
+		t.Fatalf("bought hosts holding %+v, shortfall %+v (%s); want the 8 CPU of work and the %v warm target", held, mp.Shortfall, mp.Reason, mp.WarmTarget.CPUMillis)
 	}
 }

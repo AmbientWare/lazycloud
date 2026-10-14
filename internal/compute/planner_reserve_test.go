@@ -56,7 +56,8 @@ func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 
 // Spot-tolerant containers on an on-demand host count as the Spot market's
 // load, and the rest as the on-demand market's, in the plan a pass
-// publishes.
+// publishes; CPU work packed on a GPU host counts as the CPU Spot
+// market's.
 func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	host := fleetHost(t, o, compute.PhaseReady, "c6a.4xlarge", "i-0000000000000a001")
@@ -76,6 +77,9 @@ values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uu
 	gpuRelease := newRelease(t, o.pool, ws, `{"resources": {"gpu": ["L4"], "gpu_count": 1}}`)
 	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
 values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
+	// CPU work packed on a GPU host is the CPU Spot market's.
+	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, 'ready', $3, 1, 250, 1 << 30, 'auto', now(), now())`, ws, release, uuid.UUID(gpuHost))
 	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +97,8 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gp
 			cards[m.Preemptible] = m.Load.GPUs
 		}
 	}
-	if load[true] != 1500 || load[false] != 2000 {
-		t.Fatalf("Spot load %v and on-demand %v, want 1500 and 2000", load[true], load[false])
+	if load[true] != 1750 || load[false] != 2000 {
+		t.Fatalf("Spot load %v and on-demand %v, want 1750 and 2000", load[true], load[false])
 	}
 	if cards[true] != 1 || cards[false] != 0 {
 		t.Fatalf("L4 Spot load %d cards and on-demand %d, want the borrowed card in Spot", cards[true], cards[false])
