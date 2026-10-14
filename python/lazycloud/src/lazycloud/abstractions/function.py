@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -875,31 +876,30 @@ class _QueuedTaskWatcher:
 
 
 def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
-    """Run call to completion even through Ctrl-C, returning the interrupt."""
-    outcome: dict[str, Any] = {}
-    done = threading.Event()
+    """Run call to completion even through Ctrl-C, returning the interrupt.
 
-    def run() -> None:
-        try:
-            outcome["value"] = call()
-        except BaseException as exc:
-            outcome["error"] = exc
-        finally:
-            done.set()
-
-    threading.Thread(target=copy_context().run, args=(run,), daemon=True).start()
-    interrupted: KeyboardInterrupt | None = None
-    while True:
-        try:
-            # An interrupted Event.wait leaves the event usable, unlike an
-            # interrupted Thread.join.
-            if done.wait(0.1):
-                break
-        except KeyboardInterrupt as exc:
-            interrupted = exc
-    if "error" in outcome:
-        raise outcome["error"]
-    return cast(T, outcome["value"]), interrupted
+    Only the main thread receives SIGINT. It holds the signal from before call
+    starts until call returns, so a Ctrl-C never abandons a request the
+    server may already have acted on.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return call(), None
+    previous = signal.getsignal(signal.SIGINT)
+    if not callable(previous):
+        return call(), None
+    received: list[int] = []
+    signal.signal(signal.SIGINT, lambda signum, _frame: received.append(signum))
+    try:
+        value = call()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    if not received:
+        return value, None
+    try:
+        previous(signal.SIGINT, None)
+    except KeyboardInterrupt as exc:
+        return value, exc
+    return value, None
 
 
 def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
