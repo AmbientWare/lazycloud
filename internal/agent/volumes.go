@@ -565,6 +565,39 @@ func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...stri
 	}
 }
 
+// fuseConnections is where the kernel lists FUSE connections, each named
+// by its device's minor number.
+const fuseConnections = "/sys/fs/fuse/connections"
+
+// fuseConnection is the control directory of the FUSE connection mounted at
+// path, or empty when path is no FUSE mount.
+func fuseConnection(path string) string {
+	var st unix.Stat_t
+	if !mounted(path) || unix.Stat(path, &st) != nil || unix.Major(st.Dev) != 0 {
+		return ""
+	}
+	connection := filepath.Join(fuseConnections, strconv.FormatUint(uint64(unix.Minor(st.Dev)), 10))
+	if _, err := os.Stat(connection); err != nil {
+		return ""
+	}
+	return connection
+}
+
+// abortConnection ends the FUSE connection whose control directory is
+// connection: its daemon's reads fail and it exits. A connection already
+// gone needs nothing.
+func abortConnection(connection string) error {
+	f, err := os.OpenFile(filepath.Join(connection, "abort"), os.O_WRONLY, 0) //nolint:gosec // A kernel control file under fuseConnections.
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open the connection's abort: %w", err)
+	}
+	_, err = f.WriteString("1")
+	return errors.Join(err, f.Close())
+}
+
 // mounted reports whether path is the root of a mount: its device differs
 // from its parent's.
 func mounted(path string) bool {
@@ -809,11 +842,14 @@ func (v *volumes) markExited(m *mounter) bool {
 	return m.up && !m.stopping
 }
 
-// stop removes m's binds, stops m's container, whose script unmounts on
-// SIGTERM and waits for GeeseFS to store what it holds, then removes it and
-// its directory, which only goes when nothing is mounted on it and it is
-// empty. No later mount uses the name, so binds or a directory left behind
-// are only logged.
+// stop removes m's binds, stops m's container, whose script on SIGTERM
+// waits for GeeseFS to store what it holds and then detaches the mount,
+// then removes it and its directory, which only goes when nothing is
+// mounted on it and it is empty. A container started while the mount
+// existed keeps a copy of it in its own mount namespace, which the detach
+// does not reach and which keeps GeeseFS serving, so once the mount is
+// detached stop ends its FUSE connection. No later mount uses the name, so
+// binds or a directory left behind are only logged.
 func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	v.mu.Lock()
 	m.stopping = true
@@ -821,7 +857,26 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
 		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
 	}
-	if err := v.a.stopDocker(ctx, m.name, mounterFlushSeconds); err != nil {
+	connection := fuseConnection(m.dir)
+	stopped := make(chan error, 1)
+	go func() { stopped <- v.a.stopDocker(ctx, m.name, mounterFlushSeconds) }()
+	poll := time.NewTicker(mountPoll)
+	defer poll.Stop()
+	var err error
+	for waiting := true; waiting; {
+		select {
+		case err = <-stopped:
+			waiting = false
+		case <-poll.C:
+			if connection != "" && !mounted(m.dir) {
+				if err := abortConnection(connection); err != nil {
+					v.a.log.Warn("ending a detached mount's FUSE connection failed", "mount", m.name, "error", err)
+				}
+				connection = ""
+			}
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if err := v.a.removeContainer(ctx, m.name); err != nil {
