@@ -20,7 +20,7 @@ from lazycloud.abstractions.sandbox import (
     SandboxInstance,
 )
 from lazycloud.cli.main import build_public_cli, start
-from lazycloud.clients.api import ApiClient
+from lazycloud.clients.api import ApiClient, ApiError
 from lazycloud.clients.workloads import WorkloadsClient
 from typer.testing import CliRunner, Result
 
@@ -480,6 +480,40 @@ def test_ctrl_c_while_a_sandbox_is_created_terminates_it(
 
     assert len(fake_api.calls("POST", f"{BOX}/stop")) == 1
     assert not fake_api.calls("POST", f"{BOX}/connect")
+
+
+@pytest.mark.parametrize("ending", ["interrupted", "failed"])
+def test_a_ctrl_c_during_sandbox_cleanup_waits_for_the_termination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi, ending: str
+) -> None:
+    tools = _project(tmp_path, monkeypatch)
+    tools.scratch.stub_id = RELEASE
+
+    @fake_api.route("POST", f"{TEAM}/instances")
+    def create(request: ApiRequest) -> Reply:
+        if ending == "interrupted":
+            press_ctrl_c()
+        return json_reply(_instance(), 201)
+
+    fake_api.route("POST", f"{BOX}/connect")(
+        lambda request: error_reply("conflict", "the container stopped: start_failed", 409)
+    )
+
+    @fake_api.route("POST", f"{BOX}/stop")
+    def stop(request: ApiRequest) -> Reply:
+        # The user presses Ctrl-C again while the termination is in flight.
+        press_ctrl_c()
+        if ending == "interrupted":
+            return error_reply("internal", "termination failed", 500)
+        return json_reply(_container(state="stopped"))
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        tools.scratch.create()
+
+    # The interrupt carries what the termination it waited for ended with.
+    expected = ApiError if ending == "interrupted" else SandboxConnectionError
+    assert isinstance(raised.value.__cause__, expected)
+    assert len(fake_api.calls("POST", f"{BOX}/stop")) == 1
 
 
 def _sandbox(fake_api: FakeApi) -> SandboxInstance:
