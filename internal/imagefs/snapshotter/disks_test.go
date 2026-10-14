@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package snapshotter
 
 import (
@@ -120,6 +122,7 @@ func readFile(t *testing.T, path string, off int64, n int) []byte {
 // frame of zeros is a hole that reads without a fetch, and a cached frame
 // reads again without one.
 func TestDiskReadsFetchOnlyTheTouchedFrames(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	frames := [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize), nil, bytes.Repeat([]byte{2}, imagefs.FrameSize), bytes.Repeat([]byte{3}, imagefs.FrameSize/2)}
 	frames[3] = append(frames[3], make([]byte, imagefs.FrameSize/2)...)
@@ -166,6 +169,7 @@ func TestDiskReadsFetchOnlyTheTouchedFrames(t *testing.T) {
 // Serving to attach fetches the start frames in the background, and the
 // disk's reads come back as its next start trace and recent frames.
 func TestDiskServePrefetchesAndTraces(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	frames := make([][]byte, 6)
 	for i := range frames {
@@ -222,6 +226,7 @@ func TestDiskServePrefetchesAndTraces(t *testing.T) {
 // trace: not a frame of zeros, nor a read through a file opened with
 // O_NOATIME, as a publish opens it.
 func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	frames := [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize), nil, bytes.Repeat([]byte{2}, imagefs.FrameSize)}
 	stored := ts.disk(t, "d4", frames, nil)
@@ -254,6 +259,7 @@ func TestDiskTraceCountsOnlyTheDisksStoredReads(t *testing.T) {
 // A snapshotter that died serving disks leaves their directory a mount whose
 // connection is gone; the next one detaches it and starts.
 func TestStaleDiskDirectoryIsDetached(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	stored := ts.disk(t, "d5", [][]byte{bytes.Repeat([]byte{1}, imagefs.FrameSize)}, nil)
 	root := t.TempDir()
@@ -293,6 +299,7 @@ func (d *delayedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // Releasing a generation stops its prefetch, and serving it again to attach
 // starts no second one.
 func TestDiskReleaseStopsItsPrefetch(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	frames, start := make([][]byte, 16), make([]uint32, 16)
 	for i := range frames {
