@@ -81,7 +81,7 @@ func TestCloudHostEnrollsAndReportsSpotInterruptions(t *testing.T) {
 	metadata := newIMDSEmulator(t)
 	e := newEnv(t)
 	e.startAgent(func(cfg *Config) {
-		cfg.JoinToken, cfg.CloudHostID, cfg.IMDSEndpoint = "", e.server.hostID, metadata.URL
+		cfg.JoinToken, cfg.CloudHostID, cfg.IMDSEndpoint, cfg.InterruptionPoll = "", e.server.hostID, metadata.URL, 50*time.Millisecond
 	})
 	enroll := e.enrollment()
 	if enroll.GetJoinToken() != "" || enroll.GetCloudIdentity().GetHostId() != e.server.hostID || enroll.GetCloudIdentity().GetUrl() == "" {

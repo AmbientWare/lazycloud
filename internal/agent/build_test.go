@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
+
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -67,13 +69,9 @@ func startTestRegistry(t *testing.T) string {
 // on a registry's transient 5xx, and the copy retries it.
 func buildBase(t *testing.T, registry string) string {
 	t.Helper()
-	src, err := name.ParseReference(testBuildBase)
+	img, err := imagefstest.Image(t.Context(), testBuildBase, v1.Platform{OS: "linux", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	img, err := remote.Image(src, remote.WithContext(t.Context()), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
-	if err != nil {
-		t.Fatalf("read %s: %v", testBuildBase, err)
 	}
 	dst, err := name.ParseReference(registry+"/lazycloud/base:test", name.Insecure)
 	if err != nil {

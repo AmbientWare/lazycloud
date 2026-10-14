@@ -75,8 +75,9 @@ func runContainer(t *testing.T, args ...string) string {
 	if runtime == "" {
 		runtime = "runc"
 	}
-	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
+	// A run that fails may leave the container created.
 	t.Cleanup(func() { _, _ = docker(t, "rm", "-f", name) })
+	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
 	return name
 }
 
@@ -159,7 +160,7 @@ for _ in range(3):
 // them with another protocol from a raw socket.
 func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
 	bin := dockerTest(t)
-	const python = "python:3.12-slim"
+	const python = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 	if _, err := docker(t, "image", "inspect", python); err != nil {
 		mustDocker(t, "pull", python)
 	}

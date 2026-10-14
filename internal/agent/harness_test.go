@@ -29,7 +29,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-const testImage = "python:3.12-slim"
+// The images tests start, pinned so that the image cache serves them.
+const (
+	testImage   = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+	alpineImage = "docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4"
+	// ungrantedImage is pulled by no test, so no grant of it exists.
+	ungrantedImage = "docker.io/library/python:3.11-alpine@sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929"
+)
 
 // supervisorBinary is built once per test binary by TestMain.
 var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain
@@ -56,6 +62,16 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("convert the test images: %v", err))
 	}
 	code := m.Run()
+	// The images the tests pulled read their layers from the test store,
+	// whose buckets go next; left behind, they would serve later runs of
+	// other tests unreadable files.
+	for _, image := range lazyImages {
+		out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", image).CombinedOutput()
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", image).Run() == nil {
+			fmt.Fprintf(os.Stderr, "remove %s: %v: %s\n", image, err, out)
+			code = max(code, 1)
+		}
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)

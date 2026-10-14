@@ -50,8 +50,14 @@ const (
 	// mountWait bounds how long a new mount takes to appear once its
 	// container runs.
 	mountWait = 30 * time.Second
-	// mountPoll is how often a start looks for its new mount.
-	mountPoll = 100 * time.Millisecond
+	// mountPoll is how often a start looks for its new mount, and
+	// mountOutputPoll how often it reads what the mount printed.
+	mountPoll       = 100 * time.Millisecond
+	mountOutputPoll = 500 * time.Millisecond
+	// certificateFailure starts Go's error for a store certificate the
+	// trust bundle does not verify, which GeeseFS retries as it retries
+	// any request; no retry passes it.
+	certificateFailure = "tls: failed to verify certificate"
 	// GeeseFS reads ahead of every reader and holds what it read in a cache
 	// of geesefsMemoryMiB, and its runtime collects garbage before
 	// geesefsGoMemoryMiB. Its memory grows with the readers' readahead,
@@ -567,7 +573,8 @@ func mounted(path string) bool {
 	return self.Dev != parent.Dev
 }
 
-// start runs m's container and waits for its mount, at most mountWait;
+// start runs m's container and waits for its mount, at most mountWait or
+// until the mount reports a certificate its trust bundle does not verify;
 // release removes it after a failure, which carries the end of what it
 // printed.
 func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
@@ -579,6 +586,8 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 	defer timer.Stop()
 	poll := time.NewTicker(mountPoll)
 	defer poll.Stop()
+	printed := time.NewTicker(mountOutputPoll)
+	defer printed.Stop()
 	var failure string
 	for failure == "" {
 		if mounted(m.dir) && v.markUp(m) {
@@ -586,6 +595,10 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 		}
 		select {
 		case <-poll.C:
+		case <-printed.C:
+			if strings.Contains(v.a.containerOutput(ctx, m.name), certificateFailure) {
+				failure = "cannot verify its store's certificate"
+			}
 		case <-m.exited:
 			failure = "exited before it mounted"
 		case <-timer.C:

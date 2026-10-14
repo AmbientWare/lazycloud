@@ -503,7 +503,7 @@ func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
 
 // TestMountsVerifyTheirStoreAgainstTheTrustBundle: a mount that reaches its
 // store itself, as a cloud bucket's does, trusts only the agent's CA
-// bundle: a store it does not trust fails the start, with the
+// bundle: a store it does not trust fails the start at once, with the
 // certificate's error, and one it trusts mounts.
 func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
 	t.Parallel()
@@ -535,9 +535,14 @@ func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
 	began := time.Now()
 	s.send(t, untrusted)
 	exit := s.phase(t, untrusted.GetStart().GetContainerId(), exited).GetExit()
-	t.Logf("start on an untrusted store failed after %s: %s", time.Since(began), exit.GetMessage())
+	took := time.Since(began)
 	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "certificate") {
 		t.Fatalf("start on an untrusted store: %v", exit)
+	}
+	// GeeseFS retries every failed request; the start ends at the first
+	// certificate failure it prints, not when the mount's wait runs out.
+	if took > 10*time.Second {
+		t.Fatalf("start on an untrusted store failed after %s", took)
 	}
 	e.eventually("the mount that never mounted is removed", func() bool {
 		return len(e.mounters(true, untrusted.GetStart().GetContainerId())) == 0
@@ -910,13 +915,22 @@ func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2 * time.Second)
-	if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
-		t.Fatalf("the volume lists %v", names)
-	}
+	// The reader reads at once, while its mount's stat cache may still hold
+	// the old version, and reads the new bytes once its mount has seen them,
+	// within the stat cache's TTL.
 	want := sha256.Sum256(rewritten)
-	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != `"`+hex.EncodeToString(want[:])+`"` {
-		t.Fatalf("after the overwrite the container reads %s", got)
+	sum = `"` + hex.EncodeToString(want[:]) + `"`
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
+			t.Fatalf("the volume lists %v", names)
+		}
+		got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`)))
+		if got == sum {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("5 s after the overwrite the container reads %s, want %s", got, sum)
+		}
 	}
 }
 

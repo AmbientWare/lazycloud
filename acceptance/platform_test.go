@@ -113,6 +113,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	code := m.Run()
+	if err := removeRegistryImages(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = max(code, 1)
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)
@@ -120,6 +124,30 @@ func TestMain(m *testing.M) {
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// removeRegistryImages removes the images agents pulled from the test
+// registry, which read their layers from the test store's buckets.
+func removeRegistryImages() error {
+	out, err := exec.CommandContext(context.Background(), "docker", "image", "ls", "--no-trunc", "--format", "{{.Repository}} {{.ID}}").Output()
+	if err != nil {
+		return fmt.Errorf("list images: %w", err)
+	}
+	removed := map[string]bool{}
+	for line := range strings.Lines(string(out)) {
+		repository, id, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if !strings.HasPrefix(repository, registry+"/") || removed[id] {
+			continue
+		}
+		removed[id] = true
+		if out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", id).CombinedOutput(); err != nil {
+			return fmt.Errorf("remove %s: %w: %s", repository, err, out)
+		}
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", id).Run() == nil {
+			return fmt.Errorf("remove %s: it remains", repository)
+		}
+	}
+	return nil
 }
 
 // platform is one server, scheduler and agent over a fresh database.
