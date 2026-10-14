@@ -16,6 +16,7 @@ from pydantic import JsonValue
 from lazycloud._shared.task_context import current_task_id
 from lazycloud.aio import to_thread
 from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.config import settings
 from lazycloud.contracts.api import (
     ContainerLogEntry,
     Encoding,
@@ -603,7 +604,7 @@ def retry_budget_spent(failing_since: float) -> bool:
 
 
 def retry_backoff(failures: int) -> None:
-    time.sleep(min(0.5 * 2 ** (failures - 1), 8.0))
+    time.sleep(min(settings().retry_delay_seconds * 2 ** (failures - 1), 8.0))
 
 
 __all__ = [
