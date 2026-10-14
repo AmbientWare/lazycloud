@@ -290,6 +290,7 @@ func receive(t *testing.T, stream hostStream) *hostproto.ServerMessage {
 }
 
 func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, container := h.startingContainer(host)
@@ -333,6 +334,7 @@ func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
 }
 
 func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -412,13 +414,12 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 	}
 }
 
-// A container whose start cannot be built fails alone: the host's session
-// stays open and its other containers still start.
 // A pickled result keeps the display its runner made when it is a valid
 // one, and loses only the display, never the result, when a runner forges
 // one: an image that is no PNG, HTML beside an image, an unknown field or
 // text past the limit.
 func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -493,31 +494,52 @@ func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
 	}
 }
 
-func TestUnbuildableStartFailsOnlyItsContainer(t *testing.T) {
+// A container whose start cannot be built fails alone with its reason: the
+// host's session stays open and its other containers still start.
+func TestUnstartableContainersFailAlone(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
+	failing := map[uuid.UUID]string{}
 	// An image id without its pinned reference cannot be pulled.
-	ws, bad := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12", "image_id": "img_0123456789abcdef01234567"}}`)
-	var good uuid.UUID
-	err := h.pool.QueryRow(t.Context(), `
-with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select workload_id, 2, '{"handler": "reports:summarize", "image": {"python_version": "3.12"}}'::jsonb, sha256('spec2'), sha256('src')
-             from releases limit 1 returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id`, uuid.UUID(ws), uuid.UUID(host)).Scan(&good)
+	_, unpinned := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12", "image_id": "img_0123456789abcdef01234567"}}`)
+	failing[unpinned] = "the release's image has no pinned reference; deploy it again"
+	_, missing := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "secrets": ["TOKEN"]}`)
+	failing[missing] = "secret not found: TOKEN"
+	_, bucket := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "models", "mount_path": "/models", "cloud_bucket": {"bucket": "user-models", "region": "us-east-2",
+		  "access_key_secret": "AWS_KEY", "secret_key_secret": "AWS_SECRET"}}]}`)
+	failing[bucket] = "secret not found: AWS_KEY"
+	// A value sealed under a master key this server does not hold.
+	sealedWS, sealed := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "secrets": ["SEALED_ELSEWHERE"]}`)
+	failing[sealed] = "secret SEALED_ELSEWHERE cannot be read"
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := secrets.NewFileKey(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream := open(t, ctx, h.client)
-	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
-		t.Fatalf("first start %s; want the buildable container %s", got, good)
-	}
-	var state, reason, message string
-	if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1`,
-		uuid.UUID(bad)).Scan(&state, &reason, &message); err != nil {
+	if _, err := secrets.NewSecrets(h.pool, otherKey).Set(t.Context(), sealedWS, "SEALED_ELSEWHERE", "value"); err != nil {
 		t.Fatal(err)
 	}
-	if state != "stopped" || reason != "start_failed" || message != "the release's image has no pinned reference; deploy it again" {
-		t.Fatalf("unbuildable container %s/%s %q; want stopped/start_failed with the owner's reason", state, reason, message)
+	_, good := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}}`)
+
+	stream := open(t, ctx, h.client)
+	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
+		t.Fatalf("first start %s; want the startable container %s", got, good)
+	}
+	for container, want := range failing {
+		var state, reason, message string
+		for deadline := time.Now().Add(5 * time.Second); state != "stopped" && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1`,
+				container).Scan(&state, &reason, &message); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if state != "stopped" || reason != "start_failed" || message != want {
+			t.Errorf("container %s/%s %q; want stopped/start_failed %q", state, reason, message, want)
+		}
 	}
 }

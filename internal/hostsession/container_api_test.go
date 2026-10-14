@@ -3,13 +3,11 @@ package hostsession_test
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
@@ -19,7 +17,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
-	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 type apiReply struct {
@@ -70,6 +67,7 @@ func call(ctx context.Context, client hostproto.HostServiceClient, container exe
 }
 
 func TestContainerAPIReachesOnlyTheContainersWorkspace(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -105,9 +103,17 @@ func TestContainerAPIReachesOnlyTheContainersWorkspace(t *testing.T) {
 	if err != nil || reply.status != 413 {
 		t.Fatalf("an oversized body: %d %v", reply.status, err)
 	}
+	if _, err := h.pool.Exec(t.Context(), "update workspaces set state = 'deleting', deletion_requested_at = now() where name = 'ws'"); err != nil {
+		t.Fatal(err)
+	}
+	reply, err = call(ctx, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil)
+	if err != nil || reply.status != 409 || !bytes.Contains(reply.body, []byte("being deleted")) {
+		t.Fatalf("a deleting workspace: %d %s %v", reply.status, reply.body, err)
+	}
 }
 
 func TestSpawnFromARunningTaskRecordsItAsParent(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -150,6 +156,7 @@ func TestSpawnFromARunningTaskRecordsItAsParent(t *testing.T) {
 // A task an attempt submits through the container API stores the
 // attempt's trace, and the server's handling of the call records in it.
 func TestContainerAPICallsJoinTheAttemptsTrace(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, container := h.startingContainer(host)
@@ -180,10 +187,11 @@ func TestContainerAPICallsJoinTheAttemptsTrace(t *testing.T) {
 	}
 }
 
-func TestStartCarriesNamedSecretsAndFailsWithoutThem(t *testing.T) {
+func TestStartCarriesItsNamedSecrets(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
-	ws, container := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+	ws, _ := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
 		"secrets": ["TOKEN"], "concurrency": 1, "max_pending_tasks": 10}`)
 	if _, err := h.secrets.Set(t.Context(), ws, "TOKEN", "hunter2-hunter2"); err != nil {
 		t.Fatal(err)
@@ -191,91 +199,5 @@ func TestStartCarriesNamedSecretsAndFailsWithoutThem(t *testing.T) {
 	start := receive(t, open(t, ctx, h.client)).GetStart()
 	if start.GetSecrets()["TOKEN"] != "hunter2-hunter2" || start.GetWorkspace() != "ws" || len(start.GetSecrets()) != 1 {
 		t.Fatalf("start %v", start)
-	}
-
-	if err := h.secrets.Delete(t.Context(), ws, "TOKEN"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'stopped', stopped_at = now() where id = $1", uuid.UUID(container)); err != nil {
-		t.Fatal(err)
-	}
-	var release uuid.UUID
-	if err := h.pool.QueryRow(t.Context(), "select release_id from containers where id = $1", uuid.UUID(container)).Scan(&release); err != nil {
-		t.Fatal(err)
-	}
-	var second uuid.UUID
-	if err := h.pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, uuid.UUID(ws), release, uuid.UUID(host)).Scan(&second); err != nil {
-		t.Fatal(err)
-	}
-	open(t, ctx, h.client)
-	deadline := time.Now().Add(5 * time.Second)
-	var state, message string
-	for time.Now().Before(deadline) {
-		if err := h.pool.QueryRow(t.Context(), "select state, coalesce(exit_message, '') from containers where id = $1", second).Scan(&state, &message); err != nil {
-			t.Fatal(err)
-		}
-		if state == "stopped" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if state != "stopped" || message != "secret not found: TOKEN" {
-		t.Fatalf("a start without its secret: %s %q", state, message)
-	}
-}
-
-func TestAnUnreadableSecretFailsOnlyItsContainer(t *testing.T) {
-	h := start(t)
-	host, ctx := h.enroll()
-	ws, bad := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
-		"secrets": ["SEALED_ELSEWHERE"], "concurrency": 1, "max_pending_tasks": 10}`)
-	// A value sealed under a master key this server does not hold.
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		t.Fatal(err)
-	}
-	otherKey, err := secrets.NewFileKey(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := secrets.NewSecrets(h.pool, otherKey).Set(t.Context(), ws, "SEALED_ELSEWHERE", "value"); err != nil {
-		t.Fatal(err)
-	}
-	var good uuid.UUID
-	if err := h.pool.QueryRow(t.Context(), `
-with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select workload_id, 2, '{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "concurrency": 1}',
-                    sha256('spec2'), sha256('src') from releases limit 1 returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id`, uuid.UUID(ws), uuid.UUID(host)).Scan(&good); err != nil {
-		t.Fatal(err)
-	}
-
-	stream := open(t, ctx, h.client)
-	if started := receive(t, stream).GetStart(); started.GetContainerId() != good.String() {
-		t.Fatalf("start %v, want the container without the bad secret", started)
-	}
-	var state, message string
-	if err := h.pool.QueryRow(t.Context(), "select state, coalesce(exit_message, '') from containers where id = $1", uuid.UUID(bad)).
-		Scan(&state, &message); err != nil {
-		t.Fatal(err)
-	}
-	if state != "stopped" || !strings.Contains(message, "secret SEALED_ELSEWHERE cannot be read") {
-		t.Fatalf("the container with the unreadable secret: %s %q", state, message)
-	}
-}
-
-func TestContainerAPIRefusesADeletingWorkspace(t *testing.T) {
-	h := start(t)
-	host, ctx := h.enroll()
-	_, container := h.startingContainer(host)
-	if _, err := h.pool.Exec(t.Context(), "update workspaces set state = 'deleting', deletion_requested_at = now() where name = 'ws'"); err != nil {
-		t.Fatal(err)
-	}
-	reply, err := call(ctx, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil)
-	if err != nil || reply.status != 409 || !bytes.Contains(reply.body, []byte("being deleted")) {
-		t.Fatalf("a deleting workspace: %d %s %v", reply.status, reply.body, err)
 	}
 }

@@ -25,6 +25,7 @@ from containers, generate_series(1, $2) where id = $1`, container, n)
 // image as for one, their secrets among them, and sending the starts
 // adds only a fixed cost per container.
 func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
+	t.Parallel()
 	sending1, waiting1 := syncStatements(t, 1)
 	sending2, _ := syncStatements(t, 2)
 	sending4, waiting4 := syncStatements(t, 4)
