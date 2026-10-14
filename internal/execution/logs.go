@@ -127,11 +127,6 @@ const logBatch = 500
 // whose transaction may still have older lines in flight.
 const unsettledRetry = 50 * time.Millisecond
 
-// settleWait bounds how long a read without follow waits for lines in
-// flight. A transaction that runs longer holds back every newer line, since
-// visibility is cluster-wide.
-const settleWait = 2 * time.Second
-
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -161,8 +156,12 @@ func (c logPosition) less(o logPosition) bool {
 // followed task stream ends when the task is terminal and drained, a
 // container stream when the container has stopped and is drained, and a
 // workload stream only when ctx ends. It returns ErrNotFound before
-// emitting anything for a source outside the workspace.
+// emitting anything for a source outside the workspace, and refuses a read
+// without follow when LogSettle is not positive.
 func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, source LogSource, query LogQuery, emit func([]LogEntry) error) error {
+	if !query.Follow && e.LogSettle <= 0 {
+		return fmt.Errorf("log settle wait %s must be positive", e.LogSettle)
+	}
 	var wake <-chan struct{}
 	var idle *time.Timer
 	if query.Follow {
@@ -195,7 +194,7 @@ func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener,
 		}
 		return nil
 	}
-	settleBy := time.Now().Add(settleWait)
+	settleBy := time.Now().Add(e.LogSettle)
 	for {
 		page, err := e.drainLogs(ctx, source, cursor, send)
 		if err != nil {

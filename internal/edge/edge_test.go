@@ -469,7 +469,12 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := secrets.NewSecrets(pool, key)
-	deliverer := callbacks.NewCallbacks(pool, s, callbacks.CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	config := callbacks.DefaultCallbackConfig()
+	config.AllowPrivateTargets = true
+	deliverer, err := callbacks.NewCallbacks(pool, s, config, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n, err := deliverer.Deliver(ctx); err != nil || n != len(batch) {
 		t.Fatalf("delivered %d callbacks (%v); want %d", n, err, len(batch))
 	}
