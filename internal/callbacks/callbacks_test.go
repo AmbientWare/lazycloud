@@ -98,6 +98,14 @@ func state(t *testing.T, pool *pgxpool.Pool) (string, int) {
 	return s, n
 }
 
+// fastConfig is the production configuration with retries 10 ms apart.
+func fastConfig(allowPrivate bool) CallbackConfig {
+	c := DefaultCallbackConfig()
+	c.AllowPrivateTargets = allowPrivate
+	c.RetryDelays = [callbackAttempts - 1]time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
+	return c
+}
+
 // deliverUntil runs passes until the callback leaves pending, each when the
 // next one is due, as the scheduler loop does.
 func deliverUntil(t *testing.T, c *Callbacks, pool *pgxpool.Pool) {
@@ -126,7 +134,7 @@ func TestCallbackIsSignedAndRetriedUntilDelivered(t *testing.T) {
 	server := httptest.NewServer(srv)
 	defer server.Close()
 	ws, task := callback(t, pool, server.URL+"/hooks")
-	c := NewCallbacks(pool, vault, CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	c := NewCallbacks(pool, vault, fastConfig(true), slog.New(slog.DiscardHandler))
 
 	deliverUntil(t, c, pool)
 
@@ -163,7 +171,7 @@ func TestCallbackGivesUpOnRejectionAndAfterThreeAttempts(t *testing.T) {
 	server := httptest.NewServer(srv)
 	defer server.Close()
 	callback(t, pool, server.URL)
-	c := NewCallbacks(pool, newSecrets(t, pool), CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	c := NewCallbacks(pool, newSecrets(t, pool), fastConfig(true), slog.New(slog.DiscardHandler))
 	deliverUntil(t, c, pool)
 	if s, n := state(t, pool); s != "failed" || n != 1 {
 		t.Fatalf("a rejected callback is %s after %d deliveries", s, n)
@@ -174,7 +182,7 @@ func TestCallbackGivesUpOnRejectionAndAfterThreeAttempts(t *testing.T) {
 	server2 := httptest.NewServer(always)
 	defer server2.Close()
 	callback(t, busy, server2.URL)
-	deliverUntil(t, NewCallbacks(busy, newSecrets(t, busy), CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler)), busy)
+	deliverUntil(t, NewCallbacks(busy, newSecrets(t, busy), fastConfig(true), slog.New(slog.DiscardHandler)), busy)
 	if s, n := state(t, busy); s != "failed" || n != 3 || len(always.requests()) != 3 {
 		t.Fatalf("a failing target got %d requests; callback %s after %d", len(always.requests()), s, n)
 	}
@@ -187,7 +195,7 @@ func TestCallbacksNeverReachPrivateAddresses(t *testing.T) {
 	server := httptest.NewServer(srv)
 	defer server.Close()
 	callback(t, pool, server.URL)
-	c := NewCallbacks(pool, newSecrets(t, pool), CallbackConfig{}, slog.New(slog.DiscardHandler))
+	c := NewCallbacks(pool, newSecrets(t, pool), fastConfig(false), slog.New(slog.DiscardHandler))
 	deliverUntil(t, c, pool)
 	var lastError string
 	if err := pool.QueryRow(t.Context(), "select last_error from task_callbacks").Scan(&lastError); err != nil {
@@ -209,7 +217,7 @@ func TestALargeResultIsLeftOutOfTheCallback(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), "update task_results set data = $1 where task_id = $2", []byte(big), task); err != nil {
 		t.Fatal(err)
 	}
-	deliverUntil(t, NewCallbacks(pool, newSecrets(t, pool), CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler)), pool)
+	deliverUntil(t, NewCallbacks(pool, newSecrets(t, pool), fastConfig(true), slog.New(slog.DiscardHandler)), pool)
 	got := srv.requests()
 	var body map[string]any
 	if err := json.Unmarshal(got[0].body, &body); err != nil {
@@ -273,7 +281,7 @@ from task_callbacks c, generate_series(2, $1::int + 1) n;
 		t.Fatal(err)
 	}
 	_, other := callback(t, pool, server.URL)
-	c := NewCallbacks(pool, vault, CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	c := NewCallbacks(pool, vault, fastConfig(true), slog.New(slog.DiscardHandler))
 
 	sent, err := c.Deliver(t.Context())
 	if err != nil || sent != flood+2 {

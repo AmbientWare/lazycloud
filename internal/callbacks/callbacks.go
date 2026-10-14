@@ -50,23 +50,30 @@ const (
 	purgeBatch    = 1000
 )
 
-// retryDelays separate the attempts.
-var retryDelays = [...]time.Duration{250 * time.Millisecond, 750 * time.Millisecond} //nolint:gochecknoglobals // constant table
-
 // CallbackConfig configures delivery.
 type CallbackConfig struct {
 	// AllowPrivateTargets permits callback hosts that resolve to private,
 	// loopback or link-local addresses. Only local development sets it.
 	AllowPrivateTargets bool
+	// RetryDelays separate the attempts: the first after the first
+	// failure, the second after the second.
+	RetryDelays [callbackAttempts - 1]time.Duration
+}
+
+// DefaultCallbackConfig retries after 250 ms and then 750 ms and reaches
+// public addresses only.
+func DefaultCallbackConfig() CallbackConfig {
+	return CallbackConfig{RetryDelays: [callbackAttempts - 1]time.Duration{250 * time.Millisecond, 750 * time.Millisecond}}
 }
 
 // Callbacks delivers task callbacks.
 type Callbacks struct {
-	pool    *pgxpool.Pool
-	queries *Queries
-	secrets *secrets.Secrets
-	client  *http.Client
-	logger  *slog.Logger
+	pool        *pgxpool.Pool
+	queries     *Queries
+	secrets     *secrets.Secrets
+	client      *http.Client
+	retryDelays [callbackAttempts - 1]time.Duration
+	logger      *slog.Logger
 }
 
 // NewCallbacks returns the callback deliverer. Signing keys come from
@@ -94,7 +101,7 @@ func NewCallbacks(pool *pgxpool.Pool, s *secrets.Secrets, config CallbackConfig,
 		MaxIdleConnsPerHost:   2,
 	}
 	return &Callbacks{
-		pool: pool, queries: New(pool), secrets: s, logger: logger,
+		pool: pool, queries: New(pool), secrets: s, retryDelays: config.RetryDelays, logger: logger,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   callbackTimeout,
@@ -249,7 +256,7 @@ func (c *Callbacks) deliverOne(ctx context.Context, row CallbackDeliveriesRow, d
 		log.InfoContext(ctx, "callback failed; retrying", "error", message)
 		record = c.queries.RetryCallback(ctx, RetryCallbackParams{
 			ID: row.ID, Deliveries: deliveries, LastError: &message,
-			DelaySeconds: retryDelays[min(int(deliveries), len(retryDelays))-1].Seconds(),
+			DelaySeconds: c.retryDelays[deliveries-1].Seconds(),
 		})
 	default:
 		message := err.Error()
