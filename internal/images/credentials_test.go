@@ -8,6 +8,7 @@ import (
 
 // The documented credential names per registry, as users set them.
 func TestRegistryCredentialNames(t *testing.T) {
+	t.Parallel()
 	account := `{"type":"service_account","client_email":"a@b.iam","private_key":"k"}`
 	var ecrRegion string
 	exchange := func(_ context.Context, region, key, secret, _ string) (*Auth, error) {

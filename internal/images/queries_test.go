@@ -28,6 +28,7 @@ func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEnd
 // of four, the grants of one reference or of four, and the record of a
 // startup trace of one frame or of four.
 func TestStartReadsDoNotGrowWithTheImage(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")

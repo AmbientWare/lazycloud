@@ -29,6 +29,7 @@ func dockerfileDef(dockerfile string) apitypes.ImageDefinition {
 // is refused: otherwise a workspace could share an image that copies from a
 // private image it cannot read.
 func TestDockerfilesCannotNameUncheckedImages(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	refused := map[string]string{
@@ -56,6 +57,7 @@ func TestDockerfilesCannotNameUncheckedImages(t *testing.T) {
 
 // Values written into the Dockerfile cannot add instructions to it.
 func TestDefinitionValuesCannotInjectInstructions(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	injected := "\nFROM docker.io/acme/private:1\nCOPY . /"
@@ -96,6 +98,7 @@ func TestDefinitionValuesCannotInjectInstructions(t *testing.T) {
 // Images in the platform registry are reached by image id only, and user
 // registries must be public.
 func TestBaseImagesMustBePublicRegistries(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	digest := pushRandom(t, f.registry+"/lazycloud/images:someone-else")
@@ -118,6 +121,7 @@ func TestBaseImagesMustBePublicRegistries(t *testing.T) {
 // A registry's token realm is dialed with the same address check, so a
 // registry cannot point lookups at internal services.
 func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
+	t.Parallel()
 	var realmHits atomic.Int32
 	realm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		realmHits.Add(1)
@@ -149,6 +153,7 @@ func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
 // A forced rebuild replaces the image for the workspace that asked; others
 // keep the published image, and caches are never shared across workspaces.
 func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	host := f.host(t)
@@ -233,6 +238,7 @@ func TestForcedRebuildsAndCachesStayInTheirWorkspace(t *testing.T) {
 // workspace's repository and never becomes the image other workspaces
 // resolve, even those that joined the build.
 func TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	host := f.host(t)
@@ -282,6 +288,7 @@ func TestBuildsOnCustomerHostsNeverPublishForOtherWorkspaces(t *testing.T) {
 
 // Stored build output is capped per attempt and the cut is marked once.
 func TestBuildOutputIsCappedPerAttempt(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)

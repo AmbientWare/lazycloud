@@ -97,6 +97,7 @@ func unconverted(t *testing.T, im *images.Images, reference string, host compute
 // the layer bucket. A check that found a layer missing waits out the
 // recheck period, and the sweep takes a layer's checks with it.
 func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
@@ -169,6 +170,7 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 // Concurrent checks of one reference and region on two servers check each
 // layer once between them.
 func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
