@@ -59,7 +59,7 @@ jobs:
       - run: uv sync --frozen --group dev
       # Tests that need root, a host's runtime or Docker images carry the
       # hostruntime tag and run in the host-runtime and acceptance jobs.
-      - run: go list ./... | grep -v -e /acceptance$ | xargs go test -race
+      - run: go test -race ./...
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
