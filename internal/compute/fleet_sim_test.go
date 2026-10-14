@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,9 +15,11 @@ import (
 
 // The replay (fleet_run_test.go) runs PlanFleet against a fleet simulation
 // calibrated to the recorded prod run (testdata/fleetrun): measured
-// lifecycle timings, placement oldest first and rate-card revenue. Each
-// purchase launches in its pool on the launch loop's tick, and a stopped
-// Spot reserve's request disables after a measured gap.
+// lifecycle timings, placement oldest first and rate-card revenue. A pass
+// runs as the plan loop's do: when the fleet or its work changed, after a
+// pass that acted, and otherwise on the loop's tick. Each purchase launches
+// in its pool on the launch loop's tick, and a stopped Spot reserve's
+// request disables after a measured gap.
 
 const (
 	simTick = time.Second
@@ -35,8 +38,9 @@ const (
 	simGPUStop = 392 * time.Second
 )
 
-// launchTick is the launch loop's period, fleetTick in cmd/scheduler.
-const launchTick = 5 * time.Second
+// fleetTick is the period of the fleet's plan and launch loops, fleetTick
+// in cmd/scheduler.
+const fleetTick = 5 * time.Second
 
 // disableGaps are measured gaps between a Spot reserve's stop and EC2
 // disabling its persistent request: 38-146 s, with 63 s and 165 s on
@@ -146,6 +150,22 @@ type sim struct {
 	// when a plan pass bought, as the compute notification wakes it.
 	launchedAt time.Time
 	wake       bool
+	// planned is the state the last pass left, plannedAt when it ran and
+	// acted whether it acted.
+	planned   string
+	plannedAt time.Time
+	acted     bool
+}
+
+// state is the fleet and its work as far as a change wakes the plan loop:
+// pending containers, and each host's phase, containers and launch.
+func (s *sim) state() string {
+	var b strings.Builder
+	fmt.Fprint(&b, len(s.pending))
+	for _, h := range s.hosts {
+		fmt.Fprint(&b, h.ID, h.State, len(h.containers), h.walk != nil, ";")
+	}
+	return b.String()
 }
 
 // gap is how long EC2 takes to disable h's request once it stopped.
@@ -164,19 +184,22 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 			}
 		}
 		s.place()
-		// A pass that held purchases for arrivals runs again once they
-		// settle, as the planner loop does.
-		if s.wake || s.now.Sub(s.launchedAt) >= launchTick {
+		if s.wake || s.now.Sub(s.launchedAt) >= fleetTick {
 			s.launchPass()
 		}
-		if wait := s.plan(); wait > 0 {
-			tick := s.now
-			s.now = s.now.Add(wait)
-			s.plan()
-			if s.wake {
-				s.launchPass()
+		if state := s.state(); state != s.planned || s.acted || s.now.Sub(s.plannedAt) >= fleetTick {
+			// A pass that held purchases for arrivals runs again once they
+			// settle, as the plan loop does.
+			if wait := s.plan(); wait > 0 {
+				tick := s.now
+				s.now = s.now.Add(wait)
+				s.plan()
+				if s.wake {
+					s.launchPass()
+				}
+				s.now = tick
 			}
-			s.now = tick
+			s.planned, s.plannedAt = s.state(), s.now
 		}
 		if s.wake {
 			s.launchPass()
@@ -400,6 +423,7 @@ func (s *sim) plan() time.Duration {
 	}
 	s.check(snapshot, plan)
 	s.apply(plan)
+	s.acted = len(plan.Actions) > 0
 	return plan.BatchWait
 }
 
@@ -581,7 +605,7 @@ func (s *sim) apply(plan FleetPlan) {
 			case h.until.After(from):
 				from = h.until
 			}
-			h.startAt = from.Add(launchTick)
+			h.startAt = from.Add(fleetTick)
 			switch {
 			case h.State == FleetImageSaved || h.State == FleetStopping && *h.ReserveMode == ReserveHibernate:
 				h.until = from.Add(simResume)
