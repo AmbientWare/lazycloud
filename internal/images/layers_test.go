@@ -349,7 +349,7 @@ func TestLayerReadURLs(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
+	im := newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
 
 	reference := "registry.test/lazycloud/images/abc@sha256:" + hex64("1")
 	contents := [][]byte{bytes.Repeat([]byte("base "), 1<<20), []byte("app layer")}

@@ -14,9 +14,6 @@ const (
 	publishInterval = time.Second
 	// renewAfter republishes unchanged demand well before its lease lapses.
 	renewAfter = execution.EndpointLoadTTL / 3
-	// failureCheckInterval bounds how often waiting requests of one release
-	// ask whether it can start, unless Config sets another bound.
-	failureCheckInterval = time.Second
 )
 
 // releaseLoad is this edge's demand on one release. Requests count against

@@ -107,9 +107,20 @@ type Config struct {
 	// lands only on a host with this much free.
 	BuildCPU cpu.Millis
 	// PlatformTransferBackoff is the wait before the first retry of a
-	// platform image's registry read or store write, doubling after; nil
-	// waits a second.
-	PlatformTransferBackoff *time.Duration
+	// platform image's registry read or store write, doubling after;
+	// PlatformTransferBackoff in production.
+	PlatformTransferBackoff time.Duration
+}
+
+// PlatformTransferBackoff is Config.PlatformTransferBackoff in production.
+const PlatformTransferBackoff = time.Second
+
+// Validate refuses settings the owner cannot run with.
+func (c Config) Validate() error {
+	if c.PlatformTransferBackoff <= 0 {
+		return fmt.Errorf("images: the platform transfer backoff must be positive, not %s", c.PlatformTransferBackoff)
+	}
+	return nil
 }
 
 // Repositories under Repository, by what they hold. A built image has a
@@ -180,9 +191,6 @@ type Images struct {
 	login    *platformLogin
 	// transfer stores the layer pairs of platform images.
 	transfer *http.Client
-	// transferBackoff is the first wait between tries of a platform
-	// image's transfers.
-	transferBackoff time.Duration
 
 	// managed holds the managed sources read, by Python version. The
 	// source managed_images records for a version under
@@ -191,16 +199,16 @@ type Images struct {
 	managed   map[string]string
 }
 
-// NewImages returns the images owner.
-func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) *Images {
-	i := &Images{
+// NewImages returns the images owner, or the error of a config it cannot
+// run with.
+func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) (*Images, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return &Images{
 		pool: pool, queries: New(pool), execution: exec, secrets: vault, storage: store, resolver: newResolver(config.Registry), config: config,
-		login: newPlatformLogin(config), transfer: &http.Client{}, transferBackoff: platformTransferBackoff, managed: map[string]string{},
-	}
-	if config.PlatformTransferBackoff != nil {
-		i.transferBackoff = *config.PlatformTransferBackoff
-	}
-	return i
+		login: newPlatformLogin(config), transfer: &http.Client{}, managed: map[string]string{},
+	}, nil
 }
 
 // Image is a resolved image.

@@ -37,7 +37,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}), storage: store, logger: logger,
+		execution: exec, images: testImages(t, pool, exec, store), storage: store, logger: logger,
 	}
 
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -156,7 +156,7 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}),
+		execution: exec, images: testImages(t, pool, exec, store),
 		storage: store, logger: logger,
 	}
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -314,6 +314,16 @@ select host.id, ctr.id from host, ctr`, uuid.UUID(ws), release).Scan(&host, &con
 }
 
 // testVault returns a secrets owner with a fixed development master key.
+// testImages is the images owner the account loops run with.
+func testImages(t *testing.T, pool *pgxpool.Pool, exec *execution.Execution, store *storage.Storage) *images.Images {
+	t.Helper()
+	im, err := images.NewImages(pool, exec, testVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
 func testVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
 	t.Helper()
 	key, err := secrets.NewFileKey(make([]byte, 32))

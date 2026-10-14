@@ -60,10 +60,8 @@ const (
 	// fresh grants, which come with a fresh login.
 	platformPullWindow = 30 * time.Minute
 	// platformTransferAttempts bounds the tries of one registry read or
-	// store write that fails for the network or the service, the first
-	// retry after platformTransferBackoff unless Config sets another.
+	// store write that fails for the network or the service.
 	platformTransferAttempts = 3
-	platformTransferBackoff  = time.Second
 )
 
 // ErrServerDisk means the server could not create the files a platform
@@ -568,5 +566,5 @@ func (i *Images) retryPlatform(ctx context.Context, fn func() error) error {
 		var unconvertible *ConversionError
 		return errors.As(err, &unconvertible) || errors.Is(err, ErrServerDisk)
 	}
-	return imagefs.Retry(ctx, platformTransferAttempts, i.transferBackoff, final, fn) //nolint:wrapcheck // fn's error.
+	return imagefs.Retry(ctx, platformTransferAttempts, i.config.PlatformTransferBackoff, final, fn) //nolint:wrapcheck // fn's error.
 }

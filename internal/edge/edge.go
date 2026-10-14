@@ -37,8 +37,19 @@ type Config struct {
 	// (database.OpenSession); nil uses the edge's pool.
 	SessionPool *pgxpool.Pool
 	// FailureCheckInterval bounds how often waiting requests of one
-	// release ask whether it can start; nil asks at most once a second.
-	FailureCheckInterval *time.Duration
+	// release ask whether it can start; FailureCheckInterval in production.
+	FailureCheckInterval time.Duration
+}
+
+// FailureCheckInterval is Config.FailureCheckInterval in production.
+const FailureCheckInterval = time.Second
+
+// Validate refuses settings the edge cannot run with.
+func (c Config) Validate() error {
+	if c.FailureCheckInterval <= 0 {
+		return fmt.Errorf("edge: the failure check interval must be positive, not %s", c.FailureCheckInterval)
+	}
+	return nil
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -97,13 +108,16 @@ type versionKey struct {
 // NewEdge returns the edge. listener must listen on database.ChannelTask
 // for function invocations.
 func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Execution, listener *database.Listener, cfg Config, logger *slog.Logger) (*Edge, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	urls, err := ParseURLs(cfg.URL)
 	if err != nil {
 		return nil, err
 	}
 	e := &Edge{
 		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
-		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: failureCheckInterval,
+		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: cfg.FailureCheckInterval,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},
@@ -112,9 +126,6 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		refresh:   make(chan uuid.UUID, refreshQueue),
 		publish:   make(chan struct{}, 1),
 		records:   make(chan requestRecord, requestQueue),
-	}
-	if cfg.FailureCheckInterval != nil {
-		e.failureCheck = *cfg.FailureCheckInterval
 	}
 	e.auth.entries = map[authKey]time.Time{}
 	e.holds.first = make(chan struct{}, 1)

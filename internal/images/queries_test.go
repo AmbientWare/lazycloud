@@ -56,8 +56,9 @@ func TestStartReadsDoNotGrowWithTheImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	im := images.NewImages(traced, f.execution, f.secrets, f.storage, images.Config{
-		Registry: f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
+	im := newImages(t, traced, f.execution, f.secrets, f.storage, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
 	})
 	statements := func(call func() error) int64 {
 		t.Helper()

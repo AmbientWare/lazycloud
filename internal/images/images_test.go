@@ -74,6 +74,16 @@ type fixture struct {
 	listener  *database.Listener
 }
 
+// newImages is the images owner with cfg.
+func newImages(t *testing.T, pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, cfg images.Config) *images.Images {
+	t.Helper()
+	im, err := images.NewImages(pool, exec, vault, store, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
 // newVault returns a secrets owner with a random master key.
 func newVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
 	t.Helper()
@@ -95,8 +105,9 @@ func newFixture(t *testing.T) fixture {
 	exec := execution.NewExecution(pool)
 	vault := newVault(t, pool)
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
-	im := images.NewImages(pool, exec, vault, store, images.Config{
-		Registry: registry, Repository: "lazycloud", Insecure: true,
+	im := newImages(t, pool, exec, vault, store, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",
 	})
 	pushRandom(t, registry+"/library/python:3.12-slim")
@@ -218,8 +229,9 @@ func TestAReleaseRetaggingTheManagedBaseKeepsImageIdentities(t *testing.T) {
 		if err := remote.Write(mustRef(t, f.registry+"/release/python:3.12-"+release), img, remote.WithContext(t.Context())); err != nil {
 			t.Fatal(err)
 		}
-		im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
-			Registry: f.registry, Repository: "lazycloud", Insecure: true,
+		im := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+			PlatformTransferBackoff: images.PlatformTransferBackoff,
+			Registry:                f.registry, Repository: "lazycloud", Insecure: true,
 			ManagedBase: f.registry + "/release/python:{version}-" + release,
 		})
 		resolved, err := im.Resolve(t.Context(), ws, numpy())
@@ -725,5 +737,16 @@ values ('g', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint <
 	place()
 	if starts, err := f.execution.BuildStarts(ctx, l4); err != nil || len(starts) != 1 {
 		t.Fatalf("the host's one GPU holds one build: %v %v", starts, err)
+	}
+}
+
+// A config without a positive transfer backoff is refused when the owner is
+// built, not discovered as retries with no wait.
+func TestImagesNeedAPositiveTransferBackoff(t *testing.T) {
+	t.Parallel()
+	for _, backoff := range []time.Duration{0, -time.Second} {
+		if _, err := images.NewImages(nil, nil, nil, nil, images.Config{PlatformTransferBackoff: backoff}); err == nil {
+			t.Errorf("a transfer backoff of %s was accepted", backoff)
+		}
 	}
 }

@@ -231,10 +231,10 @@ func pushPythonBase() error {
 // newImages is the images owner every test's server runs over pool. Its
 // managed template names the bases pushPythonBase pushed, and its builds
 // fit the test host.
-func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
+func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) (*images.Images, error) {
 	return images.NewImages(pool, exec, vault, store, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
-		BuildCPU: 500,
+		BuildCPU: 500, PlatformTransferBackoff: images.PlatformTransferBackoff,
 	})
 }
 
@@ -249,7 +249,10 @@ func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})))
+	im, err := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})))
+	if err != nil {
+		return err
+	}
 	source, err := im.ManagedSource(ctx, pythonVersion)
 	if err != nil {
 		return err
@@ -339,7 +342,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		t.Fatal(err)
 	}
 	p.newEdge = func(url, relay string) (*edge.Edge, error) {
-		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay}, logger)
+		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay, FailureCheckInterval: edge.FailureCheckInterval}, logger)
 	}
 	p.edge, err = p.newEdge("http://lazycloud.localhost:"+port, relayListener.Addr().String())
 	if err != nil {
@@ -364,7 +367,9 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	p.images = newImages(pool, p.execution, vault, p.storage)
+	if p.images, err = newImages(pool, p.execution, vault, p.storage); err != nil {
+		t.Fatal(err)
+	}
 	p.secrets = vault
 	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
@@ -379,10 +384,13 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hosts := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
+	hosts, err := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
+		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
 	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer(hostsession.HostFrom))

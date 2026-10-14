@@ -38,10 +38,9 @@ const testFailureCheck = 200 * time.Millisecond
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
-	check := testFailureCheck
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
 		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
-			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: &check,
+			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck,
 		}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -621,7 +620,7 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -798,5 +797,16 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 	}
 	if n := failures(); n != 3 {
 		t.Fatalf("a request within the backoff left %d start failures; want the release held at 3", n)
+	}
+}
+
+// A config without a positive failure check interval is refused when the
+// edge is built, not discovered as waiting requests asking without pause.
+func TestEdgesNeedAPositiveFailureCheckInterval(t *testing.T) {
+	t.Parallel()
+	for _, interval := range []time.Duration{0, -time.Second} {
+		if _, err := NewEdge(nil, nil, nil, nil, Config{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: interval}, slog.New(slog.DiscardHandler)); err == nil {
+			t.Errorf("a failure check interval of %s was accepted", interval)
+		}
 	}
 }
