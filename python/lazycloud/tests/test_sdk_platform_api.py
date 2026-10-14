@@ -1210,6 +1210,45 @@ def test_ctrl_c_during_map_cancels_every_unfinished_task_despite_a_second_interr
     assert sorted(cancelled) == sorted(ids)
 
 
+def test_ctrl_c_during_a_failed_map_submission_cancels_the_admitted_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    from lazycloud.abstractions import function
+
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    monkeypatch.setattr(function, "MAX_SUBMIT_BATCH", 2)
+    admitted = [_task_id(100), _task_id(101)]
+    batches: list[ApiRequest] = []
+
+    @fake_api.route("POST", TASKS)
+    def submit(request: ApiRequest) -> Reply:
+        batches.append(request)
+        if len(batches) == 1:
+            return json_reply({"tasks": [_task(i) for i in admitted]}, 201)
+        # Ctrl-C while the second batch is refused.
+        press_ctrl_c()
+        return error_reply("internal", "submission failed", 500)
+
+    @fake_api.route("POST", "/v1/workspaces/team/tasks/[^/]+/cancel")
+    def cancel(request: ApiRequest) -> Reply:
+        task_id = request.path.split("/")[-2]
+        if task_id == admitted[0]:
+            # Ctrl-C again while a cancel fails.
+            press_ctrl_c()
+            return error_reply("internal", "cancel failed", 500)
+        return json_reply(_task(task_id, "cancelled"))
+
+    with pytest.raises(KeyboardInterrupt):
+        reports.summarize_sales.spawn_map([[1], [2], [3]])
+
+    cancelled = [
+        r.path.split("/")[-2]
+        for r in fake_api.calls("POST", "/v1/workspaces/team/tasks/[^/]+/cancel")
+    ]
+    assert cancelled == admitted
+
+
 def test_remote_reports_why_a_queued_task_waits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

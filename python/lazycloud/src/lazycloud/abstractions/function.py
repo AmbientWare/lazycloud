@@ -724,6 +724,9 @@ class Function(Generic[P, R]):
                         workspace, self._app_slug, self.resource_name, request
                     )
                 )
+            except KeyboardInterrupt:
+                cancel_tasks(tasks)
+                raise
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if not tasks:
