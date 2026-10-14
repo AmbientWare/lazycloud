@@ -223,7 +223,7 @@ func (n *Notifications) deliverOne(ctx context.Context, row ClaimDueRow) outcome
 	default:
 		n.logger.WarnContext(ctx, "email delivery will retry", "message_id", id.String(), "attempts", row.Attempts, "error", sendErr)
 		_, err := n.queries.MarkRetry(settleCtx, MarkRetryParams{
-			DelaySeconds: RetryDelay(int(row.Attempts)).Seconds(), LastError: truncate(sendErr.Error()),
+			DelaySeconds: retryDelay(int(row.Attempts)).Seconds(), LastError: truncate(sendErr.Error()),
 			ID: row.ID, Attempts: row.Attempts,
 		})
 		if err != nil {
@@ -233,9 +233,9 @@ func (n *Notifications) deliverOne(ctx context.Context, row ClaimDueRow) outcome
 	}
 }
 
-// RetryDelay is the wait after the given number of failed attempts:
+// retryDelay is the wait after the given number of failed attempts:
 // exponential from 10 seconds, capped at 10 minutes.
-func RetryDelay(attempts int) time.Duration {
+func retryDelay(attempts int) time.Duration {
 	delay := retryBase
 	for range max(attempts-1, 0) {
 		delay *= 2
