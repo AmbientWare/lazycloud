@@ -1,7 +1,6 @@
 package execution
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -370,6 +369,7 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
+	e.LogSettle = 100 * time.Millisecond
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
 	host, container := placedContainer(t, pool, f, ContainerReady, 2)
@@ -379,17 +379,13 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 		t.Fatalf("claim %v %v", claimed, err)
 	}
 	source := LogSource{Kind: LogsOfContainer, ID: uuid.UUID(container)}
-	readOn := func(ctx context.Context, e *Execution, after int64) ([]LogEntry, error) {
+	read := func(after int64) []LogEntry {
+		t.Helper()
 		var out []LogEntry
-		err := e.StreamLogs(ctx, l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
+		err := e.StreamLogs(t.Context(), l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
 			out = append(out, batch...)
 			return nil
 		})
-		return out, err
-	}
-	read := func(after int64) []LogEntry {
-		t.Helper()
-		out, err := readOn(t.Context(), e, after)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -398,11 +394,6 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	line := func(n int, data string) []LogLine {
 		return []LogLine{{Attempt: claimed[n].Attempt, Stream: LogStdout, Data: data, Time: time.Now()}}
 	}
-	counted, statements := countedExecution(t, pool)
-	if got, err := readOn(t.Context(), counted, 0); err != nil || len(got) != 0 {
-		t.Fatalf("read before any line: %+v, %v", got, err)
-	}
-	pass := statements.take()
 
 	// The first writer takes the lower id and commits last.
 	slow, err := pool.Begin(t.Context())
@@ -419,31 +410,10 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	if err := e.AppendLogs(t.Context(), host, container, line(1, "second")); err != nil {
 		t.Fatal(err)
 	}
-	// A read while the older writer runs holds the later line back: it
-	// drains once and reads again without returning anything.
-	type result struct {
-		got []LogEntry
-		err error
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	held := make(chan result, 1)
-	go func() {
-		got, err := readOn(ctx, counted, 0)
-		held <- result{got, err}
-	}()
-	for statements.n.Load() <= pass {
-		select {
-		case r := <-held:
-			t.Fatalf("read while an older writer runs returned %+v, %v", r.got, r.err)
-		case <-statements.done:
-		case <-time.After(10 * time.Second):
-			t.Fatal("the read never read again")
-		}
-	}
-	cancel()
-	if r := <-held; len(r.got) != 0 || (r.err != nil && !errors.Is(r.err, context.Canceled)) {
-		t.Fatalf("read while an older writer runs returned %+v, %v", r.got, r.err)
+	// A read while the older writer runs holds the later line back until
+	// its settle wait ends.
+	if got := read(0); len(got) != 0 {
+		t.Fatalf("read while an older writer runs returned %+v", got)
 	}
 	if err := slow.Commit(t.Context()); err != nil {
 		t.Fatal(err)
