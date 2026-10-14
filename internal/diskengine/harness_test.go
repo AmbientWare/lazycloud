@@ -116,7 +116,7 @@ func newHost(t *testing.T, cacheBytes int64) *host {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	counting := &countingTransport{}
 	cfg := snapshotter.Config{
-		Root: filepath.Join(dir, "sn"), CacheDir: filepath.Join(dir, "cache"), CacheBytes: cacheBytes, Fetches: 4,
+		Root: filepath.Join(dir, "sn"), CacheDir: filepath.Join(dir, "cache"), CacheBytes: cacheBytes, Fetches: 4, VolumeAddr: "127.0.0.1:0",
 		HTTP: &http.Client{Transport: counting}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
 	}
 	socket := filepath.Join(dir, "sn.sock")

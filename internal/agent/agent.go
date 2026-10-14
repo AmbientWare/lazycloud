@@ -224,6 +224,10 @@ type Agent struct {
 	drain context.Context
 	// restart ends Run with a cause, as after installing an update.
 	restart func(error)
+	// previousSnapshotter is set, before the first session, on a host that
+	// keeps the previous release's snapshotter because something used it
+	// when the agent started.
+	previousSnapshotter bool
 
 	metrics agentMetrics
 
@@ -417,11 +421,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
-	if err := a.replaceSnapshotter(ctx); err != nil {
+	if a.previousSnapshotter, err = a.replaceSnapshotter(ctx); err != nil {
 		a.log.Warn("replacing the snapshotter failed", "error", err)
 	}
-	if a.volumes.endpoint, err = a.volumeEndpoint(ctx); err != nil {
-		a.log.Warn("the snapshotter did not answer for volumes; volumes mount from their buckets", "error", err)
+	if a.previousSnapshotter {
+		a.log.Info("the host keeps the previous release's snapshotter until it runs nothing")
+		a.goOwned(a.awaitIdle)
 	}
 	a.volumes.adoptGrants()
 	a.recoverDisks(ctx)

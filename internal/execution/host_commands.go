@@ -185,6 +185,19 @@ func (e *Execution) RecordImageReference(ctx context.Context, host compute.HostI
 	return n == 1, nil
 }
 
+// ContainerWorkload returns the workspace and workload of a container of a
+// release the host runs; false when the host runs no such container.
+func (e *Execution) ContainerWorkload(ctx context.Context, host compute.HostID, container ContainerID) (identity.WorkspaceID, uuid.UUID, bool, error) {
+	row, err := e.queries.ContainerWorkload(ctx, ContainerWorkloadParams{ID: uuid.UUID(container), HostID: hostUUID(host)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.WorkspaceID{}, uuid.UUID{}, false, nil
+	}
+	if err != nil {
+		return identity.WorkspaceID{}, uuid.UUID{}, false, fmt.Errorf("read container workload: %w", err)
+	}
+	return identity.WorkspaceID(row.WorkspaceID), row.WorkloadID, true, nil
+}
+
 // ContainerImage returns the workspace of a live container on host and the
 // image reference it was started with, or false when the host runs no such
 // container.

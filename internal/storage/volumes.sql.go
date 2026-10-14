@@ -463,6 +463,47 @@ func (q *Queries) RecordVolumeSize(ctx context.Context, arg RecordVolumeSizePara
 	return err
 }
 
+const recordVolumeTrace = `-- name: RecordVolumeTrace :exec
+with reads as (
+    select i.volume_id, p.path, i.n
+    from unnest($4::uuid[]) with ordinality as i (volume_id, n)
+    join unnest($5::text[]) with ordinality as p (path, n) using (n)
+    join volume_mounts m on m.volume_id = i.volume_id and m.container_id = $6
+    join volumes v on v.id = i.volume_id and v.workspace_id = $2
+)
+insert into volume_traces (workload_id, workspace_id, volume_ids, paths)
+select $1, $2, array_agg(volume_id order by n), array_agg(path order by n)
+from reads
+having count(*) > 0
+on conflict (workload_id) do update
+set volume_ids = excluded.volume_ids, paths = excluded.paths, recorded_at = now()
+where volume_traces.recorded_at < now() - make_interval(secs => $3::float8)
+`
+
+type RecordVolumeTraceParams struct {
+	WorkloadID    uuid.UUID
+	WorkspaceID   uuid.UUID
+	MaxAgeSeconds float64
+	VolumeIds     []uuid.UUID
+	Paths         []string
+	ContainerID   uuid.UUID
+}
+
+// Stores the reads of the volumes the container mounts in the workspace, in
+// their order, unless a trace of the workload younger than max_age_seconds
+// is stored.
+func (q *Queries) RecordVolumeTrace(ctx context.Context, arg RecordVolumeTraceParams) error {
+	_, err := q.db.Exec(ctx, recordVolumeTrace,
+		arg.WorkloadID,
+		arg.WorkspaceID,
+		arg.MaxAgeSeconds,
+		arg.VolumeIds,
+		arg.Paths,
+		arg.ContainerID,
+	)
+	return err
+}
+
 const shareActiveVolumes = `-- name: ShareActiveVolumes :many
 select id, name from volumes
 where workspace_id = $1 and name = any($2::text[]) and state = 'active'
@@ -498,6 +539,30 @@ func (q *Queries) ShareActiveVolumes(ctx context.Context, arg ShareActiveVolumes
 		return nil, err
 	}
 	return items, nil
+}
+
+const volumeTrace = `-- name: VolumeTrace :one
+select volume_ids::uuid[] as volume_ids, paths::text[] as paths, recorded_at
+from volume_traces
+where workload_id = $1 and workspace_id = $2
+`
+
+type VolumeTraceParams struct {
+	WorkloadID  uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type VolumeTraceRow struct {
+	VolumeIds  []uuid.UUID
+	Paths      []string
+	RecordedAt time.Time
+}
+
+func (q *Queries) VolumeTrace(ctx context.Context, arg VolumeTraceParams) (VolumeTraceRow, error) {
+	row := q.db.QueryRow(ctx, volumeTrace, arg.WorkloadID, arg.WorkspaceID)
+	var i VolumeTraceRow
+	err := row.Scan(&i.VolumeIds, &i.Paths, &i.RecordedAt)
+	return i, err
 }
 
 const volumeUsers = `-- name: VolumeUsers :many

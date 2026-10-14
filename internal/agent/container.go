@@ -3,6 +3,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -262,8 +263,11 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 	if err := c.prepare(startCtx, spec); err != nil { //nolint:contextcheck // stopping cancels preparation, not the watch
 		c.endStart(err)
 		reason := hostproto.ExitReason_EXIT_REASON_START_FAILED
-		if c.isStopping() {
+		switch {
+		case c.isStopping():
 			reason = hostproto.ExitReason_EXIT_REASON_STOPPED
+		case errors.Is(err, errPreviousSnapshotter):
+			reason = hostproto.ExitReason_EXIT_REASON_REFUSED
 		}
 		c.log.Warn("container did not start", "error", err, "reason", reason)
 		c.mu.Lock()
@@ -292,6 +296,9 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 // socket, starts the Docker container and applies its network policy. Each
 // stage is timed and reported as it finishes.
 func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) (err error) {
+	if mounter, _, _, _ := platformMounts(c.id, spec.GetVolumes()); mounter != "" && c.a.previousSnapshotter {
+		return errPreviousSnapshotter
+	}
 	pod := spec.GetPod()
 	if pod == nil && spec.GetFunction().GetHandler() == "" {
 		return fmt.Errorf("start has neither a function handler nor a pod")
@@ -352,6 +359,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			}
 		})
 	}
+	c.a.volumes.warm(c, spec)
 	pullCtx, pull := telemetry.Start(ctx, "agent.image_pull")
 	pulled, err := c.a.images.ensure(pullCtx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
 	pull.SetAttributes(attribute.Bool("lazycloud.pulled", pulled))

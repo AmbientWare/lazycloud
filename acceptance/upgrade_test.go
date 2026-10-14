@@ -10,18 +10,23 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 const upgradeApp = `
@@ -41,18 +46,25 @@ def peek() -> int:
 `
 
 // An agent of the release this change replaces, serving a workload that
-// holds a volume, updates itself to this tree's release when it becomes
-// the target. The workload's volume keeps its data through the update, and
-// a new container of the workspace mounts the same volume beside it.
-func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
+// holds a volume through its snapshotter's cache, updates itself to this
+// tree's release when it becomes the target. The host keeps the old
+// snapshotter while the workload runs: the workload's volume reads and
+// writes on through it, and a new start of the workspace waits off the
+// host. Once the workload stops, the agent replaces the snapshotter and
+// the new start mounts the same volume.
+func TestAnOldSnapshotterWithALiveVolumeServesUntilItIsReplaced(t *testing.T) {
 	old := oldRelease(t)
 	dist := t.TempDir()
 	p := startServer(t, serverOptions{dist: dist})
 	if p.geesefs == "" {
 		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
 	}
+	// The old snapshotter caches volumes as on its large GPU hosts.
+	cacheVolumes(t)
 	head := buildRelease(t, dist)
-	agent := p.startHostAgent(p.installRelease(old))
+	root, state := p.installRelease(old)
+	host := p.startHostAgent(root, state)
+	defer host.stop()
 	p.awaitHost()
 	if v := p.agentVersion(); v != old.version {
 		t.Fatalf("the host runs %q, want the old release %s", v, old.version)
@@ -70,17 +82,89 @@ func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	}
 
 	p.publish(head)
-	p.awaitAgentVersion(head.version, 3*time.Minute)
-	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "2" {
-		t.Fatalf("request after the update: %d %s", status, body)
+	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(200 * time.Millisecond) {
+		// The agent commits the release on trial once its session stayed
+		// open.
+		_, trial := os.Stat(filepath.Join(state, agent.TrialFile))
+		if current, _ := os.Readlink(filepath.Join(root, "current")); filepath.Base(current) == head.version && errors.Is(trial, fs.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the host did not commit the new release")
+		}
+	}
+	if v := p.agentVersion(); v != "" {
+		t.Fatalf("a host that kept the old snapshotter reports release %q, want none", v)
 	}
 	peek := endpointSpec(source, "peek", "app:peek", "/")
 	peek.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
 	p.deploy("second", peek)
-	if status, _, body := p.call(http.MethodGet, p.describe("second", apitypes.WorkloadKindEndpoint, "peek").Url, ""); status != http.StatusOK || body != "2" {
-		t.Fatalf("second start on the updated agent: %d %s", status, body)
+	for n := 2; n <= 6; n++ {
+		if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != strconv.Itoa(n) {
+			t.Fatalf("request %d after the update: %d %s", n, status, body)
+		}
+		if assigned := p.assignedTo("second"); assigned > 0 {
+			t.Fatalf("%d containers assigned to the host that kept the old snapshotter", assigned)
+		}
+		time.Sleep(5 * time.Second)
 	}
-	agent.stop()
+
+	ctx := t.Context()
+	id, err := p.control.FindWorkload(ctx, p.workspace.ID, control.WorkloadRef{App: "live", Kind: apitypes.WorkloadKindEndpoint, Name: "hits"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.control.StopWorkload(ctx, p.workspace.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	p.awaitAgentVersion(head.version, 3*time.Minute)
+	if status, _, body := p.call(http.MethodGet, p.describe("second", apitypes.WorkloadKindEndpoint, "peek").Url, ""); status != http.StatusOK || body != "6" {
+		t.Fatalf("second start once the snapshotter was replaced: %d %s", status, body)
+	}
+	installed, err := os.ReadFile(layersource.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built, _ := os.ReadFile(filepath.Join(head.dir, "lazycloud-snapshotter")); !bytes.Equal(installed, built) { //nolint:gosec // The test's own build.
+		t.Fatal("the host runs another snapshotter than the new release's")
+	}
+}
+
+// cacheVolumes has the snapshotter of the release this change replaces
+// cache volumes until the test ends; this tree's ignores the setting.
+func cacheVolumes(t *testing.T) {
+	t.Helper()
+	conf := "/etc/systemd/system/" + layersource.Unit + ".d/old-volume-cache.conf"
+	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil { //nolint:gosec // A systemd drop-in directory.
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conf, []byte("[Service]\nEnvironment=LAZYCLOUD_VOLUME_CACHE=true\n"), 0o644); err != nil { //nolint:gosec // A systemd drop-in.
+		t.Fatal(err)
+	}
+	reload := func() {
+		if out, err := exec.CommandContext(context.Background(), "systemctl", "daemon-reload").CombinedOutput(); err != nil {
+			t.Errorf("systemctl daemon-reload: %v: %s", err, out)
+		}
+	}
+	reload()
+	t.Cleanup(func() {
+		if err := os.Remove(conf); err != nil {
+			t.Error(err)
+		}
+		reload()
+	})
+}
+
+// assignedTo counts the containers of app's releases a host holds.
+func (p *platform) assignedTo(app string) int {
+	p.t.Helper()
+	var n int
+	if err := p.pool.QueryRow(p.t.Context(), `select count(*) from containers c
+join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id join apps a on a.id = w.app_id
+where a.name = $1 and c.host_id is not null`, app).Scan(&n); err != nil {
+		p.t.Fatal(err)
+	}
+	return n
 }
 
 // An agent of the release this change replaces that restarts after the
@@ -143,12 +227,15 @@ where h.state = 'online' group by h.agent_version`).Scan(&version, &assigned); e
 }
 
 // release is an agent release: its version and a directory holding its
-// VERSION, lazycloud-agent and supervisor.
+// releaseFiles.
 type release struct {
 	version string
 	dir     string
 	sha256  string
 }
+
+// releaseFiles make up an agent release.
+var releaseFiles = []string{"VERSION", "lazycloud-agent", "supervisor", "lazycloud-snapshotter"}
 
 // oldRelease is the agent release this change replaces, built from the
 // commit it is based on into LAZYCLOUD_TEST_OLD_AGENT.
@@ -156,7 +243,7 @@ func oldRelease(t *testing.T) release {
 	t.Helper()
 	dir := os.Getenv("LAZYCLOUD_TEST_OLD_AGENT")
 	if dir == "" {
-		t.Skip("LAZYCLOUD_TEST_OLD_AGENT names no directory holding the previous release's lazycloud-agent and supervisor")
+		t.Skip("LAZYCLOUD_TEST_OLD_AGENT names no directory holding the previous release's lazycloud-agent, supervisor and lazycloud-snapshotter")
 	}
 	out, err := exec.CommandContext(t.Context(), filepath.Join(dir, "lazycloud-agent"), "--version").Output() //nolint:gosec // The test's own build.
 	if err != nil {
@@ -165,17 +252,19 @@ func oldRelease(t *testing.T) release {
 	return release{version: strings.TrimSpace(string(out)), dir: dir}
 }
 
-// buildRelease builds this tree's agent and supervisor as a new release
-// and writes its archive into dist as the API serves it.
+// buildRelease builds this tree's agent, supervisor and snapshotter as a
+// new release and writes its archive into dist as the API serves it.
 func buildRelease(t *testing.T, dist string) release {
 	t.Helper()
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
 	r := release{version: "head-" + hex.EncodeToString(suffix), dir: t.TempDir()}
-	build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", filepath.Join(r.dir, "lazycloud-agent"), "../cmd/agent")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build the agent: %v\n%s", err, out)
+	for name, pkg := range map[string]string{"lazycloud-agent": "../cmd/agent", "lazycloud-snapshotter": "../cmd/snapshotter"} {
+		build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", filepath.Join(r.dir, name), pkg) //nolint:gosec // The test's own build.
+		build.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", name, err, out)
+		}
 	}
 	copyFile(t, supervisorBinary, filepath.Join(r.dir, "supervisor"))
 	if err := os.WriteFile(filepath.Join(r.dir, "VERSION"), []byte(r.version+"\n"), 0o644); err != nil { //nolint:gosec // The release's version.
@@ -184,7 +273,7 @@ func buildRelease(t *testing.T, dist string) release {
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
-	for _, name := range []string{"VERSION", "lazycloud-agent", "supervisor"} {
+	for _, name := range releaseFiles {
 		data, err := os.ReadFile(filepath.Join(r.dir, name)) //nolint:gosec // The test's own build.
 		if err != nil {
 			t.Fatal(err)
@@ -232,7 +321,7 @@ func (p *platform) installRelease(r release) (root, state string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Test files.
 		t.Fatal(err)
 	}
-	for _, name := range []string{"VERSION", "lazycloud-agent", "supervisor"} {
+	for _, name := range releaseFiles {
 		copyFile(t, filepath.Join(r.dir, name), filepath.Join(dir, name))
 	}
 	if err := os.Symlink(filepath.Join("releases", r.version), filepath.Join(root, "current")); err != nil {

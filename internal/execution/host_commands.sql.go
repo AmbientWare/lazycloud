@@ -36,6 +36,30 @@ func (q *Queries) ContainerImage(ctx context.Context, arg ContainerImageParams) 
 	return i, err
 }
 
+const containerWorkload = `-- name: ContainerWorkload :one
+select c.workspace_id, r.workload_id from containers c
+join releases r on r.id = c.release_id
+where c.id = $1 and c.host_id = $2 and c.state <> 'stopped'
+`
+
+type ContainerWorkloadParams struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+type ContainerWorkloadRow struct {
+	WorkspaceID uuid.UUID
+	WorkloadID  uuid.UUID
+}
+
+// The workspace and workload of a live container of a release on the host.
+func (q *Queries) ContainerWorkload(ctx context.Context, arg ContainerWorkloadParams) (ContainerWorkloadRow, error) {
+	row := q.db.QueryRow(ctx, containerWorkload, arg.ID, arg.HostID)
+	var i ContainerWorkloadRow
+	err := row.Scan(&i.WorkspaceID, &i.WorkloadID)
+	return i, err
+}
+
 const endedAttemptsOnHost = `-- name: EndedAttemptsOnHost :many
 select a.id, a.container_id, a.state
 from containers c

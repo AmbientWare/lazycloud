@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -153,8 +154,29 @@ func (f *failedReads) Handle(_ context.Context, r slog.Record) error {
 // testConfig is a snapshotter's configuration for a test under dir.
 func testConfig(dir string, transport http.RoundTripper, logger *slog.Logger) Config {
 	return Config{
-		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4,
+		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4, VolumeAddr: "127.0.0.1:0", VolumeDisk: true,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
+	}
+}
+
+// A snapshotter whose volume endpoint cannot listen does not start, so no
+// host runs with mounts that have no endpoint to reach.
+func TestTheSnapshotterNeedsItsVolumeEndpoint(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Fatal("the snapshotter tests mount FUSE and overlay filesystems and run as root")
+	}
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+	root := t.TempDir()
+	cfg := testConfig(filepath.Join(root, "state"), http.DefaultTransport, slog.New(slog.DiscardHandler))
+	cfg.VolumeAddr = taken.Addr().String()
+	err = Serve(t.Context(), cfg, filepath.Join(root, "snapshotter.sock"), func() { t.Error("the snapshotter served without its endpoint") })
+	var listen *net.OpError
+	if !errors.As(err, &listen) || listen.Op != "listen" || listen.Addr.String() != cfg.VolumeAddr {
+		t.Fatalf("a snapshotter whose endpoint's address is taken: %v", err)
 	}
 }
 
@@ -617,6 +639,8 @@ func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frame
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The writer stores its last frame before the directory goes.
+	t.Cleanup(c.writer.Wait)
 	t.Cleanup(c.background.Wait)
 	return c
 }
@@ -631,6 +655,7 @@ func TestReadsOutliveClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(c.writer.Wait)
 	c.limit = 64 << 20
 	l := ts.file(t, "a", random(4*imagefs.FrameSize)).grantTo(c)
 	reads := make(chan error, len(l.index.Frames))

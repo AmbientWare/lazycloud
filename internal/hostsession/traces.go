@@ -3,6 +3,7 @@ package hostsession
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -63,5 +64,44 @@ func (sess *session) recordTrace(ctx context.Context, report *hostproto.StartupT
 			msg = "the host reported a startup trace that does not fit its image or the bound"
 		}
 		sess.server.logger.WarnContext(ctx, msg, "host", sess.host.String(), "container", id.String(), "error", err)
+	}
+}
+
+// volumeTrace returns what a start of workload that mounts platform volumes
+// carries of its workload's volume trace, once per sync, and nil for a start
+// that mounts none. A start is sent without its reads when they cannot be
+// read: warming only speeds the start up.
+func (s *Server) volumeTrace(ctx context.Context, cache *syncCache, start execution.StartCommand, mounts []*hostproto.VolumeMount) *hostproto.VolumeTrace {
+	if !slices.ContainsFunc(mounts, func(m *hostproto.VolumeMount) bool { return m.GetVolume() != nil }) {
+		return nil
+	}
+	if t, ok := cache.volumeTraces[start.Workload]; ok {
+		return t
+	}
+	reads, record, err := s.storage.VolumeTrace(ctx, start.Workspace, start.Workload)
+	if err != nil {
+		s.logger.WarnContext(ctx, "reading the volume trace failed", "workload", start.Workload.String(), "error", err)
+		return &hostproto.VolumeTrace{}
+	}
+	t := &hostproto.VolumeTrace{Reads: reads, Record: record}
+	cache.volumeTraces[start.Workload] = t
+	return t
+}
+
+// recordVolumeTrace stores the volume trace a host reported for one of its
+// live containers, under the container's own workspace and workload. A
+// trace that cannot be stored is logged and dropped; a later start records
+// another.
+func (sess *session) recordVolumeTrace(ctx context.Context, report *hostproto.ContainerVolumeTrace) {
+	id, err := uuid.Parse(report.GetContainerId())
+	if err != nil || len(report.GetReads()) == 0 {
+		return
+	}
+	workspace, workload, ok, err := sess.server.execution.ContainerWorkload(ctx, sess.host, execution.ContainerID(id))
+	if err == nil && ok {
+		err = sess.server.storage.RecordVolumeTrace(ctx, workspace, workload, id, report.GetReads())
+	}
+	if err != nil && ctx.Err() == nil {
+		sess.server.logger.WarnContext(ctx, "storing a volume trace failed", "host", sess.host.String(), "container", id.String(), "error", err)
 	}
 }

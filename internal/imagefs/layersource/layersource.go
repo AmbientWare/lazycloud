@@ -60,22 +60,9 @@ const (
 // Binary unless Binary holds it, and reports whether it changed. An
 // executable with no snapshotter beside it installs nothing.
 func Install(executable string) (bool, error) {
-	exe, err := filepath.EvalSymlinks(executable)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("resolve the agent executable: %w", err)
-	}
-	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), Executable)) //nolint:gosec // The agent's own release.
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read the release's snapshotter: %w", err)
-	}
-	if current, err := os.ReadFile(Binary); err == nil && bytes.Equal(current, release) {
-		return false, nil
+	release, err := Replaced(executable)
+	if release == nil || err != nil {
+		return false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(Binary), 0o755); err != nil { //nolint:gosec // Executables are world-readable.
 		return false, fmt.Errorf("install the snapshotter: %w", err)
@@ -87,6 +74,30 @@ func Install(executable string) (bool, error) {
 		return false, fmt.Errorf("install the snapshotter: %w", err)
 	}
 	return true, nil
+}
+
+// Replaced returns the snapshotter of the agent release executable is in
+// when Binary holds another, and nil when it holds that one or the release
+// has none.
+func Replaced(executable string) ([]byte, error) {
+	exe, err := filepath.EvalSymlinks(executable)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve the agent executable: %w", err)
+	}
+	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), Executable)) //nolint:gosec // The agent's own release.
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the release's snapshotter: %w", err)
+	}
+	if current, err := os.ReadFile(Binary); err == nil && bytes.Equal(current, release) {
+		return nil, nil
+	}
+	return release, nil
 }
 
 // Client calls one snapshotter.
