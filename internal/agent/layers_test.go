@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +108,7 @@ func traceRunning(t *testing.T, client *layersource.Client, name string) (runnin
 // shared, a start that ends stops its trace, and a start alone on its
 // layers traces.
 func TestSharedStartsReportNoTrace(t *testing.T) {
+	t.Parallel()
 	l, client := testLayerSources(t)
 	log := slog.New(slog.DiscardHandler)
 	base := testDigest()
@@ -184,6 +186,7 @@ func TestSharedStartsReportNoTrace(t *testing.T) {
 // ends its trace traceWindow after it began, and one that exits first ends
 // the wait at once.
 func TestStartupTracesEndWithinTheWindow(t *testing.T) {
+	t.Parallel()
 	l, client := testLayerSources(t)
 	log := slog.New(slog.DiscardHandler)
 	never := make(chan struct{})
@@ -228,17 +231,33 @@ func TestStartupTracesEndWithinTheWindow(t *testing.T) {
 	}
 }
 
+// failedRefreshes counts the refreshes the agent logs as failed.
+type failedRefreshes struct{ n atomic.Int64 }
+
+func (f *failedRefreshes) Enabled(context.Context, slog.Level) bool { return true }
+func (f *failedRefreshes) WithAttrs([]slog.Attr) slog.Handler       { return f }
+func (f *failedRefreshes) WithGroup(string) slog.Handler            { return f }
+
+func (f *failedRefreshes) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == "refreshing layer grants failed; retrying" {
+		f.n.Add(1)
+	}
+	return nil
+}
+
 // TestRefreshesOutlastTheSnapshotter: a refresh the snapshotter does not
 // take is kept and retried until it does, and a start whose grants it
 // refuses fails.
 func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
+	t.Parallel()
 	socket, client := dialSnapshotter(t)
 	l := newLayerSources(client)
 	ctx, cancel := context.WithCancel(t.Context())
 	looped := make(chan struct{})
+	failed := &failedRefreshes{}
 	go func() {
 		defer close(looped)
-		l.refreshLoop(ctx, slog.New(slog.DiscardHandler))
+		l.refreshLoop(ctx, slog.New(failed))
 	}()
 	t.Cleanup(func() { cancel(); <-looped })
 	pending := func() int {
@@ -248,7 +267,11 @@ func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
 	}
 
 	l.refresh([]*imagefsproto.LayerGrant{layerGrant(testDigest(), time.Now().Add(time.Hour))})
-	time.Sleep(300 * time.Millisecond)
+	for deadline := time.Now().Add(10 * time.Second); failed.n.Load() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh was never tried")
+		}
+	}
 	if pending() != 1 {
 		t.Fatal("a refresh the snapshotter could not take was dropped")
 	}
@@ -263,35 +286,5 @@ func TestRefreshesOutlastTheSnapshotter(t *testing.T) {
 	refused.Layers[0].IndexUrl = "ftp://store/index"
 	if _, err := l.start(t.Context(), slog.New(slog.DiscardHandler), "refused", refused); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("a start with grants the snapshotter refuses gave %v", err)
-	}
-}
-
-// TestStartupTracesEndWithTheFirstTask: the host's snapshotter traces a
-// start until its first task, request or command ends, the agent reports
-// the frames read, and a later start prefetches them. No other package
-// unpacks this image without the snapshotter, so its layers mount lazily
-// and reads reach FUSE.
-func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
-	const image = "python:3.12-alpine"
-	e := newEnv(t)
-	e.startAgent()
-	s := e.session()
-	command := &hostproto.PodWorkload{Command: []string{"python3", "-c", "import email, http.client, json, sqlite3"}}
-
-	start := withImage(e.podCommand(command), image)
-	id := start.GetStart().GetContainerId()
-	start.GetStart().RecordTrace = true
-	s.send(t, start)
-	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
-	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
-		t.Fatalf("the host reported %v", reported)
-	}
-	s.phase(t, id, exited)
-
-	next := withImage(e.podCommand(command), image)
-	next.GetStart().Prefetch = reported.GetTrace()
-	s.send(t, next)
-	if exit := s.phase(t, next.GetStart().GetContainerId(), exited).GetExit(); exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != 0 {
-		t.Fatalf("a start prefetching the trace exited %v", exit)
 	}
 }

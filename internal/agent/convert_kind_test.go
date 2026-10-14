@@ -150,6 +150,7 @@ func testPublish(t *testing.T, repository string, layers *layerServer) *layerPub
 // A converted layer uploads while another still converts: here the large
 // layer's blob is only served once the small layer's index is stored.
 func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
+	t.Parallel()
 	smallStored := make(chan struct{})
 	var once sync.Once
 	var mu sync.Mutex
@@ -201,6 +202,7 @@ func TestLayerPublishUploadsALayerWhileAnotherConverts(t *testing.T) {
 // A layer the server keeps naming after its upload fails the build for
 // itself once it has taken maxPublishRounds.
 func TestLayerPublishBoundsTheRoundsOfALayer(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	indexPuts := 0
 	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +247,7 @@ func (w *cutWriter) Write(p []byte) (int, error) {
 // conversion: the cut reads as a truncated tar, which is the read's
 // failure, not the layer's.
 func TestLayerConversionRetriesACutOffRead(t *testing.T) {
+	t.Parallel()
 	var cut atomic.Bool
 	repository, layers := pushLayers(t, func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +267,7 @@ func TestLayerConversionRetriesACutOffRead(t *testing.T) {
 // A publish the server names no layers for ends at once, and stops the
 // conversion of a layer started while the image pushed.
 func TestLayerPublishStopsConversionsTheServerDoesNotName(t *testing.T) {
+	t.Parallel()
 	read := make(chan struct{}, 1)
 	repository, layers := pushLayers(t, func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +318,7 @@ func TestLayerPublishStopsConversionsTheServerDoesNotName(t *testing.T) {
 // A host that cannot write its data file fails the build for itself; only
 // a layer's own content fails the image.
 func TestHostErrorsAreNotLayerContent(t *testing.T) {
+	t.Parallel()
 	repository, layers := pushLayers(t, func(h http.Handler) http.Handler { return h }, 1024)
 	digest, err := layers[0].Digest()
 	if err != nil {
