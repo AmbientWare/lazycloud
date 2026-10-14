@@ -61,9 +61,12 @@ func summary(plan string) string {
 	return timing + ", " + buffers
 }
 
-// explainAs explains query under plan_cache_mode mode in a transaction it
-// rolls back: "auto" plans with the arguments, "force_generic_plan" as a
-// prepared statement reused across arguments may.
+// explainAs explains query as a prepared statement under plan_cache_mode
+// mode, in a transaction it rolls back: force_custom_plan plans it with the
+// arguments, force_generic_plan as a statement reused across arguments may.
+// The arguments go into the EXECUTE as literals of the statement's parameter
+// types, since an EXPLAIN given parameters plans with their values in either
+// mode.
 func explainAs(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any) string {
 	t.Helper()
 	var plan string
@@ -71,7 +74,25 @@ func explainAs(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any
 		if _, err := tx.Exec(t.Context(), "select set_config('plan_cache_mode', $1, true)", mode); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+query, args...)
+		if _, err := tx.Exec(t.Context(), "prepare explained as "+query); err != nil {
+			return err
+		}
+		var types []string
+		if err := tx.QueryRow(t.Context(), "select parameter_types::text[] from pg_prepared_statements where name = 'explained'").Scan(&types); err != nil {
+			return err
+		}
+		literals := make([]string, len(args))
+		for n, arg := range args {
+			if err := tx.QueryRow(t.Context(), "select quote_nullable($1::"+types[n]+")", arg).Scan(&literals[n]); err != nil {
+				return err
+			}
+			literals[n] += "::" + types[n]
+		}
+		execute := "execute explained"
+		if len(literals) > 0 {
+			execute += "(" + strings.Join(literals, ", ") + ")"
+		}
+		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+execute)
 		if err != nil {
 			return err
 		}
@@ -80,6 +101,9 @@ func explainAs(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any
 			return err
 		}
 		plan = strings.Join(lines, "\n")
+		if _, err := tx.Exec(t.Context(), "deallocate explained"); err != nil {
+			return err
+		}
 		return errRollback
 	})
 	if !errors.Is(err, errRollback) {
@@ -143,14 +167,12 @@ func costAt(t *testing.T, pool *pgxpool.Pool, scans []scan, label string, limit 
 	t.Helper()
 	cost := map[string]int{}
 	for _, s := range scans {
-		for _, mode := range []string{"auto", "force_generic_plan"} {
+		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 			plan := explainAs(t, pool, mode, s.query, s.args...)
 			cost[s.name] = max(cost[s.name], buffers(plan))
-			t.Logf("%s, %s, %s: %s, scans read %d", label, s.name, mode, summary(plan), buffers(plan))
-			if limit <= 0 {
-				continue
-			}
-			if node, rows := widestRead(plan); rows > limit {
+			node, rows := widestRead(plan)
+			t.Logf("%s, %s, %s: %s, scans read %d, widest read %d rows", label, s.name, mode, summary(plan), buffers(plan), rows)
+			if limit > 0 && rows > limit {
 				t.Errorf("%s: %s (%s) reads %d rows in %q:\n%s", label, s.name, mode, rows, node, plan)
 			}
 		}
