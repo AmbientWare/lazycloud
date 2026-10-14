@@ -56,8 +56,8 @@ func DefaultChangesConfig() ChangesConfig {
 	}
 }
 
-// Validate checks that every bound and interval of cfg is positive.
-func (c ChangesConfig) Validate() error {
+// validate checks that every bound and interval of cfg is positive.
+func (c ChangesConfig) validate() error {
 	for _, field := range []struct {
 		name  string
 		value int64
@@ -137,7 +137,10 @@ type changeMetrics struct {
 
 // NewChanges returns the hub; Run delivers notifications to it. registerer
 // may be nil.
-func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Registerer, logger *slog.Logger) *Changes {
+func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Registerer, logger *slog.Logger) (*Changes, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	m := changeMetrics{
 		subscribers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "lazycloud_change_stream_subscribers", Help: "Open workspace change streams.",
@@ -165,7 +168,7 @@ func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Reg
 		subs:    map[identity.WorkspaceID]map[*Subscription]struct{}{},
 		streams: map[string]int{},
 		done:    make(chan struct{}),
-	}
+	}, nil
 }
 
 // Done is closed once the hub stops, so streams end with the server.

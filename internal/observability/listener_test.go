@@ -18,7 +18,10 @@ func TestStreamsPerCallerAreCapped(t *testing.T) {
 	t.Parallel()
 	cfg := observability.DefaultChangesConfig()
 	cfg.MaxPerPrincipal = 2
-	hub := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
+	hub, err := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	ws := identity.WorkspaceID(uuid.New())
 	first, _, err := hub.Subscribe(ws, "user:a", nil)
 	if err != nil {
@@ -43,7 +46,7 @@ func TestStreamsPerCallerAreCapped(t *testing.T) {
 // unlimited or a default when zero.
 func TestChangesConfigNeedsEveryField(t *testing.T) {
 	t.Parallel()
-	if err := observability.DefaultChangesConfig().Validate(); err != nil {
+	if _, err := observability.NewChanges(nil, observability.DefaultChangesConfig(), nil, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("the default: %v", err)
 	}
 	for name, unset := range map[string]func(*observability.ChangesConfig){
@@ -57,7 +60,7 @@ func TestChangesConfigNeedsEveryField(t *testing.T) {
 	} {
 		cfg := observability.DefaultChangesConfig()
 		unset(&cfg)
-		if err := cfg.Validate(); err == nil {
+		if _, err := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler)); err == nil {
 			t.Errorf("%s: accepted %+v", name, cfg)
 		}
 	}
