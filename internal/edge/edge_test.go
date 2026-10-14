@@ -31,11 +31,18 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
+// testFailureCheck is how often the test edge's waiting requests ask
+// whether their release can start.
+const testFailureCheck = 200 * time.Millisecond
+
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
+	check := testFailureCheck
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082"}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
+			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: &check,
+		}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +684,7 @@ select d.id, r.id from d, r`).Scan(&deployed, &workingTree)
 	}
 }
 
-// A load error recorded within failureCheckInterval of a waiting request's
+// A load error recorded within the failure check interval of a waiting request's
 // last check fails the request once the next check is due, not at its
 // deadline: the change that woke it early is checked again.
 func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
@@ -718,7 +725,7 @@ update releases set load_error = 'no database configured' where id = $1`, rel); 
 		if !errors.As(err, &failed) || !strings.Contains(failed.reason, "no database configured") {
 			t.Fatalf("the waiting request ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the load error was not checked once the next check was due")
 	}
 }
@@ -780,7 +787,7 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 		if !errors.As(err, &failed) || failed.reason != want {
 			t.Fatalf("the request whose fresh start failed ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the request did not fail once its fresh start failed")
 	}
 

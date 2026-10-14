@@ -15,7 +15,7 @@ const (
 	// renewAfter republishes unchanged demand well before its lease lapses.
 	renewAfter = execution.EndpointLoadTTL / 3
 	// failureCheckInterval bounds how often waiting requests of one release
-	// ask whether it can start.
+	// ask whether it can start, unless Config sets another bound.
 	failureCheckInterval = time.Second
 )
 
@@ -65,8 +65,8 @@ func (l *releaseLoad) sample(now time.Time) {
 
 // failureCheckIn is how long until a waiting request of the release may
 // ask whether it can start; zero means now, and the ask is recorded.
-func (l *releaseLoad) failureCheckIn(now time.Time) time.Duration {
-	if wait := failureCheckInterval - now.Sub(l.checkedAt); wait > 0 {
+func (l *releaseLoad) failureCheckIn(now time.Time, interval time.Duration) time.Duration {
+	if wait := interval - now.Sub(l.checkedAt); wait > 0 {
 		return wait
 	}
 	l.checkedAt = now

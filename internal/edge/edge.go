@@ -36,6 +36,9 @@ type Config struct {
 	// SessionPool holds the route listener's LISTEN connection
 	// (database.OpenSession); nil uses the edge's pool.
 	SessionPool *pgxpool.Pool
+	// FailureCheckInterval bounds how often waiting requests of one
+	// release ask whether it can start; nil asks at most once a second.
+	FailureCheckInterval *time.Duration
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -51,6 +54,8 @@ type Edge struct {
 	urls      URLs
 	domains   Provider
 	logger    *slog.Logger
+	// failureCheck is Config.FailureCheckInterval.
+	failureCheck time.Duration
 
 	routes atomic.Pointer[routeTable]
 	// reloading serializes route reloads; reloadStarted is when the last
@@ -98,7 +103,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 	}
 	e := &Edge{
 		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
-		urls: urls, domains: cfg.Domains, logger: logger,
+		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: failureCheckInterval,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},
@@ -107,6 +112,9 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		refresh:   make(chan uuid.UUID, refreshQueue),
 		publish:   make(chan struct{}, 1),
 		records:   make(chan requestRecord, requestQueue),
+	}
+	if cfg.FailureCheckInterval != nil {
+		e.failureCheck = *cfg.FailureCheckInterval
 	}
 	e.auth.entries = map[authKey]time.Time{}
 	e.holds.first = make(chan struct{}, 1)
