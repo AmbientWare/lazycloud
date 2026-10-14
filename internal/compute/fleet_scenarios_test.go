@@ -593,7 +593,7 @@ func (s *sim) evict(h *simHost, enough func(HostCapacity) bool) []*simContainer 
 
 func (s *sim) load(h *simHost) HostCapacity {
 	fh := s.fleetHost(h)
-	return fh.capacity()
+	return forWork(fh, fh.capacity())
 }
 
 // current reports whether h was prepared on the target agent release or

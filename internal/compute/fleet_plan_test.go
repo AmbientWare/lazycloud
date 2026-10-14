@@ -1120,3 +1120,14 @@ func TestAWorkHostAboveTheCapDrainsRatherThanJoinTheReserve(t *testing.T) {
 		}
 	}
 }
+
+// A deploy that marks the host holding the warm floor due an agent update
+// buys nothing: the host holds its warm slots while it updates, and only
+// pending work, which placement gives it no room for, buys past it.
+func TestADeployBuysNothingForAHostUpdatingItsAgent(t *testing.T) {
+	h := planHost(1, planSmall, FleetServing)
+	h.UpdateDue = true
+	if plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, h)); len(plan.Actions) > 0 {
+		t.Fatalf("actions %+v after a deploy", plan.Actions)
+	}
+}

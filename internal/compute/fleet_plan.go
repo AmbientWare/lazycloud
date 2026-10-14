@@ -97,8 +97,11 @@ func (h FleetHost) free() FleetCapacity {
 	if h.UpdateDue {
 		return FleetCapacity{}
 	}
-	return h.Usable.Minus(h.Load).Clamp()
+	return h.room()
 }
+
+// room is what the host's live containers leave of it.
+func (h FleetHost) room() FleetCapacity { return h.Usable.Minus(h.Load).Clamp() }
 
 // resumable is a stopped reserve.
 func (h FleetHost) resumable() bool {
@@ -110,10 +113,11 @@ func (h FleetHost) reserve() bool {
 	return h.resumable() || h.State == FleetPreparing || h.State == FleetStopping
 }
 
-// capacity is the host as placement sees it, its disk slots those its
-// type's data volume holds.
+// capacity is the host's room, its disk slots those its type's data volume
+// holds. Placement gives a host due an agent update none of it (forWork);
+// its warm slots keep it while the update runs.
 func (h FleetHost) capacity() HostCapacity {
-	free := h.free()
+	free := h.room()
 	room := HostCapacity{
 		Host: h.ID, Kind: KindPlatform, Provider: ProviderAWS, Region: h.Region, Zone: h.Zone, ZoneID: h.ZoneID,
 		Market: h.Market, GPUType: h.GPU, GPUCount: h.Usable.GPUs,
@@ -121,8 +125,17 @@ func (h FleetHost) capacity() HostCapacity {
 		FreeCPUMillis: free.CPUMillis, FreeMemoryBytes: free.MemoryBytes, FreeGPUs: free.GPUs, HandsBack: h.HandsBack,
 		Packed: h.Packed,
 	}
-	if t, ok := CatalogTypeNamed(h.InstanceType); ok && !h.UpdateDue {
+	if t, ok := CatalogTypeNamed(h.InstanceType); ok {
 		room.FreeDiskSlots = max(0, t.DiskSlots()-h.UsedDisks)
+	}
+	return room
+}
+
+// forWork is room as placement gives it to pending work on host h: none
+// while h is due an agent update.
+func forWork(h FleetHost, room HostCapacity) HostCapacity {
+	if h.UpdateDue {
+		room.FreeCPUMillis, room.FreeMemoryBytes, room.FreeGPUs, room.FreeDiskSlots = 0, 0, 0, 0
 	}
 	return room
 }
@@ -693,7 +706,7 @@ func take(bins []bin, rooms []HostCapacity, it coverItem, floor FleetCapacity) i
 	}
 	if i >= 0 {
 		bins[i].room.Reserve(it.need)
-		rooms[i] = bins[i].room
+		rooms[i] = forWork(*bins[i].host, bins[i].room)
 	}
 	return i
 }
@@ -708,11 +721,11 @@ func (ps *pass) holds(id HostID, kinds ...slotKind) bool {
 	return slices.ContainsFunc(ps.holding[id], func(s warmSlot) bool { return slices.Contains(kinds, s.kind) })
 }
 
-// binRooms are the bins' room.
+// binRooms are the bins' room for pending work.
 func binRooms(bins []bin) []HostCapacity {
 	rooms := make([]HostCapacity, len(bins))
 	for i, b := range bins {
-		rooms[i] = b.room
+		rooms[i] = forWork(*b.host, b.room)
 	}
 	return rooms
 }
@@ -780,7 +793,7 @@ func (ps *pass) cover(items []coverItem) {
 		if it.bought != nil {
 			if i := slices.IndexFunc(coming, func(b bin) bool { return b.host.ID == *it.bought }); i >= 0 {
 				coming[i].room.Reserve(it.need)
-				comingRooms[i] = coming[i].room
+				comingRooms[i] = forWork(*coming[i].host, coming[i].room)
 				ps.claimed[coming[i].host.ID] = true
 				ps.provisioning(it, ptr(coming[i].host.ID), nil)
 				continue
