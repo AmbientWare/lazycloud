@@ -369,7 +369,6 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
-	e.LogSettle = 100 * time.Millisecond
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
 	host, container := placedContainer(t, pool, f, ContainerReady, 2)
@@ -411,10 +410,14 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A read while the older writer runs holds the later line back until
-	// its settle wait ends.
+	// its settle wait ends. Any transaction on the server holds lines back,
+	// other tests' too, so the reads that expect lines wait longer; they
+	// return once their lines settle.
+	e.LogSettle = 100 * time.Millisecond
 	if got := read(0); len(got) != 0 {
 		t.Fatalf("read while an older writer runs returned %+v", got)
 	}
+	e.LogSettle = time.Minute
 	if err := slow.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -436,6 +439,9 @@ func TestLogsByWorkloadAndContainerWithTail(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
+	// Any transaction on the server, other tests' too, holds lines back;
+	// reads return once their lines settle.
+	e.LogSettle = time.Minute
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
 	host, container := placedContainer(t, pool, f, ContainerReady, 2)
