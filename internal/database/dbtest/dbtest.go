@@ -180,12 +180,18 @@ func migrateTemplate(ctx context.Context, admin *pgx.Conn, base string) (string,
 	return name, nil
 }
 
+// withDatabase is base on database name, with production's four
+// connections per pool so parallel tests and packages stay within the
+// server's max_connections.
 func withDatabase(base, name string) string {
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
 	}
 	u.Path = "/" + name
+	query := u.Query()
+	query.Set("pool_max_conns", "4")
+	u.RawQuery = query.Encode()
 	return u.String()
 }
 

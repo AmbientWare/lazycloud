@@ -67,7 +67,11 @@ def test_workspace_syncer_writes_the_filtered_tree_then_follows_changes(
         (source / "pkg" / "worker.py").unlink()
         assert rewritten.wait(10) and deleted.wait(10)
     finally:
-        syncer.stop()
+        # A stop that does not wake the follow loop never returns.
+        stopping = threading.Thread(target=syncer.stop, daemon=True)
+        stopping.start()
+        stopping.join(10)
+    assert not stopping.is_alive(), "stop() did not wake the follow loop"
     syncer.raise_if_failed()
 
     assert [r.query["path"] for r in fake_api.calls("DELETE", FILES)] == [["pkg/worker.py"]]

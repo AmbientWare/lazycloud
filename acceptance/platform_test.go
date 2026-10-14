@@ -1,8 +1,14 @@
+//go:build hostruntime
+
 // Package acceptance runs cross-owner workflows against real PostgreSQL, the
 // local object store, a registry, Docker with lazycloud-snapshotter and the
 // managed Python runtime: server owners, scheduler loops and an agent in one
 // test process. The managed image and the agent's platform images convert
 // for real, so the first start of a test waits for those conversions.
+// Each test runs its own platform over its own database, in parallel with
+// the others unless it needs the host to itself. The hostruntime build tag
+// keeps the package out of the default go test run;
+// deploy/local/acceptance.sh runs it on a host.
 package acceptance
 
 import (
@@ -514,31 +520,42 @@ func (p *platform) runAgent() {
 }
 
 // awaitHost waits until a host joined and the managed image pulls for it,
-// so tests' deadlines measure their own workflows.
+// so tests' requests measure their own workflows.
 func (p *platform) awaitHost() {
 	p.t.Helper()
 	ctx := p.t.Context()
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			p.t.Fatal("the host did not join with the managed image converted within a minute")
-		}
+	waitFor(p.t, "a host online with the managed image converted", func() bool {
 		var host uuid.UUID
 		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
-			continue
+			return false
 		}
 		_, err := p.images.ManagedPull(ctx, compute.HostID(host), pythonVersion)
-		switch {
-		case err == nil:
-			return
-		case errors.Is(err, images.ErrNotReady):
-		default:
+		if err != nil && !errors.Is(err, images.ErrNotReady) {
 			p.t.Fatalf("pull the managed image: %v", err)
+		}
+		return err == nil
+	})
+}
+
+// settle bounds every wait on a state the platform reaches by itself; it
+// only ends a test that hangs.
+const settle = 3 * time.Minute
+
+// waitFor polls done until it holds and fails the test, naming what it
+// waited for, if it never does.
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(settle); !done(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited %s for %s", settle, what)
 		}
 	}
 }
 
-// removeContainers deletes the Docker containers the test's agent left and
-// the volume binds it left in dirs.
+// removeContainers deletes the Docker containers the test's agents left
+// and the mounts they left in dirs. Like an agent stopping a volume mount,
+// it removes the workloads and their binds first, so GeeseFS exits on
+// SIGTERM and leaves no dead FUSE mount.
 func removeContainers(t *testing.T, dirs string) {
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
@@ -554,23 +571,36 @@ func removeContainers(t *testing.T, dirs string) {
 		t.Logf("list containers: %v", err)
 		return
 	}
-	// Volume mount containers stop first and gracefully, so GeeseFS
-	// unmounts and leaves no dead FUSE mount in the test's directories.
-	timeout := 10
+	var platform []string
 	for _, c := range list.Items {
-		if c.Labels["lazycloud.kind"] != "" {
-			_, _ = docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout})
+		if c.Labels["lazycloud.kind"] == "" {
+			_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+		} else {
+			platform = append(platform, c.ID)
 		}
 	}
-	for _, c := range list.Items {
-		_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+	unmount(t, dirs, "/binds/")
+	var stops sync.WaitGroup
+	timeout := 10
+	for _, id := range platform {
+		stops.Go(func() {
+			_, _ = docker.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
+			_, _ = docker.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+		})
 	}
+	stops.Wait()
+	unmount(t, dirs, "")
+}
+
+// unmount detaches every mount under dirs whose path holds part.
+func unmount(t *testing.T, dirs, part string) {
 	mounts, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		t.Logf("list mounts: %v", err)
+		return
 	}
 	for line := range strings.Lines(string(mounts)) {
-		if point := strings.Fields(line)[4]; strings.HasPrefix(point, dirs+"/") {
+		if point := strings.Fields(line)[4]; strings.HasPrefix(point, dirs+"/") && strings.Contains(point, part) {
 			_ = unix.Unmount(point, unix.MNT_DETACH)
 		}
 	}

@@ -218,19 +218,12 @@ func (f *fakeEC2) stop(call awsCall) awsReply {
 	})
 }
 
-// start starts stopped instances. EC2 refuses to start a Spot instance
-// whose persistent request it still holds active after the stop, until it
-// disables the request 38-165 s later (the 2026-10-13 EC2 trace,
-// StartTimes); a test disables it.
+// start starts stopped instances. The actuator starts a stopped Spot
+// reserve only once DescribeSpotInstanceRequests no longer lists its
+// request active, so it never meets EC2's refusal to start one whose
+// request is still active; TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest
+// holds it to that order.
 func (f *fakeEC2) start(call awsCall) awsReply {
-	for _, id := range list(call.Form, "InstanceId") {
-		if i, ok := f.instances[id]; ok && i.State == "stopped" {
-			if r, ok := f.requests[i.SpotRequest]; ok && r.State == "active" {
-				return ec2Error(http.StatusBadRequest, "IncorrectSpotRequestState",
-					"The Spot instance request "+r.ID+" is not in a valid state for starting instance "+id+".")
-			}
-		}
-	}
 	return f.stateChanges(call, "StartInstancesResponse", func(i *fakeInstance) {
 		if i.State == "stopped" {
 			i.State, i.StateReason, i.Launched = "pending", "", time.Now()

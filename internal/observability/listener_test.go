@@ -16,7 +16,8 @@ import (
 // One caller may hold MaxPerPrincipal streams; closing one frees its place.
 func TestStreamsPerCallerAreCapped(t *testing.T) {
 	t.Parallel()
-	cfg := observability.ChangesConfig{Retained: 8, Buffer: 8, MaxSubscribers: 10, MaxPerPrincipal: 2}
+	cfg := observability.DefaultChangesConfig()
+	cfg.MaxPerPrincipal = 2
 	hub := observability.NewChanges(nil, cfg, nil, slog.New(slog.DiscardHandler))
 	ws := identity.WorkspaceID(uuid.New())
 	first, _, err := hub.Subscribe(ws, "user:a", nil)
@@ -38,6 +39,30 @@ func TestStreamsPerCallerAreCapped(t *testing.T) {
 	}
 }
 
+// A hub's bounds and intervals are all set: none of them stands for
+// unlimited or a default when zero.
+func TestChangesConfigNeedsEveryField(t *testing.T) {
+	t.Parallel()
+	if err := observability.DefaultChangesConfig().Validate(); err != nil {
+		t.Fatalf("the default: %v", err)
+	}
+	for name, unset := range map[string]func(*observability.ChangesConfig){
+		"retained":   func(c *observability.ChangesConfig) { c.Retained = 0 },
+		"buffer":     func(c *observability.ChangesConfig) { c.Buffer = 0 },
+		"per server": func(c *observability.ChangesConfig) { c.MaxSubscribers = 0 },
+		"per caller": func(c *observability.ChangesConfig) { c.MaxPerPrincipal = 0 },
+		"idle":       func(c *observability.ChangesConfig) { c.Idle = 0 },
+		"reconnect":  func(c *observability.ChangesConfig) { c.Reconnect = 0 },
+		"negative":   func(c *observability.ChangesConfig) { c.Reconnect = -time.Second },
+	} {
+		cfg := observability.DefaultChangesConfig()
+		unset(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: accepted %+v", name, cfg)
+		}
+	}
+}
+
 // An idle listener checks its connection without losing it; a lost
 // connection resets every stream, and changes flow again after the hub
 // reconnects.
@@ -51,7 +76,7 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 	// last run a statement like query and be idle, and returns its pid.
 	listener := func(query string, not int) int {
 		t.Helper()
-		for {
+		for deadline := time.Now().Add(10 * time.Second); ; {
 			var pid int
 			err := f.pool.QueryRow(t.Context(), `select pid from pg_stat_activity
 				where datname = current_database() and pid not in (pg_backend_pid(), $2) and query like $1 and state = 'idle'`, query, not).Scan(&pid)
@@ -60,6 +85,9 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 			}
 			if !errors.Is(err, pgx.ErrNoRows) {
 				t.Fatal(err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no idle listener connection that last ran %q", query)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

@@ -249,6 +249,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	cfg.compute.Fleet = fleet
 	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
+	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
@@ -359,7 +360,11 @@ func (ls listeners) close() {
 func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
-	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
+	changesConfig := observability.DefaultChangesConfig()
+	if err := changesConfig.Validate(); err != nil {
+		return fmt.Errorf("change streams: %w", err)
+	}
+	changes := observability.NewChanges(session, changesConfig, tel.Registry, logger)
 	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelTaskFinished,
 		database.ChannelClaim, database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)

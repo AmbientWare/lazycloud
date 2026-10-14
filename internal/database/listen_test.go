@@ -95,19 +95,46 @@ func TestNotifyAllWakesEveryPackedID(t *testing.T) {
 }
 
 // Notifications sent while the listener is disconnected are lost, so a lost
-// connection wakes every subscriber to re-read.
+// connection wakes every subscriber to re-read; the listener then connects
+// again and delivers later notifications.
 func TestListenerWakesEveryoneWhenItsConnectionDrops(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), database.ChannelExecution)
-	wake, cancel := listener.Subscribe(database.ChannelExecution, uuid.NewString())
+	listener.Reconnect = 10 * time.Millisecond
+	key := uuid.NewString()
+	wake, cancel := listener.Subscribe(database.ChannelExecution, key)
 	defer cancel()
 	run(t, listener)
 	woken(t, "after LISTEN", wake)
 
-	if _, err := pool.Exec(t.Context(), `select pg_terminate_backend(pid) from pg_stat_activity
-		where datname = current_database() and pid <> pg_backend_pid() and query ilike 'listen%'`); err != nil {
+	listening := func() []int32 {
+		t.Helper()
+		var pids []int32
+		if err := pool.QueryRow(t.Context(), `select coalesce(array_agg(pid), '{}') from pg_stat_activity
+			where datname = current_database() and pid <> pg_backend_pid() and state = 'idle' and query ilike 'listen%'`).Scan(&pids); err != nil {
+			t.Fatal(err)
+		}
+		return pids
+	}
+	dropped := listening()
+	if _, err := pool.Exec(t.Context(), "select pg_terminate_backend(pid) from unnest($1::int[]) pid", dropped); err != nil {
 		t.Fatal(err)
 	}
 	woken(t, "after the connection dropped", wake)
+
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if pids := listening(); len(pids) == 1 && pids[0] != dropped[0] {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the listener did not connect again")
+		}
+	}
+	select {
+	case <-wake:
+	default:
+	}
+	notifyAll(t, pool, database.ChannelExecution, key)
+	woken(t, "after a notify on the new connection", wake)
 }

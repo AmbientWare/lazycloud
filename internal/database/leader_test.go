@@ -21,23 +21,24 @@ type candidate struct {
 	stop    context.CancelFunc
 }
 
-// One of three candidates leads while the others retry without a statement
+// One of two candidates leads while the other retries without a statement
 // open, which would hold back vacuum. A leader whose session is terminated
-// steps down and another leads; when that one stops, another takes over.
+// steps down and the other leads; the lost one tries again and takes over
+// when that one stops.
 func TestLeadElectsOneAndHandsOver(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	const check = 20 * time.Millisecond
+	const check, retry = 20 * time.Millisecond, 20 * time.Millisecond
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	candidates := make([]*candidate, 3)
+	candidates := make([]*candidate, 2)
 	for n := range candidates {
 		ctx, cancel := context.WithCancel(t.Context())
 		c := &candidate{stop: cancel}
 		candidates[n] = c
 		wg.Go(func() {
-			if err := database.Lead(ctx, pool, "test_leader", check, c.leading.Store, logger); err != nil {
+			if err := database.Lead(ctx, pool, "test_leader", check, retry, c.leading.Store, logger); err != nil {
 				t.Error(err)
 			}
 		})
@@ -68,9 +69,9 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), "select clock_timestamp()").Scan(&elected); err != nil {
 		t.Fatal(err)
 	}
-	// Both standbys tried again after the election and sit idle between
+	// The standby tried again after the election and sits idle between
 	// tries, holding no snapshot.
-	waitFor("standbys retry", func() bool {
+	waitFor("standby retries", func() bool {
 		if l := leaders(); len(l) != 1 || l[0] != first {
 			t.Fatalf("leaders %v while %d holds the lock", l, first)
 		}
@@ -80,7 +81,7 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 			  and query like 'select pg_try_advisory_lock%' and query_start > $1`, elected).Scan(&idle); err != nil {
 			t.Fatal(err)
 		}
-		return idle == 2
+		return idle == 1
 	})
 
 	// Ending the leader's session releases the lock; the leader notices
@@ -92,11 +93,11 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 		  and d.datname = current_database()`); err != nil {
 		t.Fatal(err)
 	}
-	waitFor("after the session ended", func() bool { l := leaders(); return len(l) == 1 && l[0] != first })
-	second := leaders()[0]
+	second := 1 - first
+	waitFor("after the session ended", func() bool { l := leaders(); return len(l) == 1 && l[0] == second })
 
 	candidates[second].stop()
-	waitFor("after the leader stopped", func() bool { l := leaders(); return len(l) == 1 && l[0] != second })
+	waitFor("after the leader stopped", func() bool { l := leaders(); return len(l) == 1 && l[0] == first })
 }
 
 // The leader's check finds its own session's lock and nothing else: not
@@ -148,5 +149,22 @@ func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 		if holds(leader, name, leaderMarker) {
 			t.Fatalf("%s: the check sees a released lock", name)
 		}
+	}
+}
+
+// Lead and a listener refuse waits that are not positive before they touch
+// the database.
+func TestLeadAndListenerRefuseWaitsThatAreNotPositive(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, c := range [][2]time.Duration{{0, time.Second}, {time.Second, 0}, {time.Second, -time.Second}} {
+		if err := database.Lead(t.Context(), nil, "test_leader", c[0], c[1], func(bool) {}, logger); err == nil {
+			t.Errorf("Lead with check %s and retry %s ran", c[0], c[1])
+		}
+	}
+	listener := database.NewListener(nil, logger, database.ChannelExecution)
+	listener.Reconnect = 0
+	if err := listener.Run(t.Context()); err == nil {
+		t.Error("a listener with no reconnect wait ran")
 	}
 }

@@ -161,12 +161,30 @@ func TestDeliveryRetriesAndFailures(t *testing.T) {
 	if r := read(t, pool, flaky); r.State != "sent" || r.Attempts != 2 {
 		t.Fatalf("flaky after retry %+v", r)
 	}
-	// The rate-limited message gives up after MaxAttempts.
+	// The rate-limited message waits longer after each failure, never past
+	// retryCap, and gives up after MaxAttempts.
+	var waits []time.Duration
 	for range MaxAttempts {
+		var seconds *float64
+		if err := pool.QueryRow(ctx, `select case when state = 'queued' then extract(epoch from next_attempt_at - now()) end from email_outbox where id = $1`,
+			uuid.UUID(limited)).Scan(&seconds); err != nil {
+			t.Fatal(err)
+		}
+		if seconds != nil {
+			waits = append(waits, time.Duration(*seconds*float64(time.Second)))
+		}
 		makeDue(t, pool)
 		if _, err := n.Deliver(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for i, wait := range waits {
+		if wait > retryCap || i > 0 && wait < waits[i-1] {
+			t.Fatalf("waits after each failure %v: want growing and at most %s", waits, retryCap)
+		}
+	}
+	if last := waits[len(waits)-1]; last < retryCap-time.Minute {
+		t.Fatalf("waits after each failure %v: want the cap reached", waits)
 	}
 	if r := read(t, pool, limited); r.State != "failed" || r.Attempts != MaxAttempts {
 		t.Fatalf("limited %+v", r)

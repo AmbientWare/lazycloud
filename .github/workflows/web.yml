@@ -58,6 +58,19 @@ jobs:
           bun run typecheck
           bun run test --reporter=default --reporter=junit --outputFile=test-results/vitest.xml
           bun run build
+          git diff --exit-code -- src/routeTree.gen.ts
+
+      # The specs mock the API, except stack.spec.ts, which skips without a
+      # running platform.
+      - name: Install Chromium
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Browser specs
+        working-directory: web
+        env:
+          WEB_E2E_PRODUCTION: "1"
+        run: bun run test:e2e
 
       - name: Upload test timings
         if: always()

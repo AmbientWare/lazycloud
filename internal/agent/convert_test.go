@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -30,6 +32,7 @@ import (
 // converted while the image pushes, so no blob is read back from the
 // registry.
 func TestAgentConvertsTheLayersTheServerNames(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	backend := startTestRegistry(t)
 	base := buildBase(t, backend)

@@ -75,6 +75,10 @@ type Config struct {
 	BrowserOrigin string
 	// Links serves download URLs that outlive the server's credentials.
 	Links Links
+	// DeleteChunk is the most objects one step of the sweep or of a
+	// workspace's deletion removes under a prefix: from 1 to
+	// DefaultDeleteChunk, the most one S3 listing returns.
+	DeleteChunk int32
 }
 
 // Storage is the storage owner.

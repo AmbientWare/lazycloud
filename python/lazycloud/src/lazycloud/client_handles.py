@@ -7,7 +7,7 @@ handle signs requests with the caller's own profile token.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 from uuid import UUID
@@ -26,12 +26,14 @@ from lazycloud.contracts.api import (
     Payload,
     RunTaskRequest,
     TaskInput,
+    TaskRunEvent,
     TaskStatus,
 )
 from lazycloud.contracts.api import Task as TaskView
 from lazycloud.control import api_client, resolve_control_client_config
 from lazycloud.exceptions import FunctionNotDeployedError, SdkError
 from lazycloud.json_contracts import JsonValue
+from lazycloud.session.interrupts import cancel_tasks, uninterrupted
 from lazycloud.session.task import TERMINAL_STATUSES, Task
 
 
@@ -100,27 +102,30 @@ class FunctionHandle:
             )
         )
         events = client.run_task(self.workspace, self.app, self.name, request)
-        view: TaskView | None = None
-        payload: Payload | None = None
         try:
-            for event in events:
-                if event.task is not None:
-                    view, payload = event.task, event.result
-        except ApiError as exc:
-            if exc.code is ErrorCode.not_found:
-                raise FunctionNotDeployedError(self.app, self.name, self.workspace) from exc
-            raise
-        except ApiConnectionError:
-            # A stream that drops after admission is waited on below.
-            if view is None:
+            try:
+                # Ctrl-C waits for admission so the admitted task can be cancelled.
+                admitted, interrupted = uninterrupted(lambda: next(events, None))
+            except ApiError as exc:
+                if exc.code is ErrorCode.not_found:
+                    raise FunctionNotDeployedError(self.app, self.name, self.workspace) from exc
+                raise
+            if admitted is None or admitted.task is None:
+                raise ClientHandleError("the run stream ended before it named the admitted task")
+            view, payload = admitted.task, admitted.result
+            task = Task(str(view.id), self.workspace, client)
+            if interrupted is not None:
+                cancel_tasks([task])
+                raise interrupted
+            try:
+                view, payload = _follow_run(events, view, payload)
+                if view.status not in TERMINAL_STATUSES:
+                    view = task.wait_view()
+            except KeyboardInterrupt:
+                cancel_tasks([task])
                 raise
         finally:
             events.close()
-        if view is None:
-            raise ClientHandleError("the run stream ended before it named the admitted task")
-        task = Task(str(view.id), self.workspace, client)
-        if view.status not in TERMINAL_STATUSES:
-            view = task.wait_view()
         if view.status is not TaskStatus.succeeded:
             # Raises the remote exception, a typed failure or the cancellation.
             return task.outcome(view)
@@ -265,6 +270,20 @@ def handle_from_manifest(
     if selected.kind is ResourceKind.Asgi:
         return ASGIHandle(selected, endpoint=endpoint, workspace=workspace)
     assert_never(selected.kind)
+
+
+def _follow_run(
+    events: Iterator[TaskRunEvent], view: TaskView, payload: Payload | None
+) -> tuple[TaskView, Payload | None]:
+    """The last task view and result the rest of a run stream carries."""
+    try:
+        for event in events:
+            if event.task is not None:
+                view, payload = event.task, event.result
+    except ApiConnectionError:
+        # A stream that drops after admission is waited on by the caller.
+        pass
+    return view, payload
 
 
 def _json_argument(value: object) -> JsonValue:

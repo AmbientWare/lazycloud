@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import re
+import signal
+import threading
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -127,6 +129,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         self.wfile.write(b"0\r\n\r\n")
+
+
+def press_ctrl_c() -> None:
+    """Send SIGINT to the main thread, as Ctrl-C at a terminal does.
+
+    A route calls this before it answers, so the client is still waiting on
+    the request the server is handling.
+    """
+    main = threading.main_thread().ident
+    assert main is not None
+    signal.pthread_kill(main, signal.SIGINT)
 
 
 @contextmanager

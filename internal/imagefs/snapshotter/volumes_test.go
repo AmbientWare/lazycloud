@@ -142,6 +142,7 @@ func send(t *testing.T, method, url, byteRange, key string, header ...string) (a
 // If-Match, so the read fails rather than mix versions, and the next read
 // returns the new version.
 func TestVolumeReadsServeOneVersion(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	up := &upstream{}
 	// Objects over a quarter of the cache are read by frame, never whole.
@@ -200,6 +201,7 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 // large file makes, and a delete; and a read right after a write returns
 // what was written.
 func TestVolumeWritesPassThrough(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	_, base := volumeEndpoint(t, ts, &upstream{})
 	client := endpointClient(base, ts)
@@ -305,6 +307,7 @@ func endpointClient(base string, ts *testStore) *s3.Client {
 // Keys with spaces, plus signs and non-ASCII letters read through the
 // cache and write through the endpoint like any other.
 func TestVolumeKeysKeepTheirNames(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	_, base := volumeEndpoint(t, ts, &upstream{})
 	body := randomBytes(10, 2<<20)
@@ -332,6 +335,7 @@ func TestVolumeKeysKeepTheirNames(t *testing.T) {
 // Writes of other keys leave a cached object's version standing, so its
 // reads ask the store nothing.
 func TestCachedReadsHitUnderSteadyWrites(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	up := &upstream{}
 	_, base := volumeEndpoint(t, ts, up)
@@ -380,6 +384,7 @@ func TestCachedReadsHitUnderSteadyWrites(t *testing.T) {
 // workspace's mounts cannot reach another's bucket, and only for keys
 // under volumes/: a workspace's grant reaches its disks too.
 func TestTheVolumeEndpointRefusesOtherKeysAndPrefixes(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	v, base := volumeEndpoint(t, ts, &upstream{})
 	ts.put(t, "file", []byte("volume"))

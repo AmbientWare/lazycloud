@@ -411,6 +411,20 @@ func TestAlwaysOnPodsRefuseScalingToZero(t *testing.T) {
 	}
 }
 
+// Only pods, sandboxes, devboxes and checkpointing functions are
+// snapshotted; a plain function's ready container is refused.
+func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{}`)
+	container := readyContainer(t, pool, f, newHost(t, pool), time.Minute)
+	var invalid *InvalidError
+	if _, err := e.CreateSnapshot(t.Context(), identity.WorkspaceID(f.workspace), ContainerID(container), nil); !errors.As(err, &invalid) {
+		t.Fatalf("snapshot of a plain function: %v", err)
+	}
+}
+
 func TestSnapshotsAreReportedOnceByTheirHost(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)

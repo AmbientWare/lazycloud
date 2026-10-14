@@ -52,6 +52,11 @@ const (
 // After a reconnect every subscriber is woken because notifications sent while
 // disconnected are lost.
 type Listener struct {
+	// Reconnect is how long Run waits before it connects again after a
+	// connection failure. NewListener sets DefaultReconnect; change it
+	// before Run.
+	Reconnect time.Duration
+
 	pool     *pgxpool.Pool
 	channels []Channel
 	logger   *slog.Logger
@@ -69,14 +74,19 @@ type subscription struct {
 	wake chan struct{}
 }
 
+// DefaultReconnect is the wait between a failed listener connection and the
+// next.
+const DefaultReconnect = time.Second
+
 // NewListener creates a listener for channels. Run must be started to deliver
 // wake-ups.
 func NewListener(pool *pgxpool.Pool, logger *slog.Logger, channels ...Channel) *Listener {
 	return &Listener{
-		pool:     pool,
-		channels: channels,
-		logger:   logger,
-		subs:     map[subKey]map[*subscription]struct{}{},
+		Reconnect: DefaultReconnect,
+		pool:      pool,
+		channels:  channels,
+		logger:    logger,
+		subs:      map[subKey]map[*subscription]struct{}{},
 	}
 }
 
@@ -110,8 +120,12 @@ func (l *Listener) Subscribe(channel Channel, payloads ...string) (wake <-chan s
 	}
 }
 
-// Run listens until ctx ends, reconnecting after connection failures.
+// Run listens until ctx ends, reconnecting after connection failures. It
+// refuses a Reconnect that is not positive.
 func (l *Listener) Run(ctx context.Context) error {
+	if l.Reconnect <= 0 {
+		return fmt.Errorf("listener reconnect wait %s must be positive", l.Reconnect)
+	}
 	for {
 		err := l.listen(ctx)
 		if ctx.Err() != nil {
@@ -122,7 +136,7 @@ func (l *Listener) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(time.Second):
+		case <-time.After(l.Reconnect):
 		}
 	}
 }

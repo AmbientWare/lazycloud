@@ -1325,3 +1325,47 @@ func TestSpotHeadroomIsBoughtWithTheWork(t *testing.T) {
 		t.Fatalf("bought hosts holding %+v, shortfall %+v (%s); want the 8 CPU of work and the %v warm target", held, mp.Shortfall, mp.Reason, mp.WarmTarget.CPUMillis)
 	}
 }
+
+// CPU work that packs takes the spare room of a fleet GPU host running GPU
+// work, which the GPU work already pays for, instead of buying a CPU host;
+// work that cannot pack buys one.
+func TestPackedCPUWorkBuysNoHostWhileAGPUHostHasRoom(t *testing.T) {
+	t.Parallel()
+	h := planHost(1, mustType(t, "g6.4xlarge"), FleetServing)
+	h.Market, h.GPU = MarketSpot, "L4"
+	h.Load, h.Containers = FleetCapacity{CPUMillis: 2000, MemoryBytes: 13 * gib, GPUs: 1}, 1
+	for _, packs := range []bool{true, false} {
+		s := spotQuoted(gpuPlanSnapshot(t, h), 100_000, "c6a.xlarge", "c6a.2xlarge")
+		g, id := pendingOne(Requirement{Preemptible: true, Packs: packs, CPUMillis: 4000, MemoryBytes: 8 * gib}, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(gpuPolicy(), s)
+		if bought := boughtForWork(plan); (len(bought) == 0) != packs || packs && waitOf(t, plan, id).Wait != nil {
+			t.Errorf("packs %t: bought %v, wait %+v", packs, bought, waitOf(t, plan, id))
+		}
+	}
+}
+
+// A pool cooling after refusals costs what its absence would: the pass
+// buys exactly what it buys were that pool never quoted.
+func TestARefusedPoolBuysWhatItsAbsenceWould(t *testing.T) {
+	t.Parallel()
+	g, _ := pendingOne(Requirement{Preemptible: true, CPUMillis: 4000, MemoryBytes: 8 * gib}, nil)
+	snapshot := func(cheap bool) FleetSnapshot {
+		s := planSnapshot(t)
+		s.Offers.Catalog, s.Pending = FleetCatalog(), []DemandGroup{g}
+		s = spotQuoted(s, 140_000, "m7i.2xlarge", "c6a.4xlarge")
+		if cheap {
+			s = spotQuoted(s, 90_000, "c6a.2xlarge")
+		}
+		return s
+	}
+	refused := snapshot(true)
+	refused.Offers.Cooldowns = cooling("c6a.2xlarge")
+	got, want := PlanFleet(demandOnly(), refused), PlanFleet(demandOnly(), snapshot(false))
+	if !slices.Equal(boughtForWork(got), boughtForWork(want)) || len(boughtForWork(got)) != 1 {
+		t.Fatalf("with c6a.2xlarge refused bought %v, without it %v", boughtForWork(got), boughtForWork(want))
+	}
+	if cheap := boughtForWork(PlanFleet(demandOnly(), snapshot(true))); !slices.Equal(cheap, []string{"c6a.2xlarge"}) {
+		t.Fatalf("with c6a.2xlarge quoted and not cooling bought %v", cheap)
+	}
+}

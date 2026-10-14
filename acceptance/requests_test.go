@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -5,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
@@ -13,6 +14,7 @@ import (
 // Endpoint requests run as no task; each gets an X-Request-Id, a record
 // with its status and latency, and keeps what the handler printed.
 func TestEndpointRequestsAreRecordedWithTheirOutput(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": endpointApp})
 	p.deploy("api_demo", endpointSpec(source, "count_words", "app:count_words", "/word-count", apitypes.HttpMethodPOST))
@@ -35,16 +37,12 @@ func TestEndpointRequestsAreRecordedWithTheirOutput(t *testing.T) {
 	}
 
 	var list apitypes.HttpRequestList
-	deadline := time.Now().Add(10 * time.Second)
-	for len(list.Data) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the request was never recorded")
-		}
-		time.Sleep(200 * time.Millisecond)
+	waitFor(t, "the request's record", func() bool {
 		if status := p.apiCall(http.MethodGet, "/v1/workspaces/ws/apps/api_demo/requests?name=count_words", nil, &list); status != http.StatusOK {
 			t.Fatalf("list requests: %d", status)
 		}
-	}
+		return len(list.Data) > 0
+	})
 	got := list.Data[0]
 	if got.Id.String() != id || got.Status != http.StatusOK || got.Method != http.MethodPost || got.Path != "/word-count" ||
 		got.ContainerId == nil || got.RequestBytes == 0 || got.ResponseBytes == 0 || got.Kind != apitypes.WorkloadKindEndpoint {
@@ -52,19 +50,12 @@ func TestEndpointRequestsAreRecordedWithTheirOutput(t *testing.T) {
 	}
 
 	var logs apitypes.ContainerLogList
-	deadline = time.Now().Add(10 * time.Second)
-	for {
+	waitFor(t, "the request's output", func() bool {
 		if status := p.apiCall(http.MethodGet, fmt.Sprintf("/v1/workspaces/ws/requests/%s/logs", id), nil, &logs); status != http.StatusOK {
 			t.Fatalf("request logs: %d", status)
 		}
-		if len(logs.Data) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the request's output never arrived")
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+		return len(logs.Data) > 0
+	})
 	if len(logs.Data) != 1 || logs.Data[0].Data != "counting one two three" {
 		t.Fatalf("request logs %+v", logs.Data)
 	}

@@ -50,6 +50,8 @@ class ContainerWorkspaceSyncer:
     terminal: Terminal | None = None
     debounce_seconds: float = DEFAULT_SYNC_DEBOUNCE_SECONDS
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+    # Set by a file change and by stop, so the follow loop never polls.
+    _wake: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _snapshot: dict[str, FileState] | None = field(default=None, init=False, repr=False)
     _failure: Exception | None = field(default=None, init=False, repr=False)
@@ -76,17 +78,17 @@ class ContainerWorkspaceSyncer:
             return
         if self._snapshot is None:
             self._snapshot = _snapshot(self.root)
-        changes = _Changes()
         observer = Observer()
-        observer.schedule(changes, str(self.root), recursive=True)
+        observer.schedule(_Changes(self._wake), str(self.root), recursive=True)
         observer.start()
         self._thread = threading.Thread(
-            target=self._run, args=(observer, changes), name="workspace-sync", daemon=True
+            target=self._run, args=(observer,), name="workspace-sync", daemon=True
         )
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wake.set()
         if self._thread is not None:
             self._thread.join()
 
@@ -94,14 +96,13 @@ class ContainerWorkspaceSyncer:
         if self._failure is not None:
             raise WorkspaceSyncError(f"directory sync failed: {self._failure}") from self._failure
 
-    def _run(self, observer: BaseObserver, changes: _Changes) -> None:
+    def _run(self, observer: BaseObserver) -> None:
         try:
-            while not self._stop_event.is_set():
-                if not changes.ready.wait(0.5):
-                    continue
+            while True:
+                self._wake.wait()
                 if self._stop_event.wait(self.debounce_seconds):
                     return
-                changes.ready.clear()
+                self._wake.clear()
                 previous = self._snapshot or {}
                 current = _snapshot(self.root)
                 removed = sorted(set(previous) - set(current))
@@ -154,12 +155,12 @@ class ContainerWorkspaceSyncer:
 
 
 class _Changes(FileSystemEventHandler):
-    def __init__(self) -> None:
-        self.ready = threading.Event()
+    def __init__(self, wake: threading.Event) -> None:
+        self.wake = wake
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if event.event_type in {"created", "modified", "deleted", "moved"}:
-            self.ready.set()
+            self.wake.set()
 
 
 def sync_local_workspace(

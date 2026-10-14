@@ -172,9 +172,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	crons := schedules.NewSchedules(pool, exec)
 	vault := secrets.NewSecrets(pool, masterKey)
-	deliverer := callbacks.NewCallbacks(pool, vault, callbacks.CallbackConfig{
-		AllowPrivateTargets: os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1",
-	}, logger)
+	callbackConfig := callbacks.DefaultCallbackConfig()
+	callbackConfig.AllowPrivateTargets = os.Getenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE") == "1"
+	deliverer, err := callbacks.NewCallbacks(pool, vault, callbackConfig, logger)
+	if err != nil {
+		return err
+	}
 	// Build recovery and the layer sweep need no registry: they read and move
 	// build state and delete layer pairs.
 	buildCPU, err := cpu.ParseCores(cmp.Or(os.Getenv("LAZYCLOUD_BUILD_CPU"), "4"))
@@ -228,7 +231,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 		p.setLeading(leading)
 	}
-	group.Go(func() error { return database.Lead(ctx, session, leaderLock, leaderCheck, leading, logger) })
+	group.Go(func() error {
+		return database.Lead(ctx, session, leaderLock, leaderCheck, database.DefaultLeadRetry, leading, logger)
+	})
 	group.Go(func() error { return p.watch(ctx, exec.HasLiveWork, liveWake, logger) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
@@ -475,6 +480,7 @@ func objectStoreFromEnv(fleet compute.Fleet) (storage.Config, error) {
 		LayerBucket:     os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
 		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
+		DeleteChunk:     storage.DefaultDeleteChunk,
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
 			Prefix:           fleet.BucketPrefix,

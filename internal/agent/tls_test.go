@@ -83,6 +83,7 @@ func writeCertificate(t *testing.T) (string, string, string) {
 // The agent reaches a TLS listener only when it trusts the server's
 // certificate, and refuses plaintext to anything but loopback.
 func TestAgentDialsTheServerWithVerifiedTLS(t *testing.T) {
+	t.Parallel()
 	caFile, certFile, keyFile := writeCertificate(t)
 	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
 	if err != nil {
