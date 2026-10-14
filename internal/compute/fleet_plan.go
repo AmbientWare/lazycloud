@@ -375,12 +375,7 @@ type plannedHost struct {
 type marketView struct {
 	m ReserveMarket
 	MarketTarget
-	// returnable are the market's hosts that could stop into the reserve
-	// once their work ends: those that run or start for work, those that
-	// slept there, which leave first, and in a market without running
-	// headroom every host it keeps.
-	returnable []*FleetHost
-	retired    map[HostID]bool
+	retired map[HostID]bool
 	// shortfall and stoppedShort are what the pass could not cover, and
 	// warmReason and stoppedReason why.
 	shortfall, stoppedShort   FleetCapacity
@@ -1464,17 +1459,6 @@ func (ps *pass) keep(v *marketView) []idleHost {
 	for _, h := range surplus {
 		ps.leave(v, h)
 	}
-	v.returnable = ps.inMarket(v.m, func(h FleetHost) bool {
-		_, catalogued := ps.typeNamed(h.InstanceType)
-		return h.held() && (ps.anchored(h) || starting(h) || h.Slept || v.Floor.Empty()) && h.Stoppable && catalogued && !h.Protected &&
-			ps.p.LargestShape.Cap.Covers(h.Usable) && !ps.misplaced(v, h.Region)
-	})
-	for _, n := range ps.planned {
-		stoppable := n.offer.Market == MarketOnDemand || n.offer.Type.GPU != ""
-		if n.market == v.m && n.work && stoppable && ps.p.LargestShape.Cap.Covers(n.offer.Usable) && !ps.misplaced(v, n.offer.Region) {
-			v.returnable = append(v.returnable, &FleetHost{Usable: n.offer.Usable, InstanceType: n.offer.Type.Name})
-		}
-	}
 	return idle
 }
 
@@ -1641,9 +1625,9 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 // It keeps each while those kept do not cover the stopped target or none
 // fits the largest shape, and retires the rest: a pending one once the
 // kept reserves cover both, a ready one, or one that does not count, once
-// the kept ready ones do. What the kept reserves and the hosts that could
-// return to them lack is bought once no work waits in the market and
-// arrivals have settled.
+// the kept ready ones do. What the kept reserves and the resumed ones no
+// work holds lack is bought once no work waits in the market and arrivals
+// have settled.
 func (ps *pass) reserves(v *marketView) {
 	ps.retireUnresumable(v)
 	counted := ps.inMarket(v.m, func(h FleetHost) bool { return !h.Protected && ps.placed(v)(h) })
@@ -1677,10 +1661,15 @@ func (ps *pass) reserves(v *marketView) {
 			}
 		}
 	}
-	supply := kept.Plus(totalOf(v.returnable, func(h *FleetHost) FleetCapacity { return h.Usable }))
-	short := v.Stopped.Minus(supply).Clamp()
+	// A reserve resumed for headroom that no work has taken yet can stop
+	// back at any time, so it still holds its place; one serving work
+	// counts toward the running target alone.
+	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return ps.sleeping(v, h) }) {
+		kept, large = kept.Plus(h.Usable), large || ps.fitsLargest(v, *h)
+	}
+	short := v.Stopped.Minus(kept).Clamp()
 	var item FleetCapacity
-	if !large && !slices.ContainsFunc(v.returnable, func(h *FleetHost) bool { return ps.fitsLargest(v, *h) }) {
+	if !large {
 		item = v.Largest
 	}
 	v.stoppedShort = short.Upper(item)
@@ -1716,6 +1705,12 @@ func (ps *pass) reserves(v *marketView) {
 	if !v.stoppedShort.Empty() {
 		v.stoppedReason = ps.shortReason(v.m, shapeNeed(v.m, item), true)
 	}
+}
+
+// sleeping reports a host of market v resumed from the reserve that runs
+// no work and no pending work takes, which can stop back into the reserve.
+func (ps *pass) sleeping(v *marketView, h FleetHost) bool {
+	return h.held() && h.Slept && !ps.anchored(h) && h.Stoppable && ps.p.LargestShape.Cap.Covers(h.Usable) && !ps.misplaced(v, h.Region)
 }
 
 // retire terminates reserve h, or removes it before it launches.

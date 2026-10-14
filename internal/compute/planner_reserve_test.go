@@ -745,47 +745,6 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 	}
 }
 
-// An 8 CPU request resumes the large-shape reserve and leaves the floor
-// one stopped. No replacement is bought while the resumed host serves or
-// idles within its market's window, since it can return; once its work has
-// ended and the window passed it returns to the reserve, and the warm host
-// keeps serving.
-func TestAReserveResumedForWorkReturnsWithoutAReplacement(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	settledFleet(t, o)
-	floor, large := onDemandReserves(t, o)
-	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
-where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 8000, 16*gib)
-	run(t, o.pool, "update containers set rate_class = 'non_preemptible' where id = $1", container)
-
-	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) ||
-		hostRowOf(t, o, floor).Phase != string(compute.PhaseStopped) {
-		t.Fatalf("plan %+v, want only the large-shape reserve resumed", r)
-	}
-	if got := scan[uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", container); got != uuid.UUID(large) {
-		t.Fatalf("container waits for %s, want the large-shape reserve", got)
-	}
-	serveFromReserve(t, o, large)
-	placeOn(t, o, container, large)
-	lapseHolds(t, o)
-	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one serves")
-	}
-	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", container)
-	if r := plan(t, o); largeBought(t, o) != 0 || r.Returned != 0 {
-		t.Fatalf("plan %+v with %d large hosts bought while the resumed one idles within the window, want nothing", r, largeBought(t, o))
-	}
-	lapseHolds(t, o)
-	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 ||
-		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
-		t.Fatalf("plan %+v, large host %s, warm host %s, %d large bought; want it back in the reserve, the warm host serving and none bought",
-			r, hostRowOf(t, o, large).Phase, hostRowOf(t, o, warm).Phase, largeBought(t, o))
-	}
-}
-
 // A release of the reserves' agent build leaves them in place. A release
 // of another build buys their replacements first and retires none of them
 // before those are ready.
@@ -829,8 +788,8 @@ where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 		burst = append(burst, pendingContainer(t, o.pool, dev, release, 1000, gib))
 	}
 
-	if r := plan(t, o); r.Resumed != 1 || r.Requested != 0 {
-		t.Fatalf("plan %+v, want one reserve resumed and nothing bought", r)
+	if r := plan(t, o); r.Resumed != 1 || servingBought(t, o) != 0 {
+		t.Fatalf("plan %+v, want one reserve resumed and nothing bought to serve", r)
 	}
 	resumed := compute.HostID(scan[uuid.UUID](t, o.pool, "select id from hosts where market = 'on_demand' and phase = 'resuming'"))
 	serveFromReserve(t, o, resumed)
@@ -838,13 +797,19 @@ where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	for _, c := range burst[1:] {
 		placeOn(t, o, c, resumed)
 	}
-	if r := plan(t, o); r.Resumed != 0 || r.Requested != 0 {
+	if r := plan(t, o); r.Resumed != 0 || servingBought(t, o) != 0 {
 		t.Fatalf("plan once the burst runs %+v, want no warm refill", r)
 	}
 	if n := scan[int](t, o.pool, `select count(*) from hosts where market = 'on_demand' and reserve_mode is null
 and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 'ready')`); n > 2 {
 		t.Fatalf("the burst left %d on-demand hosts, want at most two", n)
 	}
+}
+
+// servingBought counts the hosts bought to serve that have not launched.
+func servingBought(t *testing.T, o owners) int {
+	t.Helper()
+	return scan[int](t, o.pool, "select count(*) from hosts where phase = 'requested' and reserve_mode is null")
 }
 
 // buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
@@ -899,14 +864,14 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Resumed != 1 || r.Requested != 0 {
-		t.Fatalf("plan %+v, want a Spot reserve resumed for the build and nothing bought", r)
+	if r.Resumed != 1 || servingBought(t, o) != 0 {
+		t.Fatalf("plan %+v, want a Spot reserve resumed for the build and nothing bought to serve", r)
 	}
 	if host := scan[uuid.UUID](t, o.pool, "select capacity_host_id from containers where id = $1", build); !slices.Contains(reserves, host) {
 		t.Fatalf("the build waits for %s, want one of the Spot reserves %v", host, reserves)
 	}
-	if r := plan(t, o); r.Requested != 0 {
-		t.Fatalf("plan once arrivals settled %+v, want nothing bought", r)
+	if r := plan(t, o); servingBought(t, o) != 0 {
+		t.Fatalf("plan once arrivals settled %+v, want nothing bought to serve", r)
 	}
 }
 

@@ -593,21 +593,6 @@ func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 	}
 }
 
-// A market whose reserves fall short buys none while a host that runs its
-// work could return to the reserve once the work ends.
-func TestAReserveShortfallWaitsForAHostThatCanReturn(t *testing.T) {
-	back := planHost(1, planSmall, FleetServing)
-	back.Load, back.Containers = cpuGiB(1000, 1), 1
-	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, back))
-	if mp := marketPlan(t, plan, onDemand); !mp.StoppedShortfall.Empty() || len(actionsOf(plan, ActionBuyReserve)) > 0 {
-		t.Fatalf("a host may return: shortfall %+v, actions %+v", mp.StoppedShortfall, plan.Actions)
-	}
-	plan = PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t))
-	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonNone || len(actionsOf(plan, ActionBuyReserve)) != 1 {
-		t.Fatalf("no host could return: reason %q, actions %+v", mp.Reason, plan.Actions)
-	}
-}
-
 func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
 	need := Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
@@ -692,33 +677,6 @@ func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
 		}
 		if !slices.Equal(got, []string{c.want}) {
 			t.Errorf("Spot of %v cooling: bought %v, want %s", c.cooled, got, c.want)
-		}
-	}
-}
-
-func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
-	for _, gpu := range []bool{true, false} {
-		h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
-		m := ReserveMarket{Preemptible: true}
-		if gpu {
-			h = planHost(1, mustType(t, "g6.4xlarge"), FleetServing)
-			h.GPU, m.GPU = "L4", "L4"
-		}
-		// A Spot GPU work host runs on a persistent request; a Spot CPU one
-		// on a one-time request, which cannot stop.
-		h.Market, h.Load, h.Containers, h.Stoppable = MarketSpot, FleetCapacity{CPUMillis: 1000, MemoryBytes: gib, GPUs: h.Usable.GPUs}, 1, gpu
-		s := gpuPlanSnapshot(t, h)
-		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "c6a.4xlarge", HourlyMicros: 200_000, ObservedAt: offerNow})
-		p := gpuPolicy()
-		p.Spot = DefaultPolicy().Spot
-		var bought []FleetAction
-		for _, a := range actionsOf(PlanFleet(p, s), ActionBuyReserve) {
-			if a.Market == m {
-				bought = append(bought, a)
-			}
-		}
-		if (len(bought) == 0) != gpu {
-			t.Errorf("%s bought reserves %+v while its host serves", m, bought)
 		}
 	}
 }
@@ -835,7 +793,7 @@ func TestAGPUMarketKeepsOnlyTheHostsItsWorkHolds(t *testing.T) {
 		t.Fatalf("an A10G host released %v within its window", hostsOf(left))
 	}
 	s.Pending = []DemandGroup{g}
-	if plan := PlanFleet(gpuPolicy(), s); len(inMarket(plan, a10g).Actions) > 0 || waitOf(t, plan, id).Wait != nil {
+	if plan := PlanFleet(gpuPolicy(), s); len(actionsOf(inMarket(plan, a10g), ActionBuy, ActionResume)) > 0 || waitOf(t, plan, id).Wait != nil {
 		t.Fatalf("the next job: actions %+v, wait %+v; want it placed on the idle host", plan.Actions, waitOf(t, plan, id))
 	}
 }
@@ -1028,3 +986,28 @@ func TestReservesForALoadPeakStayForTheCostHorizon(t *testing.T) {
 
 // l4Job is a Spot-tolerant job of one L4 card.
 var l4Job = Requirement{Preemptible: true, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 13056 << 20}
+
+// A reserve resumed for work serves it and holds none of the stopped
+// target any more: the next pass buys its replacement.
+func TestAReserveResumedForWorkIsReplacedInTheReserve(t *testing.T) {
+	p := planPolicy(FleetCapacity{}, small)
+	s := planSnapshot(t, planHost(1, planSmall, FleetStopped))
+	g, _ := pendingOne(Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}, nil)
+	s.Pending = []DemandGroup{g}
+	plan := PlanFleet(p, s)
+	if resumed := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(resumed, []HostID{{1}}) {
+		t.Fatalf("actions %+v, want the reserve resumed for the work", plan.Actions)
+	}
+	serving := planHost(1, planSmall, FleetServing)
+	serving.Load, serving.Containers, serving.Slept = cpuGiB(4000, 4), 1, true
+	s = planSnapshot(t, serving)
+	s.Holds = carried(plan)
+	plan = PlanFleet(p, s)
+	var bought FleetCapacity
+	for _, a := range actionsOf(plan, ActionBuyReserve) {
+		bought = bought.Plus(a.Offer.Usable)
+	}
+	if !bought.Covers(small) {
+		t.Fatalf("actions %+v, want a reserve bought to replace the one serving work", plan.Actions)
+	}
+}
