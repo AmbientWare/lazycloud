@@ -36,8 +36,8 @@ type AgentRelease struct {
 // counts as lost: three wrapper starts and a rollback fit in it.
 const updateWindow = 5 * time.Minute
 
-func releaseOf(version string, amd64, arm64 *string, rollout int32, build *string) AgentRelease {
-	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: deref(build)}
+func releaseOf(version string, amd64, arm64 *string, rollout int32, build string) AgentRelease {
+	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: build}
 	if amd64 != nil {
 		r.SHA256["amd64"] = *amd64
 	}
@@ -97,7 +97,7 @@ func (c *Compute) PublishAgentRelease(ctx context.Context, release AgentRelease)
 		n, err := q.UpsertAgentRelease(ctx, UpsertAgentReleaseParams{
 			Version: release.Version, Sha256Amd64: digest("amd64"), Sha256Arm64: digest("arm64"),
 			RolloutPercent: int32(release.RolloutPercent), //nolint:gosec // The schema bounds it to 0-100.
-			Build:          nilIfEmpty(release.Build),
+			Build:          release.Build,
 		})
 		if err != nil {
 			return fmt.Errorf("insert release: %w", err)

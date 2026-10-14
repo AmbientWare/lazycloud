@@ -20,7 +20,7 @@ type AgentReleaseRow struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
-	Build          *string
+	Build          string
 }
 
 func (q *Queries) AgentRelease(ctx context.Context, version string) (AgentReleaseRow, error) {
@@ -98,7 +98,7 @@ type TargetReleaseRow struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
-	Build          *string
+	Build          string
 }
 
 func (q *Queries) TargetRelease(ctx context.Context) (TargetReleaseRow, error) {
@@ -128,7 +128,7 @@ type UpsertAgentReleaseParams struct {
 	Sha256Amd64    *string
 	Sha256Arm64    *string
 	RolloutPercent int32
-	Build          *string
+	Build          string
 }
 
 // A version is immutable: republishing it with other digests changes no row.

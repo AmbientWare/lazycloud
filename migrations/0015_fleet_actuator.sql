@@ -19,3 +19,20 @@ alter table containers drop constraint containers_capacity_wait_check;
 alter table containers add constraint containers_capacity_wait_check check (capacity_wait in (
     'provisioning', 'limit', 'batch', 'deferred', 'cooldown', 'quota', 'margin', 'no_offer'
 ));
+
+-- Each market's held targets and the keep order decide which idle hosts
+-- leave; no host carries an idle clock.
+alter table hosts drop column idle_since;
+
+-- Every release records its build; a host runs what it should when the
+-- rollout does not reach it or its release is of the target's build.
+delete from agent_releases where build is null;
+alter table agent_releases alter column build set not null;
+create or replace function on_target(bucket integer, version text) returns boolean
+language sql stable
+return coalesce((
+    select bucket >= t.rollout_percent or coalesce(v.build = t.build, false)
+    from agent_releases t
+    left join agent_releases v on v.version = on_target.version
+    where t.target
+), true);
