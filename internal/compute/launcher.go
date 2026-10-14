@@ -531,8 +531,10 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 	}
 	if n == 0 {
 		// The host stopped being wanted while it launched, or its claim
-		// passed to another actuator: no row records the instance.
-		return false, nil, c.terminate(ctx, target.scope, h.Region, aws.ToString(instance.InstanceId))
+		// passed to another actuator: no row records the instance, and
+		// reconcile ends it as an orphan.
+		logger.WarnContext(ctx, "launch not recorded", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId))
+		return false, nil, nil
 	}
 	if h.Market != nil {
 		if err := c.queries.ClearCooldown(ctx, ClearCooldownParams{

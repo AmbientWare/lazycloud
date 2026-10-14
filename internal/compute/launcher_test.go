@@ -634,7 +634,8 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 }
 
 // A launch whose claim passed to another actuator in the meantime neither
-// records its instance nor moves the host; the instance ends.
+// records its instance, moves the host nor ends the instance: reconcile
+// ends it once the host records another.
 func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
 	for _, refuse := range []bool{false, true} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
@@ -650,7 +651,6 @@ func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
 			}
 			return succeed(call)
 		})
-		emulator.on("TerminateInstances", terminateInstancesReply)
 		if n := launch(t, o); n != 0 {
 			t.Fatalf("refuse %v: launched %d for a host another claim holds", refuse, n)
 		}
@@ -665,8 +665,8 @@ func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
 		if phase != string(compute.PhaseRequested) || instanceType != emulator.calls("RunInstances")[0].Form.Get("InstanceType") {
 			t.Fatalf("refuse %v: host %s as %s, want it requested where it was", refuse, phase, instanceType)
 		}
-		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{false: 1, true: 0}[refuse] {
-			t.Fatalf("refuse %v: %d terminations, want the fenced instance ended", refuse, terminated)
+		if terminated := len(emulator.calls("TerminateInstances")); terminated != 0 {
+			t.Fatalf("refuse %v: the launcher made %d terminations, want the fenced instance left to reconcile", refuse, terminated)
 		}
 	}
 }

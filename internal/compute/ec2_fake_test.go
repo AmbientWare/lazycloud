@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// fakeEC2 is a small EC2 region on the emulator: instances and Spot
+// fakeEC2 is a small EC2 region, us-east-2, on the emulator: instances and Spot
 // requests that StopInstances, StartInstances, TerminateInstances,
 // CancelSpotInstanceRequests and RunInstances change, and the describe
 // calls with the filters compute sends. A refuse hook answers a call with
@@ -39,6 +39,18 @@ type fakeInstance struct {
 	// Was is the state before the last change, at Changed.
 	Was     string
 	Changed time.Time
+}
+
+// empty answers a call to a region the fake does not hold: describe calls
+// list nothing.
+func (f *fakeEC2) empty(call awsCall) awsReply {
+	switch call.Action {
+	case "DescribeInstances":
+		return describeInstancesReply()
+	case "DescribeSpotInstanceRequests":
+		return awsReply{body: `<DescribeSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet/></DescribeSpotInstanceRequestsResponse>`}
+	}
+	return ec2Error(http.StatusBadRequest, "InvalidInstanceID.NotFound", "no such instance in the region")
 }
 
 // shown is the state DescribeInstances reports for i.
@@ -70,6 +82,10 @@ func newFakeEC2(e *awsEmulator) *fakeEC2 {
 		e.on(action, func(call awsCall) awsReply {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+				// Another region holds none of the fake's instances.
+				return f.empty(call)
+			}
 			if f.refuse != nil {
 				if reply, refused := f.refuse(call); refused {
 					return reply

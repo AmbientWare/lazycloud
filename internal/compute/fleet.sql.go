@@ -419,24 +419,31 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 	return err
 }
 
-const knownHostIDs = `-- name: KnownHostIDs :many
-select id from hosts where id = any($1::uuid[]) and phase not in ('deleted', 'failed')
+const liveHosts = `-- name: LiveHosts :many
+select id, instance_id, spot_request_id from hosts where id = any($1::uuid[]) and phase not in ('deleted', 'failed')
 `
 
-// Which of these hosts still exist and are not failed or deleted.
-func (q *Queries) KnownHostIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, knownHostIDs, ids)
+type LiveHostsRow struct {
+	ID            uuid.UUID
+	InstanceID    *string
+	SpotRequestID *string
+}
+
+// Which of these hosts are neither failed nor deleted, with the instance and
+// Spot request each records.
+func (q *Queries) LiveHosts(ctx context.Context, ids []uuid.UUID) ([]LiveHostsRow, error) {
+	rows, err := q.db.Query(ctx, liveHosts, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []LiveHostsRow
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var i LiveHostsRow
+		if err := rows.Scan(&i.ID, &i.InstanceID, &i.SpotRequestID); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

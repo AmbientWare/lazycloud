@@ -480,6 +480,10 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 	live := reserve(t, o, compute.PhaseStopped, compute.MarketSpot, compute.ReserveStop, "i-0000000000000e006")
 	ec2.add(fakeInstance{ID: "i-0000000000000e006", State: "stopped", SpotRequest: "sir-0000e006"}, live.String())
 	ec2.addRequest(fakeSpotRequest{ID: "sir-0000e006", State: "disabled", Instance: "i-0000000000000e006"}, live.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000e006' where id = $1", uuid.UUID(live))
+	// A request a stale launch made for the live reserve, which records
+	// another.
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000e007", State: "open"}, live.String())
 
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
@@ -507,6 +511,9 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 	}
 	if s := ec2.request("sir-0000e005").State; s != "cancelled" {
 		t.Errorf("orphan request %s, want cancelled", s)
+	}
+	if s := ec2.request("sir-0000e007").State; s != "cancelled" {
+		t.Errorf("stale request %s, want cancelled", s)
 	}
 	if s := ec2.request("sir-0000e006").State; s != "disabled" {
 		t.Errorf("live reserve's request %s, want kept", s)

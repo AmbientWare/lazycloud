@@ -118,6 +118,9 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 			ec2Instance{ID: "i-0000000000000b007", State: state("i-0000000000000b007", "stopped"), Tags: tags(stopped.String())},
 			ec2Instance{ID: "i-0000000000000b008", State: "terminated", Tags: tags(uuid.NewString())},
 			ec2Instance{ID: "i-0000000000000b009", State: "terminated", Tags: tags(reclaimed.String())},
+			// A launch a stale claim made for a host that has since
+			// recorded another instance.
+			ec2Instance{ID: "i-0000000000000b00a", State: state("i-0000000000000b00a", "running"), Tags: tags(starting.String())},
 		)
 	})
 	emulator.on("TerminateInstances", func(call awsCall) awsReply {
@@ -144,8 +147,8 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	}
 	// Reconcile ends only the orphan; the hosts whose instance must end
 	// terminate with their failure, for the actuator.
-	if got, want := terminated(emulator), []string{"i-0000000000000b005"}; !slices.Equal(got, want) {
-		t.Fatalf("reconcile terminated %v, want the orphan %v", got, want)
+	if got, want := terminated(emulator), []string{"i-0000000000000b005", "i-0000000000000b00a"}; !slices.Equal(got, want) {
+		t.Fatalf("reconcile terminated %v, want the orphans %v", got, want)
 	}
 	expect := func(want map[compute.HostID]compute.Phase, failures map[compute.HostID]compute.Failure) {
 		t.Helper()
@@ -172,7 +175,7 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := terminated(emulator), []string{"i-0000000000000b003", "i-0000000000000b005", "i-0000000000000b007"}; !slices.Equal(got, want) {
+	if got, want := terminated(emulator), []string{"i-0000000000000b003", "i-0000000000000b005", "i-0000000000000b007", "i-0000000000000b00a"}; !slices.Equal(got, want) {
 		t.Fatalf("terminated %v, want each of %v once", got, want)
 	}
 	expect(map[compute.HostID]compute.Phase{slow: compute.PhaseFailed, stopped: compute.PhaseFailed}, failures)

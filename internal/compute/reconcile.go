@@ -215,17 +215,19 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 	if len(orphans) == 0 {
 		return nil
 	}
-	// A launch whose answer was lost still has a live host: spare it.
-	known, err := c.queries.KnownHostIDs(ctx, tagged)
+	// A launch whose answer was lost has a live host that records no
+	// instance yet: spare it. One a stale claim made for a host that has
+	// recorded another ends.
+	live, err := c.queries.LiveHosts(ctx, tagged)
 	if err != nil {
-		return fmt.Errorf("read known hosts: %w", err)
+		return fmt.Errorf("read live hosts: %w", err)
 	}
-	live := map[string]bool{}
-	for _, id := range known {
-		live[id.String()] = true
+	awaiting := map[string]bool{}
+	for _, h := range live {
+		awaiting[h.ID.String()] = h.InstanceID == nil
 	}
 	for _, instance := range orphans {
-		if live[observed[instance].host] {
+		if awaiting[observed[instance].host] {
 			continue
 		}
 		if err := c.terminate(ctx, scope, region, instance); err != nil {
@@ -325,18 +327,22 @@ func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Log
 	if len(requests) == 0 {
 		return nil
 	}
-	known, err := c.queries.KnownHostIDs(ctx, tagged)
+	live, err := c.queries.LiveHosts(ctx, tagged)
 	if err != nil {
-		return fmt.Errorf("read known hosts: %w", err)
+		return fmt.Errorf("read live hosts: %w", err)
 	}
-	live := map[uuid.UUID]bool{}
-	for _, id := range known {
-		live[id] = true
+	// A live host keeps the request it records, or any while it records
+	// none, as when its launch's answer was lost.
+	keeps := map[uuid.UUID]*string{}
+	for _, h := range live {
+		keeps[h.ID] = h.SpotRequestID
 	}
 	for _, r := range requests {
 		request := aws.ToString(r.SpotInstanceRequestId)
-		if host, ok := hosts[request]; ok && live[host] {
-			continue
+		if host, ok := hosts[request]; ok {
+			if recorded, alive := keeps[host]; alive && (recorded == nil || *recorded == request) {
+				continue
+			}
 		}
 		if err := endSpotRequest(ctx, client, request); err != nil {
 			logger.ErrorContext(ctx, "end orphan spot request", "spot_request_id", request, "error", err)

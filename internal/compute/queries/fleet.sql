@@ -147,9 +147,10 @@ order by id;
 select distinct connection_id, region from hosts
 where provider = 'aws' and phase not in ('deleted', 'failed', 'requested') and region <> '';
 
--- name: KnownHostIDs :many
--- Which of these hosts still exist and are not failed or deleted.
-select id from hosts where id = any(@ids::uuid[]) and phase not in ('deleted', 'failed');
+-- name: LiveHosts :many
+-- Which of these hosts are neither failed nor deleted, with the instance and
+-- Spot request each records.
+select id, instance_id, spot_request_id from hosts where id = any(@ids::uuid[]) and phase not in ('deleted', 'failed');
 
 -- name: SetHostPhase :execrows
 update hosts
