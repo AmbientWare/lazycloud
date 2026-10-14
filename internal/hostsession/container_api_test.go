@@ -99,6 +99,10 @@ func TestContainerAPIReachesOnlyTheContainersWorkspace(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("a container of no host: %v", err)
 	}
+	_, otherHost := h.enroll()
+	if _, err := call(otherHost, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("another host's call as the container: %v", err)
+	}
 	reply, err = call(ctx, h.client, container, "POST", "/v1/workspaces/ws/secrets", bytes.Repeat([]byte("x"), hostsession.MaxContainerAPIBody+1), nil)
 	if err != nil || reply.status != 413 {
 		t.Fatalf("an oversized body: %d %v", reply.status, err)
@@ -109,6 +113,13 @@ func TestContainerAPIReachesOnlyTheContainersWorkspace(t *testing.T) {
 	reply, err = call(ctx, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil)
 	if err != nil || reply.status != 409 || !bytes.Contains(reply.body, []byte("being deleted")) {
 		t.Fatalf("a deleting workspace: %d %s %v", reply.status, reply.body, err)
+	}
+	// A stopped container is no longer assigned to the host.
+	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", uuid.UUID(container)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(ctx, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a stopped container: %v", err)
 	}
 }
 
