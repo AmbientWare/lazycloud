@@ -710,6 +710,7 @@ func (s *sim) plan() time.Duration {
 	}
 	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
 	plan := PlanFleet(s.p, snapshot)
+	dumpPlan(s, plan)
 	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
 	for _, mp := range plan.Markets {
 		if mp.Market == (ReserveMarket{Preemptible: true}) {
@@ -737,15 +738,19 @@ func (s *sim) plan() time.Duration {
 	return plan.BatchWait
 }
 
-// check asserts no purchase serves a container a ready reserve would fit,
-// and, since the simulation never refuses on-demand capacity, that each
-// on-demand purchase takes its type's cheapest pool.
+// check asserts every action names its reason, no purchase serves a
+// container a ready reserve would fit, and, since the simulation never
+// refuses on-demand capacity, that each on-demand purchase takes its
+// type's cheapest pool.
 func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 	// A cheaper pool may lack the quota room the hosts and the pass's
 	// earlier starts left.
 	quotaUsed := QuotaUse(snapshot.Hosts, s.in.Catalog)
 	used := maps.Clone(quotaUsed)
 	for _, a := range plan.Actions {
+		if a.Reason == "" {
+			s.t.Errorf("%s: %s action %+v names no reason", s.now.Format(time.TimeOnly), a.Kind, a)
+		}
 		if a.Offer == nil {
 			continue
 		}

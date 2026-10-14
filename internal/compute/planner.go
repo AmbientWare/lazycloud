@@ -201,7 +201,9 @@ type fleetPass struct {
 	// traces holds the pending containers' traces and earlier waits.
 	traces map[uuid.UUID]pendingTrace
 	w      fleetWrites
-	result PlanResult
+	// reasons are why the pass acts on each host it names or buys.
+	reasons map[uuid.UUID]ActionReason
+	result  PlanResult
 	// notes are what the pass logs once it commits.
 	notes []note
 	// decisions are the hosts the pass newly gave waiting containers, which
@@ -279,7 +281,7 @@ type coolRow struct {
 }
 
 func newFleetPass(c *Compute, p Policy, r fleetRead) *fleetPass {
-	ps := &fleetPass{c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, waits: map[uuid.UUID]waitRow{}}
+	ps := &fleetPass{c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, waits: map[uuid.UUID]waitRow{}, reasons: map[uuid.UUID]ActionReason{}}
 	for _, h := range r.hosts {
 		ps.rows[HostID(h.ID)] = h
 	}
@@ -459,6 +461,9 @@ func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.UUID, error) {
 	hosts := map[int]uuid.UUID{}
 	for i, a := range plan.Actions {
+		if a.Host != nil {
+			ps.reasons[uuid.UUID(*a.Host)] = a.Reason
+		}
 		switch a.Kind {
 		case ActionBuy, ActionBuyReserve, ActionRightsize:
 			id, err := uuid.NewV7()
@@ -466,6 +471,7 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 				return nil, fmt.Errorf("name a host: %w", err)
 			}
 			ps.w.buys = append(ps.w.buys, requested(id, connection, *a.Offer, a))
+			ps.reasons[id] = a.Reason
 			hosts[i] = id
 		case ActionResume:
 			ps.w.resumes = append(ps.w.resumes, uuid.UUID(*a.Host))
@@ -676,7 +682,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, h := range ps.w.buys {
 			ps.note("host requested", "host_id", h.ID, "instance_type", h.InstanceType, "market", h.Market, "region", h.Region,
-				"reserve_mode", h.ReserveMode)
+				"zone_id", h.AvailabilityZoneID, "reserve_mode", h.ReserveMode, "reason", ps.reasons[h.ID].Message())
 		}
 		ps.result.Requested, moved = len(ps.w.buys), true
 	}
@@ -687,7 +693,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		ps.result.Resumed, moved = len(resumed), moved || len(resumed) > 0
 		for _, id := range resumed {
-			ps.note("reserve resuming", "host_id", id)
+			ps.note("reserve resuming", "host_id", id, "reason", ps.reasons[id].Message())
 		}
 	}
 	if len(ps.w.returns) > 0 {
@@ -697,7 +703,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, id := range returned {
 			wake = append(wake, id.String())
-			ps.note("host returning to the reserve", "host_id", id)
+			ps.note("host returning to the reserve", "host_id", id, "reason", ps.reasons[id].Message())
 		}
 		if err := ps.evictPacked(ctx, tx, returned); err != nil {
 			return err
@@ -707,7 +713,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	for _, d := range []struct {
 		ids    []uuid.UUID
 		reason string
-	}{{ps.w.drains, "idle"}, {ps.w.retirePreparing, "the reserve no longer needs it"}} {
+	}{{ps.w.drains, ReasonIdle.Message()}, {ps.w.retirePreparing, ReasonSurplus.Message()}} {
 		if len(d.ids) == 0 {
 			continue
 		}
@@ -734,7 +740,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			if slices.Contains(ps.w.handBacks, id) {
 				msg = "host handing Spot-tolerant work back"
 			}
-			ps.note(msg, "host_id", id)
+			ps.note(msg, "host_id", id, "reason", ps.reasons[id].Message())
 		}
 		if err := ps.c.containers.WakeReleasesOnHosts(ctx, tx, changed); err != nil {
 			return err
@@ -747,7 +753,7 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			return fmt.Errorf("retire reserves: %w", err)
 		}
 		for _, id := range retired {
-			ps.note("reserve retiring", "host_id", id)
+			ps.note("reserve retiring", "host_id", id, "reason", ps.reasons[id].Message())
 		}
 		ps.result.Retired, moved = len(retired), moved || len(retired) > 0
 	}
