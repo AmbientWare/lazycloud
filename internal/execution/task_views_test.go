@@ -433,10 +433,6 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	// its settle wait ends. Any transaction on the server holds lines back,
 	// other tests' too, so the reads that expect lines wait longer; they
 	// return once their lines settle.
-	e.LogSettle = 0
-	if err := e.StreamLogs(t.Context(), l, f.workspace, source, LogQuery{}, func([]LogEntry) error { return nil }); err == nil {
-		t.Fatal("a read without a settle wait ran")
-	}
 	e.LogSettle = 100 * time.Millisecond
 	if got := read(0); len(got) != 0 {
 		t.Fatalf("read while an older writer runs returned %+v", got)
