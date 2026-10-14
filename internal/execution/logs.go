@@ -156,12 +156,8 @@ func (c logPosition) less(o logPosition) bool {
 // followed task stream ends when the task is terminal and drained, a
 // container stream when the container has stopped and is drained, and a
 // workload stream only when ctx ends. It returns ErrNotFound before
-// emitting anything for a source outside the workspace, and refuses a read
-// without follow when LogSettle is not positive.
+// emitting anything for a source outside the workspace.
 func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, source LogSource, query LogQuery, emit func([]LogEntry) error) error {
-	if !query.Follow && e.LogSettle <= 0 {
-		return fmt.Errorf("log settle wait %s must be positive", e.LogSettle)
-	}
 	var wake <-chan struct{}
 	var idle *time.Timer
 	if query.Follow {
