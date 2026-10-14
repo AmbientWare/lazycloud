@@ -734,8 +734,8 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 }
 
 // A release of the reserves' agent build leaves them in place. A release
-// of another build buys their replacements first and retires none of them
-// before those are ready.
+// of another build buys their replacements first, retires none of them
+// before those are ready, and retires them all once they are.
 func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
@@ -755,8 +755,16 @@ func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 		t.Fatalf("plan after a release of the same build %+v, want nothing retired or bought", r)
 	}
 	release("1.2.0", strings.Repeat("c", 64))
+	stale := scan[int](t, o.pool, "select count(*)::int from hosts where reserve_mode is not null")
 	if r := plan(t, o); r.Retired != 0 || r.Requested == 0 {
 		t.Fatalf("plan after a release of another build %+v, want replacements bought and nothing retired", r)
+	}
+	run(t, o.pool, `update hosts set phase = 'stopped', state = 'offline', last_seen_at = now(), phase_at = now() - interval '1 hour',
+       prepared_agent_version = '1.2.0', image_evidence = 'unavailable',
+       spot_request_id = case when market = 'spot' then 'sir-' || left(id::text, 8) end
+where phase = 'requested' and reserve_mode is not null`)
+	if r := plan(t, o); r.Retired != stale || r.Requested != 0 {
+		t.Fatalf("plan once the replacements are ready %+v, want the %d reserves of the old build retired", r, stale)
 	}
 }
 

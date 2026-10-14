@@ -1568,12 +1568,13 @@ func (r reserveSupply) without(ps *pass, v *marketView, skip HostID) (FleetCapac
 	return total, large
 }
 
-// reserves walks market v's reserve supply in reserve order and keeps each
-// counted reserve while those kept do not cover the stopped target or none
-// fits the largest shape, and retires the rest: a pending one once the
-// kept reserves cover both, a ready one, or one that does not count, once
-// the kept ready ones do. What the supply lacks is bought once no work
-// waits in the market and arrivals have settled.
+// reserves walks market v's counted reserves in reserve order and keeps
+// each while those kept do not cover the stopped target or none fits the
+// largest shape, and retires the rest: a pending one once the kept
+// reserves cover both, a ready one once the kept ready ones do, and one
+// that does not count once those and the sleeping hosts do. What the
+// supply lacks is bought once no work waits in the market and arrivals
+// have settled.
 func (ps *pass) reserves(v *marketView) {
 	ps.retireUnresumable(v)
 	counted := slices.DeleteFunc(slices.Clone(v.supply.counted), func(h *FleetHost) bool { return !h.reserve() || v.retired[h.ID] })
@@ -1597,7 +1598,15 @@ func (ps *pass) reserves(v *marketView) {
 			ps.retire(v, h)
 		}
 	}
-	if readyCovers {
+	// What does not count retires once the ready supply covers the target
+	// without it; a counted reserve retires on the reserves alone, so a
+	// host that may yet take work never retires one.
+	for _, h := range v.supply.sleeping {
+		if h.held() && !ps.anchored(*h) {
+			ready, readyLarge = ready.Plus(h.Usable), readyLarge || ps.fitsLargest(v, *h)
+		}
+	}
+	if ready.Covers(v.Stopped) && readyLarge {
 		for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !h.Protected && h.State != FleetStopping }) {
 			if !ps.placed(v)(*h) && !v.retired[h.ID] {
 				ps.retire(v, h)
