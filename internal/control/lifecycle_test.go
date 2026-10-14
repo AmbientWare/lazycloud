@@ -154,8 +154,8 @@ func TestRunningContainersCountReadyAndDrainingAcrossReleases(t *testing.T) {
 	_, err := pool.Exec(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256('h'), 'online', 64000, 1 << 36) returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-select $1, c.release_id, c.state, case when c.state = 'pending' then null else host.id end, 1, 1000, 1 << 28
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+select $1, c.release_id, (select workload_id from releases where id = c.release_id), c.state, case when c.state = 'pending' then null else host.id end, 1, 1000, 1 << 28
 from host, (values ($2::uuid, 'ready'), ($2, 'draining'), ($2, 'stopped'),
                    ($3::uuid, 'ready'), ($3, 'pending'), ($3, 'starting'), ($3, 'stopped'),
                    ($4::uuid, 'ready')) as c (release_id, state)`,

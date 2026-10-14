@@ -85,8 +85,8 @@ select uuidv7(-make_interval(secs => s)), $1, $2, $3, 'succeeded', 1,
        now() - make_interval(secs => s), now() - make_interval(secs => s) + interval '20 ms',
        now() - make_interval(secs => s) + interval '1 s'
 from (select 86400 + random() * 29 * 86400 as s from generate_series(1, $4::int)) x`, uuid.UUID(f.workspace), f.workload, f.release, n)
-		f.exec1(`insert into containers (id, workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
-select uuidv7(-make_interval(secs => s)), $1, $2, 'stopped', 1, 1000, 1 << 30,
+		f.exec1(`insert into containers (id, workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
+select uuidv7(-make_interval(secs => s)), $1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, 1 << 30,
        now() - make_interval(secs => s), now() - make_interval(secs => s), now() - make_interval(secs => s) + interval '5 minutes', 'stopped'
 from (select 86400 + random() * 29 * 86400 as s from generate_series(1, $3::int)) x`, uuid.UUID(f.workspace), f.release, n/10)
 		f.exec1("analyze tasks, containers")

@@ -107,9 +107,9 @@ with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
              select id, n, s, sha256(n::text::bytea), sha256('src') from wl,
              (values (1, '{"volumes":[{"name":"models","mount_path":"/m"}]}'::jsonb), (2, '{}'::jsonb)) x(n, s)
-             returning id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, assigned_at, gpu_count, gpu_type)
-select ws.id, rel.id, 'stopped', 1, 1000, 1, now(), 1, 'L4' from ws, rel`); err != nil {
+             returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, assigned_at, gpu_count, gpu_type)
+select ws.id, rel.id, rel.workload_id, 'stopped', 1, 1000, 1, now(), 1, 'L4' from ws, rel`); err != nil {
 		t.Fatal(err)
 	}
 	dbtest.OwnWorkspaces(t, pool)

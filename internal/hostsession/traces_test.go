@@ -60,8 +60,8 @@ func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
 	again := func(of uuid.UUID) uuid.UUID {
 		t.Helper()
 		var id uuid.UUID
-		if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-			select workspace_id, release_id, 'starting', host_id, 1, 1000, 1 << 28, now() from containers where id = $1 returning id`, of).Scan(&id); err != nil {
+		if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+			select workspace_id, release_id, (select workload_id from releases where id = release_id), 'starting', host_id, 1, 1000, 1 << 28, now() from containers where id = $1 returning id`, of).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		return id

@@ -98,8 +98,8 @@ func TestLostHostLocksContainersBeforeTasks(t *testing.T) {
 	}
 	last := uuid.Max
 	exec(t, pool, `
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-values ($1, $2, $3, 'ready', $4, 1, 1000, 1 << 28)`, last, uuid.UUID(f.workspace), f.release, uuid.UUID(host))
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+values ($1, $2, $3, (select workload_id from releases where id = $3), 'ready', $4, 1, 1000, 1 << 28)`, last, uuid.UUID(f.workspace), f.release, uuid.UUID(host))
 	exec(t, pool, "update hosts set last_seen_at = now() - interval '1 minute'")
 
 	report, err := pool.Begin(t.Context())
@@ -199,8 +199,8 @@ func TestPreemptionRetriesWithoutSpendingAttemptsUntilItsBound(t *testing.T) {
 		var attempt, container uuid.UUID
 		err := pool.QueryRow(t.Context(), `
 with ctr as (
-    insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-    select workspace_id, release_id, 'ready', $2, 1, 1000, 1 << 28 from tasks where id = $1 returning id
+    insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+    select workspace_id, release_id, (select workload_id from releases where id = release_id), 'ready', $2, 1, 1000, 1 << 28 from tasks where id = $1 returning id
 ), att as (
     insert into attempts (task_id, number, container_id, state, deadline_at)
     select t.id, t.attempt_count + 1, ctr.id, 'running', now() + interval '1 hour' from tasks t, ctr where t.id = $1

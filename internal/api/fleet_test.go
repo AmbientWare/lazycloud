@@ -81,9 +81,9 @@ with ws as (insert into workspaces (name) values ('fleet-pending') returning id)
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); err != nil {
+             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select app.workspace_id, rel.id, rel.workload_id, 'pending', 1, 8000, 1 << 30 from app, rel`); err != nil {
 		t.Fatal(err)
 	}
 

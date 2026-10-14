@@ -32,8 +32,8 @@ func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
 		t.Fatalf("without containers %s, want queued", got)
 	}
 
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-	               values ($1, $2, 'pending', 1, 1000, 1 << 28)`, uuid.UUID(f.workspace), f.release)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+	               values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 28)`, uuid.UUID(f.workspace), f.release)
 	if got := pendingReason(t, e, f, task.ID); got != PendingCapacityUnavailable {
 		t.Fatalf("with an unplaced container %s, want capacity_unavailable", got)
 	}

@@ -46,9 +46,9 @@ func TestMeteringReadsLiveAndRecentContainersOnly(t *testing.T) {
 	ws := f.workspace(owner)
 	rel := f.release(ws)
 	host := f.host(time.Now())
-	f.exec(`insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes,
+	f.exec(`insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes,
 	                                assigned_at, ready_at, stopped_at, stop_reason)
-		select $1, $2, 'stopped', $3, 1, 1000, 1 << 30, now() - interval '30 days', now() - interval '30 days',
+		select $1, $2, (select workload_id from releases where id = $2), 'stopped', $3, 1, 1000, 1 << 30, now() - interval '30 days', now() - interval '30 days',
 		       now() - interval '29 days', 'stopped'
 		from generate_series(1, 2000)`, ws, rel.id, host)
 	f.exec(`insert into users (email) select 'bulk' || n || '@example.test' from generate_series(1, 1000) n`)
@@ -87,8 +87,8 @@ func TestCostsByTaskReadOnlyTheirContainersAttempts(t *testing.T) {
 	// Month-old history: 2,000 finished tasks with attempts in other,
 	// short-lived containers.
 	f.exec(`with old as (
-    insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, stopped_at, stop_reason)
-    select $1, $2, 'stopped', $3, 1, 1000, 1 << 30, now() - interval '30 days', now() - interval '30 days', now() - interval '30 days' + interval '1 minute', 'stopped'
+    insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, stopped_at, stop_reason)
+    select $1, $2, (select workload_id from releases where id = $2), 'stopped', $3, 1, 1000, 1 << 30, now() - interval '30 days', now() - interval '30 days', now() - interval '30 days' + interval '1 minute', 'stopped'
     from generate_series(1, 200) returning id
 ), t as (
     insert into tasks (workspace_id, workload_id, release_id, status, max_attempts, finished_at)

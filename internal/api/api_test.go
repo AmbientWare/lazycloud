@@ -304,8 +304,8 @@ func (e *env) runOnHost(result string) {
 	err := e.pool.QueryRow(ctx, `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256('h'), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-             select w.id, r.id, 'ready', host.id, 1, 1000, 1 << 28
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+             select w.id, r.id, (select workload_id from releases where id = r.id), 'ready', host.id, 1, 1000, 1 << 28
              from workspaces w, releases r, host returning id)
 select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 	if err != nil {

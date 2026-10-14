@@ -197,8 +197,8 @@ func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
 			for _, at := range c.replacements {
 				var id uuid.UUID
 				err := f.pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
-values ($1, $2, case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
+values ($1, $2, (select workload_id from releases where id = $2), case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
 					ws, rel.id, host, at, old).Scan(&id)
 				if err != nil {
 					t.Fatal(err)

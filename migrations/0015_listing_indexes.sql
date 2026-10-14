@@ -14,6 +14,7 @@ create index tasks_release_listing on tasks (release_id, status, spawned, id des
 -- containers have none.
 alter table containers add column workload_id uuid references workloads (id) on delete cascade;
 update containers c set workload_id = r.workload_id from releases r where r.id = c.release_id;
+alter table containers add constraint containers_workload check ((release_id is null) = (workload_id is null));
 -- Container listings of an app or workload, all or live.
 create index containers_workload_recent on containers (workload_id, id desc);
 create index containers_workload_live on containers (workload_id, id desc) where state <> 'stopped';

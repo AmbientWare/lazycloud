@@ -23,8 +23,8 @@ func (f *fixture) secondHost() compute.HostID {
 func (f *fixture) containerOn(host compute.HostID) uuid.UUID {
 	f.t.Helper()
 	var id uuid.UUID
-	f.exec(`insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-		values ($1, $2, 'ready', $3, 1, 1000, 1000) returning id`, &id, uuid.UUID(f.ws), f.release, uuid.UUID(host))
+	f.exec(`insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+		values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1000) returning id`, &id, uuid.UUID(f.ws), f.release, uuid.UUID(host))
 	return id
 }
 

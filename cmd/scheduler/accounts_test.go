@@ -304,8 +304,8 @@ func readyContainer(t *testing.T, pool *pgxpool.Pool, ws identity.WorkspaceID, r
 	err := pool.QueryRow(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
               values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32, now()) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             select $1, $2, 'ready', host.id, 1, 1000, 1 << 28, now(), now() from host returning id)
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             select $1, $2, (select workload_id from releases where id = $2), 'ready', host.id, 1, 1000, 1 << 28, now(), now() from host returning id)
 select host.id, ctr.id from host, ctr`, uuid.UUID(ws), release).Scan(&host, &container)
 	if err != nil {
 		t.Fatal(err)

@@ -21,8 +21,8 @@ func TestContainersCannotControlWorkloadsTheyDidNotStart(t *testing.T) {
 	host, ctx := h.enroll()
 	_, container := h.startingContainer(host)
 	var other uuid.UUID
-	if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, purpose)
-select workspace_id, release_id, 'ready', host_id, 1, 1000, 1 << 28, now(), 'instance' from containers where id = $1 returning id`,
+	if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, purpose)
+select workspace_id, release_id, (select workload_id from releases where id = release_id), 'ready', host_id, 1, 1000, 1 << 28, now(), 'instance' from containers where id = $1 returning id`,
 		uuid.UUID(container)).Scan(&other); err != nil {
 		t.Fatal(err)
 	}

@@ -35,8 +35,8 @@ func TestGPUWorkTakesAnAcceptedModelAndCountsReservedGPUs(t *testing.T) {
 	t4 := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, CPU: 16000, Memory: 64 * gib, GPUType: "T4", GPUCount: 4})
 	// A live container naming a model without a count reserves one T4.
 	held := newRelease(t, o.pool, dev, `{"resources": {"gpu": ["T4"]}}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4))
 
 	got := constrained(t, o, dev,
 		`{"resources": {"gpu": ["L4", "T4"], "gpu_count": 2}}`,

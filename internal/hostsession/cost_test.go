@@ -15,8 +15,8 @@ import (
 func (h *harness) replicate(container uuid.UUID, n int) {
 	h.t.Helper()
 	h.exec(`
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select workspace_id, release_id, 'starting', host_id, slots, cpu_millis, memory_bytes, now()
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+select workspace_id, release_id, (select workload_id from releases where id = release_id), 'starting', host_id, slots, cpu_millis, memory_bytes, now()
 from containers, generate_series(1, $2) where id = $1`, container, n)
 }
 

@@ -69,8 +69,8 @@ func TestReconcileStopsMissingAndUnknownContainers(t *testing.T) {
 	var starting ContainerID
 	var startingID uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.workspace), f.release, uuid.UUID(host)).Scan(&startingID); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.workspace), f.release, uuid.UUID(host)).Scan(&startingID); err != nil {
 		t.Fatal(err)
 	}
 	starting = ContainerID(startingID)
@@ -138,8 +138,8 @@ func TestHelloAdoptsStartingAndAppliesExited(t *testing.T) {
 	host, adopted := placedContainer(t, pool, f, ContainerReady, 1)
 	var exitedID uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.workspace), f.release, uuid.UUID(host)).Scan(&exitedID); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.workspace), f.release, uuid.UUID(host)).Scan(&exitedID); err != nil {
 		t.Fatal(err)
 	}
 	exited := ContainerID(exitedID)
