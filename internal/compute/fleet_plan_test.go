@@ -50,7 +50,7 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 
 // idle makes a serving host idle for an hour.
 func idle(h FleetHost) FleetHost {
-	h.IdleSince = ptr(offerNow.Add(-time.Hour))
+	h.IdleSince, h.FreeSince = ptr(offerNow.Add(-time.Hour)), ptr(offerNow.Add(-time.Hour))
 	return h
 }
 
@@ -484,7 +484,7 @@ func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	idleFor := func(id byte, market Market) FleetHost {
 		h := planHost(id, planSmall, FleetServing)
-		h.Market, h.IdleSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout))
+		h.Market, h.IdleSince, h.FreeSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout)), ptr(offerNow.Add(-p.SpotIdleTimeout))
 		return h
 	}
 	plan := PlanFleet(p, planSnapshot(t, idleFor(1, MarketSpot), idleFor(2, MarketOnDemand)))
@@ -498,7 +498,7 @@ func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
 func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
-	fresh.IdleSince = ptr(offerNow.Add(-p.IdleTimeout + time.Second))
+	fresh.IdleSince, fresh.FreeSince = ptr(offerNow.Add(-p.IdleTimeout+time.Second)), ptr(offerNow.Add(-p.IdleTimeout+time.Second))
 	old := idle(planHost(2, planSmall, FleetServing))
 	wanted := idle(planHost(3, planLarge, FleetServing))
 	s := planSnapshot(t, fresh, old, wanted)
@@ -806,7 +806,7 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 	resumed.PhaseAt = offerNow.Add(-over)
 	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
 		h := resumed
-		h.IdleSince = ptr(offerNow.Add(-idleFor))
+		h.IdleSince, h.FreeSince = ptr(offerNow.Add(-idleFor)), ptr(offerNow.Add(-idleFor))
 		s := planSnapshot(t, append([]FleetHost{h}, hosts...)...)
 		s.Offers.Catalog = FleetCatalog()
 		s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: resumed.PhaseAt}

@@ -24,7 +24,7 @@ func cloudHost(t *testing.T, o owners, market compute.Market, instance string) c
 // idleFor makes a host idle for ago.
 func idleFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
 	t.Helper()
-	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
+	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2), free_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
 }
 
 // terminated lists the instance ids every TerminateInstances call named.

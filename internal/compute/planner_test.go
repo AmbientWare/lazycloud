@@ -442,7 +442,7 @@ func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
 		Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 4000, Memory: 28 * gib, GPUType: "T4", GPUCount: 1,
 		Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", InstanceID: "i-gpu",
 	})
-	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge', idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge', idle_since = now() - interval '1 hour', free_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
 	w := runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{"kind": "function"}`), host)
 
 	plan(t, o)

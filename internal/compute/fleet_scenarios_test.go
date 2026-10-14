@@ -1249,9 +1249,12 @@ func (s *sim) apply(plan FleetPlan) {
 		}
 	}
 	for _, h := range s.hosts {
-		h.IdleSince = nil
+		h.IdleSince, h.FreeSince = nil, nil
 		if since, ok := plan.IdleSince[h.ID]; ok {
 			h.IdleSince = ptr(since)
+		}
+		if since, ok := plan.FreeSince[h.ID]; ok {
+			h.FreeSince = ptr(since)
 		}
 	}
 }
@@ -2014,5 +2017,41 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 	}
 	if on <= off {
 		t.Errorf("packing made $%.2f, $%.2f unpacked", on, off)
+	}
+}
+
+// mixedLoad is prodcheck6's Spot-tolerant CPU driver for d: a quick task
+// every 2 s that runs well under a second, two medium tasks every 20 s that
+// run 5 minutes, and two long ones every minute that run 10.
+func mixedLoad(d time.Duration) []simArrival {
+	quick := Requirement{Preemptible: true, CPUMillis: 250, MemoryBytes: 512 << 20}
+	task := Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
+	var out []simArrival
+	for at := time.Duration(0); at < d; at += 2 * time.Second {
+		out = append(out, simArrival{at: at, need: quick, count: 1, runs: (100 + (at/time.Second*37)%300) * time.Millisecond, fn: "quick"})
+		if at%(20*time.Second) == 0 {
+			out = append(out, simArrival{at: at, need: task, count: 2, runs: 5 * time.Minute, fn: "medium"})
+		}
+		if at%time.Minute == 0 {
+			out = append(out, simArrival{at: at, need: task, count: 2, runs: 10 * time.Minute, fn: "long"})
+		}
+	}
+	return out
+}
+
+// Under prodcheck6's mixed load, where quick tasks move a warm slot between
+// a busy host and an idle one from pass to pass, the Spot market releases
+// no host it buys back and no host leaves without running a container.
+func TestASwingingLoadReleasesNoHostItBuysBack(t *testing.T) {
+	t.Parallel()
+	s := newProdSim(t, false)
+	s.maxHosts = 250
+	r := s.run(30*time.Minute, mixedLoad(30*time.Minute))
+	if len(r.violations) > 0 {
+		t.Fatalf("violations %v", r.violations)
+	}
+	spot := ReserveMarket{Preemptible: true}
+	if r.rebought > 0 || r.unusedBy[spot] > 0 {
+		t.Errorf("bought back %d within %s of a release; %d Spot CPU hosts left without running a container", r.rebought, simRebuy, r.unusedBy[spot])
 	}
 }

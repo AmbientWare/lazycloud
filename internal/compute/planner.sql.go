@@ -99,7 +99,7 @@ func (q *Queries) BatchWaits(ctx context.Context, arg BatchWaitsParams) ([]Batch
 const drainHosts = `-- name: DrainHosts :many
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
-    idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    idle_since = null, free_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -474,7 +474,7 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
+       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.free_since, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
        coalesce(h.start_refused_at > now() - make_interval(secs => $1::float8), false)::bool as start_refused,
@@ -551,6 +551,7 @@ type PlannerHostsRow struct {
 	RolloutBucket         int32
 	UpdatingUntil         *time.Time
 	IdleSince             *time.Time
+	FreeSince             *time.Time
 	Replaces              *uuid.UUID
 	RightsizeRefusedAt    *time.Time
 	HandsBackAt           *time.Time
@@ -623,6 +624,7 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 			&i.RolloutBucket,
 			&i.UpdatingUntil,
 			&i.IdleSince,
+			&i.FreeSince,
 			&i.Replaces,
 			&i.RightsizeRefusedAt,
 			&i.HandsBackAt,
@@ -795,7 +797,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = null, idle_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
+    reserve_mode = null, idle_since = null, free_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
 where id = any($1::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id
 `
@@ -863,7 +865,7 @@ const returnToReserve = `-- name: ReturnToReserve :many
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
-    idle_since = null, hands_back_at = null, updated_at = now()
+    idle_since = null, free_since = null, hands_back_at = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -960,12 +962,13 @@ func (q *Queries) SetHandsBack(ctx context.Context, arg SetHandsBackParams) ([]u
 
 const setIdleSince = `-- name: SetIdleSince :exec
 update hosts h
-set idle_since = v.idle_since
-from jsonb_to_recordset($1::jsonb) as v(id uuid, idle_since timestamptz)
-where h.id = v.id and h.idle_since is distinct from v.idle_since
+set idle_since = v.idle_since, free_since = v.free_since
+from jsonb_to_recordset($1::jsonb) as v(id uuid, idle_since timestamptz, free_since timestamptz)
+where h.id = v.id and (h.idle_since is distinct from v.idle_since or h.free_since is distinct from v.free_since)
 `
 
-// When each changed serving host became idle; null clears it.
+// When each changed serving host became idle, and free of warm slots; null
+// clears either.
 func (q *Queries) SetIdleSince(ctx context.Context, hosts []byte) error {
 	_, err := q.db.Exec(ctx, setIdleSince, hosts)
 	return err

@@ -19,3 +19,7 @@ alter table containers drop constraint containers_capacity_wait_check;
 alter table containers add constraint containers_capacity_wait_check check (capacity_wait in (
     'provisioning', 'limit', 'batch', 'deferred', 'cooldown', 'quota', 'margin', 'no_offer'
 ));
+
+-- When an idle serving host last ran work or held a warm slot; it leaves
+-- once that is its market's idle timeout ago.
+alter table hosts add column free_since timestamptz;

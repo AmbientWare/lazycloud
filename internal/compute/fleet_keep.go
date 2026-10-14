@@ -8,18 +8,26 @@ import (
 )
 
 // idle records when each serving host without containers or pending work
-// for it became idle.
+// for it became idle, and when each of those that holds no warm slot last
+// held one: a slot that moves between hosts from pass to pass keeps both.
 func (ps *pass) idle() {
 	for _, h := range ps.s.Hosts {
 		if h.State != FleetServing || h.Containers > 0 || ps.claimed[h.ID] {
 			continue
 		}
-		since := ps.s.Now
-		if h.IdleSince != nil {
-			since = *h.IdleSince
+		ps.plan.IdleSince[h.ID] = since(h.IdleSince, ps.s.Now)
+		if len(ps.holding[h.ID]) == 0 {
+			ps.plan.FreeSince[h.ID] = since(h.FreeSince, ps.s.Now)
 		}
-		ps.plan.IdleSince[h.ID] = since
 	}
+}
+
+// since is the recorded time, or now for none.
+func since(recorded *time.Time, now time.Time) time.Time {
+	if recorded != nil {
+		return *recorded
+	}
+	return now
 }
 
 // idleLong reports a host idle for the idle timeout.
@@ -29,14 +37,14 @@ func (ps *pass) idleLong(h FleetHost) bool {
 }
 
 // retain releases the idle hosts the market no longer needs once each has
-// been idle for its market's timeout.
+// held no warm slot and run no work for its market's timeout.
 func (ps *pass) retain(v *marketView) {
 	timeout := ps.p.IdleTimeout
 	if v.m.spotCPU() {
 		timeout = ps.p.SpotIdleTimeout
 	}
 	for _, h := range ps.leavers(v) {
-		if ps.s.Now.Sub(ps.plan.IdleSince[h.ID]) >= timeout {
+		if ps.s.Now.Sub(ps.plan.FreeSince[h.ID]) >= timeout {
 			ps.leave(v, h)
 		}
 	}

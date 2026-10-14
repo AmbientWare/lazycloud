@@ -50,7 +50,7 @@ func stoppedReserve(t *testing.T, o owners, typ, instance string) compute.HostID
 func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	t.Helper()
 	host := fleetHost(t, o, compute.PhaseReady, typ, instance)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour', free_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
 	return host
 }
 
@@ -526,7 +526,7 @@ func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
 	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")
 	recent := idleHost(t, o, "m7i.large", "i-0000000000000f902")
 	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, []uuid.UUID{uuid.UUID(idle), uuid.UUID(recent)})
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute', free_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
 
 	if r := planCapacity(t, o); r.Drained != 1 || r.Returned != 0 {
 		t.Fatalf("plan %+v, want the idle connection host drained", r)
@@ -804,7 +804,7 @@ func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *te
 	if plan(t, o); largeBought(t, o) != 0 {
 		t.Fatal("bought a large host while the resumed one idles")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
 		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
@@ -852,7 +852,7 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 	if plan(t, o); floorBought(t, o) != 0 {
 		t.Fatal("bought a floor reserve while the idle resumed host is due back")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) || floorBought(t, o) != 0 {
 		t.Fatalf("plan %+v, floor host %s, %d floor reserves bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, floor).Phase, floorBought(t, o))
@@ -870,12 +870,12 @@ func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
 	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
 where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	serveFromReserve(t, o, floor)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes', free_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute', free_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
 	if r := plan(t, o); r.Returned != 0 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
 		t.Fatalf("plan %+v, warm host %s; want the warm host kept and nothing else done yet", r, hostRowOf(t, o, warm).Phase)
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
 	r := plan(t, o)
 	if r.Returned != 1 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) ||
 		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
