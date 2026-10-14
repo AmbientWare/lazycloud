@@ -229,8 +229,9 @@ func listingCost(t *testing.T, pool *pgxpool.Pool, listings []listing, label str
 }
 
 // settle vacuums until every page of tasks and containers is all-visible, as
-// the history autovacuum has passed over is in production. One vacuum right
-// after the writes does not always mark every page.
+// the history autovacuum has passed over is in production. The test server
+// commits asynchronously, and vacuum leaves a page unmarked while a commit
+// that wrote to it is not yet flushed.
 func settle(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	for {
