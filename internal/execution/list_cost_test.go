@@ -24,6 +24,15 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Other workspaces' work, as the tables hold in production.
+	for range 30 {
+		g := newRelease(t, pool, `{}`)
+		exec(t, pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
+select $1, $2, 'stopped', 1, 1000, 1 << 28 from generate_series(1, 500)`, g.workspace, g.release)
+		exec(t, pool, `insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts)
+select $1, $2, $3, 'succeeded', 1, 1 from generate_series(1, 300)`, g.workspace, g.workload, g.release)
+	}
+
 	page := int32(101)
 	scans := []scan{
 		{"tasks", listTasks, []any{f.workspace, nil, false, uuid.Max, page}},
