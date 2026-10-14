@@ -18,7 +18,7 @@ type PublishedMarket struct {
 	WarmFree      FleetCapacity `json:"warm_free"`
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
-	Reason        MarketReason  `json:"reason"`
+	Reason        CapacityWait  `json:"reason"`
 	// FloorShortSince is when the stopped target went short; the next pass
 	// reads it back.
 	FloorShortSince *time.Time `json:"floor_short_since,omitempty"`
@@ -54,7 +54,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out.Decision = fmt.Sprintf("load %s, running free %s of %s, starting %s, reserve ready %s of %s, preparing %s, short %s and %s, actions [%s], reason %q",
 		describe(mp.Load), describe(mp.WarmFree), describe(mp.WarmTarget), describe(mp.WarmPending), describe(mp.ReserveReady),
 		describe(mp.StoppedTarget), describe(mp.ReservePending), describe(mp.Shortfall), describe(mp.StoppedShortfall),
-		strings.Join(names, ", "), mp.Reason)
+		strings.Join(names, ", "), mp.Reason.Message())
 	return out
 }
 

@@ -144,7 +144,7 @@ func TestPlanReplacesAStaleReserveBeforeRetiringIt(t *testing.T) {
 		t.Fatalf("replaced: %v", got)
 	}
 	snapshot := planSnapshot(t, stale)
-	snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
+	snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot)); slices.Contains(got, ActionResume) {
 		t.Fatalf("CPU work resumed a stale reserve: %v", got)
 	}
@@ -157,7 +157,7 @@ func TestPendingWorkBuysPastAHostDueAnAgentUpdate(t *testing.T) {
 		h := planHost(1, planSmall, FleetServing)
 		h.UpdateDue = due
 		snapshot := planSnapshot(t, h)
-		snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
+		snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 		n := 0
 		for _, a := range PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot).Actions {
 			if a.Kind == ActionBuy {
@@ -254,7 +254,7 @@ func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
 			hosts = append(hosts, planHost(byte(i+1), planSmall, FleetStopped))
 		}
 		s := planSnapshot(t, hosts...)
-		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, CPUMillis: 4000, MemoryBytes: 4 * gib}, Containers: []PendingContainer{{ID: uuid.New()}}}}
+		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, CPUMillis: 4000, MemoryBytes: 4 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 		plan := PlanFleet(planPolicy(FleetCapacity{}, c.target), s)
 		if borrowed := len(actionsOf(plan, ActionResume)) == 1; borrowed != c.borrows {
 			t.Errorf("%d reserves, target %+v: actions %+v", c.reserves, c.target, plan.Actions)
@@ -312,7 +312,7 @@ func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
 
 func pendingOne(need Requirement, host *HostID) (DemandGroup, uuid.UUID) {
 	id := uuid.New()
-	return DemandGroup{Need: need, Containers: []PendingContainer{{ID: id, Host: host}}}, id
+	return DemandGroup{Need: need, Containers: []PendingContainer{{ID: id, Since: offerNow, Host: host}}}, id
 }
 
 func waitOf(t *testing.T, plan FleetPlan, id uuid.UUID) ContainerWait {
@@ -363,7 +363,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 
 	s.HostRoom = 0
 	plan = PlanFleet(p, s)
-	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != ReasonFleetLimit {
+	if w := waitOf(t, plan, id); len(plan.Actions) > 0 || *w.Wait != WaitLimit || marketPlan(t, plan, onDemand).Reason != WaitLimit {
 		t.Fatalf("fleet limit: %+v %+v", plan.Actions, w)
 	}
 }
@@ -372,7 +372,7 @@ func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
 	need := Requirement{CPUMillis: 3000, MemoryBytes: 4 * gib}
-	s.Pending = []DemandGroup{{Need: need, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{{Need: need, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}, {ID: uuid.New(), Since: offerNow}}}}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
 	if got := boughtTypes(plan); !slices.Equal(got, []string{"c6a.4xlarge"}) || len(plan.Actions[0].Containers) != 2 {
 		t.Fatalf("two 3 CPU containers: %+v", plan.Actions)
@@ -382,7 +382,7 @@ func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
 func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 	plan := PlanFleet(planPolicy(large.Times(20), FleetCapacity{}), planSnapshot(t))
 	mp := marketPlan(t, plan, onDemand)
-	if n := len(actionsOf(plan, ActionBuy)); n != 16 || mp.Reason != ReasonActionCap || mp.Shortfall.Empty() {
+	if n := len(actionsOf(plan, ActionBuy)); n != 16 || mp.Reason != WaitDeferred || mp.Shortfall.Empty() {
 		t.Fatalf("%d buys, reason %q, short %+v", n, mp.Reason, mp.Shortfall)
 	}
 }
@@ -472,7 +472,7 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 			t.Errorf("headroom %s while work waits", a.Kind)
 		}
 	}
-	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonDemand {
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != WaitDemand {
 		t.Errorf("reason %q", mp.Reason)
 	}
 }
@@ -813,7 +813,7 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 		return s
 	}
 	plan := PlanFleet(p, snapshot(under))
-	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(plan.Actions) > 0 {
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != WaitReturning || len(plan.Actions) > 0 {
 		t.Fatalf("idle within the timeout: reason %q, actions %+v", mp.Reason, plan.Actions)
 	}
 	plan = PlanFleet(p, snapshot(over))
@@ -834,11 +834,11 @@ func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
 	back := planHost(1, planSmall, FleetServing)
 	back.PhaseAt, back.Load, back.Containers = offerNow, cpuGiB(1000, 1), 1
 	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, back))
-	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonReturning || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != WaitReturning || len(actionsOf(plan, ActionBuyReserve)) > 0 {
 		t.Fatalf("a host may return: reason %q, actions %+v", mp.Reason, plan.Actions)
 	}
 	plan = PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t))
-	if mp := marketPlan(t, plan, onDemand); mp.Reason != ReasonNone || len(actionsOf(plan, ActionBuyReserve)) != 1 {
+	if mp := marketPlan(t, plan, onDemand); mp.Reason != WaitNone || len(actionsOf(plan, ActionBuyReserve)) != 1 {
 		t.Fatalf("no host could return: reason %q, actions %+v", mp.Reason, plan.Actions)
 	}
 }
@@ -847,19 +847,19 @@ func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
 // a vCPU quota, the purchase margin, or none at all.
 func TestAnUncoveredSlotNamesTheExclusion(t *testing.T) {
 	for _, c := range []struct {
-		want    MarketReason
+		want    CapacityWait
 		exclude func(*Policy, *OfferInputs)
 	}{
-		{ReasonCooldown, func(_ *Policy, in *OfferInputs) {
+		{WaitCooldown, func(_ *Policy, in *OfferInputs) {
 			for _, typ := range in.Catalog {
 				in.Cooldowns = append(in.Cooldowns, OfferCooldown{Region: "us-east-2", InstanceType: typ.Name, Market: MarketOnDemand, Until: offerNow.Add(time.Hour)})
 			}
 		}},
-		{ReasonQuota, func(_ *Policy, in *OfferInputs) {
+		{WaitQuota, func(_ *Policy, in *OfferInputs) {
 			in.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}}}
 		}},
-		{ReasonMargin, func(p *Policy, _ *OfferInputs) { p.MarginPercent = 100 }},
-		{ReasonNoOffer, func(_ *Policy, in *OfferInputs) { in.Networks = nil }},
+		{WaitMargin, func(p *Policy, _ *OfferInputs) { p.MarginPercent = 100 }},
+		{WaitNoOffer, func(_ *Policy, in *OfferInputs) { in.Networks = nil }},
 	} {
 		p := planPolicy(small, FleetCapacity{})
 		s := planSnapshot(t)
@@ -888,8 +888,8 @@ func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
 
 	s, id := batching()
 	plan := PlanFleet(p, s)
-	if len(plan.Actions) > 0 || plan.BatchWait != s.BatchWait || waitOf(t, plan, id).Wait != nil ||
-		marketPlan(t, plan, onDemand).Reason != ReasonBatch {
+	if w := waitOf(t, plan, id).Wait; len(plan.Actions) > 0 || plan.BatchWait != s.BatchWait || w == nil || *w != WaitBatch ||
+		marketPlan(t, plan, onDemand).Reason != WaitBatch {
 		t.Fatalf("while arriving: actions %+v, batch %s, wait %+v, reason %q", plan.Actions, plan.BatchWait, waitOf(t, plan, id),
 			marketPlan(t, plan, onDemand).Reason)
 	}
@@ -954,7 +954,7 @@ func TestGPUWorkResumesAReserveOfItsMarket(t *testing.T) {
 	}{{true, HostID{1}}, {false, HostID{2}}} {
 		s := gpuPlanSnapshot(t, gpuReserve(t, 1, MarketSpot), gpuReserve(t, 2, MarketOnDemand))
 		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: c.preemptible, GPUs: []string{"L4"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
-			Containers: []PendingContainer{{ID: uuid.New()}}}}
+			Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 		plan := PlanFleet(gpuPolicy(), s)
 		if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{c.want}) || len(boughtForWork(plan)) > 0 {
 			t.Errorf("preemptible %t: resumed %v, bought %v", c.preemptible, got, boughtForWork(plan))
@@ -1006,6 +1006,31 @@ func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
 	}
 }
 
+// Spot-tolerant GPU work no Spot offer can host buys an on-demand host at a
+// loss only once it has waited the Spot wait; until then it waits on the
+// cooling Spot pools.
+func TestSpotGPUWorkBuysOnDemandOnceItHasWaitedTheSpotWait(t *testing.T) {
+	p := gpuPolicy()
+	for _, c := range []struct {
+		waited time.Duration
+		buys   bool
+	}{{0, false}, {p.SpotWait, true}} {
+		s := gpuPlanSnapshot(t)
+		s.Offers.Cooldowns = slices.Concat(spotCooled("L4"), spotCooled("A10G"))
+		id := uuid.New()
+		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
+			Containers: []PendingContainer{{ID: id, Since: offerNow.Add(-c.waited)}}}}
+		plan := PlanFleet(p, s)
+		bought := boughtForWork(plan)
+		if (len(bought) == 1) != c.buys {
+			t.Errorf("after %s: bought %v, want a purchase %t", c.waited, bought, c.buys)
+		}
+		if w := waitOf(t, plan, id); !c.buys && (w.Wait == nil || *w.Wait != WaitCooldown) {
+			t.Errorf("after %s: wait %+v, want the cooling Spot pools", c.waited, w)
+		}
+	}
+}
+
 // A Spot GPU market whose reserve serves waits for it to return rather than
 // buy another, however long it has been short; the CPU Spot market buys
 // once the return wait passes.
@@ -1045,8 +1070,8 @@ func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
 	tiny := planHost(3, planSmall, FleetServing)
 	s := planSnapshot(t, full, coming, tiny)
 	s.Pending = []DemandGroup{
-		{Need: Requirement{CPUMillis: 4000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &full.ID}}},
-		{Need: Requirement{CPUMillis: 16000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Host: &tiny.ID}}},
+		{Need: Requirement{CPUMillis: 4000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow, Host: &full.ID}}},
+		{Need: Requirement{CPUMillis: 16000, MemoryBytes: 8 * gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow, Host: &tiny.ID}}},
 	}
 	_, cools := planOwner(planPolicy(FleetCapacity{}, FleetCapacity{}), s, time.Minute)
 	if len(cools) != 1 || cools[0].InstanceType != planSmall.Name {
@@ -1067,7 +1092,7 @@ func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 	in.Cooldowns = []OfferCooldown{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6.xlarge", Market: MarketSpot, Until: offerNow.Add(2 * time.Second)}}
 	s := FleetSnapshot{Now: offerNow, Offers: in, HostRoom: 10, ReserveRoom: 10,
 		Pending: []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4"}, CPUMillis: 2000, MemoryBytes: 13056 << 20},
-			Containers: []PendingContainer{{ID: uuid.New()}}}}}
+			Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}}
 	if bought := boughtForWork(PlanFleet(demandOnly(), s)); len(bought) > 0 {
 		t.Fatalf("bought %v while g6.xlarge cools for two seconds", bought)
 	}

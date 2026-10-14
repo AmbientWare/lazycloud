@@ -39,15 +39,65 @@ const (
 	ownerPlatform = string(KindPlatform)
 )
 
-// CapacityWait says why a pending container waits for compute.
+// CapacityWait says why a pending container waits for compute, or why a
+// market falls short.
 type CapacityWait string
 
 const (
+	// WaitNone means nothing falls short.
+	WaitNone CapacityWait = ""
 	// WaitProvisioning means a host being bought or resumed will take it.
 	WaitProvisioning CapacityWait = "provisioning"
 	// WaitLimit means the fleet limit holds the purchase back.
 	WaitLimit CapacityWait = "limit"
+	// WaitBatch means purchases wait for arrivals to settle.
+	WaitBatch CapacityWait = "batch"
+	// WaitDeferred means the market's growth continues next pass.
+	WaitDeferred CapacityWait = "deferred"
+	// WaitDemand means a market's headroom and reserve purchases wait while
+	// its work does: warm slots take only room bought for the work.
+	WaitDemand CapacityWait = "demand"
+	// WaitReturning means reserve purchases wait while hosts that may return
+	// to the reserve cover what it lacks.
+	WaitReturning CapacityWait = "returning"
+	// WaitCooldown means the offers that could host it cool after refusals.
+	WaitCooldown CapacityWait = "cooldown"
+	// WaitQuota means the vCPU quotas leave no room for an offer that could.
+	WaitQuota CapacityWait = "quota"
+	// WaitMargin means no offer that could host it keeps the purchase margin.
+	WaitMargin CapacityWait = "margin"
+	// WaitNoOffer means no offer can host it.
+	WaitNoOffer CapacityWait = "no_offer"
 )
+
+// Message is the sentence a start failure or the fleet page names for the
+// wait.
+func (w CapacityWait) Message() string {
+	switch w {
+	case WaitNone:
+		return ""
+	case WaitProvisioning:
+		return "a host is being bought for it"
+	case WaitLimit:
+		return "fleet host limit reached"
+	case WaitBatch:
+		return "purchases wait for arrivals to settle"
+	case WaitDeferred:
+		return "growth continues next pass"
+	case WaitDemand:
+		return "headroom waits for pending work"
+	case WaitReturning:
+		return "reserves wait for hosts to return"
+	case WaitCooldown:
+		return "offers cooling after refusals"
+	case WaitQuota:
+		return "vCPU quota reached"
+	case WaitMargin:
+		return "no offer keeps the purchase margin"
+	case WaitNoOffer:
+	}
+	return "no offer fits"
+}
 
 // PlanResult summarizes one planning pass.
 type PlanResult struct {

@@ -12,3 +12,10 @@ alter table hosts add column terminate_requested_at timestamptz;
 drop index hosts_provider_actions;
 create index hosts_actions on hosts (phase, phase_at)
     where provider = 'aws' and phase in ('requested', 'draining', 'stopping', 'resuming', 'terminating');
+
+-- Why a pending container waits: a host being bought for it, or what keeps
+-- the fleet from buying one.
+alter table containers drop constraint containers_capacity_wait_check;
+alter table containers add constraint containers_capacity_wait_check check (capacity_wait in (
+    'provisioning', 'limit', 'batch', 'deferred', 'cooldown', 'quota', 'margin', 'no_offer'
+));

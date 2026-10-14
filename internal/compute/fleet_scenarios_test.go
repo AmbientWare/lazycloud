@@ -703,7 +703,7 @@ func (s *sim) plan() time.Duration {
 			groups[key] = &DemandGroup{Need: c.need}
 			order = append(order, key)
 		}
-		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Host: c.host})
+		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Since: c.arrived, Host: c.host})
 	}
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])

@@ -351,7 +351,7 @@ func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error 
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
-           c.purpose
+           c.purpose, c.created_at
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -370,7 +370,8 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
-       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents
+       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents,
+       array_agg(b.created_at order by b.id)::timestamptz[] as created
 from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
@@ -398,10 +399,12 @@ type PendingDemandRow struct {
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
+	Created      []time.Time
 }
 
 // The oldest pending containers, up to the batch, grouped by what they need
-// from a host, each with the host bought for it (the zero id for none). The
+// from a host, each with when it was created and the host bought for it
+// (the zero id for none). The
 // batch follows the pending index alone: ordering ties by id would sort a
 // whole backlog created in one statement. A mirror build runs on the
 // platform, as placement puts it, whatever its workspace's connection.
@@ -431,6 +434,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
+			&i.Created,
 		); err != nil {
 			return nil, err
 		}

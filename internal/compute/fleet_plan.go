@@ -134,8 +134,10 @@ type DemandGroup struct {
 
 // PendingContainer is one pending container and the host bought for it.
 type PendingContainer struct {
-	ID   uuid.UUID
-	Host *HostID
+	ID uuid.UUID
+	// Since is when the container was created.
+	Since time.Time
+	Host  *HostID
 }
 
 // FleetSnapshot is everything one planning pass reads.
@@ -220,35 +222,6 @@ type ContainerWait struct {
 	Action    *int
 }
 
-// MarketReason says why a market falls short.
-type MarketReason string
-
-const (
-	ReasonNone MarketReason = ""
-	// ReasonBatch holds purchases while containers keep arriving.
-	ReasonBatch MarketReason = "purchases wait for arrivals to settle"
-	// ReasonDemand holds headroom of its own while the market's work waits:
-	// warm slots take only room bought for the work, and reserves wait.
-	ReasonDemand MarketReason = "headroom waits for pending work"
-	// ReasonReturning holds reserve purchases while hosts that may return
-	// to the reserve cover what it lacks.
-	ReasonReturning MarketReason = "reserves wait for hosts to return"
-	// ReasonActionCap defers the rest of the growth to the next pass.
-	ReasonActionCap MarketReason = "growth continues next pass"
-	// ReasonFleetLimit means the fleet's host limit holds growth back.
-	ReasonFleetLimit MarketReason = "fleet host limit reached"
-	// ReasonCooldown means the offers that would cover the shortfall cool
-	// after refusals.
-	ReasonCooldown MarketReason = "offers cooling after refusals"
-	// ReasonQuota means the vCPU quotas leave no room for an offer that
-	// covers it.
-	ReasonQuota MarketReason = "vCPU quota reached"
-	// ReasonMargin means no offer that covers it keeps the purchase margin.
-	ReasonMargin MarketReason = "no offer keeps the purchase margin"
-	// ReasonNoOffer means no offer covers it.
-	ReasonNoOffer MarketReason = "no offer fits"
-)
-
 // LoadPeak is the most load a market held and when it last reached it.
 type LoadPeak struct {
 	Load FleetCapacity `json:"load"`
@@ -289,7 +262,7 @@ type MarketPlan struct {
 	// Peak is the most load the market held within the cost horizon; its
 	// reserves stay while it holds.
 	Peak   LoadPeak
-	Reason MarketReason
+	Reason CapacityWait
 	States []FleetStateCapacity
 }
 
@@ -407,7 +380,7 @@ type marketView struct {
 	// shortfall and stoppedShort are what the pass could not cover, and
 	// warmReason and stoppedReason why.
 	shortfall, stoppedShort   FleetCapacity
-	warmReason, stoppedReason MarketReason
+	warmReason, stoppedReason CapacityWait
 	// floorShortSince is when the stopped target went short; nil while held.
 	floorShortSince *time.Time
 }
@@ -432,6 +405,7 @@ type coverItem struct {
 	slot   bool
 	kind   slotKind
 	id     uuid.UUID
+	since  time.Time
 	need   Requirement
 	market ReserveMarket
 	bought *HostID
@@ -456,7 +430,7 @@ func (ps *pass) pendingItems() []coverItem {
 		m := ps.demandMarket(g.Need)
 		for _, c := range g.Containers {
 			ps.plan.Waits = append(ps.plan.Waits, ContainerWait{Container: c.ID})
-			items = append(items, coverItem{id: c.ID, need: g.Need, market: m, bought: c.Host, wait: len(ps.plan.Waits) - 1})
+			items = append(items, coverItem{id: c.ID, since: c.Since, need: g.Need, market: m, bought: c.Host, wait: len(ps.plan.Waits) - 1})
 		}
 	}
 	slices.SortStableFunc(items, func(a, b coverItem) int {
@@ -567,9 +541,13 @@ func marketNeed(m ReserveMarket) Requirement {
 // slotNeed is a warm slot of market m as a requirement; a GPU market's
 // slot holds at least one card.
 func slotNeed(m ReserveMarket, shape FleetCapacity) Requirement {
-	need := marketNeed(m)
-	need.CPUMillis, need.MemoryBytes, need.GPUCount = shape.CPUMillis, shape.MemoryBytes, shape.GPUs
-	return need
+	return needOf(marketNeed(m), shape)
+}
+
+// needOf is class need asking for shape.
+func needOf(class Requirement, shape FleetCapacity) Requirement {
+	class.CPUMillis, class.MemoryBytes, class.GPUCount = shape.CPUMillis, shape.MemoryBytes, shape.GPUs
+	return class
 }
 
 // reservedShape is what a requirement reserves on a host.
@@ -895,6 +873,11 @@ func (ps *pass) provisioning(it coverItem, host *HostID, action *int) {
 	}
 	w := &ps.plan.Waits[it.wait]
 	w.Wait, w.Host, w.Action = ptr(WaitProvisioning), host, action
+}
+
+// waits records why a pending container no purchase took waits.
+func (ps *pass) waits(it coverItem, wait CapacityWait) {
+	ps.plan.Waits[it.wait].Wait = ptr(wait)
 }
 
 // demandMarket is the market a container's demand belongs to: Spot or
@@ -1365,25 +1348,32 @@ func (ps *pass) buyFor(items []coverItem) {
 			ps.buyClass(c, ps.classOffers(c.need))
 		}
 		for _, g := range c.groups {
+			var short *CapacityWait
 			for _, it := range g.items {
 				if it.slot {
 					v := ps.byMarket[it.market]
 					v.shortfall = v.shortfall.Plus(g.shape)
 					switch {
-					case v.warmReason != ReasonNone:
+					case v.warmReason != WaitNone:
 					case ps.waiting[it.market]:
-						v.warmReason = ReasonDemand
+						v.warmReason = WaitDemand
 					default:
-						v.warmReason = ps.shortReason(it.market, g.shape, false)
+						v.warmReason = ps.shortReason(it.market, slotNeed(it.market, g.shape), false)
 					}
 					continue
 				}
 				switch {
 				case ps.hostRoom <= 0:
-					ps.plan.Waits[it.wait].Wait = ptr(WaitLimit)
+					ps.waits(it, WaitLimit)
 					ps.limited[c.market] = true
 				case held:
+					ps.waits(it, WaitBatch)
 					ps.batched[c.market] = true
+				default:
+					if short == nil {
+						short = ptr(ps.shortReason(c.market, needOf(c.need, g.shape), false))
+					}
+					ps.waits(it, *short)
 				}
 			}
 		}
@@ -1398,7 +1388,9 @@ func (ps *pass) buyFor(items []coverItem) {
 // cannot take, under a quota or a cooldown, any offer covers. On-demand
 // prices scale with size, so on-demand hosts hold what the cover needs.
 // GPU work buys its models in its preference order: Spot-tolerant work on
-// Spot, and on-demand only what no Spot offer of any model can host.
+// Spot, on-demand only what no Spot offer of any model can host, and, once
+// it has waited the Spot wait, an on-demand host of its own whatever the
+// margin.
 func (ps *pass) buyClass(c *demandClass, r ranking) {
 	m, offers := c.market, r.offers
 	if m.GPU != "" {
@@ -1416,6 +1408,7 @@ func (ps *pass) buyClass(c *demandClass, r ranking) {
 		}
 		buy(MarketSpot, nil)
 		buy(MarketOnDemand, func(g itemGroup) bool { return !ps.spotOffered(g.items[0].need) })
+		ps.buyAtLoss(c)
 		return
 	}
 	if v := ps.byMarket[m]; v != nil && m.spotCPU() {
@@ -1425,6 +1418,39 @@ func (ps *pass) buyClass(c *demandClass, r ranking) {
 		}), r, nil)
 	}
 	ps.coverClass(c, m, offers, r, nil)
+}
+
+// buyAtLoss buys each container of Spot-tolerant GPU class c that waited
+// the Spot wait while no Spot offer of a model it accepts can host it an
+// on-demand host of its own, the purchase margin set aside.
+func (ps *pass) buyAtLoss(c *demandClass) {
+	waited := func(it coverItem) bool {
+		return !it.slot && ps.s.Now.Sub(it.since) >= ps.p.SpotWait && !ps.spotOffered(it.need)
+	}
+	if !slices.ContainsFunc(c.groups, func(g itemGroup) bool { return slices.ContainsFunc(g.items, waited) }) {
+		return
+	}
+	in := ps.s.Offers
+	in.WaiveMargin = true
+	r := ranking{offers: RankOffers(ps.p, c.need, false, in), refs: sizeRefs(ps.p, c.need, false, in)}
+	r.soon = RankOffers(ps.p, c.need, false, availableSoon(ps.p, in))
+	for i := range c.groups {
+		g := &c.groups[i]
+		for _, it := range slices.Clone(g.items) {
+			if !waited(it) {
+				continue
+			}
+			alone := &demandClass{need: c.need, key: c.key, market: c.market, groups: []itemGroup{{shape: g.shape, disks: g.disks, items: []coverItem{it}}}}
+			for _, model := range ps.gpuModels(c.need, r.offers) {
+				ps.coverClass(alone, ReserveMarket{Preemptible: true, GPU: model}, slices.DeleteFunc(slices.Clone(r.offers), func(o FleetOffer) bool {
+					return o.Type.GPU != model || o.Market != MarketOnDemand
+				}), r, nil)
+			}
+			if len(alone.groups[0].items) == 0 {
+				g.items = slices.DeleteFunc(g.items, func(o coverItem) bool { return o.id == it.id })
+			}
+		}
+	}
 }
 
 // coverClass buys from offers the cheapest cover of what is left of class
@@ -1458,20 +1484,19 @@ func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer,
 	}
 }
 
-// shortReason says why market m's purchases fall short of shape: the
-// pass's limits, or else the first exclusion whose removal lets an offer of
+// shortReason says why market m's purchases fall short of need: the pass's
+// limits, or else the first exclusion whose removal lets an offer of
 // the market cover it. An offer that covers it with every exclusion in
 // place was held back by the quota room the pass's earlier purchases took.
-func (ps *pass) shortReason(m ReserveMarket, shape FleetCapacity, reserve bool) MarketReason {
+func (ps *pass) shortReason(m ReserveMarket, need Requirement, reserve bool) CapacityWait {
 	switch {
 	case ps.hostRoom <= 0 || reserve && ps.reserveRoom <= 0:
-		return ReasonFleetLimit
+		return WaitLimit
 	case ps.s.BatchWait > 0:
-		return ReasonBatch
+		return WaitBatch
 	case ps.room(m) <= 0:
-		return ReasonActionCap
+		return WaitDeferred
 	}
-	need := slotNeed(m, shape)
 	offered := func(relax func(*OfferInputs)) bool {
 		in := ps.s.Offers
 		relax(&in)
@@ -1481,15 +1506,15 @@ func (ps *pass) shortReason(m ReserveMarket, shape FleetCapacity, reserve bool) 
 	}
 	switch {
 	case offered(func(*OfferInputs) {}):
-		return ReasonQuota
+		return WaitQuota
 	case offered(func(in *OfferInputs) { in.Cooldowns = nil }):
-		return ReasonCooldown
+		return WaitCooldown
 	case offered(func(in *OfferInputs) { in.Quotas = nil }):
-		return ReasonQuota
+		return WaitQuota
 	case offered(func(in *OfferInputs) { in.OwnerPays = true }):
-		return ReasonMargin
+		return WaitMargin
 	}
-	return ReasonNoOffer
+	return WaitNoOffer
 }
 
 // idle records when each serving host without containers or pending work
@@ -1657,11 +1682,11 @@ func (ps *pass) reserves(v *marketView) {
 	switch {
 	case v.stoppedShort.Empty():
 	case ps.waiting[v.m]:
-		v.stoppedReason = ReasonDemand
+		v.stoppedReason = WaitDemand
 	case ps.returning(v, short, !item.Empty()):
-		v.stoppedReason = ReasonReturning
+		v.stoppedReason = WaitReturning
 	case ps.batching():
-		v.stoppedReason = ReasonBatch
+		v.stoppedReason = WaitBatch
 	case v.loaded:
 		// A share of load sets the target: the cheapest cover holds it, and
 		// whichever of its hosts fits the largest shape holds that. In the
@@ -1728,7 +1753,7 @@ func (ps *pass) reserveReason(v *marketView, item FleetCapacity) {
 		v.floorShortSince = nil
 		return
 	}
-	v.stoppedReason = ps.shortReason(v.m, item, true)
+	v.stoppedReason = ps.shortReason(v.m, slotNeed(v.m, item), true)
 }
 
 // buyReserves buys the cheapest reserves that cover need, ones that
@@ -1899,9 +1924,9 @@ func (ps *pass) report(v *marketView) MarketPlan {
 	}
 	switch {
 	case ps.limited[v.m]:
-		plan.Reason = ReasonFleetLimit
+		plan.Reason = WaitLimit
 	case ps.batched[v.m]:
-		plan.Reason = ReasonBatch
+		plan.Reason = WaitBatch
 	case !plan.Shortfall.Empty():
 		plan.Reason = v.warmReason
 	case !plan.StoppedShortfall.Empty():

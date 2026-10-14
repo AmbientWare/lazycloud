@@ -165,8 +165,8 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 			t.Errorf("container %s waits %q, want provisioning", c, w)
 		}
 	}
-	if w := capacityWait(t, o, containers[5]); w != "" {
-		t.Errorf("a container no fleet region serves waits %q, want nothing", w)
+	if w := capacityWait(t, o, containers[5]); w != string(compute.WaitNoOffer) {
+		t.Errorf("a container no fleet region serves waits %q, want %q", w, compute.WaitNoOffer)
 	}
 }
 

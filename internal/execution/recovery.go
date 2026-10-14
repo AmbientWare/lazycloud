@@ -72,11 +72,16 @@ func (e *Execution) TimeOutAttempts(ctx context.Context, logger *slog.Logger) (i
 	}
 }
 
-// TimeOutStarts stops containers that stayed starting longer than
-// StartTimeout as start failures. It returns how many it stopped.
+// TimeOutStarts stops as start failures the containers that stayed
+// starting longer than StartTimeout, and the fleet containers no launched
+// host took within the fleet's queue timeout. It returns how many it
+// stopped.
 func (e *Execution) TimeOutStarts(ctx context.Context, logger *slog.Logger) (int, error) {
+	stopped, err := e.timeOutPending(ctx, logger)
+	if err != nil {
+		return stopped, err
+	}
 	params := StuckStartingContainersParams{TimeoutSeconds: StartTimeout.Seconds(), BatchSize: recoveryBatch}
-	stopped := 0
 	for {
 		stuck, err := e.queries.StuckStartingContainers(ctx, params)
 		if err != nil {
@@ -172,5 +177,53 @@ func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (
 			return lost, nil
 		}
 		after = &hosts[len(hosts)-1]
+	}
+}
+
+// timeOutPending stops as start failures the fleet containers pending past
+// the queue timeout that no launched host will take, each naming why the
+// planner last said it waits. It returns how many it stopped.
+func (e *Execution) timeOutPending(ctx context.Context, logger *slog.Logger) (int, error) {
+	timeout := compute.DefaultPolicy().QueueTimeout
+	params := StalePendingContainersParams{TimeoutSeconds: timeout.Seconds(), BatchSize: recoveryBatch}
+	stopped := 0
+	for {
+		stale, err := e.queries.StalePendingContainers(ctx, params)
+		if err != nil {
+			return stopped, fmt.Errorf("list stale pending containers: %w", err)
+		}
+		for _, container := range stale {
+			var timedOut bool
+			err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+				n, err := e.queries.WithTx(tx).LockStalePendingContainer(ctx, LockStalePendingContainerParams{
+					ID: container.ID, TimeoutSeconds: timeout.Seconds(),
+				})
+				if err != nil {
+					return fmt.Errorf("lock container: %w", err)
+				}
+				if timedOut = n == 1; !timedOut {
+					return nil
+				}
+				return e.containerExited(ctx, tx, ContainerID(container.ID), ContainerExit{
+					Reason:  StopStartFailed,
+					Message: fmt.Sprintf("no capacity within %s: %s", timeout, compute.CapacityWait(container.Wait).Message()),
+				})
+			})
+			switch {
+			case err == nil && timedOut:
+				stopped++
+				logger.WarnContext(ctx, "container found no capacity", "container_id", container.ID, "wait", container.Wait)
+			case err == nil:
+			case ctx.Err() != nil:
+				return stopped, fmt.Errorf("time out pending container: %w", err)
+			default:
+				logger.ErrorContext(ctx, "time out pending container", "container_id", container.ID, "error", err)
+			}
+		}
+		if len(stale) < recoveryBatch {
+			return stopped, nil
+		}
+		last := stale[len(stale)-1]
+		params.AfterCreatedAt, params.AfterID = last.CreatedAt, last.ID
 	}
 }

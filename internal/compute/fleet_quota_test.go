@@ -71,7 +71,7 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 	s.Offers.Quotas = []VCPUQuota{{Key: key, VCPUs: 48}}
 	s.Hosts[0].Load = small
 	whole := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
-	s.Pending = []DemandGroup{{Need: whole, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}, {ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{{Need: whole, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}, {ID: uuid.New(), Since: offerNow}, {ID: uuid.New(), Since: offerNow}}}}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
 	// 16 vCPUs run; the stopped reserve resumes into 16 more and one host
 	// is bought with the last 16.
@@ -79,7 +79,7 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
-	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 	s.Offers.Quotas[0].VCPUs = 16
 	s.Hosts = s.Hosts[:1]
 	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); len(plan.Actions) > 0 {

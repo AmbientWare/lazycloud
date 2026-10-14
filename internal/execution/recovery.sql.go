@@ -41,6 +41,30 @@ func (q *Queries) LockLiveContainersOnHost(ctx context.Context, hostID *uuid.UUI
 	return items, nil
 }
 
+const lockStalePendingContainer = `-- name: LockStalePendingContainer :execrows
+select c.id from containers c
+left join hosts h on h.id = c.capacity_host_id
+where c.id = $1 and c.state = 'pending'
+  and c.created_at < now() - make_interval(secs => $2::float8)
+  and (h.id is null or h.phase = 'requested')
+for update of c
+`
+
+type LockStalePendingContainerParams struct {
+	ID             uuid.UUID
+	TimeoutSeconds float64
+}
+
+// Rechecks the queue timeout under the row lock: a container placed or
+// given a launched host after the scan keeps waiting.
+func (q *Queries) LockStalePendingContainer(ctx context.Context, arg LockStalePendingContainerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, lockStalePendingContainer, arg.ID, arg.TimeoutSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const lockStuckStartingContainer = `-- name: LockStuckStartingContainer :execrows
 select id from containers
 where id = $1
@@ -99,6 +123,67 @@ func (q *Queries) OverdueAttempts(ctx context.Context, arg OverdueAttemptsParams
 	for rows.Next() {
 		var i OverdueAttemptsRow
 		if err := rows.Scan(&i.ID, &i.DeadlineAt, &i.HostID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const stalePendingContainers = `-- name: StalePendingContainers :many
+select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
+from containers c
+join workspaces ws on ws.id = c.workspace_id
+left join image_builds ib on ib.id = c.image_build_id
+left join releases r on r.id = c.release_id
+left join hosts h on h.id = c.capacity_host_id
+where c.state = 'pending'
+  and (ws.connection_id is null or ib.mirror is true)
+  and c.created_at < now() - make_interval(secs => $1::float8)
+  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
+  and (h.id is null or h.phase = 'requested')
+  and (c.created_at, c.id) > ($2::timestamptz, $3::uuid)
+order by c.created_at, c.id
+limit $4
+`
+
+type StalePendingContainersParams struct {
+	TimeoutSeconds float64
+	AfterCreatedAt time.Time
+	AfterID        uuid.UUID
+	BatchSize      int32
+}
+
+type StalePendingContainersRow struct {
+	ID        uuid.UUID
+	CreatedAt time.Time
+	Wait      string
+}
+
+// Platform fleet containers pending longer than the queue timeout that no
+// launched host will take, none having been bought for them or the one
+// bought not launched yet, in (created_at, id) order after the cursor, with
+// why the planner says they wait. Work pinned to a joined machine waits for
+// it, and a connected account's work for its own hosts; a mirror build runs
+// on the platform whatever its workspace.
+func (q *Queries) StalePendingContainers(ctx context.Context, arg StalePendingContainersParams) ([]StalePendingContainersRow, error) {
+	rows, err := q.db.Query(ctx, stalePendingContainers,
+		arg.TimeoutSeconds,
+		arg.AfterCreatedAt,
+		arg.AfterID,
+		arg.BatchSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StalePendingContainersRow
+	for rows.Next() {
+		var i StalePendingContainersRow
+		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Wait); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

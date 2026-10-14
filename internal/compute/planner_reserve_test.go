@@ -435,7 +435,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		if d := m.ExpiresAt.Sub(m.GeneratedAt); d != 5*time.Minute {
 			t.Errorf("market %+v expires %s after it was generated", m, d)
 		}
-		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.ReasonNoOffer) {
+		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.WaitNoOffer) {
 			t.Errorf("CPU market %+v, want the 1 CPU warm floor short for want of an offer", m)
 		}
 	}

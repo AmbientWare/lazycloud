@@ -221,6 +221,13 @@ type Policy struct {
 	// FloorHold is how long a warm floor slot that new work took from a host
 	// able to hold it waits for that work to end before it buys a host.
 	FloorHold time.Duration
+	// SpotWait is how long Spot-tolerant GPU work waits while no Spot offer
+	// of a model it accepts can host it before it buys an on-demand host of
+	// its own, the purchase margin set aside for that host.
+	SpotWait time.Duration
+	// QueueTimeout is how long pending fleet work waits for a host that has
+	// not launched before execution ends it as a start failure.
+	QueueTimeout time.Duration
 	// Starts is how long work waits for each way a host starts.
 	Starts StartTimes
 }
@@ -285,6 +292,8 @@ func DefaultPolicy() Policy {
 		SpotIdleTimeout: 30 * time.Second,
 		ReturnWait:      5 * time.Minute,
 		FloorHold:       time.Minute,
+		SpotWait:        2 * time.Minute,
+		QueueTimeout:    20 * time.Minute,
 		SpotPriceAge:    time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
