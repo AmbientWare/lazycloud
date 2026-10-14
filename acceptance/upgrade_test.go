@@ -23,6 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/moby/moby/client"
+
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
@@ -37,16 +40,14 @@ def hits() -> int:
     count = int(HITS.read_text()) + 1 if HITS.exists() else 1
     HITS.write_text(str(count))
     return count
-
-
-def peek() -> int:
-    return int(HITS.read_text())
 `
 
 // An agent of the release this change replaces, serving a workload that
 // holds a volume, updates itself to this tree's release when it becomes
-// the target. The workload's volume keeps its data through the update, and
-// a new container of the workspace mounts the same volume beside it.
+// the target. The workload's volume keeps its data through the update. A
+// redeploy then hands the volume over: the new release's container mounts it
+// beside the old one, reads its writes, and keeps working once the replaced
+// container and its mount stop.
 func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	t.Parallel()
 	old := oldRelease(t)
@@ -67,7 +68,7 @@ func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	keepWarm := 600
 	live.KeepWarmSeconds = &keepWarm
 	live.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
-	p.deploy("live", live)
+	first := p.deploy("live", live)
 	hits := p.describe("live", apitypes.WorkloadKindEndpoint, "hits").Url
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "1" {
 		t.Fatalf("first request on the old agent: %d %s", status, body)
@@ -78,11 +79,24 @@ func TestAnOldAgentWithALiveVolumeUpdates(t *testing.T) {
 	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "2" {
 		t.Fatalf("request after the update: %d %s", status, body)
 	}
-	peek := endpointSpec(source, "peek", "app:peek", "/")
-	peek.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
-	p.deploy("second", peek)
-	if status, _, body := p.call(http.MethodGet, p.describe("second", apitypes.WorkloadKindEndpoint, "peek").Url, ""); status != http.StatusOK || body != "2" {
-		t.Fatalf("second start on the updated agent: %d %s", status, body)
+
+	var replaced uuid.UUID
+	if err := p.pool.QueryRow(t.Context(), `select id from containers where release_id = $1 and state <> 'stopped'`, first.Releases[0].Id).Scan(&replaced); err != nil {
+		t.Fatal(err)
+	}
+	timeout := 90
+	live.TimeoutSeconds = &timeout
+	redeployed := p.deploy("live", live).Releases[0].Id
+	next := p.describe("live", apitypes.WorkloadKindEndpoint, "hits").ReleaseUrl
+	if status, _, body := p.call(http.MethodGet, next, ""); status != http.StatusOK || body != "3" {
+		t.Fatalf("the redeployed release beside the old one: %d %s", status, body)
+	}
+	p.awaitGone(replaced)
+	if status, _, body := p.call(http.MethodGet, hits, ""); status != http.StatusOK || body != "4" {
+		t.Fatalf("the redeployed release after the old one stopped: %d %s", status, body)
+	}
+	if started := p.containersOf(redeployed); started != 1 {
+		t.Fatalf("the redeployed release started %d containers; the handover should leave its first running", started)
 	}
 	agent.stop()
 }
@@ -339,4 +353,34 @@ func (p *platform) agentVersion() string {
 		p.t.Fatal(err)
 	}
 	return version
+}
+
+// awaitGone waits until the host runs nothing of container: neither its
+// workload nor its volume mounts.
+func (p *platform) awaitGone(container uuid.UUID) {
+	p.t.Helper()
+	docker, err := client.New(client.FromEnv)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	defer func() { _ = docker.Close() }()
+	waitFor(p.t, "the host to remove "+container.String()+" and its mounts", func() bool {
+		list, err := docker.ContainerList(p.t.Context(), client.ContainerListOptions{
+			All: true, Filters: client.Filters{}.Add("label", "lazycloud.container-id="+container.String()),
+		})
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		return len(list.Items) == 0
+	})
+}
+
+// containersOf counts the containers release ever had.
+func (p *platform) containersOf(release uuid.UUID) int {
+	p.t.Helper()
+	var n int
+	if err := p.pool.QueryRow(p.t.Context(), `select count(*) from containers where release_id = $1`, release).Scan(&n); err != nil {
+		p.t.Fatal(err)
+	}
+	return n
 }
