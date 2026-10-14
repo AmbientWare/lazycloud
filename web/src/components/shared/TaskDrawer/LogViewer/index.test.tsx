@@ -74,7 +74,7 @@ describe("log viewer", () => {
       );
       await vi.advanceTimersByTimeAsync(50);
     });
-    expect(screen.getAllByRole("listitem")).toHaveLength(1_000);
+    expect(screen.getByRole("list").children).toHaveLength(1_000);
     expect(screen.getByText("output-2499")).toBeVisible();
     expect(screen.queryByText("output-1499")).not.toBeInTheDocument();
     await act(async () => {
@@ -82,7 +82,7 @@ describe("log viewer", () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(screen.getByText("still live")).toBeVisible();
-    expect(screen.getAllByRole("listitem")).toHaveLength(1_000);
+    expect(screen.getByRole("list").children).toHaveLength(1_000);
     view.unmount();
   });
 
