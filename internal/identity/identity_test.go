@@ -8,6 +8,7 @@ import (
 )
 
 func TestWorkspaceAuthorization(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	id := NewIdentity(pool, Config{})
