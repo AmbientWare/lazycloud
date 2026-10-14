@@ -10,56 +10,54 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-// A committed NOTIFY wakes subscribers of its payload and of the channel.
-func TestListenerWakesOnCommittedNotify(t *testing.T) {
-	pool := dbtest.New(t)
-	listener := database.NewListener(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), database.ChannelExecution)
-	byPayload, cancelPayload := listener.Subscribe(database.ChannelExecution, "release-1")
-	defer cancelPayload()
-	anyPayload, cancelAny := listener.Subscribe(database.ChannelExecution, "")
-	defer cancelAny()
-
-	ctx, cancel := context.WithCancel(t.Context())
+// run starts listener until the test ends.
+func run(t *testing.T, listener *database.Listener) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		if err := listener.Run(ctx); err != nil {
 			t.Error(err)
 		}
 	})
-	defer wg.Wait()
-	defer cancel()
-
-	// Run wakes everyone once LISTEN is active.
-	for _, wake := range []<-chan struct{}{byPayload, anyPayload} {
-		select {
-		case <-wake:
-		case <-time.After(5 * time.Second):
-			t.Fatal("no wake after LISTEN")
-		}
-	}
-	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
-		return database.Notify(t.Context(), tx, database.ChannelExecution, "release-1")
+	t.Cleanup(func() {
+		cancel()
+		wg.Wait()
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, wake := range []<-chan struct{}{byPayload, anyPayload} {
+}
+
+// woken waits for a wake on each channel.
+func woken(t *testing.T, step string, wakes ...<-chan struct{}) {
+	t.Helper()
+	for _, wake := range wakes {
 		select {
 		case <-wake:
 		case <-time.After(5 * time.Second):
-			t.Fatal("no wake after a committed notify")
+			t.Fatalf("%s: no wake", step)
 		}
 	}
 }
 
-// NotifyAll packs many keys into few notifications, and each key still
-// wakes its own subscribers and no others, even a queue key with a comma.
+func notifyAll(t *testing.T, pool *pgxpool.Pool, channel database.Channel, payloads ...string) {
+	t.Helper()
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		return database.NotifyAll(t.Context(), tx, channel, payloads)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A committed NotifyAll packs many keys into few notifications, and each key
+// still wakes its own subscribers, and the channel's, and no others, even a
+// queue key with a comma.
 func TestNotifyAllWakesEveryPackedID(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), database.ChannelTask)
 	ids := make([]string, 500)
@@ -71,41 +69,45 @@ func TestNotifyAllWakesEveryPackedID(t *testing.T) {
 	defer cancelFirst()
 	last, cancelLast := listener.Subscribe(database.ChannelTask, ids[len(ids)-1])
 	defer cancelLast()
+	anyPayload, cancelAny := listener.Subscribe(database.ChannelTask, "")
+	defer cancelAny()
 	other, cancelOther := listener.Subscribe(database.ChannelTask, uuid.NewString())
 	defer cancelOther()
+	sentinel := uuid.NewString()
+	after, cancelAfter := listener.Subscribe(database.ChannelTask, sentinel)
+	defer cancelAfter()
 
-	ctx, cancel := context.WithCancel(t.Context())
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		if err := listener.Run(ctx); err != nil {
-			t.Error(err)
-		}
-	})
-	defer wg.Wait()
-	defer cancel()
-	for _, wake := range []<-chan struct{}{first, last, other} {
-		select {
-		case <-wake:
-		case <-time.After(5 * time.Second):
-			t.Fatal("no wake after LISTEN")
-		}
-	}
-	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
-		return database.NotifyAll(t.Context(), tx, database.ChannelTask, append(ids, ids[0]))
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, wake := range []<-chan struct{}{first, last} {
-		select {
-		case <-wake:
-		case <-time.After(5 * time.Second):
-			t.Fatal("a packed id woke no subscriber")
-		}
-	}
+	run(t, listener)
+	// Run wakes everyone once LISTEN is active.
+	woken(t, "after LISTEN", first, last, anyPayload, other, after)
+
+	notifyAll(t, pool, database.ChannelTask, append(ids, ids[0])...)
+	woken(t, "after a committed notify", first, last, anyPayload)
+	// Notifications arrive in commit order, so once a later commit's wake
+	// arrives, every wake of the first has.
+	notifyAll(t, pool, database.ChannelTask, sentinel)
+	woken(t, "after the sentinel", after)
 	select {
 	case <-other:
 		t.Fatal("an id outside the notification woke its subscriber")
-	case <-time.After(200 * time.Millisecond):
+	default:
 	}
+}
+
+// Notifications sent while the listener is disconnected are lost, so a lost
+// connection wakes every subscriber to re-read.
+func TestListenerWakesEveryoneWhenItsConnectionDrops(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	listener := database.NewListener(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), database.ChannelExecution)
+	wake, cancel := listener.Subscribe(database.ChannelExecution, uuid.NewString())
+	defer cancel()
+	run(t, listener)
+	woken(t, "after LISTEN", wake)
+
+	if _, err := pool.Exec(t.Context(), `select pg_terminate_backend(pid) from pg_stat_activity
+		where datname = current_database() and pid <> pg_backend_pid() and query ilike 'listen%'`); err != nil {
+		t.Fatal(err)
+	}
+	woken(t, "after the connection dropped", wake)
 }

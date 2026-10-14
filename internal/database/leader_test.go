@@ -21,82 +21,82 @@ type candidate struct {
 	stop    context.CancelFunc
 }
 
-// One of two candidates leads; a leader whose session is terminated steps
-// down and someone leads again, and when the leader stops the other takes
-// over.
+// One of three candidates leads while the others retry without a statement
+// open, which would hold back vacuum. A leader whose session is terminated
+// steps down and another leads; when that one stops, another takes over.
 func TestLeadElectsOneAndHandsOver(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const check = 20 * time.Millisecond
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	candidates := make([]*candidate, 2)
+	candidates := make([]*candidate, 3)
 	for n := range candidates {
 		ctx, cancel := context.WithCancel(t.Context())
 		c := &candidate{stop: cancel}
 		candidates[n] = c
 		wg.Go(func() {
-			if err := database.Lead(ctx, pool, "test_leader", 100*time.Millisecond, c.leading.Store, logger); err != nil {
+			if err := database.Lead(ctx, pool, "test_leader", check, c.leading.Store, logger); err != nil {
 				t.Error(err)
 			}
 		})
 		defer cancel()
 	}
-	// leader waits for exactly one candidate to lead and returns its index.
-	leader := func(step string) int {
-		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-			a, b := candidates[0].leading.Load(), candidates[1].leading.Load()
-			if a && b {
-				t.Fatalf("%s: both candidates lead", step)
-			}
-			if a != b {
-				if a {
-					return 0
-				}
-				return 1
+	leaders := func() []int {
+		var out []int
+		for n, c := range candidates {
+			if c.leading.Load() {
+				out = append(out, n)
 			}
 		}
-		t.Fatalf("%s: no candidate leads", step)
-		return -1
+		return out
+	}
+	// waitFor polls until done holds.
+	waitFor := func(step string, done func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !done(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: leaders %v", step, leaders())
+			}
+		}
 	}
 
-	first := leader("start")
-	// The standby stays one while the leader holds the lock, and waiting
-	// holds no snapshot that would keep vacuum from removing dead rows.
-	time.Sleep(300 * time.Millisecond)
-	leader("while held")
-	var held int
-	if err := pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
-		where datname = current_database() and pid <> pg_backend_pid() and backend_xmin is not null
-		  and now() - query_start > interval '200 milliseconds'`).Scan(&held); err != nil {
+	waitFor("start", func() bool { return len(leaders()) == 1 })
+	first := leaders()[0]
+	var elected time.Time
+	if err := pool.QueryRow(t.Context(), "select clock_timestamp()").Scan(&elected); err != nil {
 		t.Fatal(err)
 	}
-	if held != 0 {
-		t.Fatalf("%d sessions hold a snapshot while the standby waits", held)
-	}
+	// Both standbys tried again after the election and sit idle between
+	// tries, holding no snapshot.
+	waitFor("standbys retry", func() bool {
+		if l := leaders(); len(l) != 1 || l[0] != first {
+			t.Fatalf("leaders %v while %d holds the lock", l, first)
+		}
+		var idle int
+		if err := pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
+			where datname = current_database() and state = 'idle' and backend_xmin is null
+			  and query like 'select pg_try_advisory_lock%' and query_start > $1`, elected).Scan(&idle); err != nil {
+			t.Fatal(err)
+		}
+		return idle == 2
+	})
 
 	// Ending the leader's session releases the lock; the leader notices
-	// within its check.
-	// Only this test's database: other packages' tests share the server.
+	// within its check. Only this test's database: other packages' tests
+	// share the server.
 	if _, err := pool.Exec(t.Context(), `select pg_terminate_backend(l.pid) from pg_locks l
 		join pg_database d on d.oid = l.database
 		where l.locktype = 'advisory' and l.granted and l.pid <> pg_backend_pid()
 		  and d.datname = current_database()`); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); candidates[first].leading.Load() && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	current := leader("after the session ended")
+	waitFor("after the session ended", func() bool { l := leaders(); return len(l) == 1 && l[0] != first })
+	second := leaders()[0]
 
-	candidates[current].stop()
-	other := 1 - current
-	for deadline := time.Now().Add(5 * time.Second); !candidates[other].leading.Load() && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !candidates[other].leading.Load() {
-		t.Fatal("the standby did not take over after the leader stopped")
-	}
+	candidates[second].stop()
+	waitFor("after the leader stopped", func() bool { l := leaders(); return len(l) == 1 && l[0] != second })
 }
 
 // The leader's check finds its own session's lock and nothing else: not
@@ -104,6 +104,7 @@ func TestLeadElectsOneAndHandsOver(t *testing.T) {
 // and markers cover both signs of the 64-bit key, whose high half pg_locks
 // keeps apart.
 func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	acquire := func() *pgxpool.Conn {
