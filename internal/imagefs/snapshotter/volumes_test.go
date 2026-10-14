@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -611,16 +612,16 @@ func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
 }
 
 // On a host whose disk reads back slower than the stores deliver, volume
-// frames stay off the disk: a partial read fetches what it reads and no
-// more, leaving background fetches free for layers, disks and other
-// objects; a whole read comes back intact with nothing stored; and a warm
-// fetches nothing.
+// frames stay off the disk: a partial read fetches what it reads and its
+// read-ahead, not the whole object, leaving background fetches free for
+// layers, disks and other objects; a whole read comes back intact with
+// nothing stored; and a warm fetches nothing.
 func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
 	ts := newTestStore(t)
 	up := &upstream{}
 	c := newTestCache(t, up, 256<<20)
 	v, base := serveVolumes(t, ts, up, c, false)
-	body := randomBytes(14, 48<<20)
+	body := randomBytes(14, 12*volumeFrame)
 	ts.put(t, "weights", body)
 	if resp, got := get(t, base+"weights", "0-0"); resp.StatusCode != http.StatusPartialContent || len(got) != 1 {
 		t.Fatalf("the partial read: %s", resp.Status)
@@ -635,7 +636,7 @@ func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("background fetches still hold their slots after a partial read")
 	}
-	if gets, _ := up.counts(); gets != 1 {
+	if gets, _ := up.counts(); gets > 1+readAheadFrames {
 		t.Fatalf("a read of one frame made %d store GETs", gets)
 	}
 	if resp, got := get(t, base+"weights", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
@@ -653,5 +654,47 @@ func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
 	c.background.Wait()
 	if after, _ := up.counts(); after != gets {
 		t.Fatalf("a warm made %d store GETs", after-gets)
+	}
+}
+
+// Where the disk stores no volume frames, a read that starts an object
+// fetches the frames after it into memory, so the reads that follow it
+// reach no store, and a read that jumps elsewhere fetches nothing ahead.
+func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
+	ts := newTestStore(t)
+	var mu sync.Mutex
+	fetched := map[int]int{}
+	up := &upstream{before: func(r *http.Request) {
+		var first int64
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-", &first); err == nil && r.Header.Get("If-Match") != "" {
+			mu.Lock()
+			fetched[int(first/volumeFrame)]++
+			mu.Unlock()
+		}
+	}}
+	c := newTestCache(t, up, 256<<20)
+	_, base := serveVolumes(t, ts, up, c, false)
+	body := randomBytes(15, 12*volumeFrame)
+	ts.put(t, "weights", body)
+	read := func(from, to int64) {
+		t.Helper()
+		if resp, got := get(t, base+"weights", fmt.Sprintf("%d-%d", from, to)); resp.StatusCode != http.StatusPartialContent || !bytes.Equal(got, body[from:to+1]) {
+			t.Fatalf("read of %d-%d: %s", from, to, resp.Status)
+		}
+		c.background.Wait()
+	}
+	frames := func() map[int]int {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(fetched)
+	}
+	read(0, 99)
+	if got := frames(); !maps.Equal(got, map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1}) {
+		t.Fatalf("a read starting the object fetched frames %v", got)
+	}
+	read(10*volumeFrame, 10*volumeFrame+99)
+	read(volumeFrame, 5*volumeFrame-1)
+	if got := frames(); !maps.Equal(got, map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 10: 1}) {
+		t.Fatalf("after a jump and a read of the frames fetched ahead, the store sent frames %v", got)
 	}
 }

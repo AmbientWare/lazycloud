@@ -40,6 +40,12 @@ const (
 	volumeFrame   = 8 << 20
 	// minCachedObject is the smallest object reads take from the cache.
 	minCachedObject = 1 << 20
+	// readAheadFrames is how far past a sequential read the frames it will
+	// want are fetched into memory where the disk stores no volume frames,
+	// and readAheadFetches bounds those fetches across the host: a few
+	// fetches in parallel bring a reader to the store's full speed.
+	readAheadFrames  = 4
+	readAheadFetches = 16
 	// observationLife is how long a HEAD's answer names an object's
 	// version, as GeeseFS's --stat-cache-ttl.
 	observationLife = time.Second
@@ -72,6 +78,8 @@ type volumes struct {
 	// the bytes of the warms running, which half the cache bounds.
 	filling map[string]bool
 	warming int64
+	// ahead holds a token per read-ahead fetch running.
+	ahead chan struct{}
 }
 
 // bucket is one workspace's granted bucket: its grant and the versions
@@ -85,14 +93,15 @@ type bucket struct {
 }
 
 // volumeMount is a container's mount of its workspace's volumes: the key
-// it signs with, the bucket the key reaches and the objects of
-// minCachedObject or more it read, each once in first-read order, until
-// VolumeReads ends the record. Guarded by volumes.mu.
+// it signs with, the bucket the key reaches, the objects of minCachedObject
+// or more it read, each once in first-read order, until VolumeReads ends
+// the record, and the last frame it read of each. Guarded by volumes.mu.
 type volumeMount struct {
 	key, bucket string
 	reads       []*imagefsproto.VolumeRead
 	seen        map[string]bool
 	ended       bool
+	last        map[string]int
 }
 
 type volumeGrant struct {
@@ -117,6 +126,7 @@ func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger, disk b
 		cache: cache, http: client, log: log, disk: disk,
 		signer:  v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }),
 		buckets: map[string]*bucket{}, mounts: map[string]*volumeMount{}, filling: map[string]bool{},
+		ahead: make(chan struct{}, readAheadFetches),
 	}
 	// Forwarding has no deadline: a server-side copy of gigabytes runs for
 	// minutes.
@@ -168,7 +178,7 @@ func (v *volumes) grant(workspace string, g *imagefsproto.BucketGrant, container
 	if m := v.mounts[container]; m != nil {
 		m.key, m.bucket = key, vg.name
 	} else if container != "" {
-		v.mounts[container] = &volumeMount{key: key, bucket: vg.name, seen: map[string]bool{}}
+		v.mounts[container] = &volumeMount{key: key, bucket: vg.name, seen: map[string]bool{}, last: map[string]int{}}
 	}
 	return nil
 }
@@ -469,6 +479,9 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 	if v.disk && ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
 		v.fill(ver) //nolint:contextcheck // a fill runs under the cache's life, not the read's
 	}
+	if !v.disk {
+		v.readAhead(f.mount, ver, int(first/volumeFrame), int(last/volumeFrame)) //nolint:contextcheck // a fetch runs under the cache's life
+	}
 	buf := make([]byte, min(maxRead, last-first+1))
 	for pos, started := first, false; pos <= last; {
 		frame, within := int(pos/volumeFrame), pos%volumeFrame
@@ -552,6 +565,39 @@ func (v *volumes) fill(ver objectVersion) {
 		return
 	}
 	v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
+}
+
+// readAhead fetches into memory the readAheadFrames frames after a read of
+// from to to that starts an object or follows the mount's last read of it,
+// as GeeseFS reads a file in order, using the fetch slots reads use.
+func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
+	v.mu.Lock()
+	last, seen := m.last[ver.name]
+	if len(m.last) >= hostproto.MaxVolumeReads {
+		clear(m.last)
+	}
+	m.last[ver.name] = to
+	v.mu.Unlock()
+	if seen && (from < last-1 || from > last+1) || !seen && from > 0 {
+		return
+	}
+	frames := int((ver.size + volumeFrame - 1) / volumeFrame)
+	for frame := to + 1; frame < min(frames, to+1+readAheadFrames); frame++ {
+		if _, ok := v.cache.fromMemory(ver.key(frame)); ok {
+			continue
+		}
+		select {
+		case v.ahead <- struct{}{}:
+		default:
+			return
+		}
+		v.cache.background.Go(func() {
+			defer func() { <-v.ahead }()
+			if _, err := v.cache.load(ver, frame); err != nil {
+				v.log.Debug("reading a volume frame ahead failed", "bucket", ver.bucket, "key", ver.name, "frame", frame, "error", err)
+			}
+		})
+	}
 }
 
 // startFill marks a fill of ver, which a warm counts as warmed bytes until
