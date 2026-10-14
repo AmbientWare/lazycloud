@@ -75,7 +75,10 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
-	changes := observability.NewChanges(pool, changesConfig, nil, slog.New(slog.DiscardHandler))
+	changes, err := observability.NewChanges(pool, changesConfig, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	probe, _, err := changes.Subscribe(identity.WorkspaceID{}, "test", nil)
 	if err != nil {
 		t.Fatal(err)
