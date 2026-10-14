@@ -48,11 +48,18 @@ jobs:
       - run: go mod tidy -diff
       - run: go tool buf format -d --exit-code
       - run: go tool buf lint
-      - run: go vet ./...
+      - run: go vet -tags hostruntime ./...
       - run: go tool golangci-lint run ./...
-      # The host runtime and acceptance tests run in their own jobs, on
-      # runners set up as hosts.
-      - run: go list ./... | grep -v -e /internal/agent$ -e /internal/imagefs -e /internal/diskengine$ -e /acceptance$ | xargs go test -race
+      # The supervisor's HTTP runner tests run the repository's Python
+      # runner.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.29"
+          python-version: "3.12"
+      - run: uv sync --frozen --group dev
+      # Tests that need root, a host's runtime or Docker images carry the
+      # hostruntime tag and run in the host-runtime and acceptance jobs.
+      - run: go list ./... | grep -v -e /acceptance$ | xargs go test -race
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up
@@ -72,18 +79,20 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race ./internal/imagefs ./internal/imagefs/layersource
+      - run: go test -race -tags hostruntime ./internal/imagefs/...
       # The agent binds volumes and the snapshotter mounts FUSE and overlay
       # filesystems as root, as on hosts, and a join installs as root. A
       # skipped volume mount test fails the job.
       - run: |
           set -o pipefail
-          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -v ./internal/agent/... ./internal/imagefs/snapshotter 2>&1 | tee "$RUNNER_TEMP/agent.log"
+          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -v ./internal/agent/... ./internal/imagefs/snapshotter 2>&1 | tee "$RUNNER_TEMP/agent.log"
           if grep -- 'volume mounts need GeeseFS' "$RUNNER_TEMP/agent.log"; then
             echo "volume mount tests skipped" >&2
             exit 1
           fi
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
+      # The supervisor's egress rules and Docker runs, as root on a host.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -v ./internal/supervisor
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
@@ -96,7 +105,7 @@ jobs:
       # hosts. A skipped test fails the job.
       - run: |
           set -o pipefail
-          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -v ./internal/diskengine 2>&1 | tee "$RUNNER_TEMP/diskengine.log"
+          sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -v ./internal/diskengine 2>&1 | tee "$RUNNER_TEMP/diskengine.log"
           if grep -- '--- SKIP' "$RUNNER_TEMP/diskengine.log"; then
             echo "disk engine tests skipped" >&2
             exit 1

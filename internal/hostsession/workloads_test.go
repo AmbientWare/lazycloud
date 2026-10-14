@@ -173,4 +173,3 @@ func TestNetworkChangesWaitForTheHost(t *testing.T) {
 		}
 	}
 }
-
