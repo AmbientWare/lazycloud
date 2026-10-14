@@ -1,10 +1,10 @@
 name: Deployment checks
 
 # Renders and validates the chart, Argo CD applications and Terraform, lints
-# workflows and scripts, and builds every image without pushing. It reaches
-# no cloud account or cluster.
+# workflows and scripts, and builds every image without pushing when a pull
+# request changes the image files; Ship builds them for every release. It
+# reaches no cloud account or cluster.
 on:
-  workflow_call:
   pull_request:
     paths:
       - ".github/**"
@@ -32,6 +32,20 @@ jobs:
           persist-credentials: false
       - name: Chart, manifests, Terraform, workflows and scripts
         run: deploy/check.sh
+      - name: Image files changed
+        id: images
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --quiet "$BASE" HEAD -- deploy/images; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.images.outputs.changed == 'true'
       - name: Build images
+        if: steps.images.outputs.changed == 'true'
         run: docker buildx bake -f deploy/images/docker-bake.hcl

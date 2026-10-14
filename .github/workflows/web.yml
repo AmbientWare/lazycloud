@@ -1,8 +1,6 @@
 name: Web owner
 
 on:
-  # Ship runs it before publishing images.
-  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/web.yml"
