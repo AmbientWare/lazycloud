@@ -29,6 +29,7 @@ func indexKey(disk uuid.UUID, n int64) string {
 // waits while the first holds the disk, stale holders cannot publish, and a
 // lost host frees the disk.
 func TestDiskLeaseFencesHolders(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	s := f.storage
@@ -136,6 +137,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 // indexes below the generation and frames of its own disk, and a failure
 // is recorded until a later publish clears it.
 func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, diskSpec)
 	s := f.storage

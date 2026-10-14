@@ -51,7 +51,8 @@ func TestDefaultChainReadsTheEnvironment(t *testing.T) {
 }
 
 // TestDefaultChainUsesPodIdentity serves credentials the way the EKS Pod
-// Identity agent does: a container credentials endpoint and a token file.
+// Identity agent does: a container credentials endpoint and a token file,
+// answering with the fields the EKS user guide documents for it.
 func TestDefaultChainUsesPodIdentity(t *testing.T) {
 	isolate(t)
 	expires := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -85,6 +86,7 @@ func TestDefaultChainWithoutSourceFails(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
+	t.Parallel()
 	ok := []Config{
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, Prefix: "lazycloud-prod-workspace", AccountID: "123456789012", RoleARN: "arn:aws:iam::1:role/hosts"}},

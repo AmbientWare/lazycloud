@@ -53,6 +53,7 @@ func putObjects(t *testing.T, bucket, prefix string, n int) {
 // TestSweepDeletesLargePrefixesInChunks: a deleted volume with more files
 // than one step removes keeps its row until its prefix is empty.
 func TestSweepDeletesLargePrefixesInChunks(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -89,6 +90,7 @@ func TestSweepDeletesLargePrefixesInChunks(t *testing.T) {
 // owner's delete, through an upload URL or a host key: objects under ids
 // with no row go, owned ones stay.
 func TestSweepRemovesObjectsWithoutOwners(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -131,6 +133,7 @@ func TestSweepRemovesObjectsWithoutOwners(t *testing.T) {
 }
 
 func TestWriteURLsAreShortLived(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	if _, err := f.storage.CreateVolume(ctx, f.ws, "data"); err != nil {

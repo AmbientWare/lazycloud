@@ -7,6 +7,7 @@ import (
 )
 
 func TestUnfundedWorkspaceDataIsDeletedExceptWhatIsInUse(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	container := f.container()
 	var idle, mounted, disk, held uuid.UUID

@@ -17,6 +17,7 @@ import (
 // A workspace with more objects than one call deletes reports more work, so
 // a deletion pass stays bounded, and the next call finishes the prefix.
 func TestDeleteWorkspaceStorageIsBoundedPerCall(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	cfg := storagetest.Config(t)
 	pool := dbtest.New(t)

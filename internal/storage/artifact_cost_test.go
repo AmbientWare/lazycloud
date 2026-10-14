@@ -9,6 +9,7 @@ import (
 )
 
 func TestArtifactSummaryShowsTheMeteredCost(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	saveArtifact(t, f, f.task(), "report.bin", "application/octet-stream", make([]byte, 1<<20))

@@ -36,6 +36,7 @@ func saveArtifact(t *testing.T, f *fixture, task uuid.UUID, name, contentType st
 }
 
 func TestArtifactLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	s := f.storage
@@ -128,6 +129,7 @@ func TestArtifactLifecycle(t *testing.T) {
 }
 
 func TestArtifactMultipartUpload(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	task := f.task()
