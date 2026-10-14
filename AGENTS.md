@@ -140,6 +140,21 @@ constraints.
   happened: that a call is gone, which queries run by name, or that an
   internal type keeps its shape. Guard costs by how they scale with
   replicas, history or backlog, not by exact counts.
+- Test an owner through its entry points: state and inputs in, decisions and
+  state out. A rewrite of the owner keeps its tests and passes them as the
+  spec of what it must still do.
+- A regression test for an incident fails on the code before the fix. Prove it
+  by reverting the fix and watching the test fail.
+- Fakes of outside systems reproduce recorded behaviour: the errors, delays
+  and orderings that CloudTrail, provider responses or prod traces show, with
+  the record named beside the fake. Never fill a fake with assumed behaviour.
+- Decide designs and tuning from prod traces and measurements. A model of our
+  own code repeats our assumptions and proves nothing about prod.
+- Tests wait on the event or state they expect, never a fixed sleep. Timed
+  behaviour runs with short intervals through the owner's settings, not a
+  test-only clock.
+- Tests that share no state run in parallel. Tests that need root, a VM,
+  Docker images or a cloud account stay out of the default `go test ./...`.
 - Owner tests live beside code; `acceptance/` covers cross-owner workflows
   against real PostgreSQL, Docker and the managed runtime.
 - Run focused checks with visible output. Use gofmt, go vet, golangci-lint and
