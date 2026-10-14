@@ -90,7 +90,7 @@ func (a *Agent) prepareReserve(request *hostproto.PrepareReserve) {
 // a stop and records the attempt. The agent, Docker and the image cache stay.
 func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareReserve) *hostproto.ReserveReady {
 	ready := &hostproto.ReserveReady{
-		RequestId: request.GetRequestId(), AttemptId: request.GetAttemptId(), BootId: a.bootID, AgentVersion: a.hostVersion(),
+		RequestId: request.GetRequestId(), AttemptId: request.GetAttemptId(), BootId: a.bootID, AgentVersion: a.cfg.Version,
 	}
 	a.mu.Lock()
 	updating := a.updating || a.trial != ""

@@ -97,9 +97,6 @@ const (
 	ExitReason_EXIT_REASON_OUT_OF_MEMORY ExitReason = 5
 	// A pod's command ended on its own; exit_code is its status.
 	ExitReason_EXIT_REASON_EXITED ExitReason = 90
-	// The host cannot serve the start now, as while it keeps the previous
-	// release's snapshotter; another host runs the container's replacement.
-	ExitReason_EXIT_REASON_REFUSED ExitReason = 91
 )
 
 // Enum value maps for ExitReason.
@@ -112,7 +109,6 @@ var (
 		4:  "EXIT_REASON_CRASHED",
 		5:  "EXIT_REASON_OUT_OF_MEMORY",
 		90: "EXIT_REASON_EXITED",
-		91: "EXIT_REASON_REFUSED",
 	}
 	ExitReason_value = map[string]int32{
 		"EXIT_REASON_UNSPECIFIED":   0,
@@ -122,7 +118,6 @@ var (
 		"EXIT_REASON_CRASHED":       4,
 		"EXIT_REASON_OUT_OF_MEMORY": 5,
 		"EXIT_REASON_EXITED":        90,
-		"EXIT_REASON_REFUSED":       91,
 	}
 )
 
@@ -7979,7 +7974,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x19CONTAINER_PHASE_PREPARING\x10\x01\x12\x1c\n" +
 	"\x18CONTAINER_PHASE_STARTING\x10\x02\x12\x19\n" +
 	"\x15CONTAINER_PHASE_READY\x10\x03\x12\x1a\n" +
-	"\x16CONTAINER_PHASE_EXITED\x10\x04*\xe5\x01\n" +
+	"\x16CONTAINER_PHASE_EXITED\x10\x04*\xcc\x01\n" +
 	"\n" +
 	"ExitReason\x12\x1b\n" +
 	"\x17EXIT_REASON_UNSPECIFIED\x10\x00\x12\x17\n" +
@@ -7988,8 +7983,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x18EXIT_REASON_START_FAILED\x10\x03\x12\x17\n" +
 	"\x13EXIT_REASON_CRASHED\x10\x04\x12\x1d\n" +
 	"\x19EXIT_REASON_OUT_OF_MEMORY\x10\x05\x12\x16\n" +
-	"\x12EXIT_REASON_EXITED\x10Z\x12\x17\n" +
-	"\x13EXIT_REASON_REFUSED\x10[*\xcf\x01\n" +
+	"\x12EXIT_REASON_EXITED\x10Z*\xcf\x01\n" +
 	"\x10StartupStageKind\x12\"\n" +
 	"\x1eSTARTUP_STAGE_KIND_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18STARTUP_STAGE_KIND_IMAGE\x10\x01\x12\x1d\n" +

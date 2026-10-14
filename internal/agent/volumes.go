@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -259,9 +258,6 @@ func (v *volumes) grantVolumes(ctx context.Context, workspace, container, key st
 // key of each live mount of its volumes, so one restarted since knows them
 // all again.
 func (v *volumes) refreshGrant(ctx context.Context, workspace string) error {
-	if v.a.previousSnapshotter {
-		return v.refreshPrevious(ctx, workspace)
-	}
 	v.mu.Lock()
 	var mounts []*mounter
 	for _, ms := range v.mounts {
@@ -285,24 +281,6 @@ func (v *volumes) refreshGrant(ctx context.Context, workspace string) error {
 		}
 	}
 	return nil
-}
-
-// refreshPrevious hands a workspace's fresh grant to the snapshotter of a
-// release before per-container mount keys, which a host keeps until it
-// runs nothing: one that caches volumes holds the grant under the one key
-// all mounts of the workspace sign with, kept beside the grant; on any
-// other host its mounts read the grant's files. Delete it once every host
-// runs a snapshotter with per-container mount keys.
-func (v *volumes) refreshPrevious(ctx context.Context, workspace string) error {
-	var c processCredentials
-	data, err := os.ReadFile(filepath.Join(v.storageDir(workspace), "endpoint", "credentials.json"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil || json.Unmarshal(data, &c) != nil {
-		return fmt.Errorf("read the workspace's endpoint key: %w", err)
-	}
-	return v.grantVolumes(ctx, workspace, "", c.AccessKeyID)
 }
 
 // mountKey returns the key the platform-volume mount mounter signs with,

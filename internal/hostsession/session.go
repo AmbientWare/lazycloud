@@ -767,9 +767,6 @@ func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 	switch e.GetReason() {
 	case hostproto.ExitReason_EXIT_REASON_STOPPED:
 		exit.Reason = execution.StopRequested
-	case hostproto.ExitReason_EXIT_REASON_REFUSED:
-		// Not the release's failure: the host could not run it.
-		exit.Reason = execution.StopHostLost
 	case hostproto.ExitReason_EXIT_REASON_LOAD_ERROR:
 		exit.Reason = execution.StopLoadError
 		exit.LoadError = &execution.Failure{

@@ -246,9 +246,6 @@ enum ExitReason {
   EXIT_REASON_OUT_OF_MEMORY = 5;
   // A pod's command ended on its own; exit_code is its status.
   EXIT_REASON_EXITED = 90;
-  // The host cannot serve the start now, as while it keeps the previous
-  // release's snapshotter; another host runs the container's replacement.
-  EXIT_REASON_REFUSED = 91;
 }
 
 message ContainerReport {

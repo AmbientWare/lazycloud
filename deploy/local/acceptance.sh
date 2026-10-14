@@ -20,14 +20,13 @@ case "${1:-}" in
     deploy/local/build-runtime.sh .lazycloud/runtime 3.12
     base=$(git merge-base HEAD origin/main)
     if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
-    if [ "$(cat "$previous/base" 2>/dev/null)" != "$base" ] || [ ! -x "$previous/lazycloud-snapshotter" ]; then
+    if [ "$(cat "$previous/base" 2>/dev/null)" != "$base" ]; then
       tree=$(mktemp -d)
       trap 'rm -rf "$tree"' EXIT
       git archive "$base" | tar -x -C "$tree"
       rm -rf "$previous"
       CGO_ENABLED=0 go build -C "$tree" -trimpath -o "$previous/lazycloud-agent" ./cmd/agent
       CGO_ENABLED=0 go build -C "$tree" -trimpath -o "$previous/supervisor" ./cmd/supervisor
-      CGO_ENABLED=0 go build -C "$tree" -trimpath -o "$previous/lazycloud-snapshotter" ./cmd/snapshotter
       echo "previous-${base:0:12}" >"$previous/VERSION"
       echo "$base" >"$previous/base"
     fi

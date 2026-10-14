@@ -191,7 +191,7 @@ func (a *Agent) hello(running []string) (*hostproto.HostMessage, []*container) {
 		BootId:                a.bootID,
 		Capacity:              a.capacity,
 		Containers:            reports,
-		AgentVersion:          a.hostVersion(),
+		AgentVersion:          a.cfg.Version,
 		Updatable:             a.updatable,
 		RejectedVersion:       readMarker(a.cfg.StateDir, RejectedFile),
 		SleptSeconds:          sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),

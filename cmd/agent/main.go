@@ -142,8 +142,8 @@ func join(cfg agent.Config) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.Is(err, agent.ErrUpdateInstalled), errors.Is(err, agent.ErrSnapshotterReplaceable):
-		cfg.Logger.Info("restarting", "reason", err)
+	case errors.Is(err, agent.ErrUpdateInstalled):
+		cfg.Logger.Info("restarting into the new release")
 		return exitRestart
 	case errors.Is(err, agent.ErrCredentialRevoked):
 		cfg.Logger.Error("host credential revoked", "error", err)
