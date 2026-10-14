@@ -938,41 +938,42 @@ func (e *env) mountStops(container string) {
 // though storing them takes a while.
 func TestWritesJustBeforeAStopAreStored(t *testing.T) {
 	t.Parallel()
-	e, s, store := volumeEnv(t)
-	target, err := url.Parse(store.endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	forward := httputil.NewSingleHostReverseProxy(target)
-	// Uploads take as long as from another region; the writes do not wait
-	// for them.
-	distant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut {
-			time.Sleep(200 * time.Millisecond)
-		}
-		forward.ServeHTTP(w, r)
-	}))
-	t.Cleanup(distant.Close)
-	store.endpoint = distant.URL
-	workspace := uuid.NewString()
-	s.send(t, store.grant(workspace))
 	for _, c := range []struct {
 		name  string
-		mount func(prefix string) *hostproto.VolumeMount
+		mount func(store testStore, workspace, prefix string) *hostproto.VolumeMount
 	}{
-		{"platform volume", func(prefix string) *hostproto.VolumeMount {
+		{"platform volume", func(_ testStore, workspace, prefix string) *hostproto.VolumeMount {
 			volume := strings.TrimSuffix(strings.TrimPrefix(prefix, "volumes/"), "/")
 			return platformVolume(workspace, volume, "/volumes/data", false)
 		}},
-		{"cloud bucket", func(prefix string) *hostproto.VolumeMount {
+		{"cloud bucket", func(store testStore, _, prefix string) *hostproto.VolumeMount {
 			m := store.bucketMount("/volumes/data", prefix)
 			m.ReadOnly = false
 			return m
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, s, store := volumeEnv(t)
+			target, err := url.Parse(store.endpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forward := httputil.NewSingleHostReverseProxy(target)
+			// Uploads take as long as from another region; the writes do not
+			// wait for them.
+			distant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					time.Sleep(200 * time.Millisecond)
+				}
+				forward.ServeHTTP(w, r)
+			}))
+			t.Cleanup(distant.Close)
+			store.endpoint = distant.URL
+			workspace := uuid.NewString()
+			s.send(t, store.grant(workspace))
 			prefix := "volumes/" + uuid.NewString() + "/"
-			start := cloudBucketStart(e, c.mount(prefix))
+			start := cloudBucketStart(e, c.mount(store, workspace, prefix))
 			id := start.GetStart().GetContainerId()
 			s.send(t, start)
 			s.phase(t, id, ready)
