@@ -3,11 +3,12 @@
 -- holds, oldest phase change first: a requested host to launch; a platform
 -- host stopping or resuming; a host terminating whose last terminate EC2
 -- has had @settle_seconds to list; a draining host that runs nothing, which
--- moves to terminating, though an interrupted one is left for the provider
--- to reclaim until @reclaim_grace_seconds past its reclaim time. Each claim
--- leases its row for @lease_seconds under a new token.
+-- moves to terminating and wakes its session and the planners, though an
+-- interrupted one is left for the provider to reclaim until
+-- @reclaim_grace_seconds past its reclaim time. Each claim leases its row
+-- for @lease_seconds under a new token.
 with claimed as (
-    select r.id from hosts r
+    select r.id, r.phase as claimed_phase from hosts r
     where r.provider = 'aws' and r.phase = any(@phases::text[])
       and (r.launch_lease_until is null or r.launch_lease_until < now())
       and case r.phase
@@ -22,6 +23,10 @@ with claimed as (
     order by r.phase_at, r.id
     limit @batch_size
     for update skip locked
+), woken as (
+    select count(pg_notify(c.channel, cl.id::text)) as n
+    from claimed cl cross join (values ('lc_host'), ('lc_compute')) as c(channel)
+    where cl.claimed_phase = 'draining'
 )
 update hosts h
 set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), action_token = gen_random_uuid(),
@@ -32,7 +37,7 @@ set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8), 
     state = case when h.phase = 'draining' then 'retired' else h.state end,
     token_hash = case when h.phase = 'draining' then null else h.token_hash end,
     updated_at = now()
-from claimed
+from claimed cross join woken
 where h.id = claimed.id
 returning h.id, h.action_token, h.name, h.kind, h.connection_id, h.phase, h.region, h.availability_zone, h.availability_zone_id,
           h.instance_type, h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools,

@@ -806,3 +806,41 @@ func TestOneActuatorTerminatesEachInstanceOnce(t *testing.T) {
 		t.Errorf("terminated %v without the row's lease", unleased)
 	}
 }
+
+// A drained host that runs nothing moves to terminating as the actuator
+// claims it, and its session and the planners are woken in that statement.
+func TestADrainedHostTerminatingWakesItsSessionAndThePlanners(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	host := newHost(t, o.pool, hostSpec{
+		Provider: compute.ProviderAWS, Phase: compute.PhaseDraining, Market: compute.MarketOnDemand,
+		Region: "us-east-2", Zone: "us-east-2a", InstanceID: "i-0000000000000d901",
+	})
+	ec2.add(fakeInstance{ID: "i-0000000000000d901", State: "running"}, host.String())
+	conn, err := o.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(t.Context(), "listen lc_host; listen lc_compute"); err != nil {
+		t.Fatal(err)
+	}
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("drained host is %s, want terminating", phase)
+	}
+	woke := map[string]bool{}
+	for range 2 {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		n, err := conn.Conn().WaitForNotification(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("after %v: %v", woke, err)
+		}
+		if n.Payload == host.String() {
+			woke[n.Channel] = true
+		}
+	}
+	if !woke["lc_host"] || !woke["lc_compute"] {
+		t.Fatalf("woke %v, want the host's session and the planners", woke)
+	}
+}
