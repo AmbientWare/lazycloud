@@ -19,7 +19,7 @@ from lazycloud.values import cloudpickle_bytes
 from pydantic import BaseModel, Field
 from typer.testing import CliRunner, Result
 
-from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply
+from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply, press_ctrl_c
 
 cli = build_public_cli()
 
@@ -226,6 +226,39 @@ def test_generated_function_raises_the_remote_failure(tmp_path: Path, fake_api: 
 
     with pytest.raises(ValueError, match="no sales"):
         clients.summarize_sales.remote([])
+
+
+@pytest.mark.parametrize("pressed", ["admission", "wait"])
+def test_ctrl_c_cancels_the_task_a_generated_function_started(
+    tmp_path: Path, fake_api: FakeApi, pressed: str
+) -> None:
+    _serve_app(fake_api, contracts={"summarize_sales": _contract(summarize_sales)})
+    assert _export("reports", "-o", str(tmp_path / "lazycloud_clients")).exit_code == 0
+    sys.path.insert(0, str(tmp_path))
+    clients = importlib.import_module("lazycloud_clients.reports")
+    task_id = _uuid(204)
+    tasks = "/v1/workspaces/team/tasks"
+
+    @fake_api.route("POST", f"{FUNCTIONS}/summarize_sales/run")
+    def run(_: ApiRequest) -> Reply:
+        if pressed == "admission":
+            press_ctrl_c()
+        queued = {"task": _task(task_id, "summarize_sales", "queued")}
+        return 200, {"Content-Type": "application/x-ndjson"}, json.dumps(queued).encode() + b"\n"
+
+    @fake_api.route("GET", f"{tasks}/{task_id}")
+    def read(_: ApiRequest) -> Reply:
+        press_ctrl_c()
+        return json_reply(_task(task_id, "summarize_sales", "running"))
+
+    fake_api.route("POST", f"{tasks}/{task_id}/cancel")(
+        lambda _: json_reply(_task(task_id, "summarize_sales", "cancelled"))
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        clients.summarize_sales.remote([1])
+
+    assert len(fake_api.calls("POST", f"{tasks}/{task_id}/cancel")) == 1
 
 
 def test_a_new_release_needs_a_new_export(tmp_path: Path, fake_api: FakeApi) -> None:
