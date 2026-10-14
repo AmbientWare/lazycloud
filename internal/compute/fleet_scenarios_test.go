@@ -747,7 +747,6 @@ func (s *sim) plan() time.Duration {
 	}
 	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
 	plan := PlanFleet(s.p, snapshot)
-	dumpPlan(s, plan)
 	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
 	for _, mp := range plan.Markets {
 		if mp.Market == (ReserveMarket{Preemptible: true}) {
