@@ -295,37 +295,31 @@ func (q *Queries) PendingFacts(ctx context.Context, ids []uuid.UUID) ([]PendingF
 
 const releaseTaskIDs = `-- name: ReleaseTaskIDs :many
 select k.id
-from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as low, unnest($3::uuid[]) as high) r
-cross join unnest($4::text[]) s(status)
-cross join unnest($5::bool[]) p(spawned)
+from unnest($1::uuid[]) r(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
 cross join lateral (
     select t.id from tasks t
-    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned
-      and t.id between r.low and r.high and t.id < $6
+    where t.release_id = r.id and t.status = s.status and t.spawned = p.spawned and t.id < $4
     order by t.id desc
-    limit $7
+    limit $5
 ) k
 order by k.id desc
-limit $7
+limit $5
 `
 
 type ReleaseTaskIDsParams struct {
 	ReleaseIds []uuid.UUID
-	IDLows     []uuid.UUID
-	IDHighs    []uuid.UUID
 	Statuses   []string
 	Spawned    []bool
 	Before     uuid.UUID
 	MaxRows    int32
 }
 
-// One range per release, status and spawned flag, of the ids from the
-// release's id_low to its id_high.
+// One range per release, status and spawned flag.
 func (q *Queries) ReleaseTaskIDs(ctx context.Context, arg ReleaseTaskIDsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, releaseTaskIDs,
 		arg.ReleaseIds,
-		arg.IDLows,
-		arg.IDHighs,
 		arg.Statuses,
 		arg.Spawned,
 		arg.Before,
@@ -503,10 +497,52 @@ func (q *Queries) TaskViews(ctx context.Context, arg TaskViewsParams) ([]TaskVie
 
 const workloadTaskIDs = `-- name: WorkloadTaskIDs :many
 select k.id
-from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as low, unnest($3::uuid[]) as high) w
+from unnest($1::uuid[]) w(id)
 cross join lateral (
     select t.id from tasks t
-    where t.workload_id = w.id and t.id between w.low and w.high and t.id < $4
+    where t.workload_id = w.id and t.id < $2
+    order by t.id desc
+    limit $3
+) k
+order by k.id desc
+limit $3
+`
+
+type WorkloadTaskIDsParams struct {
+	WorkloadIds []uuid.UUID
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+// One range per workload.
+func (q *Queries) WorkloadTaskIDs(ctx context.Context, arg WorkloadTaskIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDs, arg.WorkloadIds, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const workloadTaskIDsByStatus = `-- name: WorkloadTaskIDsByStatus :many
+select k.id
+from unnest($1::uuid[]) w(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
+cross join lateral (
+    select t.id from tasks t
+    where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned and t.id < $4
     order by t.id desc
     limit $5
 ) k
@@ -514,20 +550,20 @@ order by k.id desc
 limit $5
 `
 
-type WorkloadTaskIDsParams struct {
+type WorkloadTaskIDsByStatusParams struct {
 	WorkloadIds []uuid.UUID
-	IDLows      []uuid.UUID
-	IDHighs     []uuid.UUID
+	Statuses    []string
+	Spawned     []bool
 	Before      uuid.UUID
 	MaxRows     int32
 }
 
-// One range per workload, of the ids from its id_low to its id_high.
-func (q *Queries) WorkloadTaskIDs(ctx context.Context, arg WorkloadTaskIDsParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, workloadTaskIDs,
+// One range per workload, status and spawned flag.
+func (q *Queries) WorkloadTaskIDsByStatus(ctx context.Context, arg WorkloadTaskIDsByStatusParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDsByStatus,
 		arg.WorkloadIds,
-		arg.IDLows,
-		arg.IDHighs,
+		arg.Statuses,
+		arg.Spawned,
 		arg.Before,
 		arg.MaxRows,
 	)
@@ -549,42 +585,45 @@ func (q *Queries) WorkloadTaskIDs(ctx context.Context, arg WorkloadTaskIDsParams
 	return items, nil
 }
 
-const workloadTaskIDsByStatus = `-- name: WorkloadTaskIDsByStatus :many
+const workloadTaskIDsInRange = `-- name: WorkloadTaskIDsInRange :many
 select k.id
-from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as low, unnest($3::uuid[]) as high) w
-cross join unnest($4::text[]) s(status)
-cross join unnest($5::bool[]) p(spawned)
+from unnest($1::uuid[]) w(id)
+cross join unnest($2::text[]) s(status)
+cross join unnest($3::bool[]) p(spawned)
 cross join lateral (
     select t.id from tasks t
     where t.workload_id = w.id and t.status = s.status and t.spawned = p.spawned
-      and t.id between w.low and w.high and t.id < $6
+      and t.id between $4 and $5 and t.id < $6
+      and ($7::uuid[] is null or t.release_id = any($7::uuid[]))
     order by t.id desc
-    limit $7
+    limit $8
 ) k
 order by k.id desc
-limit $7
+limit $8
 `
 
-type WorkloadTaskIDsByStatusParams struct {
+type WorkloadTaskIDsInRangeParams struct {
 	WorkloadIds []uuid.UUID
-	IDLows      []uuid.UUID
-	IDHighs     []uuid.UUID
 	Statuses    []string
 	Spawned     []bool
+	IDLow       uuid.UUID
+	IDHigh      uuid.UUID
 	Before      uuid.UUID
+	ReleaseIds  []uuid.UUID
 	MaxRows     int32
 }
 
-// One range per workload, status and spawned flag, of the ids from the
-// workload's id_low to its id_high.
-func (q *Queries) WorkloadTaskIDsByStatus(ctx context.Context, arg WorkloadTaskIDsByStatusParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, workloadTaskIDsByStatus,
+// One range per workload, status and spawned flag, of the ids from id_low to
+// id_high that a search's id prefix spans; with releases, only theirs.
+func (q *Queries) WorkloadTaskIDsInRange(ctx context.Context, arg WorkloadTaskIDsInRangeParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, workloadTaskIDsInRange,
 		arg.WorkloadIds,
-		arg.IDLows,
-		arg.IDHighs,
 		arg.Statuses,
 		arg.Spawned,
+		arg.IDLow,
+		arg.IDHigh,
 		arg.Before,
+		arg.ReleaseIds,
 		arg.MaxRows,
 	)
 	if err != nil {

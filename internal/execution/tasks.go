@@ -1,10 +1,12 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -330,10 +332,9 @@ func (e *Execution) taskIDs(ctx context.Context, workspace identity.WorkspaceID,
 	if err != nil {
 		return nil, fmt.Errorf("find workloads: %w", err)
 	}
-	// A search reads all of a workload whose name contains it, and otherwise
-	// only the ids whose text starts with it.
-	prefixLow, prefixHigh, idPrefix := idPrefixRange(search)
-	var keys, lows, highs []uuid.UUID
+	// A search reads all of a workload whose name contains it, and the ids
+	// whose text starts with it of the others.
+	var named, others, releases []uuid.UUID
 	for _, w := range workloads {
 		key := w.ID
 		if filter.Version != nil {
@@ -341,32 +342,50 @@ func (e *Execution) taskIDs(ctx context.Context, workspace identity.WorkspaceID,
 				continue
 			}
 			key = *w.ReleaseID
+			releases = append(releases, key)
 		}
-		low, high := uuid.Nil, uuid.Max
-		if !strings.Contains(strings.ToLower(w.Name), search) {
-			if !idPrefix {
-				continue
-			}
-			low, high = prefixLow, prefixHigh
+		if strings.Contains(strings.ToLower(w.Name), search) {
+			named = append(named, key)
+		} else {
+			others = append(others, w.ID)
 		}
-		keys, lows, highs = append(keys, key), append(lows, low), append(highs, high)
 	}
+	var ids []uuid.UUID
 	switch {
-	case len(keys) == 0:
-		return nil, nil
+	case len(named) == 0:
 	case filter.Version != nil:
-		return e.queries.ReleaseTaskIDs(ctx, ReleaseTaskIDsParams{
-			ReleaseIds: keys, IDLows: lows, IDHighs: highs, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
+		ids, err = e.queries.ReleaseTaskIDs(ctx, ReleaseTaskIDsParams{
+			ReleaseIds: named, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
 		})
 	case byStatus:
-		return e.queries.WorkloadTaskIDsByStatus(ctx, WorkloadTaskIDsByStatusParams{
-			WorkloadIds: keys, IDLows: lows, IDHighs: highs, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
+		ids, err = e.queries.WorkloadTaskIDsByStatus(ctx, WorkloadTaskIDsByStatusParams{
+			WorkloadIds: named, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
 		})
 	default:
-		return e.queries.WorkloadTaskIDs(ctx, WorkloadTaskIDsParams{
-			WorkloadIds: keys, IDLows: lows, IDHighs: highs, Before: before, MaxRows: rows,
-		})
+		ids, err = e.queries.WorkloadTaskIDs(ctx, WorkloadTaskIDsParams{WorkloadIds: named, Before: before, MaxRows: rows})
 	}
+	if err != nil {
+		return nil, err
+	}
+	low, high, ok := idPrefixRange(search)
+	if len(others) == 0 || !ok {
+		return ids, nil
+	}
+	prefixed, err := e.queries.WorkloadTaskIDsInRange(ctx, WorkloadTaskIDsInRangeParams{
+		WorkloadIds: others, IDLow: low, IDHigh: high, Before: before,
+		Statuses: statuses, Spawned: spawned, ReleaseIds: releases, MaxRows: rows,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newest(append(ids, prefixed...), int(rows)), nil
+}
+
+// newest is the at most n distinct ids of ids, newest first.
+func newest(ids []uuid.UUID, n int) []uuid.UUID {
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(b[:], a[:]) })
+	ids = slices.Compact(ids)
+	return ids[:min(len(ids), n)]
 }
 
 // idPrefixRange is the range of task ids whose text form starts with
