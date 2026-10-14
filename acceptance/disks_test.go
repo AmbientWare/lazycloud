@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -19,7 +21,9 @@ import (
 // A devbox's writes outlive its container: written on one host, stopped,
 // and started on another host whose engine holds nothing of the disk, its
 // root disk reads back the same bytes. It needs root and the nbd module, as
-// hosts run the disk engine.
+// hosts run the disk engine. It runs before the parallel tests: an agent
+// that starts recovers every disk under the host's disk root that it does
+// not run, as the one agent of a host does after a restart.
 func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 	if err := diskengine.Check(); err != nil {
 		t.Skip(err)
@@ -31,18 +35,13 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.runAgent()
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+	waitFor(t, "the second host to join", func() bool {
 		var online int
 		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {
 			t.Fatal(err)
 		}
-		if online == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the second host did not join within a minute")
-		}
-	}
+		return online == 2
+	})
 	// Disks come with paid plans; the account is waived, as the local
 	// stack's is.
 	var owner uuid.UUID
@@ -70,18 +69,13 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/stop", nil, nil); status != http.StatusOK {
 			t.Fatalf("stop the devbox: %d", status)
 		}
-		for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
+		waitFor(t, "the stopped devbox to save and release its disk", func() bool {
 			var released bool
 			if err := p.pool.QueryRow(t.Context(), "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
 				t.Fatal(err)
 			}
-			if released {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the stopped devbox did not save its disk within five minutes")
-			}
-		}
+			return released
+		})
 	}
 	start()
 
@@ -103,7 +97,7 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 // than not and returns it and its host.
 func (p *platform) readyDevbox(not uuid.UUID) (uuid.UUID, uuid.UUID) {
 	p.t.Helper()
-	for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
+	for deadline := time.Now().Add(settle); ; time.Sleep(50 * time.Millisecond) {
 		var container, host uuid.UUID
 		err := p.pool.QueryRow(p.t.Context(), `
 select c.id, c.host_id from containers c join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id
@@ -117,7 +111,7 @@ where w.name = 'box' and c.state = 'ready' and c.host_id <> $1`, not).Scan(&cont
 select coalesce(json_agg(json_build_object('state', c.state, 'stop', c.stop_reason, 'error', c.exit_message, 'wait', c.capacity_wait, 'host', c.host_id))::text, '[]')
        || (select json_agg(json_build_object('host', h.id, 'slots', h.disk_slots))::text from hosts h)
 from containers c join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id where w.name = 'box'`).Scan(&state)
-			p.t.Fatalf("the devbox was not ready within five minutes: %v; its containers and the hosts: %s", err, state)
+			p.t.Fatalf("the devbox was not ready after %s: %v; its containers and the hosts: %s", settle, err, state)
 		}
 	}
 }

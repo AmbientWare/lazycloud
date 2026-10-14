@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -88,7 +90,11 @@ func asgiSpec(source, name, handler string, kind apitypes.HttpKind, concurrency 
 	return s
 }
 
+// An ASGI app sees the client's headers without the platform token,
+// streams events as it writes them, takes an upload too large to replay
+// and upgrades WebSockets; a realtime handler answers each message.
 func TestASGIStreamsUploadsUpgradesAndStripsTheToken(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": asgiApp})
 	p.deploy("web",
@@ -141,7 +147,6 @@ func TestASGIStreamsUploadsUpgradesAndStripsTheToken(t *testing.T) {
 	if err != nil || !strings.Contains(string(rest), "data: 2") || total-firstAt < 500*time.Millisecond {
 		t.Fatalf("events %q after %s, first after %s: %v", rest, total, firstAt, err)
 	}
-	t.Logf("SSE through the edge: first event after %s, stream of 3 events over %s", firstAt, total)
 
 	// A streamed upload too large to replay reaches the app whole.
 	payload := bytes.Repeat([]byte("x"), 5<<20)
