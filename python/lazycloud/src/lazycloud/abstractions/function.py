@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import signal
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -76,6 +75,7 @@ from lazycloud.exceptions import (
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
+from lazycloud.session.interrupts import uninterrupted
 
 # Every container start declares functions; the API client, task session and
 # terminal load only when a call needs them.
@@ -105,7 +105,6 @@ QUEUED_POLL_SECONDS = 1.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
-T = TypeVar("T")
 
 
 class FunctionOperationError(SdkError):
@@ -581,7 +580,7 @@ class Function(Generic[P, R]):
             events = client.run_task(workspace, self._app_slug, self.resource_name, request)
             try:
                 # Ctrl-C waits for admission so the admitted task can be cancelled.
-                admitted, interrupted = _uninterrupted(lambda: next(events, None))
+                admitted, interrupted = uninterrupted(lambda: next(events, None))
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if error is exc:
@@ -720,7 +719,7 @@ class Function(Generic[P, R]):
             try:
                 # Ctrl-C waits for the request, so the tasks it admitted are
                 # known and cancelled rather than left running.
-                response, interrupted = _uninterrupted(
+                response, interrupted = uninterrupted(
                     lambda request=request: client.submit_tasks(
                         workspace, self._app_slug, self.resource_name, request
                     )
@@ -875,33 +874,6 @@ class _QueuedTaskWatcher:
                     return
 
 
-def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
-    """Run call to completion even through Ctrl-C, returning the interrupt.
-
-    Only the main thread receives SIGINT. It holds the signal from before call
-    starts until call returns, so a Ctrl-C never abandons a request the
-    server may already have acted on.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        return call(), None
-    previous = signal.getsignal(signal.SIGINT)
-    if not callable(previous):
-        return call(), None
-    received: list[int] = []
-    signal.signal(signal.SIGINT, lambda signum, _frame: received.append(signum))
-    try:
-        value = call()
-    finally:
-        signal.signal(signal.SIGINT, previous)
-    if not received:
-        return value, None
-    try:
-        previous(signal.SIGINT, None)
-    except KeyboardInterrupt as exc:
-        return value, exc
-    return value, None
-
-
 def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
     """Cancel each task, finishing even through repeated Ctrl-C.
 
@@ -912,7 +884,7 @@ def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
     interrupted: KeyboardInterrupt | None = None
     for task in tasks:
         try:
-            _, again = _uninterrupted(
+            _, again = uninterrupted(
                 lambda task=task: task.client.cancel_task(task.workspace, UUID(task.task_id))
             )
         except Exception as exc:
