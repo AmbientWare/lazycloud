@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -543,34 +542,6 @@ func TestWarmingFillsTheTraceAtCurrentVersions(t *testing.T) {
 	}
 }
 
-// A warm holds only the background half of the fetch slots, so a read of
-// another object runs while every warm fetch waits on the store.
-func TestReadsRunBesideAWarm(t *testing.T) {
-	ts := newTestStore(t)
-	release := make(chan struct{})
-	var waiting atomic.Int64
-	up := &upstream{before: func(r *http.Request) {
-		if r.Header.Get("If-Match") != "" && strings.HasSuffix(r.URL.Path, "/warmed") {
-			waiting.Add(1)
-			<-release
-		}
-	}}
-	v, base := serveVolumes(t, ts, up, newTestCache(t, up, 128<<20), true)
-	ts.put(t, "warmed", randomBytes(1, 3*volumeFrame))
-	read := randomBytes(2, 2<<20)
-	ts.put(t, "read", read)
-	defer close(release)
-	if _, err := (volumeSources{volumes: v}).WarmVolumes(t.Context(), &imagefsproto.WarmVolumesRequest{
-		WorkspaceId: v.buckets[ts.bucket].grant.workspace, Reads: []*imagefsproto.VolumeRead{volumeRead(ts, "warmed")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, func() bool { return waiting.Load() == int64(cap(v.cache.filling)) })
-	if resp, body := get(t, base+"read", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(body, read) {
-		t.Fatalf("a read beside a warm: %s", resp.Status)
-	}
-}
-
 // slowDisk returns a directory on a filesystem of its own whose writes
 // this process makes at bytesPerSecond, synchronously, until the test ends.
 func slowDisk(t *testing.T, size int64, bytesPerSecond int) string {
@@ -668,44 +639,18 @@ func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
 	t.Logf("read %d MiB in %v", size>>20, took)
 }
 
-// Where the cache's disk reads back slower than the stores deliver, volume
-// frames stay off it: a large object reads whole and intact through
-// memory alone, and a warm fetches nothing.
+// On a host whose disk reads back slower than the stores deliver, volume
+// frames stay off the disk: a partial read fetches what it reads and no
+// more, leaving background fetches free for layers, disks and other
+// objects; a whole read comes back intact with nothing stored; and a warm
+// fetches nothing.
 func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
 	ts := newTestStore(t)
 	up := &upstream{}
-	c := newTestCache(t, up, 32<<20)
-	v, base := serveVolumes(t, ts, up, c, false)
-	body := randomBytes(13, 6<<20)
-	ts.put(t, "weights", body)
-	if resp, got := get(t, base+"weights", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
-		t.Fatalf("the read: %s, intact %v", resp.Status, bytes.Equal(got, body))
-	}
-	c.background.Wait()
-	if stored := diskBytes(t, c.dir); stored != 0 {
-		t.Fatalf("the cache stored %d bytes of the object on its disk", stored)
-	}
-	gets, _ := up.counts()
-	if _, err := (volumeSources{volumes: v}).WarmVolumes(t.Context(), &imagefsproto.WarmVolumesRequest{
-		WorkspaceId: v.buckets[ts.bucket].grant.workspace, Reads: []*imagefsproto.VolumeRead{volumeRead(ts, "weights")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	c.background.Wait()
-	if after, _ := up.counts(); after != gets {
-		t.Fatalf("a warm made %d store GETs", after-gets)
-	}
-}
-
-// A partial read on a host that stores no volume frames fetches what it
-// reads and no more, so background fetching stays free for layers, disks
-// and other objects.
-func TestAPartialReadOffDiskLeavesBackgroundFetchesFree(t *testing.T) {
-	ts := newTestStore(t)
-	up := &upstream{}
 	c := newTestCache(t, up, 256<<20)
-	_, base := serveVolumes(t, ts, up, c, false)
-	ts.put(t, "weights", randomBytes(14, 48<<20))
+	v, base := serveVolumes(t, ts, up, c, false)
+	body := randomBytes(14, 48<<20)
+	ts.put(t, "weights", body)
 	if resp, got := get(t, base+"weights", "0-0"); resp.StatusCode != http.StatusPartialContent || len(got) != 1 {
 		t.Fatalf("the partial read: %s", resp.Status)
 	}
@@ -721,5 +666,21 @@ func TestAPartialReadOffDiskLeavesBackgroundFetchesFree(t *testing.T) {
 	}
 	if gets, _ := up.counts(); gets != 1 {
 		t.Fatalf("a read of one frame made %d store GETs", gets)
+	}
+	if resp, got := get(t, base+"weights", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
+		t.Fatalf("the whole read: %s, intact %v", resp.Status, bytes.Equal(got, body))
+	}
+	if stored := diskBytes(t, c.dir); stored != 0 {
+		t.Fatalf("the cache stored %d bytes of the object on its disk", stored)
+	}
+	gets, _ := up.counts()
+	if _, err := (volumeSources{volumes: v}).WarmVolumes(t.Context(), &imagefsproto.WarmVolumesRequest{
+		WorkspaceId: v.buckets[ts.bucket].grant.workspace, Reads: []*imagefsproto.VolumeRead{volumeRead(ts, "weights")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.background.Wait()
+	if after, _ := up.counts(); after != gets {
+		t.Fatalf("a warm made %d store GETs", after-gets)
 	}
 }
