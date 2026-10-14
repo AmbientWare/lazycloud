@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from lazycloud._shared.image_building.credentials import ImageCredentialLookupError
+from lazycloud.config import reset_settings_cache
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.terminal import Terminal, TerminalStep
 
@@ -366,8 +367,11 @@ def test_build_output_is_opt_in_and_uses_stderr(
 
 
 def test_build_summary_follows_buildkit_steps_retries_and_dropped_streams(
-    fake_api: FakeApi,
+    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("LAZYCLOUD_RETRY_DELAY_SECONDS", "0")
+    reset_settings_cache()
+
     def dropped() -> Iterator[bytes]:
         yield _log(1, "#7 [2/4] RUN pip install numpy")
         raise StreamAborted

@@ -140,7 +140,8 @@ def test_shell_waits_for_its_container_and_bridges_bytes_resizes_and_exit(
                 connector=redirect_to(url, opened),
                 terminal=terminal,
                 on_attached=lambda: attached.append(True),
-            )
+            ),
+            ready_retry_seconds=0,
         )
         status = shell.connect(ShellSession(container_id=CONTAINER, stub_id=RELEASE))
 

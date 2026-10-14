@@ -16,6 +16,8 @@ from lazycloud.terminal_shell import InteractiveShell, ShellConnectionError
 
 # How long a shell waits for its container to start, image pull included.
 SHELL_READY_TIMEOUT_SECONDS = 600.0
+# How long a shell waits between asks while its container is still starting.
+SHELL_READY_RETRY_SECONDS = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,7 @@ class Shell:
     timeout_seconds: float = 10.0
     interactive_shell: InteractiveShell | None = None
     ready_timeout_seconds: float = SHELL_READY_TIMEOUT_SECONDS
+    ready_retry_seconds: float = SHELL_READY_RETRY_SECONDS
 
     @property
     def control_client(self) -> WorkloadsClient:
@@ -83,7 +86,12 @@ class Shell:
         client = self.control_client
         container_id = UUID(session.container_id)
         try:
-            wait_until_ready(client, container_id, timeout_seconds=self.ready_timeout_seconds)
+            wait_until_ready(
+                client,
+                container_id,
+                timeout_seconds=self.ready_timeout_seconds,
+                retry_seconds=self.ready_retry_seconds,
+            )
         except KeyboardInterrupt as exc:
             if session.standalone:
                 self._stop_interrupted(session, exc)
@@ -118,7 +126,10 @@ class Shell:
         if session.sync_dir:
             client = self.control_client
             wait_until_ready(
-                client, UUID(session.container_id), timeout_seconds=self.ready_timeout_seconds
+                client,
+                UUID(session.container_id),
+                timeout_seconds=self.ready_timeout_seconds,
+                retry_seconds=self.ready_retry_seconds,
             )
             sync_local_workspace(
                 container_id=session.container_id, local_dir=session.sync_dir, client=client
@@ -144,7 +155,11 @@ class Shell:
 
 
 def wait_until_ready(
-    client: WorkloadsClient, container_id: UUID, *, timeout_seconds: float
+    client: WorkloadsClient,
+    container_id: UUID,
+    *,
+    timeout_seconds: float,
+    retry_seconds: float,
 ) -> None:
     """Hold until the container is ready; a stopped container or the deadline raises."""
     deadline = time.monotonic() + timeout_seconds
@@ -166,7 +181,7 @@ def wait_until_ready(
                     f"{timeout_seconds:g} seconds: {exc.message}"
                 )
                 raise ShellConnectionError(msg) from exc
-            time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+            time.sleep(min(retry_seconds, max(0.0, deadline - time.monotonic())))
             continue
         return
 
