@@ -1,13 +1,10 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
-import { activeWorkspace, signIn } from "./fixtures/workspaces";
+import { activeWorkspace, pricingCatalog, signIn } from "./fixtures/workspaces";
 
 test("canonical marketing routes are public, responsive, and accessible", async ({ page }) => {
-  test.fixme(
-    true,
-    "axe aria-prohibited-attr: the landing page's .run-test-checks div has aria-label but no role",
-  );
+  await page.route("**/v1/pricing", (route) => route.fulfill({ json: pricingCatalog }));
   const authenticatedRequests: string[] = [];
   const consoleErrors: string[] = [];
   page.on("request", (request) => {
