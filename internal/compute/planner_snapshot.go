@@ -233,20 +233,11 @@ func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 		Current:   h.PreparedCurrent, UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
-		StartRefused: h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		HourlyMicros:          h.HourlyMicros,
+		StartRefused:          h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays, StoppedAt: h.StoppedAt,
 		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},
 	}
-}
-
-// busySince is when the host's newest live container was placed; nil
-// without one.
-func busySince(h PlannerHostsRow) *time.Time {
-	if h.Containers == 0 {
-		return nil
-	}
-	return &h.BusySince
 }
 
 // refusedReserve reports a host serving after its agent refused to prove a
@@ -286,7 +277,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes), Packs: r.Packs,
 		}}}
 		for n, id := range r.Ids {
-			c := PendingContainer{ID: id}
+			c := PendingContainer{ID: id, Since: r.Created[n]}
 			if r.Bought[n] != uuid.Nil {
 				c.Host = ptr(HostID(r.Bought[n]))
 			}
@@ -300,7 +291,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 func recentShapesParams(p Policy) RecentShapesParams {
 	return RecentShapesParams{
 		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow().Seconds(),
 		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}
 }

@@ -44,7 +44,7 @@ func TestReadsRankOffersInTheBucketsRegionFirst(t *testing.T) {
 		t.Fatalf("with the read, %v rank first", offerKeys(offers))
 	}
 	in.Cooldowns = []OfferCooldown{{Region: "us-east-1", ZoneID: "use1-az6", InstanceType: "g6.2xlarge", Market: MarketSpot, Until: offerNow.Add(time.Hour)}}
-	h := ClaimLaunchesRow{Market: ptr(string(MarketSpot)), GpuType: "L4", GpuCount: 1, CpuMillis: 2000, MemoryBytes: 12 * gib}
+	h := ClaimHostActionsRow{Market: ptr(string(MarketSpot)), GpuType: "L4", GpuCount: 1, CpuMillis: 2000, MemoryBytes: 12 * gib}
 	waiter := HostWaitersRow{Preemptible: true, ReadRegion: &read.Region, ReadBytes: read.Bytes}
 	if o, ok := fallbackPool(DefaultPolicy(), h, []HostWaitersRow{waiter}, in, func(string, bool) bool { return true }); !ok || o.ZoneID != "use1-az1" {
 		t.Errorf("the fallback from use1-az6 is %s, want use1-az1", o.Key())
@@ -64,7 +64,7 @@ func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 		return FleetHost{
 			ID: HostID{id}, InstanceType: "g6.2xlarge", Region: region, Zone: zone, ZoneID: zoneID, Market: MarketSpot, GPU: "L4",
 			Usable: mustType(t, "g6.2xlarge").Usable(0), State: state, ReserveMode: ptr(ReserveStop), Current: true, Stoppable: true, Slept: true,
-			HourlyMicros: ptr(int64(400_000)), PhaseAt: offerNow,
+			HourlyMicros: ptr(int64(400_000)),
 		}
 	}
 	plan := func(hosts ...FleetHost) FleetPlan {

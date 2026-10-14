@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // PublishedMarket is one market's plan as the planner publishes it in
@@ -19,11 +21,8 @@ type PublishedMarket struct {
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
 	Reason        MarketReason  `json:"reason"`
-	// FloorShortSince is when the stopped target went short; the next pass
-	// reads it back.
-	FloorShortSince *time.Time `json:"floor_short_since,omitempty"`
-	// Peak is the market's load peak; the next pass reads it back.
-	Peak   LoadPeak             `json:"peak"`
+	// Holds are the market's targets as the next pass reads them back.
+	Holds  MarketHolds          `json:"holds"`
 	States []FleetStateCapacity `json:"states"`
 	// Decision summarizes the market's plan; the planner logs it when it
 	// changes.
@@ -39,8 +38,7 @@ type PublishedMarket struct {
 func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out := PublishedMarket{
 		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Load: mp.Load, WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree,
-		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States,
-		FloorShortSince: mp.FloorShortSince, Peak: mp.Peak,
+		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States, Holds: mp.Holds,
 	}
 	var names []string
 	for _, a := range actions {
@@ -74,8 +72,17 @@ type marketRow struct {
 	ExpiresAt   time.Time       `json:"expires_at"`
 }
 
-// PublishedPlan returns every market's last published plan, current or
-// expired; the caller treats an expired one as no plan.
+// marketKey is the fleet_markets key of an owner's market: the market for
+// the platform, prefixed by the connection for a connected account.
+func marketKey(connection *uuid.UUID, m ReserveMarket) string {
+	if connection == nil {
+		return m.String()
+	}
+	return connection.String() + "/" + m.String()
+}
+
+// PublishedPlan returns every platform market's last published plan,
+// current or expired; the caller treats an expired one as no plan.
 func (c *Compute) PublishedPlan(ctx context.Context) ([]PublishedMarket, error) {
 	rows, err := c.queries.FleetMarkets(ctx)
 	if err != nil {
@@ -83,6 +90,9 @@ func (c *Compute) PublishedPlan(ctx context.Context) ([]PublishedMarket, error) 
 	}
 	out := make([]PublishedMarket, 0, len(rows))
 	for _, r := range rows {
+		if strings.Contains(r.Market, "/") {
+			continue
+		}
 		var m PublishedMarket
 		if err := json.Unmarshal(r.Plan, &m); err != nil {
 			return nil, fmt.Errorf("decode the plan of market %s: %w", r.Market, err)

@@ -13,24 +13,24 @@ func cpuGiB(millis cpu.Millis, memGiB int64) FleetCapacity {
 func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 	p := DefaultPolicy()
 	cases := []struct {
-		name          string
-		market        ReserveMarket
-		load          FleetCapacity
-		warm, stopped FleetCapacity
+		name           string
+		market         ReserveMarket
+		load           FleetCapacity
+		floor, stopped FleetCapacity
 	}{
 		{"quiet on-demand keeps its floors", ReserveMarket{}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
 		{"quiet Spot keeps its floors", ReserveMarket{Preemptible: true}, FleetCapacity{}, cpuGiB(1000, 4), cpuGiB(3000, 12)},
-		{"loaded market keeps a share", ReserveMarket{}, cpuGiB(40_000, 80), cpuGiB(10_000, 20), cpuGiB(20_000, 40)},
-		{"a share rounds up", ReserveMarket{}, FleetCapacity{CPUMillis: 10_001}, cpuGiB(2501, 4), cpuGiB(5001, 12)},
+		{"loaded market keeps a share stopped", ReserveMarket{}, cpuGiB(40_000, 80), cpuGiB(1000, 4), cpuGiB(20_000, 40)},
+		{"a share rounds up", ReserveMarket{}, FleetCapacity{CPUMillis: 10_001}, cpuGiB(1000, 4), cpuGiB(5001, 12)},
 		{"GPU markets keep a share without a floor", ReserveMarket{GPU: "T4"}, FleetCapacity{}, FleetCapacity{}, FleetCapacity{}},
-		{"loaded GPU market", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{CPUMillis: 1000, GPUs: 1}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
+		{"loaded GPU market keeps no running headroom", ReserveMarket{GPU: "L4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 		{"other cards keep none", ReserveMarket{GPU: "H100"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{}},
-		{"Spot GPU work keeps a stopped share and nothing warm", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
+		{"Spot GPU work keeps a stopped share", ReserveMarket{Preemptible: true, GPU: "T4"}, FleetCapacity{CPUMillis: 4000, GPUs: 4}, FleetCapacity{}, FleetCapacity{CPUMillis: 2000, GPUs: 2}},
 	}
 	for _, c := range cases {
 		r := p.Reserve(c.market)
-		if warm, stopped := r.Warm.Of(c.load), r.Stopped.Of(c.load); warm != c.warm || stopped != c.stopped {
-			t.Errorf("%s: warm %+v stopped %+v, want %+v %+v", c.name, warm, stopped, c.warm, c.stopped)
+		if floor, stopped := r.Running.Floor, r.Stopped.Of(c.load); floor != c.floor || stopped != c.stopped {
+			t.Errorf("%s: floor %+v stopped %+v, want %+v %+v", c.name, floor, stopped, c.floor, c.stopped)
 		}
 	}
 }

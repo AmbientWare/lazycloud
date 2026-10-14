@@ -633,16 +633,16 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
-// A launcher whose host another launcher moved on in the meantime neither
-// records its instance nor moves the host again; the instance ends.
-func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing.T) {
+// A launch whose claim passed to another actuator in the meantime neither
+// records its instance nor moves the host; the instance ends.
+func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
 	for _, refuse := range []bool{false, true} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
 		alice := newUser(t, o.pool, "alice@example.com")
 		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 		succeed := launched(t)
 		emulator.on("RunInstances", func(call awsCall) awsReply {
-			if _, err := o.pool.Exec(t.Context(), "update hosts set launch_pools = 1 where id = $1", uuid.UUID(host)); err != nil {
+			if _, err := o.pool.Exec(t.Context(), "update hosts set action_token = gen_random_uuid() where id = $1", uuid.UUID(host)); err != nil {
 				t.Error(err)
 			}
 			if refuse {
@@ -652,7 +652,7 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 		})
 		emulator.on("TerminateInstances", terminateInstancesReply)
 		if n := launch(t, o); n != 0 {
-			t.Fatalf("refuse %v: launched %d for a host another launcher moved", refuse, n)
+			t.Fatalf("refuse %v: launched %d for a host another claim holds", refuse, n)
 		}
 		if n := len(emulator.calls("RunInstances")); n != 1 {
 			t.Fatalf("refuse %v: %d launches, want the fenced one alone", refuse, n)
@@ -663,7 +663,7 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 			t.Fatal(err)
 		}
 		if phase != string(compute.PhaseRequested) || instanceType != emulator.calls("RunInstances")[0].Form.Get("InstanceType") {
-			t.Fatalf("refuse %v: host %s as %s, want it requested where the other launcher left it", refuse, phase, instanceType)
+			t.Fatalf("refuse %v: host %s as %s, want it requested where it was", refuse, phase, instanceType)
 		}
 		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{false: 1, true: 0}[refuse] {
 			t.Fatalf("refuse %v: %d terminations, want the fenced instance ended", refuse, terminated)

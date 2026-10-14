@@ -51,10 +51,28 @@ func settle(t *testing.T, o owners) {
 	run(t, o.pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
 }
 
+// lapse gives every platform market without a published plan holds that
+// lapsed long ago, so a pass plans from what it sees rather than keeping
+// what the fleet holds, as the first pass after a deploy does.
+func lapse(t *testing.T, o owners) {
+	t.Helper()
+	run(t, o.pool, `
+insert into fleet_markets (market, plan, generated_at, expires_at)
+select m.key, jsonb_build_object('preemptible', m.preemptible, 'gpu_type', m.gpu,
+           'holds', jsonb_build_object('running', jsonb_build_object('at', 'epoch'::timestamptz),
+                                       'stopped', jsonb_build_object('at', 'epoch'::timestamptz), 'floor', 'epoch'::timestamptz)),
+       now() - interval '1 hour', now() - interval '1 hour'
+from (values ('spot:cpu', true, ''), ('on_demand:cpu', false, ''), ('spot:A10G', true, 'A10G'), ('on_demand:A10G', false, 'A10G'),
+             ('spot:L4', true, 'L4'), ('on_demand:L4', false, 'L4'), ('spot:T4', true, 'T4'), ('on_demand:T4', false, 'T4'))
+     as m(key, preemptible, gpu)
+on conflict (market) do nothing`)
+}
+
 // plan runs one fleet planning pass once arrivals have settled.
 func plan(t *testing.T, o owners) compute.PlanResult {
 	t.Helper()
 	settle(t, o)
+	lapse(t, o)
 	result, err := o.compute.Plan(t.Context(), discard())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -165,8 +183,8 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 			t.Errorf("container %s waits %q, want provisioning", c, w)
 		}
 	}
-	if w := capacityWait(t, o, containers[5]); w != "" {
-		t.Errorf("a container no fleet region serves waits %q, want nothing", w)
+	if w := capacityWait(t, o, containers[5]); w != string(compute.WaitNoOffer) {
+		t.Errorf("a container no fleet region serves waits %q, want %q", w, compute.WaitNoOffer)
 	}
 }
 
@@ -431,9 +449,9 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 	}
 }
 
-// CPU work never keeps a fleet GPU host up: once its GPU work ends, the
-// host leaves on its idle timeout, evicting what still runs there, whose
-// task is preempted and queued again.
+// CPU work never keeps a fleet GPU host up: once its GPU work ends and its
+// market's window has passed, the host leaves, evicting what still runs
+// there, whose task is preempted and queued again.
 func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -442,7 +460,7 @@ func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
 		Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 4000, Memory: 28 * gib, GPUType: "T4", GPUCount: 1,
 		Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", InstanceID: "i-gpu",
 	})
-	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge', idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge' where id = $1", uuid.UUID(host))
 	w := runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{"kind": "function"}`), host)
 
 	plan(t, o)

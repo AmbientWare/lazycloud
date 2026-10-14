@@ -22,6 +22,9 @@ type fakeEC2 struct {
 	requests  map[string]*fakeSpotRequest
 	refuse    func(call awsCall) (awsReply, bool)
 	launched  int
+	// lag is how long DescribeInstances keeps reporting an instance's state
+	// from before its last change, as EC2's eventually consistent reads do.
+	lag time.Duration
 }
 
 type fakeInstance struct {
@@ -33,6 +36,17 @@ type fakeInstance struct {
 	SpotRequest string
 	StateReason string
 	Tags        map[string]string
+	// Was is the state before the last change, at Changed.
+	Was     string
+	Changed time.Time
+}
+
+// shown is the state DescribeInstances reports for i.
+func (f *fakeEC2) shown(i *fakeInstance) string {
+	if f.lag > 0 && i.Was != "" && time.Since(i.Changed) < f.lag {
+		return i.Was
+	}
+	return i.State
 }
 
 type fakeSpotRequest struct {
@@ -158,7 +172,7 @@ func (f *fakeEC2) describeInstances(call awsCall) awsReply {
 		fmt.Fprintf(&b, `<item><reservationId>r-%s</reservationId><ownerId>111122223333</ownerId><instancesSet><item>`+
 			`<instanceId>%s</instanceId><instanceType>%s</instanceType><instanceState><code>%d</code><name>%s</name></instanceState>`+
 			`<launchTime>%s</launchTime><hibernationOptions><configured>%t</configured></hibernationOptions>`,
-			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(i.State), esc(i.State),
+			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(f.shown(i)), esc(f.shown(i)),
 			i.Launched.UTC().Format(time.RFC3339), i.Hibernation)
 		if i.SpotRequest != "" {
 			fmt.Fprintf(&b, `<spotInstanceRequestId>%s</spotInstanceRequestId><instanceLifecycle>spot</instanceLifecycle>`, esc(i.SpotRequest))
@@ -197,6 +211,9 @@ func (f *fakeEC2) stateChanges(call awsCall, response string, move func(*fakeIns
 		}
 		before := i.State
 		move(i)
+		if i.State != before {
+			i.Was, i.Changed = before, time.Now()
+		}
 		fmt.Fprintf(&b, `<item><instanceId>%s</instanceId><currentState><code>%d</code><name>%s</name></currentState>`+
 			`<previousState><code>%d</code><name>%s</name></previousState></item>`,
 			esc(id), instanceStateCode(i.State), esc(i.State), instanceStateCode(before), esc(before))

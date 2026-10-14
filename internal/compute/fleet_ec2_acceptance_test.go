@@ -439,10 +439,14 @@ func (r liveReserve) checkLaunch() {
 	for _, tag := range sr.Tags {
 		rtags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
 	}
-	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != ec2types.InstanceInterruptionBehaviorStop ||
+	interruption := ec2types.InstanceInterruptionBehaviorStop
+	if hibernates {
+		interruption = ec2types.InstanceInterruptionBehaviorHibernate
+	}
+	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != interruption ||
 		rtags["lazycloud:fleet"] != acceptanceFleet || rtags["lazycloud:host-id"] != r.host.String() {
-		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that stops", *request, sr.Type,
-			sr.InstanceInterruptionBehavior, rtags)
+		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that does what the reserve does, %s",
+			*request, sr.Type, sr.InstanceInterruptionBehavior, rtags, interruption)
 	}
 }
 

@@ -55,18 +55,19 @@ func TestCloudHostsThatNeverServeAreReplaced(t *testing.T) {
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
-	if phase, failure := hostPhase(t, o.pool, stuck); phase != string(compute.PhaseFailed) || failure == nil || *failure != string(compute.FailureEnrollment) {
-		t.Fatalf("joining host past the boot timeout is %s (%v), want failed agent_enrollment_failed", phase, failure)
+	if phase, failure := hostPhase(t, o.pool, stuck); phase != string(compute.PhaseTerminating) || failure == nil || *failure != string(compute.FailureEnrollment) {
+		t.Fatalf("joining host past the boot timeout is %s (%v), want terminating with agent_enrollment_failed", phase, failure)
 	}
+	actuate(t, o)
 	if got := terminated(emulator); !slices.Equal(got, []string{"i-0000000000000d001"}) {
 		t.Fatalf("terminated %v, want the stuck instance", got)
 	}
 }
 
 // A terminating host stays terminating until EC2 reports the instance
-// terminated, so a termination that did not take is retried; a new
-// instance EC2 does not list yet is not taken for gone; and a configured
-// region without hosts is still swept for orphans.
+// gone, and reconcile leaves its terminate to the actuator; a new instance
+// EC2 does not list yet is not taken for gone; and a configured region
+// without hosts is still swept for orphans.
 func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	terminating := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseTerminating, Region: "us-east-2", InstanceID: "i-0000000000000e001"})
@@ -92,8 +93,8 @@ func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
 	}
 	got := terminated(emulator)
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"i-0000000000000e001", "i-0000000000000e003"}) {
-		t.Fatalf("terminated %v, want the instance still running and the orphan in us-west-1", got)
+	if !slices.Equal(got, []string{"i-0000000000000e003"}) {
+		t.Fatalf("terminated %v, want the orphan in us-west-1 alone", got)
 	}
 }
 

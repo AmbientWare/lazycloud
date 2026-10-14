@@ -59,8 +59,10 @@ type simHost struct {
 	// failAt, when set, is when the host fails without serving, as one whose
 	// bootstrap timed out.
 	failAt *time.Time
-	// resumed is set on a host resumed from the reserve to serve.
-	resumed bool
+	// resumed is set on a host resumed from the reserve to serve, and
+	// servedAt is when it last began to serve.
+	resumed  bool
+	servedAt time.Time
 	// unbilledFrom, on a GPU reserve being made, is when EC2 begins
 	// stopping it, which it bills as stopped.
 	unbilledFrom time.Time
@@ -85,7 +87,7 @@ type simRelease struct{ version, build int }
 // the containers waiting for it, its purchase record and the end its
 // refused pools share.
 type simWalk struct {
-	row      ClaimLaunchesRow
+	row      ClaimHostActionsRow
 	waiters  []HostWaitersRow
 	purchase *simPurchase
 	kind     FleetActionKind
@@ -143,8 +145,8 @@ type simArrival struct {
 	need  Requirement
 	count int
 	runs  time.Duration
-	// build marks an image build, which keeps a warm slot of its shape in
-	// its market for the policy's BuildWindow.
+	// build marks an image build, whose shape its market keeps free for the
+	// policy's BuildWindow once it ends.
 	build bool
 	fn    string
 }
@@ -156,18 +158,21 @@ type simResult struct {
 	launches, stops, resumes   int
 	refusals                   int
 	// launched, refused, reserveBought and retired are when each launch,
-	// refused launch, reserve purchase and retirement happened.
+	// refused launch, reserve purchase and retirement happened, and
+	// retiredHosts the hosts retired.
 	launched, refused, reserveBought, retired []time.Time
+	retiredHosts                              []HostID
 	// unused counts serving hosts that left without running a container;
 	// onDemand counts on-demand hosts bought to serve; mostHosts is the most
 	// hosts that served at once.
 	unused, onDemand, mostHosts int
-	// pinnedWaits are the waits of work that cannot run on Spot; mostWarm
+	// cpuWaits are the waits of CPU work; pinnedWaits those of work that
+	// cannot run on Spot; mostWarm
 	// is the largest warm target the Spot market kept.
-	pinnedWaits []time.Duration
-	mostWarm    FleetCapacity
-	finalHourly int64
-	violations  []string
+	cpuWaits, pinnedWaits []time.Duration
+	mostWarm              FleetCapacity
+	finalHourly           int64
+	violations            []string
 	// fnWaits are each function's start waits, retries apart.
 	fnWaits map[string][]time.Duration
 	// revenueNanos is what finished containers bill.
@@ -195,6 +200,32 @@ type simResult struct {
 	// seconds GPU hosts ran.
 	cpuLaunches, evicted, evictedAgain int
 	gpuHostSec                         float64
+	// unusedBy counts by market the serving hosts that left without running
+	// a container, and mostServing the most hosts of each that served at
+	// once.
+	unusedBy, mostServing map[ReserveMarket]int
+	// idleGPU counts the passes that left a market's serving GPU host
+	// without a container while the market had load.
+	idleGPU int
+	// growth and releases are each market's resumes and purchases to serve
+	// and its serving hosts' drains and returns to the reserve; rebought
+	// counts growth within a market's window after a release there.
+	growth, releases []simEvent
+	rebought         int
+	// headroomBuys counts purchases for no container in a market whose
+	// serving and starting hosts held its load and warm target already.
+	headroomBuys int
+	// breaches are the passes that broke an invariant of the fleet plan.
+	breaches []string
+	// failed counts containers that waited past the queue timeout.
+	failed int
+}
+
+// simEvent is a pass's move in a market, naming the host it moved.
+type simEvent struct {
+	at     time.Time
+	market ReserveMarket
+	host   HostID
 }
 
 // simPurchase is one reserve purchase: its market and each pool its launch
@@ -227,17 +258,17 @@ type sim struct {
 	// recentDisks the most disks one attached.
 	recent      map[ReserveMarket]FleetCapacity
 	recentDisks map[ReserveMarket]int
-	// floorShortSince carries each market's reserve shortfall from one pass
-	// to the next, as the published plan does.
-	floorShortSince map[ReserveMarket]time.Time
-	peaks           map[ReserveMarket]LoadPeak
+	// carry is what the published plan carries from one pass to the next.
+	carry simCarry
 	// mostReserves is the most reserves any market held after a pass.
 	mostReserves map[ReserveMarket]int
 	// maxHosts is the fleet limit; tick is the step, simTick unless a long
-	// scenario sets it; provision is how long a launch takes to serve.
-	maxHosts  int
-	tick      time.Duration
-	provision time.Duration
+	// scenario sets it; provision is how long a CPU launch takes to serve,
+	// and gpuProvision an on-demand GPU one's when set, else the policy's
+	// GPU launch.
+	maxHosts                int
+	tick                    time.Duration
+	provision, gpuProvision time.Duration
 	// refuses names the pools EC2 refuses for capacity. A refused launch
 	// cools its zone and moves to the pool fallbackPool picks, as the
 	// launcher does.
@@ -248,7 +279,7 @@ type sim struct {
 	// the whole run.
 	until time.Time
 	// builds are the builds that ended, for the planner's build window, and
-	// placedLog every container placed.
+	// placedLog every container placed within the arrival window.
 	builds    []simBuild
 	placedLog []*simContainer
 	// cools are the runs of refusals by pool.
@@ -269,7 +300,23 @@ type sim struct {
 	disableGap time.Duration
 	// startsFill has EC2 start stopped reserves in pools refuses names.
 	startsFill bool
+	// plannedAt is when the last plan pass ran, and planWake is set when a
+	// container arrived, was placed or ended since, as their notifications
+	// wake the planner on every replica.
+	plannedAt time.Time
+	planWake  bool
+	// unexplained are the pending containers the last pass gave no host,
+	// purchase or wait, and when.
+	unexplained map[uuid.UUID]time.Time
 }
+
+// planTick is the planner loop's period on the leader, fleetTick in
+// cmd/scheduler.
+const planTick = 5 * time.Second
+
+// planRepeats bounds the passes one wake runs: a pass that acts notifies
+// the compute channel, which wakes the planner loops again at once.
+const planRepeats = 3
 
 // simDeploy is a deploy at at: a new agent release, of a new build when
 // agent is set.
@@ -360,39 +407,57 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 				for range a.count {
 					s.pending = append(s.pending, &simContainer{id: uuid.New(), need: a.need, arrived: s.now, runs: a.runs, build: a.build, fn: a.fn})
 				}
+				s.planWake = true
 			}
 		}
 		for _, d := range s.deploys {
 			if at := s.start.Add(d.at); !at.Before(s.now) && at.Before(s.now.Add(s.tick)) {
 				s.release.version++
+				s.outage = at.Add(simOutage)
 				if d.agent {
 					s.release.build++
+					// Serving hosts move to the new agent once the scheduler
+					// is back, and take no work while they install it.
+					for _, h := range s.hosts {
+						if h.State == FleetServing {
+							h.updateUntil = s.outage.Add(simUpdate)
+						}
+					}
 				}
-				s.outage = at.Add(simOutage)
 			}
 		}
+		s.timeOut()
 		s.place()
 		if s.now.Before(s.outage) {
 			s.account()
 			s.now = s.now.Add(s.tick)
 			continue
 		}
-		// A pass that held purchases for arrivals runs again once they
-		// settle, as the planner loop does.
 		if s.wake || s.now.Sub(s.launchedAt) >= launchTick {
 			s.launchPass()
 		}
-		if wait := s.plan(); wait > 0 {
-			tick := s.now
-			s.now = s.now.Add(wait)
-			s.plan()
-			if s.wake {
-				s.launchPass()
+		if s.planWake || s.now.Sub(s.plannedAt) >= planTick {
+			s.planWake = false
+			for range planRepeats {
+				wait, acted := s.plan()
+				// A pass that held purchases for arrivals runs again once they
+				// settle, as the planner loop does.
+				if wait > 0 {
+					tick := s.now
+					s.now = s.now.Add(wait)
+					s.plan()
+					if s.wake {
+						s.launchPass()
+					}
+					s.now = tick
+				}
+				if s.wake {
+					s.launchPass()
+				}
+				if !acted {
+					break
+				}
 			}
-			s.now = tick
-		}
-		if s.wake {
-			s.launchPass()
 		}
 		s.account()
 		s.now = s.now.Add(s.tick)
@@ -422,7 +487,7 @@ func (s *sim) advance() {
 		}
 		switch {
 		case h.State == FleetStarting:
-			h.State, h.PhaseAt = FleetServing, s.now
+			h.State, h.servedAt = FleetServing, s.now
 		case h.State == FleetPreparing && h.Market == MarketSpot:
 			// Its instance stopped; EC2 disables the Spot request later.
 			h.State, h.StoppedAt, h.until = FleetStopping, ptr(s.now), s.now.Add(s.gap(h))
@@ -446,6 +511,7 @@ func (s *sim) advance() {
 				s.builds = append(s.builds, simBuild{at: s.now, market: ReserveMarket{Preemptible: c.need.Preemptible}, shape: reservedShape(c.need)})
 			}
 			s.bill(c, c.runs)
+			s.planWake = true
 			return true
 		})
 	}
@@ -454,16 +520,50 @@ func (s *sim) advance() {
 		gone := h.State == FleetDraining && len(h.containers) == 0
 		if gone && !h.served {
 			s.r.unused++
+			if s.r.unusedBy == nil {
+				s.r.unusedBy = map[ReserveMarket]int{}
+			}
+			s.r.unusedBy[h.market()]++
 		}
 		return gone
 	})
-	serving := 0
+	serving := map[ReserveMarket]int{}
 	for _, h := range s.hosts {
 		if h.State == FleetServing {
-			serving++
+			serving[h.market()]++
 		}
 	}
-	s.r.mostHosts = max(s.r.mostHosts, serving)
+	if s.r.mostServing == nil {
+		s.r.mostServing = map[ReserveMarket]int{}
+	}
+	total := 0
+	for m, n := range serving {
+		s.r.mostServing[m] = max(s.r.mostServing[m], n)
+		total += n
+	}
+	s.r.mostHosts = max(s.r.mostHosts, total)
+}
+
+// timeOut ends the pending containers that waited past the queue timeout
+// for a host not yet launched, as execution's pending deadline does.
+func (s *sim) timeOut() {
+	limit := simQueueTimeout(s.p)
+	if limit <= 0 {
+		return
+	}
+	s.pending = slices.DeleteFunc(s.pending, func(c *simContainer) bool {
+		if s.now.Sub(c.arrived) < limit {
+			return false
+		}
+		if c.host != nil {
+			if i := slices.IndexFunc(s.hosts, func(h *simHost) bool { return h.ID == *c.host }); i >= 0 && s.hosts[i].walk == nil {
+				return false
+			}
+		}
+		s.r.failed++
+		s.planWake = true
+		return true
+	})
 }
 
 // place puts pending containers on serving hosts as placement does: the
@@ -481,7 +581,7 @@ func (s *sim) place() {
 				serving, rooms = append(serving, h), append(rooms, s.load(h))
 			}
 		}
-		i := ChooseHost(rooms, c.need, s.p.OnDemand.Warm.Floor)
+		i := ChooseHost(rooms, c.need, simFloor(s.p))
 		if i < 0 {
 			return false
 		}
@@ -502,9 +602,19 @@ func (s *sim) place() {
 		if c.need.GPUsNeeded() > 0 {
 			c.market = ReserveMarket{GPU: best.offer.Type.GPU}
 		}
+		// RecentShapes reads placed containers by tolerance and GPU model.
+		shaped := ReserveMarket{Preemptible: c.need.Preemptible, GPU: c.market.GPU}
+		if s.recent == nil {
+			s.recent, s.recentDisks = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]int{}
+		}
+		if s.recentDisks == nil {
+			s.recentDisks = map[ReserveMarket]int{}
+		}
+		s.recent[shaped] = s.recent[shaped].Upper(reservedShape(c.need))
+		s.recentDisks[shaped] = max(s.recentDisks[shaped], c.need.Disks)
 		kind := startBought
 		switch {
-		case !best.PhaseAt.After(c.arrived):
+		case !best.servedAt.After(c.arrived):
 			kind = startWarm
 		case best.resumed:
 			kind = startResumed
@@ -515,6 +625,7 @@ func (s *sim) place() {
 		s.r.starts[kind]++
 		best.containers, best.served = append(best.containers, c), true
 		s.placedLog = append(s.placedLog, c)
+		s.planWake = true
 		if c.retry {
 			return true
 		}
@@ -522,6 +633,9 @@ func (s *sim) place() {
 		s.r.waits = append(s.r.waits, wait)
 		if !c.need.Preemptible {
 			s.r.pinnedWaits = append(s.r.pinnedWaits, wait)
+		}
+		if c.need.GPUsNeeded() == 0 {
+			s.r.cpuWaits = append(s.r.cpuWaits, wait)
 		}
 		if s.r.fnWaits == nil {
 			s.r.fnWaits = map[string][]time.Duration{}
@@ -582,7 +696,7 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 	}
 	fh.UpdateDue = s.now.Before(h.updateUntil)
 	fh.StartRefused = !h.startRefusedAt.IsZero() && s.now.Sub(h.startRefusedAt) < simCooldown
-	fh.Load, fh.Lent, fh.Packed, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, FleetCapacity{}, 0, nil, 0
+	fh.Load, fh.Lent, fh.Packed, fh.Containers, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, FleetCapacity{}, 0, 0
 	var tolerant FleetCapacity
 	for _, c := range h.containers {
 		fh.Load, fh.UsedDisks = fh.Load.Plus(reservedShape(c.need)), fh.UsedDisks+c.need.Disks
@@ -591,9 +705,7 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 			continue
 		}
 		fh.Containers++
-		if fh.BusySince == nil || c.started.After(*fh.BusySince) {
-			fh.BusySince = ptr(c.started)
-		}
+		simBusy(&fh, c)
 		if c.need.Preemptible {
 			tolerant = tolerant.Plus(reservedShape(c.need))
 		}
@@ -638,8 +750,10 @@ func (s *sim) batchWait() time.Duration {
 	return max(min(newest.Add(w.Quiet).Sub(s.now), began.Add(w.Max).Sub(s.now)), 0)
 }
 
-// plan runs one pass and returns how long it held purchases.
-func (s *sim) plan() time.Duration {
+// plan runs one pass and returns how long it held purchases and whether
+// it acted.
+func (s *sim) plan() (time.Duration, bool) {
+	s.plannedAt = s.now
 	var builds map[ReserveMarket]FleetCapacity
 	for _, b := range s.builds {
 		if s.now.Sub(b.at) < s.p.BuildWindow {
@@ -649,33 +763,37 @@ func (s *sim) plan() time.Duration {
 			builds[b.market] = builds[b.market].Upper(b.shape)
 		}
 	}
-	// Arrived is what the Spot CPU market's placed work created within the
-	// arrival window reserves, less its largest batch, as RecentShapes reads
-	// it: a run is arrivals less than the batch's quiet apart, cut into
-	// batches of its max from the run's first; older containers drop out of
+	// Arrived is what each CPU market's work placed within the arrival
+	// window reserves, less its largest batch, as RecentShapes reads it: a
+	// run is arrivals less than the batch's quiet apart, cut into batches of
+	// its max from the run's first; containers placed earlier drop out of
 	// the log.
-	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.ArrivalWindow })
-	var spot []*simContainer
-	for _, c := range s.placedLog {
-		if c.need.Preemptible && c.need.GPUsNeeded() == 0 {
-			spot = append(spot, c)
+	window := simArrivalWindow(s.p)
+	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(simCounted(c)) >= window })
+	arrived := map[ReserveMarket]FleetCapacity{}
+	for _, m := range simArrivalMarkets() {
+		var work []*simContainer
+		for _, c := range s.placedLog {
+			if c.need.Preemptible == m.Preemptible && c.need.GPUsNeeded() == 0 {
+				work = append(work, c)
+			}
 		}
+		slices.SortStableFunc(work, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
+		var sum, largest, batch FleetCapacity
+		var run, last time.Time
+		part := -1
+		for _, c := range work {
+			if c.arrived.Sub(last) >= s.p.Batch.Quiet {
+				run, part = c.arrived, -1
+			}
+			if n := int(c.arrived.Sub(run) / s.p.Batch.Max); n != part {
+				largest, batch, part = largest.Upper(batch), FleetCapacity{}, n
+			}
+			shape := reservedShape(c.need)
+			sum, batch, last = sum.Plus(shape), batch.Plus(shape), c.arrived
+		}
+		arrived[m] = sum.Minus(largest.Upper(batch)).Clamp()
 	}
-	slices.SortStableFunc(spot, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
-	var sum, largest, batch FleetCapacity
-	var run, last time.Time
-	part := -1
-	for _, c := range spot {
-		if c.arrived.Sub(last) >= s.p.Batch.Quiet {
-			run, part = c.arrived, -1
-		}
-		if n := int(c.arrived.Sub(run) / s.p.Batch.Max); n != part {
-			largest, batch, part = largest.Upper(batch), FleetCapacity{}, n
-		}
-		shape := reservedShape(c.need)
-		sum, batch, last = sum.Plus(shape), batch.Plus(shape), c.arrived
-	}
-	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: sum.Minus(largest.Upper(batch)).Clamp()}
 	if s.prices != nil {
 		s.in.Spot = s.prices(s.now)
 	}
@@ -703,24 +821,21 @@ func (s *sim) plan() time.Duration {
 			groups[key] = &DemandGroup{Need: c.need}
 			order = append(order, key)
 		}
-		groups[key].Containers = append(groups[key].Containers, PendingContainer{ID: c.id, Host: c.host})
+		groups[key].Containers = append(groups[key].Containers, simPending(c))
 	}
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
+	s.carry.into(&snapshot)
 	plan := PlanFleet(s.p, snapshot)
-	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
+	s.carry.from(plan)
 	for _, mp := range plan.Markets {
 		if mp.Market == (ReserveMarket{Preemptible: true}) {
 			s.r.mostWarm = s.r.mostWarm.Upper(mp.WarmTarget)
 		}
-		s.peaks[mp.Market] = mp.Peak
-		if mp.FloorShortSince != nil {
-			s.floorShortSince[mp.Market] = *mp.FloorShortSince
-		}
 	}
 	s.check(snapshot, plan)
+	s.watch(snapshot, plan)
 	s.apply(plan)
 	held := map[ReserveMarket]int{}
 	for _, h := range s.hosts {
@@ -734,12 +849,12 @@ func (s *sim) plan() time.Duration {
 	for m, n := range held {
 		s.mostReserves[m] = max(s.mostReserves[m], n)
 	}
-	return plan.BatchWait
+	return plan.BatchWait, len(plan.Actions) > 0
 }
 
-// check asserts no purchase serves a container a ready reserve would fit,
-// and, since the simulation never refuses on-demand capacity, that each
-// on-demand purchase takes its type's cheapest pool.
+// check asserts no purchase serves a container a reserve on the target
+// agent build would fit, and, since the simulation never refuses on-demand
+// capacity, that each on-demand purchase takes its type's cheapest pool.
 func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 	// A cheaper pool may lack the quota room the hosts and the pass's
 	// earlier starts left.
@@ -781,7 +896,9 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 			limit, known := s.quotas[key]
 			typ, _ := CatalogTypeNamed(h.InstanceType)
 			full := s.knowQuota && known && quotaUsed[key]+typ.VCPUs() > limit
-			if !h.resumable() || resumed[h.ID] || full {
+			// A stale reserve updates its agent before it serves, so a
+			// launch can serve sooner.
+			if !h.resumable() || !h.Current || resumed[h.ID] || full || h.StartRefused {
 				continue
 			}
 			for _, c := range s.pending {
@@ -790,6 +907,142 @@ func (s *sim) check(snapshot FleetSnapshot, plan FleetPlan) {
 				}
 			}
 		}
+	}
+}
+
+// watch records each market's moves in a pass and the invariants it
+// broke: no serving host leaves its market within the market's window of
+// growth there, unless a rightsize replaces it (I1); no market buys
+// headroom while it holds its target (I2); no reserve, bought or returned,
+// exceeds the size cap (I3); and every pending container has a host, a
+// purchase or a typed wait, and no host leaves while work runs on it or
+// waits for it (I5).
+func (s *sim) watch(snapshot FleetSnapshot, plan FleetPlan) {
+	hosts := map[HostID]FleetHost{}
+	replaced := map[HostID]bool{}
+	busy := map[ReserveMarket]bool{}
+	awaited := map[HostID]bool{}
+	waits := map[uuid.UUID]bool{}
+	for _, w := range plan.Waits {
+		if w.Host != nil {
+			awaited[*w.Host] = true
+		}
+		waits[w.Container] = w.Host != nil || w.Action != nil || w.Wait != nil && *w.Wait != ""
+	}
+	// A container the pass leaves to placement on a serving host has no
+	// wait, and placement takes it before the next pass.
+	unexplained := map[uuid.UUID]time.Time{}
+	for _, g := range snapshot.Pending {
+		for _, c := range g.Containers {
+			if waits[c.ID] {
+				continue
+			}
+			unexplained[c.ID] = s.now
+			if at, ok := s.unexplained[c.ID]; ok && at.Before(s.now) {
+				s.breach("I5 pending container %s has no host, purchase or wait", c.ID)
+			}
+		}
+	}
+	s.unexplained = unexplained
+	for _, h := range snapshot.Hosts {
+		hosts[h.ID] = h
+		if h.Replaces != nil {
+			replaced[*h.Replaces] = true
+		}
+		if h.Containers > 0 {
+			busy[h.market()] = true
+		}
+	}
+	for _, a := range plan.Actions {
+		switch a.Kind {
+		case ActionCancel, ActionRetireReserve, ActionDrain, ActionReturnToReserve:
+			if awaited[*a.Host] || hosts[*a.Host].Containers > 0 {
+				s.breach("I5 %s %s while work runs on it or waits for it", a.Kind, a.Host)
+			}
+		case ActionResume, ActionBuy, ActionBuyReserve, ActionRightsize, ActionHandBack, ActionLend:
+		}
+	}
+	limit := s.p.LargestShape.Cap
+	for _, a := range plan.Actions {
+		switch a.Kind {
+		case ActionBuy, ActionRightsize:
+			m := reserveMarketOf(a.Offer.Market, a.Offer.Type.GPU)
+			if a.Kind == ActionRightsize {
+				replaced[*a.Host] = true
+			}
+			if a.Kind == ActionBuy && len(a.Containers) == 0 && s.held(snapshot, plan, m) {
+				s.r.headroomBuys++
+				s.breach("I2 %s bought %s for headroom it held", m, a.Offer.Type.Name)
+			}
+			s.grew(m, HostID{})
+		case ActionResume:
+			s.grew(hosts[*a.Host].market(), *a.Host)
+		case ActionBuyReserve:
+			if !limit.Covers(a.Offer.Usable) {
+				s.breach("I3 %s bought reserve %s above the size cap", a.Market, a.Offer.Type.Name)
+			}
+		case ActionDrain, ActionReturnToReserve:
+			h := hosts[*a.Host]
+			if a.Kind == ActionReturnToReserve && !limit.Covers(h.Usable) {
+				s.breach("I3 %s returned %s above the size cap to the reserve", h.market(), h.InstanceType)
+			}
+			if h.State != FleetServing {
+				continue
+			}
+			m := h.market()
+			s.r.releases = append(s.r.releases, simEvent{at: s.now, market: m, host: h.ID})
+			if g := lastEvent(s.r.growth, m); g != nil && s.now.Sub(g.at) < simWindow(s.p, m) && !replaced[h.ID] {
+				s.breach("I1 %s released %s %s after it grew", m, h.InstanceType, s.now.Sub(g.at))
+			}
+		case ActionCancel, ActionRetireReserve, ActionHandBack, ActionLend:
+		}
+	}
+	for _, h := range snapshot.Hosts {
+		if h.State == FleetServing && h.GPU != "" && h.Containers == 0 && !h.UpdateDue && busy[h.market()] {
+			s.r.idleGPU++
+		}
+	}
+}
+
+// held reports whether market m's serving and starting hosts in the
+// snapshot hold its load and warm target as the pass published them.
+func (s *sim) held(snapshot FleetSnapshot, plan FleetPlan, m ReserveMarket) bool {
+	i := slices.IndexFunc(plan.Markets, func(mp MarketPlan) bool { return mp.Market == m })
+	if i < 0 {
+		return false
+	}
+	var held FleetCapacity
+	for _, h := range snapshot.Hosts {
+		if h.market() == m && (h.State == FleetServing || h.State == FleetStarting) {
+			held = held.Plus(h.Usable)
+		}
+	}
+	return held.Covers(plan.Markets[i].Load.Plus(plan.Markets[i].WarmTarget))
+}
+
+// grew records growth in market m, and growth within its window of a
+// release there.
+func (s *sim) grew(m ReserveMarket, host HostID) {
+	if r := lastEvent(s.r.releases, m); r != nil && s.now.Sub(r.at) < simWindow(s.p, m) {
+		s.r.rebought++
+	}
+	s.r.growth = append(s.r.growth, simEvent{at: s.now, market: m, host: host})
+}
+
+func lastEvent(events []simEvent, m ReserveMarket) *simEvent {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].market == m {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
+// breach records an invariant a pass broke, once per message.
+func (s *sim) breach(format string, args ...any) {
+	msg := fmt.Sprintf("%s ", s.now.Format(time.TimeOnly)) + fmt.Sprintf(format, args...)
+	if !slices.Contains(s.r.breaches, msg) {
+		s.r.breaches = append(s.r.breaches, msg)
 	}
 }
 
@@ -824,7 +1077,7 @@ func (s *sim) host(id HostID) *simHost {
 func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	o := *a.Offer
 	reserve := a.Kind == ActionBuyReserve
-	row := ClaimLaunchesRow{
+	row := ClaimHostActionsRow{
 		Market: ptr(string(o.Market)), GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount),
 		CpuMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		HoldsCpuMillis: ptr(a.Holds.CPUMillis), HoldsMemoryBytes: ptr(a.Holds.MemoryBytes),
@@ -945,7 +1198,10 @@ func (s *sim) launched(h *simHost) {
 		}
 	}
 	provision := s.provision
-	if o.Type.GPU != "" {
+	switch {
+	case o.Type.GPU != "" && o.Market == MarketOnDemand && s.gpuProvision > 0:
+		provision = s.gpuProvision
+	case o.Type.GPU != "":
 		provision = s.p.Starts.GPULaunch
 	}
 	h.until = s.now.Add(provision)
@@ -1120,7 +1376,7 @@ func (s *sim) apply(plan FleetPlan) {
 				s.r.cancelled++
 			}
 			s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.ID == *a.Host })
-			s.r.retired = append(s.r.retired, s.now)
+			s.r.retired, s.r.retiredHosts = append(s.r.retired, s.now), append(s.r.retiredHosts, *a.Host)
 		}
 	}
 	for _, w := range plan.Waits {
@@ -1134,12 +1390,7 @@ func (s *sim) apply(plan FleetPlan) {
 			}
 		}
 	}
-	for _, h := range s.hosts {
-		h.IdleSince = nil
-		if since, ok := plan.IdleSince[h.ID]; ok {
-			h.IdleSince = ptr(since)
-		}
-	}
+	s.carry.idle(s.hosts, plan)
 }
 
 func (s *sim) account() {
@@ -1214,9 +1465,9 @@ func (r simResult) row(name string) string {
 	if len(waits) > 0 {
 		p50, p95 = waits[(len(waits)-1)/2], waits[(len(waits)*95+99)/100-1]
 	}
-	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p50 %5s p95 %5s  launches %3d refused %3d stops %3d resumes %3d",
+	return fmt.Sprintf("%-34s $%7.3f/h  reserve $%6.3f/h  idle-end $%6.3f/h  waits>30s %3d/%-3d  p50 %5s p95 %5s  CPU p95 %5s  launches %3d refused %3d stops %3d resumes %3d",
 		name, float64(r.spendMicros)/3600/1e6/r.hours, float64(r.reserveMicros)/3600/1e6/r.hours, float64(r.finalHourly)/1e6,
-		r.slow(), len(waits), p50, p95, r.launches, r.refusals, r.stops, r.resumes)
+		r.slow(), len(waits), p50, p95, quantile(r.cpuWaits, 0.95), r.launches, r.refusals, r.stops, r.resumes)
 }
 
 // demandOnly is the baseline the scenarios compare the policy with: no
@@ -1900,5 +2151,76 @@ func TestGPUHostsPackCPUWork(t *testing.T) {
 	}
 	if on <= off {
 		t.Errorf("packing made $%.2f, $%.2f unpacked", on, off)
+	}
+}
+
+// mixedLoad is prodcheck6's Spot-tolerant CPU driver for d: a quick task
+// every 2 s that runs well under a second, two medium tasks every 20 s that
+// run 5 minutes, and two long ones every minute that run 10.
+func mixedLoad(d time.Duration) []simArrival {
+	quick := Requirement{Preemptible: true, CPUMillis: 250, MemoryBytes: 512 << 20}
+	task := Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
+	var out []simArrival
+	for at := time.Duration(0); at < d; at += 2 * time.Second {
+		out = append(out, simArrival{at: at, need: quick, count: 1, runs: (100 + (at/time.Second*37)%300) * time.Millisecond, fn: "quick"})
+		if at%(20*time.Second) == 0 {
+			out = append(out, simArrival{at: at, need: task, count: 2, runs: 5 * time.Minute, fn: "medium"})
+		}
+		if at%time.Minute == 0 {
+			out = append(out, simArrival{at: at, need: task, count: 2, runs: 10 * time.Minute, fn: "long"})
+		}
+	}
+	return out
+}
+
+// Under prodcheck6's mixed CPU load the Spot market buys no host it does
+// not use: it buys nothing for headroom its hosts already hold, and while
+// the load runs every Spot CPU host it serves but the floor's runs a
+// container. Hosts that held headroom leave once the load ends.
+func TestASwingingLoadBuysNoSpotHostItDoesNotUse(t *testing.T) {
+	t.Parallel()
+	s := newProdSim(t, false)
+	s.maxHosts = 250
+	arrivals := mixedLoad(30 * time.Minute)
+	r := s.run(30*time.Minute, arrivals)
+	during := r.unusedBy[ReserveMarket{Preemptible: true}]
+	s.start = s.now
+	r = s.run(15*time.Minute, nil)
+	t.Log(r.row("prodcheck6 mixed load") + fmt.Sprintf("  unused during the load %d, after %d, headroom buys %d",
+		during, r.unusedBy[ReserveMarket{Preemptible: true}]-during, r.headroomBuys))
+	if len(r.waits) != len(r.placedLogCount(arrivals)) || len(r.violations) > 0 {
+		t.Fatalf("placed %d, violations %v", len(r.waits), r.violations)
+	}
+	if during > 1 || r.headroomBuys > 0 {
+		t.Errorf("%d Spot CPU hosts left without running a container during the load, %d headroom purchases", during, r.headroomBuys)
+	}
+}
+
+// placedLogCount is every container the arrivals bring.
+func (r simResult) placedLogCount(arrivals []simArrival) []int {
+	var out []int
+	for _, a := range arrivals {
+		for range a.count {
+			out = append(out, 0)
+		}
+	}
+	return out
+}
+
+// A deploy that changes the agent leaves the CPU markets' idle hosts
+// installing it for a few seconds, taking no work. The markets count them
+// still: neither buys or releases a host for the update.
+func TestADeployBuysNothingForHostsUpdatingTheirAgent(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	s.tick = simLongTick
+	s.run(time.Hour, nil)
+	s.start, s.until, s.r, s.tick = s.now, time.Time{}, simResult{}, simTick
+	s.deploys = []simDeploy{{at: time.Minute, agent: true}}
+	r := s.run(10*time.Minute, nil)
+	for _, e := range slices.Concat(r.growth, r.releases) {
+		if e.market.GPU == "" {
+			t.Errorf("%s %s moved host %s after the deploy", e.at.Format(time.TimeOnly), e.market, e.host)
+		}
 	}
 }

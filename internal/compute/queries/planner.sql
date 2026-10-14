@@ -14,13 +14,12 @@ select pg_try_advisory_xact_lock(hashtextextended('capacity', 0))::bool as locke
 -- of those that could move to a Spot host needs, whether one of them could
 -- not, whether its agent must move to the target release first, and
 -- whether EC2 refused its start within cooldown_seconds. Packed CPU work
--- counts apart: the containers and the newest placement
--- that keep a GPU host up are its GPU work.
+-- counts apart: the containers that keep a GPU host up are its GPU work.
 select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_state,
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
+       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
        coalesce(h.start_refused_at > now() - make_interval(secs => @cooldown_seconds::float8), false)::bool as start_refused,
@@ -35,7 +34,6 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        coalesce(used.move_cpu, '{}')::bigint[] as move_cpu, coalesce(used.move_memory, '{}')::bigint[] as move_memory,
        coalesce(used.move_gpu_count, '{}')::int[] as move_gpu_count, coalesce(used.move_gpus, '{}')::text[] as move_gpus,
        coalesce(used.move_region, '{}')::text[] as move_region,
-       coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
 left join lateral (
@@ -54,7 +52,7 @@ left join lateral (
                filter (where m.moves) as move_gpus,
            array_agg(coalesce(r.spec -> 'placement' ->> 'region', '')) filter (where m.moves) as move_region,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
-           count(*) filter (where not p.packed) as containers, max(c.assigned_at) filter (where not p.packed) as busy_since
+           count(*) filter (where not p.packed) as containers
     from containers c
     left join releases r on r.id = c.release_id
     cross join lateral (
@@ -69,13 +67,14 @@ order by h.id;
 
 -- name: PendingDemand :many
 -- The oldest pending containers, up to the batch, grouped by what they need
--- from a host, each with the host bought for it (the zero id for none). The
+-- from a host, each with when it was created and the host bought for it
+-- (the zero id for none). The
 -- batch follows the pending index alone: ordering ties by id would sort a
 -- whole backlog created in one statement. A mirror build runs on the
 -- platform, as placement puts it, whatever its workspace's connection.
 with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
-           c.purpose
+           c.purpose, c.created_at
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -92,6 +91,7 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes,
        coalesce(b.purpose = 'serve' and release_packs(r.spec), false)::bool as packs,
        array_agg(b.id order by b.id)::uuid[] as ids,
+       array_agg(b.created_at order by b.id)::timestamptz[] as created,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
        array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents
@@ -110,17 +110,19 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- of platform volumes they read with how many started, among the newest
 -- containers created within the window, up to the sample (recent); the
 -- same among the build containers that stopped within the build window
--- (build), since a running build's host holds its slot once it ends; and
--- what the placed Spot-tolerant platform CPU containers of the sample
--- created within the arrival window reserve, less their largest batch
--- (arrived): a steady rate of work, which a single burst is not. A batch is arrivals less than
+-- (build), since a market keeps a recent build's shape free; and, by CPU
+-- market, what its platform containers of the sample placed within the
+-- arrival window reserve, less their largest batch (arrived): a steady
+-- rate of work, which a single burst is not, counted when placed so work
+-- that waited for a host still counts. A batch is arrivals less than
 -- batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
 -- builds read are those created within build_scan, the window and the
 -- longest a build runs. Both reads follow primary keys, so they read at
 -- most sample_size containers and the scan's builds whatever the history;
 -- the subqueries make their bounds constants the indexes can use.
 with recent as (
-    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.billing_owner, c.assigned_at,
+           c.rate_class in ('auto', 'pinned') as preemptible,
            coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
            coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
     from (
@@ -133,47 +135,46 @@ with recent as (
     ) c
     left join releases r on r.id = c.release_id
 ), builds as (
-    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
+    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class in ('auto', 'pinned') as preemptible
     from image_builds b
     join containers c on c.image_build_id = b.id
     where b.id > (select uuidv7(- make_interval(secs => @build_scan_seconds::float8)))
       and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.state = 'stopped'
       and c.stopped_at > now() - make_interval(secs => @build_window_seconds::float8)
 )
-select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select 'recent'::text as kind, preemptible::bool, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
        max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
-select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
+select 'build', preemptible, gpu_type, max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
 from builds
 group by 2, 3
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
+select 'arrived', preemptible, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
-    select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
+    select preemptible, sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
-        select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / @batch_max_seconds::float8) as part
+        select preemptible, cpu_millis, memory_bytes, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by preemptible, run)) / @batch_max_seconds::float8) as part
         from (
-            select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
+            select preemptible, cpu_millis, memory_bytes, created_at,
+                   count(*) filter (where opens) over (partition by preemptible order by created_at, id) as run
             from (
-                select id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
+                select id, preemptible, cpu_millis, memory_bytes, created_at,
+                       coalesce(created_at - lag(created_at) over (partition by preemptible order by created_at, id), interval '1 day')
                            >= make_interval(secs => @batch_quiet_seconds::float8) as opens
                 from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
-                  and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => @arrival_seconds::float8)))
+                where billing_owner = 'platform_fleet' and gpu_count = 0
+                  and assigned_at > now() - make_interval(secs => @arrival_seconds::float8)
             ) gaps
         ) runs
     ) parts
-    group by run, part
+    group by preemptible, run, part
 ) batches
-having count(*) > 0
+group by preemptible
 order by 1, 2, 3;
 
 -- name: BatchWaits :many
@@ -270,7 +271,7 @@ from jsonb_to_recordset(@hosts::jsonb) as v(
 -- serves.
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = null, idle_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
+    reserve_mode = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
 where id = any(@ids::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id;
 
@@ -281,7 +282,7 @@ returning id;
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any(@hibernate_ids::uuid[]) then 'hibernate' else 'stop' end,
-    idle_since = null, hands_back_at = null, updated_at = now()
+    hands_back_at = null, updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -294,7 +295,7 @@ returning h.id;
 -- Packed CPU work, which the planner evicts, holds none.
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = @reason, reserve_mode = null,
-    idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any(@ids::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -323,13 +324,6 @@ where h.id = any(@ids::uuid[])
            and not exists (select 1 from containers c where c.capacity_host_id = h.id and c.state = 'pending')))
 returning h.id;
 
--- name: SetIdleSince :exec
--- When each changed serving host became idle; null clears it.
-update hosts h
-set idle_since = v.idle_since
-from jsonb_to_recordset(@hosts::jsonb) as v(id uuid, idle_since timestamptz)
-where h.id = v.id and h.idle_since is distinct from v.idle_since;
-
 -- name: SetCapacityWaits :execrows
 -- Records why each pending container waits; unchanged rows are not
 -- written.
@@ -351,11 +345,11 @@ on conflict (connection_key, region, availability_zone_id, instance_type, market
 do update set until = excluded.until, reason = excluded.reason;
 
 -- name: FailPreparing :many
--- Reserves whose agent never proved them within the limit fail, and
--- reconcile terminates their instances. An agent update in flight waits.
+-- Reserves whose agent never proved them within the limit terminate with
+-- the failure recorded. An agent update in flight waits.
 update hosts
-set phase = 'failed', failure = 'service_lost', phase_message = @message, phase_at = now(), state = 'retired',
-    token_hash = null, launch_lease_until = null, updated_at = now()
+set phase = 'terminating', failure = 'service_lost', phase_message = @message, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
 where id = any(@ids::uuid[]) and phase = 'preparing' and phase_at < now() - make_interval(secs => @seconds::float8)
   and (updating_until is null or updating_until < now())
 returning id;

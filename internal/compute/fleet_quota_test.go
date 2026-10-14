@@ -79,7 +79,7 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
-	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 	s.Offers.Quotas[0].VCPUs = 16
 	s.Hosts = s.Hosts[:1]
 	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); len(plan.Actions) > 0 {

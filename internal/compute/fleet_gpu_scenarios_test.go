@@ -3,6 +3,7 @@ package compute
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,10 +130,10 @@ func TestAnAgentChangeKeepsStaleReservesServing(t *testing.T) {
 }
 
 // EC2 holds a stopped Spot reserve's request active for up to 165 s. L4
-// work that waits for the reserve keeps it: nothing retires the reserve,
-// and the work starts once EC2 disables the request and the reserve
-// resumes. A request active past the planner's bound buys the work a host
-// instead, still retiring nothing.
+// work that waits for the reserve keeps it: nothing retires the reserve it
+// resumed, and the work starts once EC2 disables the request and the
+// reserve resumes. A request active past the planner's bound buys the work
+// a host instead, still retiring the waited reserve never.
 func TestASlowSpotDisableKeepsTheReserve(t *testing.T) {
 	t.Parallel()
 	st := DefaultPolicy().Starts
@@ -142,8 +143,13 @@ func TestASlowSpotDisableKeepsTheReserve(t *testing.T) {
 		s.disableGap = gap
 		at := stopped + 33*time.Second
 		r := s.run(at+20*time.Minute, []simArrival{{at: at, need: l4Job, count: 1, runs: time.Minute, fn: "gpu"}})
-		if len(r.retired) > 0 || len(r.violations) > 0 {
-			t.Errorf("request active %s: reserves retired at %v, violations %v", gap, r.retired, r.violations)
+		for _, g := range r.growth {
+			if g.host != (HostID{}) && slices.Contains(r.retiredHosts, g.host) {
+				t.Errorf("request active %s: retired %s, the reserve the work waited for", gap, g.host)
+			}
+		}
+		if len(r.violations) > 0 {
+			t.Errorf("request active %s: violations %v", gap, r.violations)
 		}
 		waits := r.fnWaits["gpu"]
 		if len(waits) != 1 {
@@ -191,5 +197,117 @@ func TestAGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
 	}
 	if !slices.ContainsFunc(s.hosts, func(h *simHost) bool { return h.market() == l4 && h.resumable() }) || len(r.fnWaits["gpu"]) != 1 {
 		t.Errorf("the L4 market ends without a reserve, or the job did not run (%d)", len(r.fnWaits["gpu"]))
+	}
+}
+
+// gpusmall is the on-demand A10G function prodcheck6 ran on 2026-10-14.
+var gpusmall = Requirement{GPUs: []string{"A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 20 * gib}
+
+// One on-demand A10G job holds one serving GPU host: GPU markets keep no
+// running headroom, so no second host idles beside the one it runs on.
+func TestAnOnDemandGPUJobHoldsOneServingHost(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	a10g := ReserveMarket{GPU: "A10G"}
+	s.recent = map[ReserveMarket]FleetCapacity{a10g: reservedShape(gpusmall)}
+	r := s.run(30*time.Minute, []simArrival{{at: time.Minute, need: gpusmall, count: 1, runs: 7 * time.Minute, fn: "gpu"}})
+	if len(r.fnWaits["gpu"]) != 1 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 1, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+	if n := r.mostServing[a10g]; n > 1 || r.idleGPU > 0 {
+		t.Errorf("served the job on up to %d GPU hosts, with an idle one beside it in %d passes", n, r.idleGPU)
+	}
+}
+
+// A job that arrives two seconds after the last one ended finds its host:
+// the market releases nothing it buys back within its window.
+func TestAJobArrivingAsTheLastEndsTakesItsHost(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	a10g := ReserveMarket{GPU: "A10G"}
+	s.recent = map[ReserveMarket]FleetCapacity{a10g: reservedShape(gpusmall)}
+	s.run(6*time.Minute, []simArrival{{at: time.Minute, need: gpusmall, count: 1, runs: 7 * time.Minute, fn: "gpu"}})
+	var ends time.Time
+	for _, h := range s.hosts {
+		for _, c := range h.containers {
+			ends = c.ends
+		}
+	}
+	if ends.IsZero() {
+		t.Fatal("the first job never started")
+	}
+	s.start = s.now
+	s.run(ends.Sub(s.now), nil)
+	s.start = s.now
+	r := s.run(20*time.Minute, []simArrival{{at: 2 * time.Second, need: gpusmall, count: 1, runs: 5 * time.Minute, fn: "gpu"}})
+	if len(r.fnWaits["gpu"]) != 2 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 2, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+	if r.rebought > 0 {
+		t.Errorf("bought back %d times within a window of a release", r.rebought)
+	}
+	if w := r.fnWaits["gpu"][1]; w > simTick {
+		t.Errorf("the second job waited %s", w)
+	}
+}
+
+// gpuloadBig is prodcheck6's on-demand A10G load of 10 CPU and 40.75 GiB.
+var gpuloadBig = Requirement{GPUs: []string{"A10G"}, GPUCount: 1, CPUMillis: 10000, MemoryBytes: 41728 << 20}
+
+// While every g5.4xlarge pool refuses, the large A10G job steps up to a
+// g5.8xlarge, above the size cap. Once the job ends that host drains: no
+// reserve, bought or returned, is ever above the cap.
+func TestAWorkHostAboveTheCapDrainsRatherThanJoinTheReserve(t *testing.T) {
+	t.Parallel()
+	s := newSim(t, DefaultPolicy())
+	s.tick = simLongTick
+	a10g := ReserveMarket{GPU: "A10G"}
+	s.recent = map[ReserveMarket]FleetCapacity{a10g: reservedShape(gpuloadBig)}
+	s.refuses = func(_, _, typ string, market Market) bool { return typ == "g5.4xlarge" && market == MarketOnDemand }
+	r := s.run(time.Hour, []simArrival{{at: 10 * time.Minute, need: gpuloadBig, count: 1, runs: 7 * time.Minute, fn: "gpu"}})
+	if len(r.fnWaits["gpu"]) != 1 || len(r.violations) > 0 {
+		t.Fatalf("placed %d of 1, violations %v", len(r.fnWaits["gpu"]), r.violations)
+	}
+	for _, b := range r.breaches {
+		if strings.HasPrefix(b[9:], "I3") {
+			t.Error(b)
+		}
+	}
+	for _, h := range s.hosts {
+		if h.reserve() && !s.p.LargestShape.Cap.Covers(h.Usable) {
+			t.Errorf("reserve %s is above the size cap", h.InstanceType)
+		}
+	}
+}
+
+// Spot-tolerant GPU work while every L4 and A10G Spot pool refuses for half
+// an hour runs on an on-demand host once its Spot wait passes, rather than
+// waiting for Spot to fill.
+func TestSpotGPUWorkBuysOnDemandOnceSpotRefusesPastItsWait(t *testing.T) {
+	t.Parallel()
+	s := newChurnSim(t)
+	s.tick = simLongTick
+	s.run(30*time.Minute, nil)
+	s.start, s.until, s.r = s.now, time.Time{}, simResult{}
+	refill := s.now.Add(30 * time.Minute)
+	s.refuses = func(_, _, typ string, market Market) bool {
+		c, _ := CatalogTypeNamed(typ)
+		return market == MarketSpot && (c.GPU == "L4" || c.GPU == "A10G") && s.now.Before(refill)
+	}
+	either := l4Job
+	either.GPUs = []string{"L4", "A10G"}
+	r := s.run(time.Hour, []simArrival{
+		{need: l4Job, count: 1, runs: 10 * time.Minute, fn: "gpu"},
+		{need: either, count: 1, runs: 10 * time.Minute, fn: "gpu"},
+	})
+	waits := r.fnWaits["gpu"]
+	if len(waits)+r.failed != 2 || len(r.violations) > 0 {
+		t.Fatalf("placed %d and failed %d of 2, violations %v", len(waits), r.failed, r.violations)
+	}
+	limit := simSpotWait(s.p) + s.p.Starts.GPULaunch + time.Minute
+	for _, w := range waits {
+		if w > limit {
+			t.Errorf("Spot-tolerant GPU work waited %s, want at most %s", w, limit)
+		}
 	}
 }

@@ -46,12 +46,18 @@ func stoppedReserve(t *testing.T, o owners, typ, instance string) compute.HostID
 	return host
 }
 
-// idleHost is a serving on-demand host idle for an hour.
+// idleHost is a serving on-demand host that runs nothing.
 func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	t.Helper()
-	host := fleetHost(t, o, compute.PhaseReady, typ, instance)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
-	return host
+	return fleetHost(t, o, compute.PhaseReady, typ, instance)
+}
+
+// lapseHolds ages every market's running hold and its last growth past
+// their windows, as when demand fell long ago.
+func lapseHolds(t *testing.T, o owners) {
+	t.Helper()
+	run(t, o.pool, `update fleet_markets set plan = jsonb_set(jsonb_set(plan, '{holds,running,at}', '"1970-01-01T00:00:00Z"'),
+    '{holds,grew}', '"1970-01-01T00:00:00Z"') where plan ? 'holds'`)
 }
 
 // Spot-tolerant containers on an on-demand host count as the Spot market's
@@ -305,10 +311,10 @@ func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 		t.Fatalf("plan %+v, want one reserve failed", r)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		stuck: compute.PhaseFailed, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
+		stuck: compute.PhaseTerminating, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
 	} {
 		phase, failure := hostPhase(t, o.pool, host)
-		if phase != string(want) || (want == compute.PhaseFailed && (failure == nil || *failure != string(compute.FailureServiceLost))) {
+		if phase != string(want) || (want == compute.PhaseTerminating && (failure == nil || *failure != string(compute.FailureServiceLost))) {
 			t.Errorf("host %s is %s (%v), want %s", host, phase, failure, want)
 		}
 	}
@@ -517,25 +523,22 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 	}
 }
 
-// A connected account keeps no reserves: its idle host leaves after the
-// idle timeout.
-func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
+// A connected account keeps no headroom and no reserves: its idle hosts
+// stay through the first pass, as after a deploy, and leave once its
+// market's window passes.
+func TestAConnectedAccountsIdleHostsLeaveOnceTheirWindowPasses(t *testing.T) {
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
-	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")
-	recent := idleHost(t, o, "m7i.large", "i-0000000000000f902")
-	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, []uuid.UUID{uuid.UUID(idle), uuid.UUID(recent)})
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
+	hosts := []uuid.UUID{uuid.UUID(idleHost(t, o, "m7i.large", "i-0000000000000f901")), uuid.UUID(idleHost(t, o, "m7i.large", "i-0000000000000f902"))}
+	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, hosts)
 
-	if r := planCapacity(t, o); r.Drained != 1 || r.Returned != 0 {
-		t.Fatalf("plan %+v, want the idle connection host drained", r)
+	if r := planCapacity(t, o); r.Drained != 0 {
+		t.Fatalf("first pass %+v, want the connection's hosts kept", r)
 	}
-	if phase, _ := hostPhase(t, o.pool, idle); phase != string(compute.PhaseDraining) {
-		t.Fatalf("idle connection host is %s, want draining", phase)
-	}
-	if phase, _ := hostPhase(t, o.pool, recent); phase != string(compute.PhaseReady) {
-		t.Fatalf("connection host idle for a minute is %s, want ready", phase)
+	lapseHolds(t, o)
+	if r := planCapacity(t, o); r.Drained != 2 || r.Returned != 0 {
+		t.Fatalf("plan once the window passed %+v, want both idle connection hosts drained", r)
 	}
 }
 
@@ -640,15 +643,12 @@ func TestSurplusReservesRetire(t *testing.T) {
 func settledFleet(t *testing.T, o owners) {
 	t.Helper()
 	plan(t, o)
-	// A floor short since longer than the idle timeout is bought now.
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '1 hour'))
-where plan ? 'floor_short_since'`)
-	plan(t, o)
 	run(t, o.pool, `
 update hosts set phase = case when reserve_mode is null then 'ready' else 'stopped' end,
        state = case when reserve_mode is null then 'online' else 'offline' end, last_seen_at = now(),
        phase_at = now() - interval '1 hour', prepared_agent_version = '1.0.0',
-       image_evidence = case when reserve_mode = 'hibernate' then 'saved' else 'unavailable' end
+       image_evidence = case when reserve_mode = 'hibernate' then 'saved' else 'unavailable' end,
+       spot_request_id = case when market = 'spot' and reserve_mode is not null then 'sir-' || left(id::text, 8) end
 where phase = 'requested'`)
 }
 
@@ -745,16 +745,21 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 	}
 }
 
-// An 8 CPU request resumes the large-shape reserve, and the pass replaces
-// it once the host has served past the idle timeout and the reserve has
-// lacked it as long.
-func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
+// An 8 CPU request resumes the large-shape reserve and leaves the floor
+// one stopped. No replacement is bought while the resumed host serves or
+// idles within its market's window, since it can return; once its work has
+// ended and the window passed it returns to the reserve, and the warm host
+// keeps serving.
+func TestAReserveResumedForWorkReturnsWithoutAReplacement(t *testing.T) {
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, large := onDemandReserves(t, o)
+	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
+where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 8000, 16*gib)
+	run(t, o.pool, "update containers set rate_class = 'non_preemptible' where id = $1", container)
 
 	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) ||
 		hostRowOf(t, o, floor).Phase != string(compute.PhaseStopped) {
@@ -765,144 +770,19 @@ func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 	}
 	serveFromReserve(t, o, large)
 	placeOn(t, o, container, large)
+	lapseHolds(t, o)
 	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one may still return")
+		t.Fatal("bought a large host while the resumed one serves")
 	}
-	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
-	ageFloorShortfall(t, o)
-	if plan(t, o); largeBought(t, o) != 1 {
-		t.Fatalf("%d large hosts bought once the resumed one served past the idle timeout, want 1", largeBought(t, o))
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", container)
+	if r := plan(t, o); largeBought(t, o) != 0 || r.Returned != 0 {
+		t.Fatalf("plan %+v with %d large hosts bought while the resumed one idles within the window, want nothing", r, largeBought(t, o))
 	}
-}
-
-// Small work that nothing else fits resumes the large-shape reserve. While
-// the host may return, busy within the idle timeout or idle, no replacement
-// is bought, and once idle for the timeout it returns to the reserve.
-func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	settledFleet(t, o)
-	floor, large := onDemandReserves(t, o)
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
-	// The floor reserve already serves earlier work, and the burst needs
-	// more memory than the warm host has.
-	serveFromReserve(t, o, floor)
-	placeOn(t, o, pendingContainer(t, o.pool, dev, release, 4000, 8*gib), floor)
-	burst := pendingContainer(t, o.pool, dev, release, 1000, 8*gib)
-
-	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, large).Phase != string(compute.PhaseResuming) {
-		t.Fatalf("plan %+v, want the large-shape reserve resumed", r)
-	}
-	serveFromReserve(t, o, large)
-	placeOn(t, o, burst, large)
-	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one serves within the idle timeout")
-	}
-	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
-	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
-	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one idles")
-	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
-	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
-		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
-			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
-	}
-}
-
-// floorBought counts the on-demand floor-sized reserves requested.
-func floorBought(t *testing.T, o owners) int {
-	t.Helper()
-	return scan[int](t, o.pool, `select count(*) from hosts
-where market = 'on_demand' and reserve_mode is not null and phase = 'requested' and cpu_millis < 16000`)
-}
-
-// ageFloorShortfall makes every market's floor shortfall older than the
-// idle timeout.
-func ageFloorShortfall(t *testing.T, o owners) {
-	t.Helper()
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '6 minutes'))
-where plan ? 'floor_short_since'`)
-}
-
-// A burst that resumes the floor reserve buys no replacement: not while the
-// floor has been short for less than the idle timeout, and not while the
-// host, done and idle, is due back; once idle for the timeout it returns.
-func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	settledFleet(t, o)
-	floor, _ := onDemandReserves(t, o)
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
-	burst := pendingContainer(t, o.pool, dev, release, 1000, 8*gib)
-
-	if r := plan(t, o); r.Resumed != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhaseResuming) {
-		t.Fatalf("plan %+v, want the floor reserve resumed", r)
-	}
-	serveFromReserve(t, o, floor)
-	placeOn(t, o, burst, floor)
-	if plan(t, o); floorBought(t, o) != 0 {
-		t.Fatal("bought a floor reserve as soon as the floor went short")
-	}
-	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
-	plan(t, o)
-	ageFloorShortfall(t, o)
-	if plan(t, o); floorBought(t, o) != 0 {
-		t.Fatal("bought a floor reserve while the idle resumed host is due back")
-	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
-	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) || floorBought(t, o) != 0 {
-		t.Fatalf("plan %+v, floor host %s, %d floor reserves bought; want it back in the reserve and none bought",
-			r, hostRowOf(t, o, floor).Phase, floorBought(t, o))
-	}
-}
-
-// After a burst the warm host, idle for the timeout, stays to hold the warm
-// target while the resumed floor reserve, idle since the burst ended, is
-// still within it; once the resumed host has idled for the timeout it
-// returns to the reserve. Nothing is bought or drained.
-func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	settledFleet(t, o)
-	floor, _ := onDemandReserves(t, o)
-	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
-where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
-	serveFromReserve(t, o, floor)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
-	if r := plan(t, o); r.Returned != 0 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
-		t.Fatalf("plan %+v, warm host %s; want the warm host kept and nothing else done yet", r, hostRowOf(t, o, warm).Phase)
-	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
-	r := plan(t, o)
-	if r.Returned != 1 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) ||
+	lapseHolds(t, o)
+	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 ||
 		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
-		t.Fatalf("plan %+v, floor host %s, warm host %s; want the floor host back in the reserve, the warm host serving, nothing bought",
-			r, hostRowOf(t, o, floor).Phase, hostRowOf(t, o, warm).Phase)
-	}
-}
-
-// A floor reserve resumed for work that runs past the idle timeout is
-// replaced: the host, busy since it became ready that long ago, is not due
-// back.
-func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
-	o := newOwners(t, fleetConfig(compute.Fleet{}))
-	settledFleet(t, o)
-	floor, _ := onDemandReserves(t, o)
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
-	work := pendingContainer(t, o.pool, dev, release, 1000, 8*gib)
-	plan(t, o)
-	serveFromReserve(t, o, floor)
-	placeOn(t, o, work, floor)
-	plan(t, o)
-	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
-	ageFloorShortfall(t, o)
-	if plan(t, o); floorBought(t, o) != 1 {
-		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the idle timeout, want 1", floorBought(t, o))
+		t.Fatalf("plan %+v, large host %s, warm host %s, %d large bought; want it back in the reserve, the warm host serving and none bought",
+			r, hostRowOf(t, o, large).Phase, hostRowOf(t, o, warm).Phase, largeBought(t, o))
 	}
 }
 

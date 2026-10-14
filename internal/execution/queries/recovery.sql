@@ -37,3 +37,30 @@ select id from containers
 where host_id = @host_id and state <> 'stopped'
 order by id
 for update;
+
+-- name: StalePendingContainers :many
+-- Fleet containers pending longer than the queue timeout that no launched
+-- host will take, none having been bought for them or the one bought not
+-- launched yet, in (created_at, id) order after the cursor, with why the
+-- planner says they wait. Work pinned to a joined machine waits for it.
+select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
+from containers c
+left join releases r on r.id = c.release_id
+left join hosts h on h.id = c.capacity_host_id
+where c.state = 'pending'
+  and c.created_at < now() - make_interval(secs => @timeout_seconds::float8)
+  and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
+  and (h.id is null or h.phase = 'requested')
+  and (c.created_at, c.id) > (@after_created_at::timestamptz, @after_id::uuid)
+order by c.created_at, c.id
+limit @batch_size;
+
+-- name: LockStalePendingContainer :execrows
+-- Rechecks the queue timeout under the row lock: a container placed or
+-- given a launched host after the scan keeps waiting.
+select c.id from containers c
+left join hosts h on h.id = c.capacity_host_id
+where c.id = @id and c.state = 'pending'
+  and c.created_at < now() - make_interval(secs => @timeout_seconds::float8)
+  and (h.id is null or h.phase = 'requested')
+for update of c;

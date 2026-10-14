@@ -14,11 +14,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const (
+	// serviceLostAfter is how long a ready cloud host may stay lost before
+	// its instance is replaced.
+	serviceLostAfter = 5 * time.Minute
+	// launchGrace is how long EC2 may take to list a launched instance.
+	launchGrace = 2 * time.Minute
+)
+
 // Reconcile compares cloud hosts with what EC2 reports for the fleet tag in
-// each owner's regions. A host whose instance is gone or stopped fails and
-// its containers stop through execution; a launched instance that never
-// enrolled, or a ready host lost for long, is replaced; instances no host
-// wants are terminated.
+// each owner's regions and writes phases only: a host whose instance is
+// gone ends, deleted when the fleet asked or failed otherwise, and its
+// containers stop through execution; a host whose instance must end, as
+// one stopped unasked, one that never enrolled or one lost for long,
+// terminates with its failure recorded, and the actuator ends the instance.
+// Reconcile ends only instances and Spot requests no live host records.
 func (c *Compute) Reconcile(ctx context.Context, logger *slog.Logger) error {
 	pairs, err := c.reconcileRegions(ctx)
 	if err != nil {
@@ -136,33 +146,29 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			continue
 		}
 		gone := !seen || o.state == ec2types.InstanceStateNameTerminated || o.state == ec2types.InstanceStateNameShuttingDown
-		terminated := !seen || o.state == ec2types.InstanceStateNameTerminated
 		stopped := seen && (o.state == ec2types.InstanceStateNameStopped || o.state == ec2types.InstanceStateNameStopping)
 		updating := h.UpdatingUntil != nil && time.Now().Before(*h.UpdatingUntil)
 		phase := Phase(h.Phase)
 		// A reserve's instance stops because the fleet asked: stopping and
 		// stopped are expected, and the actuator completes the stop.
 		reserve := phase == PhaseStopping || phase == PhaseStopped || phase == PhaseResuming
-		// Every end is written from the phase read above: a host the session
-		// or actuator moved since keeps its new phase and its instance.
+		// Every write is from the phase read above: a host the session or
+		// actuator moved since keeps its new phase.
 		end := func(failure Failure, message string) error {
-			ended, err := c.hostGone(ctx, h.ID, phase, failure, message)
-			if err != nil || !ended {
-				return err
-			}
-			return c.terminate(ctx, scope, region, instance)
+			return c.endHost(ctx, h.ID, phase, failure, message)
 		}
 		switch {
-		case phase == PhaseTerminating && (terminated || o.state == ec2types.InstanceStateNameShuttingDown):
-			// Shutting down: EC2 confirms the termination on a later pass.
-			_, err = c.hostGone(ctx, h.ID, phase, "", "")
+		case phase == PhaseTerminating && gone:
+			// The termination the fleet asked for, with the failure that
+			// asked for it when one did.
+			err = c.hostGone(ctx, h.ID, phase, Failure(deref(h.Failure)), h.PhaseMessage)
 		case phase == PhaseTerminating:
-			err = c.terminate(ctx, scope, region, instance)
+			// The actuator terminates it.
 		case gone && h.InterruptionAt != nil:
 			// The reclaim its notice announced.
-			_, err = c.hostGone(ctx, h.ID, phase, "", "")
+			err = c.hostGone(ctx, h.ID, phase, "", "")
 		case gone:
-			_, err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
+			err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
 		case phase == PhaseStopping && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
 			err = end(FailureUnknown, "The reserve did not stop in time")
 		case phase == PhaseResuming && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
@@ -231,20 +237,42 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 	return nil
 }
 
-// hostGone ends a cloud host in phase from whose instance is gone or must
-// go, and reports whether it did: a host that left from since it was read
-// is left alone. Its containers stop through execution in the same
-// transaction. An empty failure marks a termination the fleet asked for.
-func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, failure Failure, message string) (bool, error) {
+// endHost moves a cloud host in phase from whose instance must end to
+// terminating with its failure recorded; a host that left from since it
+// was read is left alone. Its containers stop through execution in the
+// same transaction.
+func (c *Compute) endHost(ctx context.Context, host uuid.UUID, from Phase, failure Failure, message string) error {
+	if err := transition(from, PhaseTerminating); err != nil {
+		return err
+	}
+	return inTx(ctx, c, func(tx pgx.Tx) error {
+		n, err := c.queries.WithTx(tx).EndHost(ctx, EndHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+		if err != nil {
+			return fmt.Errorf("end host: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		if _, err := c.containers.StopHostContainers(ctx, tx, HostID(host), "the host's instance is ending"); err != nil {
+			return err
+		}
+		return notifyMachines(ctx, tx, host)
+	})
+}
+
+// hostGone ends a cloud host in phase from whose instance is gone; a host
+// that left from since it was read is left alone. Its containers stop
+// through execution in the same transaction. An empty failure marks a
+// termination the fleet asked for.
+func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, failure Failure, message string) error {
 	to := PhaseFailed
 	if failure == "" {
 		to = PhaseDeleted
 	}
 	if err := transition(from, to); err != nil {
-		return false, err
+		return err
 	}
-	ended := false
-	err := inTx(ctx, c, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		var n int64
 		var err error
@@ -254,9 +282,9 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
 		}
 		if err != nil {
-			return fmt.Errorf("end host: %w", err)
+			return fmt.Errorf("mark host gone: %w", err)
 		}
-		if ended = n == 1; !ended {
+		if n == 0 {
 			return nil
 		}
 		if _, err := c.containers.StopHostContainers(ctx, tx, HostID(host), "the host's instance is gone"); err != nil {
@@ -264,7 +292,6 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 		}
 		return notifyMachines(ctx, tx, host)
 	})
-	return ended, err
 }
 
 // cancelOrphanSpotRequests ends the fleet's persistent Spot requests whose
