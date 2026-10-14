@@ -42,6 +42,7 @@ func placementScoreReply(region string, scores map[string]int) awsReply {
 // of 9 loses to one 10% dearer and wins against one 30% dearer. Shapes the
 // catalog sells fewer than three types of are not scored.
 func TestPlacementScoresRankAScarcePoolBelowASlightlyDearerOne(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		dearPrice string
 		want      string
@@ -83,6 +84,7 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1`, co
 }
 
 func TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	run(t, o.pool, `insert into spot_prices values ('us-west-1', 'usw1-az3', 'm7i.large', 40000, now() - interval '20 minutes', now() - interval '20 minutes')`)
 	emulator.on("DescribeSpotPriceHistory", func(call awsCall) awsReply {
@@ -144,6 +146,7 @@ func TestSpotPricesKeepTheLatestQuotePerZoneAndAFailedRegionKeepsItsPrices(t *te
 // refreshes every region's Spot prices before it buys: the L4 job buys a
 // Spot g6.xlarge rather than waiting on prices it has none of.
 func TestThePassAfterAnOutageRefreshesStaleSpotPricesFirst(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	spotPrices(t, o)
 	run(t, o.pool, "update spot_prices set observed_at = now() - interval '5 hours'")

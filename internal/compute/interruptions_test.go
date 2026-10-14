@@ -14,6 +14,7 @@ import (
 // nothing for a Spot instance it reclaims in its first hour. The fleet
 // terminates it only once the reclaim is overdue.
 func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")

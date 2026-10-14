@@ -31,6 +31,7 @@ func instanceProof(host compute.HostID, accessKey, signedHeaders string) compute
 }
 
 func TestCloudHostEnrollsOnceWithItsInstanceIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2",

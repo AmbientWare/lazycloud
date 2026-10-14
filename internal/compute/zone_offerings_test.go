@@ -30,6 +30,7 @@ func filterValues(call awsCall, name string) []string {
 // refuse the launch, and the refusal would cool the type in every zone of
 // the region.
 func TestPurchasesSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	run(t, o.pool, `insert into fleet_zone_offerings values ('us-west-1', 'usw1-az3', 'm7i.large', now() - interval '2 hours')`)
 	emulator.on("DescribeInstanceTypeOfferings", func(call awsCall) awsReply {

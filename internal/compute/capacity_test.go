@@ -63,6 +63,7 @@ func capacity(t *testing.T, pool *pgxpool.Pool) []HostCapacity {
 }
 
 func TestAvailableCapacitySubtractsLiveContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	host := newHost(t, pool, "now()")
 	newHost(t, pool, "now() - interval '1 minute'")
@@ -92,6 +93,7 @@ func TestAvailableCapacitySubtractsLiveContainers(t *testing.T) {
 }
 
 func TestMarkLostKeepsAHostThatReportedAfterTheScan(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	host := newHost(t, pool, "now() - interval '1 minute'")
 	stale, err := StaleHosts(t.Context(), pool, nil, 10)
@@ -120,6 +122,7 @@ func TestMarkLostKeepsAHostThatReportedAfterTheScan(t *testing.T) {
 // resuming is waking until its agent reconnects: neither silence is a loss,
 // whether it began before the scan or after.
 func TestASleepingReserveIsNotLost(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	silent := newHost(t, pool, "now() - interval '1 minute'")
 	stopping := newHost(t, pool, "now() - interval '1 minute'")

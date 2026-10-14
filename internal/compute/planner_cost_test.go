@@ -129,6 +129,7 @@ func costExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 // containers per host, never the backlog or history. Run with -v for the
 // cost table.
 func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	counter := &statementCounter{}
 	cfg := pool.Config().Copy()

@@ -96,6 +96,7 @@ func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 // A market's read is what its recent starts read on average: one of two
 // L4 starts mounting 16 GB of volumes makes it 8 GB.
 func TestAMarketsReadIsItsStartsAverage(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	if _, err := pool.Exec(t.Context(), `
 with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::text), 1, 8)) returning id),

@@ -103,6 +103,7 @@ func hostsOf(actions []FleetAction) []HostID {
 }
 
 func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		target FleetCapacity
 		want   []string
@@ -127,6 +128,7 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 // work it would fit buys a host, which serves sooner than a resume and an
 // agent update.
 func TestPlanReplacesAStaleReserveBeforeRetiringIt(t *testing.T) {
+	t.Parallel()
 	stale := planHost(1, planSmall, FleetStopped)
 	stale.Current = false
 	kinds := func(plan FleetPlan) []FleetActionKind {
@@ -153,6 +155,7 @@ func TestPlanReplacesAStaleReserveBeforeRetiringIt(t *testing.T) {
 // A serving host due an agent update takes no work until it runs the
 // target, so pending work it would fit buys a host instead of waiting.
 func TestPendingWorkBuysPastAHostDueAnAgentUpdate(t *testing.T) {
+	t.Parallel()
 	buys := func(due bool) int {
 		h := planHost(1, planSmall, FleetServing)
 		h.UpdateDue = due
@@ -178,6 +181,7 @@ func TestPendingWorkBuysPastAHostDueAnAgentUpdate(t *testing.T) {
 // waits FloorHold for its room before it buys a host, and buys once the
 // work outlasts the hold.
 func TestAFloorTakenByNewWorkWaitsBeforeItBuys(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(cpuGiB(1000, 4), FleetCapacity{})
 	plan := func(busyFor time.Duration) FleetPlan {
 		full := planHost(1, planSmall, FleetServing)
@@ -196,6 +200,7 @@ func TestAFloorTakenByNewWorkWaitsBeforeItBuys(t *testing.T) {
 // holds none of the stopped target, which a reserve bought in its place
 // takes up.
 func TestPlanRetiresAnInterruptedReserveAndBuysItsPlace(t *testing.T) {
+	t.Parallel()
 	interrupted := planHost(1, planSmall, FleetStopped)
 	interrupted.Protected = true
 	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, interrupted))
@@ -205,6 +210,7 @@ func TestPlanRetiresAnInterruptedReserveAndBuysItsPlace(t *testing.T) {
 }
 
 func TestPlanPendingCapacityNeverJustifiesRetiringReadyCapacity(t *testing.T) {
+	t.Parallel()
 	s := planSnapshot(t, idle(planHost(1, planSmall, FleetServing)), planHost(2, planLarge, FleetStarting))
 	plan := PlanFleet(planPolicy(small, FleetCapacity{}), s)
 	mp := marketPlan(t, plan, onDemand)
@@ -214,6 +220,7 @@ func TestPlanPendingCapacityNeverJustifiesRetiringReadyCapacity(t *testing.T) {
 }
 
 func TestPlanRetiresAPendingReserveBeforeTheReadyOneItWouldReplace(t *testing.T) {
+	t.Parallel()
 	ready := planHost(1, planSmall, FleetStopped)
 	pending := planHost(2, planSmall, FleetPreparing)
 	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, ready, pending))
@@ -224,6 +231,7 @@ func TestPlanRetiresAPendingReserveBeforeTheReadyOneItWouldReplace(t *testing.T)
 }
 
 func TestPlanAResumedReserveCannotCoverRetiringTheLastReadyOne(t *testing.T) {
+	t.Parallel()
 	cheap := planHost(1, planSmall, FleetStopped)
 	cheap.HourlyMicros = ptr(int64(10))
 	preparing := planHost(2, planSmall, FleetPreparing)
@@ -240,6 +248,7 @@ func TestPlanAResumedReserveCannotCoverRetiringTheLastReadyOne(t *testing.T) {
 }
 
 func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		reserves int
 		target   FleetCapacity
@@ -268,6 +277,7 @@ func TestSpotWorkBorrowsAnOnDemandReserveOnlyAboveItsTarget(t *testing.T) {
 // that cannot move lends its room, even once it hands back, and an empty
 // one never starts handing back.
 func TestOnDemandHostsHandSpotWorkBackWhileSpotCanHostIt(t *testing.T) {
+	t.Parallel()
 	quoted := func(s FleetSnapshot) FleetSnapshot {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: planSmall.Name, HourlyMicros: 30_000, ObservedAt: offerNow})
 		return s
@@ -327,6 +337,7 @@ func waitOf(t *testing.T, plan FleetPlan, id uuid.UUID) ContainerWait {
 }
 
 func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t *testing.T) {
+	t.Parallel()
 	need := Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 
@@ -369,6 +380,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 }
 
 func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
+	t.Parallel()
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
 	need := Requirement{CPUMillis: 3000, MemoryBytes: 4 * gib}
@@ -380,6 +392,7 @@ func TestPlanCoversABatchOfContainersTogether(t *testing.T) {
 }
 
 func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
+	t.Parallel()
 	plan := PlanFleet(planPolicy(large.Times(20), FleetCapacity{}), planSnapshot(t))
 	mp := marketPlan(t, plan, onDemand)
 	if n := len(actionsOf(plan, ActionBuy)); n != 16 || mp.Reason != ReasonActionCap || mp.Shortfall.Empty() {
@@ -390,6 +403,7 @@ func TestPlanCapsGrowthPerMarketAndPass(t *testing.T) {
 // A reserve runs while it is prepared, so buying one takes host room: a
 // full fleet buys none, however short the reserve.
 func TestPlanBuysReservesOnlyWithinTheHostLimit(t *testing.T) {
+	t.Parallel()
 	for _, room := range []int{0, 100} {
 		s := planSnapshot(t)
 		s.HostRoom = room
@@ -401,6 +415,7 @@ func TestPlanBuysReservesOnlyWithinTheHostLimit(t *testing.T) {
 }
 
 func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *testing.T) {
+	t.Parallel()
 	need := Requirement{GPUs: []string{GPUAny}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.GPU = DefaultPolicy().GPU
@@ -430,6 +445,7 @@ func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *t
 }
 
 func TestGPUWorkFallsThroughToTheModelItListsNext(t *testing.T) {
+	t.Parallel()
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
 	g, _ := pendingOne(Requirement{GPUs: []string{"H100", "L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}, nil)
@@ -442,6 +458,7 @@ func TestGPUWorkFallsThroughToTheModelItListsNext(t *testing.T) {
 }
 
 func TestPlanDrainsAOneTimeSpotHostInsteadOfStoppingIt(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.Spot = MarketReserve{Stopped: HeadroomTarget{Floor: small}}
 	h := idle(planHost(1, planSmall, FleetServing))
@@ -463,6 +480,7 @@ var (
 )
 
 func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
+	t.Parallel()
 	s := planSnapshot(t)
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
 	s.Pending = []DemandGroup{g}
@@ -481,6 +499,7 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 // timeout, a launch away from being replaced, while an on-demand one waits
 // out the idle timeout.
 func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	idleFor := func(id byte, market Market) FleetHost {
 		h := planHost(id, planSmall, FleetServing)
@@ -496,6 +515,7 @@ func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
 // An idle host leaves once idle for the idle timeout; a host pending work
 // fits is not idle.
 func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
 	fresh.IdleSince = ptr(offerNow.Add(-p.IdleTimeout + time.Second))
@@ -519,6 +539,7 @@ func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 // Pending work that fits ready room takes it, so that room is no longer
 // headroom: an idle host the warm target needs once the work lands stays.
 func TestPlanCountsRoomPendingWorkTakesAgainstTheWarmTarget(t *testing.T) {
+	t.Parallel()
 	need := Requirement{CPUMillis: 6000, MemoryBytes: 8 * gib}
 	s := planSnapshot(t, planHost(1, planSmall, FleetServing), idle(planHost(2, planSmall, FleetServing)))
 	g, _ := pendingOne(need, nil)
@@ -530,6 +551,7 @@ func TestPlanCountsRoomPendingWorkTakesAgainstTheWarmTarget(t *testing.T) {
 }
 
 func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
+	t.Parallel()
 	dear := planSmall
 	dear.Name, dear.prices = "m.dear", [4]int64{500_000, 500_000, 500_000, 500_000}
 	costly := idle(planHost(1, dear, FleetServing))
@@ -547,6 +569,7 @@ func TestPlanReleasesTheCostliestIdleHostFirst(t *testing.T) {
 // leaves once the replacement serves. A host running work is not replaced,
 // nor one whose replacement EC2 refused within the cost horizon.
 func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
 	snapshot := func(hosts ...FleetHost) FleetSnapshot {
@@ -583,6 +606,7 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 // host of at most 32 GiB launched able to hibernate does, any other
 // stops plainly. Once the reserve is held, it drains.
 func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, small)
 	p.Spot = MarketReserve{Stopped: HeadroomTarget{Floor: small}}
 	hibernating := func(typ CatalogType, market Market) FleetHost {
@@ -617,6 +641,7 @@ func TestPlanReturnsALeavingHostToTheReserveWhileTheReserveFallsShort(t *testing
 // leaves a reserve that fits the largest shape, though it is not the
 // smallest.
 func TestAWarmSlotResumesAReserveThatLeavesTheLargeOneStopped(t *testing.T) {
+	t.Parallel()
 	narrow := CatalogType{Name: "narrow", Topology: twoPerCore(8), MemoryBytes: 32 * gib, prices: [4]int64{90_000, 90_000, 90_000, 90_000}}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
@@ -635,6 +660,7 @@ func TestAWarmSlotResumesAReserveThatLeavesTheLargeOneStopped(t *testing.T) {
 // when no other would: an idle fleet whose only reserve has 16 CPUs buys a
 // small host for its 1-CPU slot and keeps the reserve stopped.
 func TestAWarmSlotBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	reserve := planHost(1, mustType(t, "c6a.4xlarge"), FleetStopped)
@@ -652,6 +678,7 @@ func TestAWarmSlotBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
 // T4 work, running or done within the window, keeps a stopped target of
 // one card.
 func TestRecentCardWorkKeepsAStoppedTargetOfOneCard(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.GPU = DefaultPolicy().GPU
 	h := planHost(1, mustType(t, "g4dn.xlarge"), FleetServing)
@@ -672,6 +699,7 @@ func TestRecentCardWorkKeepsAStoppedTargetOfOneCard(t *testing.T) {
 // Recent builds keep a warm slot of their shape only in CPU markets: after
 // a GPU build its idle host leaves on the idle timeout like any other.
 func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.GPU = DefaultPolicy().GPU
 	h := idle(planHost(1, mustType(t, "g4dn.xlarge"), FleetServing))
@@ -693,6 +721,7 @@ func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
 // the size that hibernates, so a target that grows a little each pass is
 // held by a few large reserves.
 func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.OnDemand, p.GPU, p.Spot.Warm = MarketReserve{}, nil, HeadroomTarget{}
 	p.Spot.Stopped.LoadPercent = 50
@@ -729,6 +758,7 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 // its headroom is bought as Spot, and the on-demand market keeps only the
 // load of work that cannot run on Spot.
 func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.GPU = nil
 	h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
@@ -746,6 +776,7 @@ func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
 // reserve: the floor never lapses, so once the shortfall outlasts the
 // idle timeout the market buys a reserve that fits the largest shape.
 func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
@@ -766,6 +797,7 @@ func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 // them: busy with spare room, it does not push the idle warm host out, so
 // it can go back into the reserve once its work ends.
 func TestAResumedReserveLeavesTheWarmSlotsToTheWarmHost(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
 	warm := idle(planHost(1, mustType(t, "m7i.large"), FleetServing))
@@ -782,6 +814,7 @@ func TestAResumedReserveLeavesTheWarmSlotsToTheWarmHost(t *testing.T) {
 // work landed on the host it replaces meanwhile: the replacement stays,
 // and the replaced host leaves once its work ends.
 func TestARightsizeReplacementKeepsTheSlotWhenWorkLandsOnTheReplacedHost(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU, p.OnDemand = MarketReserve{}, nil, MarketReserve{Warm: p.OnDemand.Warm}
 	snapshot := func(hosts ...FleetHost) FleetSnapshot {
@@ -809,6 +842,7 @@ func TestARightsizeReplacementKeepsTheSlotWhenWorkLandsOnTheReplacedHost(t *test
 // run out; rightsize then replaces it, and it returns once the
 // replacement serves.
 func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
@@ -843,6 +877,7 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 // A reserve shortfall held for a host that may return names the hold, not
 // an offer exclusion; with no host that could return it is bought at once.
 func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
+	t.Parallel()
 	back := planHost(1, planSmall, FleetServing)
 	back.PhaseAt, back.Load, back.Containers = offerNow, cpuGiB(1000, 1), 1
 	plan := PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, back))
@@ -858,6 +893,7 @@ func TestAHeldReserveShortfallNamesTheHold(t *testing.T) {
 // A warm slot no offer covers names what keeps the offers out: a cooldown,
 // a vCPU quota, the purchase margin, or none at all.
 func TestAnUncoveredSlotNamesTheExclusion(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		want    MarketReason
 		exclude func(*Policy, *OfferInputs)
@@ -888,6 +924,7 @@ func TestAnUncoveredSlotNamesTheExclusion(t *testing.T) {
 // fits resumes it, and one a starting host fits waits for that host, at
 // once.
 func TestPurchasesWaitForArrivalsToSettleButResumesDoNot(t *testing.T) {
+	t.Parallel()
 	need := Requirement{CPUMillis: 4000, MemoryBytes: 4 * gib}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	batching := func(hosts ...FleetHost) (FleetSnapshot, uuid.UUID) {
@@ -960,6 +997,7 @@ func gpuPolicy() Policy {
 // GPU work resumes a reserve of its own market: Spot-tolerant work the
 // Spot reserve, work that cannot run on Spot the on-demand one.
 func TestGPUWorkResumesAReserveOfItsMarket(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		preemptible bool
 		want        HostID
@@ -978,6 +1016,7 @@ func TestGPUWorkResumesAReserveOfItsMarket(t *testing.T) {
 // Spot pools of every reserved card refuse it: a Spot offer of a card it
 // would not buy, as L40S, keeps none of it on Spot.
 func TestAnyCardSpotWorkBorrowsWhileEveryReservedCardsSpotRefuses(t *testing.T) {
+	t.Parallel()
 	s := gpuPlanSnapshot(t, gpuReserve(t, 2, MarketOnDemand))
 	s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6e.xlarge", HourlyMicros: 300_000, ObservedAt: offerNow})
 	for _, model := range []string{"T4", "A10G", "L4"} {
@@ -995,6 +1034,7 @@ func TestAnyCardSpotWorkBorrowsWhileEveryReservedCardsSpotRefuses(t *testing.T) 
 // on-demand of any: with its first model's Spot pools refusing it buys
 // its next model on Spot, and only with every model's refusing on-demand.
 func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		cooled []string
 		want   string
@@ -1022,6 +1062,7 @@ func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
 // buy another, however long it has been short; the CPU Spot market buys
 // once the return wait passes.
 func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
+	t.Parallel()
 	for _, gpu := range []bool{true, false} {
 		h := planHost(1, mustType(t, "c6a.4xlarge"), FleetServing)
 		m := ReserveMarket{Preemptible: true}
@@ -1051,6 +1092,7 @@ func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
 // take its container: a full host whose container a starting host covers
 // cools nothing, a host of a type smaller than its container does.
 func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
+	t.Parallel()
 	full := planHost(1, planLarge, FleetServing)
 	full.Load, full.Containers = full.Usable, 1
 	coming := planHost(2, planLarge, FleetStarting)
@@ -1071,6 +1113,7 @@ func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
 // more seconds, the L4 job buys no g6.2xlarge or g6.4xlarge, and buys the
 // g6.xlarge once it frees.
 func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	for _, typ := range []string{"g6.xlarge", "g6.2xlarge", "g6.4xlarge"} {
 		price, _ := mustType(t, typ).OnDemandMicros("us-east-2")
@@ -1122,6 +1165,7 @@ func cooling(types ...string) []OfferCooldown {
 // cools, though a larger one quotes less, and never past the size cap or
 // to a type of more cards, however many smaller sizes cool.
 func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		cooled []string
 		want   []string
@@ -1149,6 +1193,7 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 // cool, as every GPU Spot pool refused on 2026-10-12: the Spot L4 market
 // waits for them, though larger types quote far less.
 func TestAGPUReserveStaysWithinTheCapWhileSmallerPoolsCool(t *testing.T) {
+	t.Parallel()
 	spotL4 := ReserveMarket{Preemptible: true, GPU: "L4"}
 	s := spotQuoted(spotQuoted(planSnapshot(t), 300_000, "g6.xlarge", "g6.2xlarge", "g6.4xlarge"), 50_000, "g6.8xlarge", "g6.12xlarge", "g6.16xlarge", "g6.48xlarge")
 	s.Offers.Catalog = FleetCatalog()
@@ -1173,6 +1218,7 @@ func TestAGPUReserveStaysWithinTheCapWhileSmallerPoolsCool(t *testing.T) {
 // buys. A reserve stopped on an older agent build updates it first, which
 // a GPU launch still outlasts.
 func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
+	t.Parallel()
 	p := gpuPolicy()
 	cpuSpot := Requirement{Preemptible: true, CPUMillis: 4000, MemoryBytes: 8 * gib}
 	for _, c := range []struct {
@@ -1211,6 +1257,7 @@ func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
 // persistent request, idles, it stops into the reserve its market lacks
 // instead of the market buying one.
 func TestAnIdleGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
+	t.Parallel()
 	h := idle(planHost(1, mustType(t, "g6.4xlarge"), FleetServing))
 	h.Market, h.GPU = MarketSpot, "L4"
 	plan := PlanFleet(gpuPolicy(), gpuPlanSnapshot(t, h))
@@ -1231,6 +1278,7 @@ func TestAnIdleGPUWorkHostBecomesItsMarketsMissingReserve(t *testing.T) {
 // rather than the market retiring and buying them again. Past the horizon
 // they retire and the host drains.
 func TestReservesForALoadPeakStayForTheCostHorizon(t *testing.T) {
+	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.OnDemand.Stopped.LoadPercent = 50
 	woken := idle(planHost(3, planSmall, FleetServing))
@@ -1255,6 +1303,7 @@ func TestReservesForALoadPeakStayForTheCostHorizon(t *testing.T) {
 // steady 12 CPU of arrivals buy hosts that hold the work and the 13 CPU
 // warm target at once.
 func TestSpotHeadroomIsBoughtWithTheWork(t *testing.T) {
+	t.Parallel()
 	spot := ReserveMarket{Preemptible: true}
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	p.Spot = MarketReserve{Warm: DefaultPolicy().Spot.Warm}

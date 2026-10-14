@@ -11,6 +11,7 @@ func cpuGiB(millis cpu.Millis, memGiB int64) FleetCapacity {
 }
 
 func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	cases := []struct {
 		name          string
@@ -39,6 +40,7 @@ func TestFleetTargetsKeepTheFloorOrAShareOfLoad(t *testing.T) {
 // recent work can't shrink it below what an 8 CPU request needs; recent
 // work only raises it, and the disks it holds, up to the cap.
 func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
+	t.Parallel()
 	s := DefaultPolicy().LargestShape
 	spot := ReserveMarket{Preemptible: true}
 	cases := []struct {
