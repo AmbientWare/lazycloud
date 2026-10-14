@@ -79,7 +79,11 @@ func (e *Execution) TimeOutAttempts(ctx context.Context, logger *slog.Logger) (i
 func (e *Execution) TimeOutStarts(ctx context.Context, logger *slog.Logger) (int, error) {
 	stopped, err := e.timeOutPending(ctx, logger)
 	if err != nil {
-		return stopped, err
+		if ctx.Err() != nil {
+			return stopped, err
+		}
+		// Starts time out on their own.
+		logger.ErrorContext(ctx, "pending timeout pass", "error", err)
 	}
 	params := StuckStartingContainersParams{TimeoutSeconds: StartTimeout.Seconds(), BatchSize: recoveryBatch}
 	for {

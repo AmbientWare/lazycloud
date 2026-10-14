@@ -39,12 +39,14 @@ order by id
 for update;
 
 -- name: StalePendingContainers :many
--- Platform fleet containers pending longer than the queue timeout that no
--- launched host will take, none having been bought for them or the one
--- bought not launched yet, in (created_at, id) order after the cursor, with
--- why the planner says they wait. Work pinned to a joined machine waits for
--- it, and a connected account's work for its own hosts; a mirror build runs
--- on the platform whatever its workspace.
+-- Platform fleet containers pending longer than the queue timeout that the
+-- fleet cannot get a host for: no offer can host them, the offers that
+-- could cool or lack quota or margin, or the host bought for them has not
+-- launched. In (created_at, id) order after the cursor, with why the
+-- planner says they wait. Work waiting on the host limit or arrivals waits
+-- on; work pinned to a joined machine waits for it, and a connected
+-- account's work for its own hosts; a mirror build runs on the platform
+-- whatever its workspace.
 select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
 from containers c
 join workspaces ws on ws.id = c.workspace_id
@@ -55,17 +57,18 @@ where c.state = 'pending'
   and (ws.connection_id is null or ib.mirror is true)
   and c.created_at < now() - make_interval(secs => @timeout_seconds::float8)
   and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-  and (h.id is null or h.phase = 'requested')
+  and (c.capacity_wait in ('cooldown', 'quota', 'margin', 'no_offer') or c.capacity_wait = 'provisioning' and h.phase = 'requested')
   and (c.created_at, c.id) > (@after_created_at::timestamptz, @after_id::uuid)
 order by c.created_at, c.id
 limit @batch_size;
 
 -- name: LockStalePendingContainer :execrows
--- Rechecks the queue timeout under the row lock: a container placed or
--- given a launched host after the scan keeps waiting.
+-- Rechecks the queue timeout under the row lock: a container placed, given
+-- a launched host or a wait the fleet will end after the scan keeps
+-- waiting.
 select c.id from containers c
 left join hosts h on h.id = c.capacity_host_id
 where c.id = @id and c.state = 'pending'
   and c.created_at < now() - make_interval(secs => @timeout_seconds::float8)
-  and (h.id is null or h.phase = 'requested')
+  and (c.capacity_wait in ('cooldown', 'quota', 'margin', 'no_offer') or c.capacity_wait = 'provisioning' and h.phase = 'requested')
 for update of c;

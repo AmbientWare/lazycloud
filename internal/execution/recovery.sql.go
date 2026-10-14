@@ -46,7 +46,7 @@ select c.id from containers c
 left join hosts h on h.id = c.capacity_host_id
 where c.id = $1 and c.state = 'pending'
   and c.created_at < now() - make_interval(secs => $2::float8)
-  and (h.id is null or h.phase = 'requested')
+  and (c.capacity_wait in ('cooldown', 'quota', 'margin', 'no_offer') or c.capacity_wait = 'provisioning' and h.phase = 'requested')
 for update of c
 `
 
@@ -55,8 +55,9 @@ type LockStalePendingContainerParams struct {
 	TimeoutSeconds float64
 }
 
-// Rechecks the queue timeout under the row lock: a container placed or
-// given a launched host after the scan keeps waiting.
+// Rechecks the queue timeout under the row lock: a container placed, given
+// a launched host or a wait the fleet will end after the scan keeps
+// waiting.
 func (q *Queries) LockStalePendingContainer(ctx context.Context, arg LockStalePendingContainerParams) (int64, error) {
 	result, err := q.db.Exec(ctx, lockStalePendingContainer, arg.ID, arg.TimeoutSeconds)
 	if err != nil {
@@ -144,7 +145,7 @@ where c.state = 'pending'
   and (ws.connection_id is null or ib.mirror is true)
   and c.created_at < now() - make_interval(secs => $1::float8)
   and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
-  and (h.id is null or h.phase = 'requested')
+  and (c.capacity_wait in ('cooldown', 'quota', 'margin', 'no_offer') or c.capacity_wait = 'provisioning' and h.phase = 'requested')
   and (c.created_at, c.id) > ($2::timestamptz, $3::uuid)
 order by c.created_at, c.id
 limit $4
@@ -163,12 +164,14 @@ type StalePendingContainersRow struct {
 	Wait      string
 }
 
-// Platform fleet containers pending longer than the queue timeout that no
-// launched host will take, none having been bought for them or the one
-// bought not launched yet, in (created_at, id) order after the cursor, with
-// why the planner says they wait. Work pinned to a joined machine waits for
-// it, and a connected account's work for its own hosts; a mirror build runs
-// on the platform whatever its workspace.
+// Platform fleet containers pending longer than the queue timeout that the
+// fleet cannot get a host for: no offer can host them, the offers that
+// could cool or lack quota or margin, or the host bought for them has not
+// launched. In (created_at, id) order after the cursor, with why the
+// planner says they wait. Work waiting on the host limit or arrivals waits
+// on; work pinned to a joined machine waits for it, and a connected
+// account's work for its own hosts; a mirror build runs on the platform
+// whatever its workspace.
 func (q *Queries) StalePendingContainers(ctx context.Context, arg StalePendingContainersParams) ([]StalePendingContainersRow, error) {
 	rows, err := q.db.Query(ctx, stalePendingContainers,
 		arg.TimeoutSeconds,
