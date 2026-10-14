@@ -104,6 +104,7 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 		LayerBucket:     prefix + "-layers",
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: secretAccessKey,
+		DeleteChunk:     storage.DefaultDeleteChunk,
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.ProviderGarage,
 			Prefix:           prefix,

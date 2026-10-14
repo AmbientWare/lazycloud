@@ -204,14 +204,15 @@ func (s *Storage) tryDeleteKeys(ctx context.Context, b bucketClient, keys []stri
 	return failed, nil
 }
 
-// prefixChunk is the most objects one sweep step deletes under a prefix.
-const prefixChunk = 1000
+// DefaultDeleteChunk is production's Config.DeleteChunk.
+const DefaultDeleteChunk = 1000
 
 // deletePrefixChunk aborts the prefix's multipart uploads and deletes up to
-// prefixChunk of its objects. It reports whether the prefix is now empty.
+// Config.DeleteChunk of its objects. It reports whether the prefix is now
+// empty.
 func (s *Storage) deletePrefixChunk(ctx context.Context, b bucketClient, prefix string) (bool, error) {
 	uploads, err := b.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
-		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxUploads: aws.Int32(prefixChunk),
+		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxUploads: aws.Int32(s.config.DeleteChunk),
 	})
 	if err != nil {
 		return false, fmt.Errorf("list multipart uploads: %w", err)
@@ -222,7 +223,7 @@ func (s *Storage) deletePrefixChunk(ctx context.Context, b bucketClient, prefix 
 		}
 	}
 	out, err := b.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxKeys: aws.Int32(prefixChunk),
+		Bucket: aws.String(b.name), Prefix: aws.String(prefix), MaxKeys: aws.Int32(s.config.DeleteChunk),
 	})
 	if err != nil {
 		return false, fmt.Errorf("list objects: %w", err)

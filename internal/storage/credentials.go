@@ -39,6 +39,9 @@ func (c Config) Validate() error {
 	if c.Workspaces.Provider != "" && !accountPattern.MatchString(c.Workspaces.AccountID) {
 		return errors.New("workspace buckets need the platform's 12-digit account id, which names them")
 	}
+	if c.DeleteChunk < 1 || c.DeleteChunk > DefaultDeleteChunk {
+		return fmt.Errorf("the deletion chunk %d must be from 1 to %d objects", c.DeleteChunk, DefaultDeleteChunk)
+	}
 	if c.Workspaces.Prefix != "" && !prefixPattern.MatchString(c.Workspaces.Prefix) {
 		return fmt.Errorf("the workspace bucket prefix %q must be up to %d lowercase letters, digits and hyphens, starting with a letter or digit", c.Workspaces.Prefix, maxPrefix)
 	}

@@ -39,6 +39,9 @@ type ChangesConfig struct {
 	// Idle is how long the listener waits without a notification before
 	// it checks the connection; zero means 30 s.
 	Idle time.Duration
+	// Reconnect is how long the listener waits to connect again after
+	// losing its connection.
+	Reconnect time.Duration
 }
 
 func (c ChangesConfig) idle() time.Duration {
@@ -51,9 +54,9 @@ func (c ChangesConfig) idle() time.Duration {
 // DefaultChangesConfig keeps 4,096 events: a few seconds of a busy cluster,
 // enough to resume after a reconnect. Frames are typically under 1 KiB and
 // at most 8 KiB, so the ring holds 32 MiB at worst; subscribers share its
-// frames.
+// frames. A lost listener connects again after a second.
 func DefaultChangesConfig() ChangesConfig {
-	return ChangesConfig{Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32}
+	return ChangesConfig{Retained: 4096, Buffer: 256, MaxSubscribers: 20000, MaxPerPrincipal: 32, Reconnect: time.Second}
 }
 
 var (
@@ -182,7 +185,7 @@ func (c *Changes) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(time.Second):
+		case <-time.After(c.cfg.Reconnect):
 		}
 	}
 }
