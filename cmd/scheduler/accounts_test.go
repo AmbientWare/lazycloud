@@ -28,6 +28,7 @@ import (
 // Deleting a workspace cancels its work, waits for its containers to stop,
 // deletes its objects and removes its rows, leaving other workspaces alone.
 func TestWorkspaceDeletion(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
@@ -146,6 +147,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 // Deleting a workspace fails the builds it is running and waits for their
 // containers, and keeps finished builds another workspace shares.
 func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
