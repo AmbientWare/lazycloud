@@ -21,8 +21,9 @@ import (
 // listing's reads where they were. That holds for the busy function and for
 // what its history and live containers bury: a quiet workload beside it, a
 // quiet app, rare statuses, root tasks below a deep cursor and a quiet
-// workspace. Production plans its statements either way,
-// so each is explained with custom and generic plans.
+// workspace. A burst of churn that vacuum has not reached tops the history,
+// and each statement is explained with custom and generic plans, as pgx
+// prepares statements in production.
 func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
@@ -75,11 +76,26 @@ values ($1, $2, $3, 'succeeded', 1, 1) returning id`, f.workspace, f.workload, b
 	// The busy function serves from many live containers.
 	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
 select $1, $2, $3, 'ready', $4, 1, 1000, 1 << 28, now(), now() from generate_series(1, 600)`, f.workspace, busy.release, f.workload, host)
+	// Vacuum runs where the history says so, and not over the recent churn.
+	exec(t, pool, "alter table tasks set (autovacuum_enabled = off)")
+	exec(t, pool, "alter table containers set (autovacuum_enabled = off)")
 	grow := func(tasks int) {
 		addHistory(t, pool, busy, host, tasks)
 		exec(t, pool, `update tasks set parent_task_id = $1, root_task_id = $1
 where workload_id = $2 and parent_task_id is null and id > $1 and right(id::text, 1) <> '0'`, spawner, f.workload)
 		exec(t, pool, "vacuum analyze")
+		// Recent churn that autovacuum has not reached: 2,000 tasks run
+		// through queued, running and succeeded, and 200 containers start
+		// and stop.
+		exec(t, pool, `insert into tasks (workspace_id, workload_id, release_id, status, max_attempts)
+select $1, $2, $3, 'queued', 1 from generate_series(1, 2000)`, f.workspace, f.workload, busy.release)
+		exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select $1, $2, $3, 'pending', 1, 1000, 1 << 28 from generate_series(1, 200)`, f.workspace, busy.release, f.workload)
+		exec(t, pool, `update tasks set status = 'running', attempt_count = 1, started_at = now() where status = 'queued' and release_id = $1`, busy.release)
+		exec(t, pool, `update containers set state = 'starting', host_id = $2, assigned_at = now() where state = 'pending' and release_id = $1`, busy.release, host)
+		exec(t, pool, `update tasks set status = 'succeeded', finished_at = now() where status = 'running' and release_id = $1`, busy.release)
+		exec(t, pool, `update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where state = 'starting' and release_id = $1`, busy.release)
+		exec(t, pool, "analyze")
 	}
 
 	ws := identity.WorkspaceID(f.workspace)

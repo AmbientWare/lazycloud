@@ -21,4 +21,7 @@ create index containers_workload_live on containers (workload_id, id desc) where
 drop index containers_workspace_recent;
 create index containers_workspace_recent on containers (workspace_id, id desc) include (release_id);
 drop index containers_workspace_live;
-create index containers_workspace_live on containers (workspace_id, id desc) include (release_id) where state <> 'stopped';
+create index containers_workspace_live on containers (workspace_id, id desc) where state <> 'stopped' and release_id is not null;
+-- One workspace may hold most live containers; estimated apart, a page of
+-- them looks like all of them, and a scan of every live container wins.
+create statistics containers_workspace_state (mcv) on workspace_id, state from containers;
