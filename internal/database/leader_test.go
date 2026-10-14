@@ -151,3 +151,20 @@ func TestLeaderCheckSeesOnlyItsOwnSessionsLock(t *testing.T) {
 		}
 	}
 }
+
+// Lead and a listener refuse waits that are not positive before they touch
+// the database.
+func TestLeadAndListenerRefuseWaitsThatAreNotPositive(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, c := range [][2]time.Duration{{0, time.Second}, {time.Second, 0}, {time.Second, -time.Second}} {
+		if err := database.Lead(t.Context(), nil, "test_leader", c[0], c[1], func(bool) {}, logger); err == nil {
+			t.Errorf("Lead with check %s and retry %s ran", c[0], c[1])
+		}
+	}
+	listener := database.NewListener(nil, logger, database.ChannelExecution)
+	listener.Reconnect = 0
+	if err := listener.Run(t.Context()); err == nil {
+		t.Error("a listener with no reconnect wait ran")
+	}
+}

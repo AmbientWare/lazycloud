@@ -120,8 +120,12 @@ func (l *Listener) Subscribe(channel Channel, payloads ...string) (wake <-chan s
 	}
 }
 
-// Run listens until ctx ends, reconnecting after connection failures.
+// Run listens until ctx ends, reconnecting after connection failures. It
+// refuses a Reconnect that is not positive.
 func (l *Listener) Run(ctx context.Context) error {
+	if l.Reconnect <= 0 {
+		return fmt.Errorf("listener reconnect wait %s must be positive", l.Reconnect)
+	}
 	for {
 		err := l.listen(ctx)
 		if ctx.Err() != nil {

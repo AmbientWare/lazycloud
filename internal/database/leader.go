@@ -29,12 +29,15 @@ const DefaultLeadRetry = time.Second
 // it learns within that long of a session that ended or that a proxy moved
 // to another backend, where a ping would still succeed. Another process may lead before a lost leader
 // notices, so leadership only paces work whose passes are already safe to
-// overlap.
+// overlap. It refuses a check or retry that is not positive.
 //
 // A proxy may answer pg_backend_pid() itself, so the check does not match
 // pg_locks against it. The leader instead also locks a random key only it
 // knows, and holds the lead while one backend holds both locks.
 func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check, retry time.Duration, leading func(bool), logger *slog.Logger) error {
+	if check <= 0 || retry <= 0 {
+		return fmt.Errorf("lead %s: check %s and retry %s must be positive", name, check, retry)
+	}
 	for {
 		err := holdLead(ctx, pool, name, check, leading)
 		if ctx.Err() != nil {
