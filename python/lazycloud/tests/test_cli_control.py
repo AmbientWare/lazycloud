@@ -16,6 +16,8 @@ from typer.testing import CliRunner, Result
 import lazycloud
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-09-30T12:00:00Z"
@@ -44,7 +46,7 @@ def forecast(months: int) -> int:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _app(state: str = "active") -> dict[str, object]:

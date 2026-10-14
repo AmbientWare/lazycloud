@@ -21,6 +21,8 @@ from typer.testing import CliRunner, Result
 
 from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-09-30T12:00:00Z"
@@ -118,7 +120,7 @@ def _serve_app(api: FakeApi, *, contracts: Mapping[str, dict[str, Any] | None]) 
 
 
 def _export(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), ["--json", "app", "export", *args])
+    return CliRunner().invoke(cli, ["--json", "app", "export", *args])
 
 
 def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str, object]:

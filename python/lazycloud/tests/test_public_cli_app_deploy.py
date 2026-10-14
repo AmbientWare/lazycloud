@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 
 from lazycloud import App
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
@@ -47,7 +49,7 @@ def test_file_deploy_requires_a_selection_when_several_apps_are_present(
         encoding="utf-8",
     )
     try:
-        result = CliRunner().invoke(build_public_cli(), ["deploy", "several_apps.py"])
+        result = CliRunner().invoke(cli, ["deploy", "several_apps.py"])
         assert isinstance(result.exception, HandlerLoadError)
         assert "multiple apps found" in str(result.exception)
         assert "several_apps.py:first" in str(result.exception)

@@ -45,6 +45,8 @@ from tests.api_server import (
     json_reply,
 )
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 APP_ID = "0192f0a0-0000-7000-8000-000000000001"
@@ -1377,7 +1379,7 @@ def test_every_command_tells_an_out_of_date_client_to_update(fake_api: FakeApi) 
 
     fake_api.route("GET", "/v1/me")(newer)
 
-    result = CliRunner().invoke(build_public_cli(), ["login"])
+    result = CliRunner().invoke(cli, ["login"])
 
     assert result.exit_code == 0, result.output
     assert "999.0.0" in result.stderr and "lazycloud update" in result.stderr
@@ -1393,7 +1395,7 @@ def test_login_verifies_the_token_and_stores_the_owned_or_only_workspace(
     reset_settings_cache()
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics"))
 
-    result = CliRunner().invoke(build_public_cli(), ["login", "--token", "lc_new-token-value"])
+    result = CliRunner().invoke(cli, ["login", "--token", "lc_new-token-value"])
 
     assert result.exit_code == 0, result.output
     (me,) = fake_api.calls("GET", "/v1/me")
@@ -1403,16 +1405,12 @@ def test_login_verifies_the_token_and_stores_the_owned_or_only_workspace(
 
     # Joining someone else's workspace does not change which one is yours.
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", "billing", owned="billing"))
-    result = CliRunner().invoke(
-        build_public_cli(), ["login", "--profile", "mine", "--token", "lc_mine-token-1"]
-    )
+    result = CliRunner().invoke(cli, ["login", "--profile", "mine", "--token", "lc_mine-token-1"])
     assert result.exit_code == 0, result.output
     assert get_profile("mine").workspace == "billing"
 
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", "billing"))
-    result = CliRunner().invoke(
-        build_public_cli(), ["login", "--profile", "other", "--token", "lc_other-token-1"]
-    )
+    result = CliRunner().invoke(cli, ["login", "--profile", "other", "--token", "lc_other-token-1"])
     assert isinstance(result.exception, ClientError)
     assert "analytics, billing" in result.exception.details.hint
 
@@ -1463,7 +1461,7 @@ def test_login_without_a_token_runs_the_device_flow(
     monkeypatch.setattr("lazycloud.cli.identity.socket.gethostname", lambda: "laptop")
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", owned="analytics"))
 
-    result = CliRunner().invoke(build_public_cli(), ["--json", "login"])
+    result = CliRunner().invoke(cli, ["--json", "login"])
 
     assert result.exit_code == 0, result.output
     # The card names the profile, the endpoint, the link and the code.
@@ -1505,7 +1503,7 @@ def test_device_login_reports_denied_and_expired(
     slept = _device_codes(fake_api, [{"status": status, "poll_interval_seconds": 5}])
     monkeypatch.setattr("lazycloud.cli.identity.time.sleep", slept.append)
 
-    result = CliRunner().invoke(build_public_cli(), ["login", "--token", ""])
+    result = CliRunner().invoke(cli, ["login", "--token", ""])
 
     assert isinstance(result.exception, ClientError)
     assert str(result.exception) == message
@@ -1529,7 +1527,6 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     fake_api.route("POST", f"/v1/workspaces/team/tasks/{task_id}/cancel")(
         lambda _: json_reply(_task(task_id, "cancelled"))
     )
-    cli = build_public_cli()
 
     ran = CliRunner().invoke(cli, ["--json", "run", "reports:summarize_sales", "[1, 2, 3]"])
     result = CliRunner().invoke(cli, ["--json", "task", "result", task_id])
@@ -1557,7 +1554,7 @@ def test_cli_deploy_of_a_file_deploys_its_app(
     monkeypatch.chdir(tmp_path)
     _serve_deployment(fake_api, stored=set())
 
-    result = CliRunner().invoke(build_public_cli(), ["--json", "deploy", "reports.py"])
+    result = CliRunner().invoke(cli, ["--json", "deploy", "reports.py"])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["releases"][0]["name"] == "summarize_sales"
@@ -1565,8 +1562,8 @@ def test_cli_deploy_of_a_file_deploys_its_app(
     assert request.json()["workloads"][0]["handler"] == "reports:summarize_sales"
 
     monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
-    pruned = CliRunner().invoke(build_public_cli(), ["deploy", "reports.py", "--prune"])
-    single = CliRunner().invoke(build_public_cli(), ["deploy", "reports:summarize_sales"])
+    pruned = CliRunner().invoke(cli, ["deploy", "reports.py", "--prune"])
+    single = CliRunner().invoke(cli, ["deploy", "reports:summarize_sales"])
 
     assert pruned.exit_code == 0, pruned.output
     assert "App deployed" in pruned.stdout and "Removed versions" in pruned.stdout

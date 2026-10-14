@@ -26,6 +26,8 @@ from typer.testing import CliRunner, Result
 import lazycloud
 from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-10-01T12:00:00Z"
@@ -79,7 +81,7 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _release(spec: dict[str, Any], **extra: object) -> dict[str, object]:
