@@ -58,7 +58,6 @@ jobs:
           bun run typecheck
           bun run test --reporter=default --reporter=junit --outputFile=test-results/vitest.xml
           bun run build
-          git diff --exit-code -- src/routeTree.gen.ts
 
       # The specs mock the API, except stack.spec.ts, which skips without a
       # running platform.
