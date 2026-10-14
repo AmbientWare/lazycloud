@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -21,6 +20,7 @@ func fillState(t *testing.T, state string, bytes int) {
 // Builds of one workspace that run at once each hold a state of their own,
 // and a state is held again once its build ends.
 func TestBuildCachesGiveConcurrentBuildsTheirOwnState(t *testing.T) {
+	t.Parallel()
 	caches := newBuildCaches(t.TempDir(), 1<<30, slog.Default())
 	workspace := uuid.NewString()
 	first, err := caches.acquire(t.Context(), workspace)
@@ -50,6 +50,7 @@ func TestBuildCachesGiveConcurrentBuildsTheirOwnState(t *testing.T) {
 // A build that names no workspace gets an empty state no other build holds,
 // and the state goes once its build ends.
 func TestBuildCachesGiveUnscopedBuildsAnEmptyStateOfTheirOwn(t *testing.T) {
+	t.Parallel()
 	caches := newBuildCaches(t.TempDir(), 1<<30, slog.Default())
 	first, err := caches.acquire(t.Context(), "")
 	if err != nil {
@@ -76,6 +77,7 @@ func TestBuildCachesGiveUnscopedBuildsAnEmptyStateOfTheirOwn(t *testing.T) {
 // The caches stay within their limit: when a build ends, the least recently
 // used workspaces are removed whole, and never one whose build still runs.
 func TestBuildCachesEvictLeastRecentlyUsedWorkspacesToTheLimit(t *testing.T) {
+	t.Parallel()
 	const limit = 1 << 20
 	caches := newBuildCaches(t.TempDir(), limit, slog.Default())
 	use := func(workspace string, bytes int) string {
@@ -94,7 +96,6 @@ func TestBuildCachesEvictLeastRecentlyUsedWorkspacesToTheLimit(t *testing.T) {
 	}
 	release(use(oldest, 500<<10))
 	held := use(running, 500<<10)
-	time.Sleep(10 * time.Millisecond)
 	release(use(recent, 300<<10))
 	if _, err := os.Stat(filepath.Join(caches.dir, oldest)); err != nil {
 		t.Fatalf("a cache was removed while the caches fit: %v", err)
@@ -108,11 +109,9 @@ func TestBuildCachesEvictLeastRecentlyUsedWorkspacesToTheLimit(t *testing.T) {
 		}
 	}
 	// Past the limit, the oldest goes and the running build's stays.
-	time.Sleep(10 * time.Millisecond)
 	release(use(recent, 300<<10))
 	kept(map[string]bool{oldest: false, running: true, recent: true})
 	// The build that ran ends last, so the other workspace is now the oldest.
-	time.Sleep(10 * time.Millisecond)
 	release(held)
 	kept(map[string]bool{running: true, recent: false})
 	_, total, err := caches.measure()

@@ -171,6 +171,13 @@ func (c *linkConn) until(t *testing.T, match func(*hostproto.SupervisorMessage) 
 
 func isReady(m *hostproto.SupervisorMessage) bool { return m.GetReady() != nil }
 
+// sleeping matches the output of attempt's sleep starting.
+func sleeping(attempt string) func(*hostproto.SupervisorMessage) bool {
+	return func(m *hostproto.SupervisorMessage) bool {
+		return m.GetOutput().GetAttemptId() == attempt && strings.Contains(m.GetOutput().GetData(), "sleeping")
+	}
+}
+
 func finished(attempt string) func(*hostproto.SupervisorMessage) bool {
 	return func(m *hostproto.SupervisorMessage) bool { return m.GetFinished().GetAttemptId() == attempt }
 }
@@ -290,7 +297,7 @@ func TestSupervisorReconnectRestatesRunningAttempts(t *testing.T) {
 	c.configure(t, "app:handle", 2)
 	c.until(t, isReady)
 	c.run(t, "long", `{"args": ["sleep", 1.5]}`)
-	time.Sleep(200 * time.Millisecond)
+	c.until(t, sleeping("long"))
 	close(c.end)
 
 	c = h.accept()
@@ -312,10 +319,18 @@ func TestSupervisorRestatesAttemptsFinishedWhileDisconnected(t *testing.T) {
 	c := h.accept()
 	c.configure(t, "app:handle", 1)
 	c.until(t, isReady)
-	c.run(t, "short", `{"args": ["sleep", 0.5]}`)
-	time.Sleep(100 * time.Millisecond)
+	slept := filepath.Join(t.TempDir(), "slept")
+	c.run(t, "short", `{"args": ["sleep", 0.2, "`+slept+`"]}`)
+	c.until(t, sleeping("short"))
 	h.grpc.Stop()
-	time.Sleep(time.Second)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(slept); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the attempt never finished")
+		}
+	}
 
 	h.listen()
 	c = h.accept()

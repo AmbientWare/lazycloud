@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package diskengine
 
 import (
@@ -14,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
@@ -26,17 +27,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
-
-// testStore is a bucket of the test object store, deleted with everything
-// in it when the test ends.
-func testStore(t *testing.T) Store {
-	t.Helper()
-	cfg := storagetest.Config(t)
-	return Store{
-		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket, ForcePathStyle: true,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-	}
-}
 
 // frameCount counts the disk's stored frames.
 func frameCount(t *testing.T, store Store, diskID string) int {

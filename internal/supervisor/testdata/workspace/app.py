@@ -22,7 +22,10 @@ def handle(action, *args):
         print(args[0])
         raise ValueError(f"failed with {args[0]}")
     if action == "sleep":
+        print("sleeping", flush=True)
         time.sleep(args[0])
+        if len(args) > 1:
+            open(args[1], "w").close()
         return "slept"
     if action == "hang":
         print("hanging", flush=True)

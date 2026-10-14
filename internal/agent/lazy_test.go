@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -154,5 +156,36 @@ func noLayerSince(t *testing.T, image string, since time.Time) {
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestStartupTracesEndWithTheFirstTask: the host's snapshotter traces a
+// start until its first task, request or command ends, the agent reports
+// the frames read, and a later start prefetches them. No other package
+// unpacks this image without the snapshotter, so its layers mount lazily
+// and reads reach FUSE.
+func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
+	t.Parallel()
+	const image = "python:3.12-alpine"
+	e := newEnv(t)
+	e.startAgent()
+	s := e.session()
+	command := &hostproto.PodWorkload{Command: []string{"python3", "-c", "import email, http.client, json, sqlite3"}}
+
+	start := withImage(e.podCommand(command), image)
+	id := start.GetStart().GetContainerId()
+	start.GetStart().RecordTrace = true
+	s.send(t, start)
+	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
+		t.Fatalf("the host reported %v", reported)
+	}
+	s.phase(t, id, exited)
+
+	next := withImage(e.podCommand(command), image)
+	next.GetStart().Prefetch = reported.GetTrace()
+	s.send(t, next)
+	if exit := s.phase(t, next.GetStart().GetContainerId(), exited).GetExit(); exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != 0 {
+		t.Fatalf("a start prefetching the trace exited %v", exit)
 	}
 }

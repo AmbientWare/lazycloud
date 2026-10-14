@@ -1,10 +1,6 @@
 package agent
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
@@ -12,6 +8,7 @@ import (
 )
 
 func TestGPUModelsUseThePlatformVocabulary(t *testing.T) {
+	t.Parallel()
 	for name, want := range map[string]string{
 		"Tesla T4":                  "T4",
 		"NVIDIA A10G":               "A10G",
@@ -35,6 +32,7 @@ func TestGPUModelsUseThePlatformVocabulary(t *testing.T) {
 }
 
 func TestOfferAppliesLimits(t *testing.T) {
+	t.Parallel()
 	a10g := []gpuDevice{{"0", "GPU-a", "A10G"}, {"1", "GPU-b", "A10G"}}
 	machine := detected{cpuMillis: 8000, memoryBytes: 16 << 30, gpus: a10g}
 	cases := []struct {
@@ -85,6 +83,7 @@ func TestOfferAppliesLimits(t *testing.T) {
 }
 
 func TestParseCapacityLimits(t *testing.T) {
+	t.Parallel()
 	for value, want := range map[string]cpu.Millis{"2": 2000, "1.5": 1500, "0.25": 250} {
 		if got, err := ParseCPU(value); err != nil || got != want {
 			t.Errorf("ParseCPU(%q) = %d, %v; want %d", value, got, err, want)
@@ -102,66 +101,5 @@ func TestParseCapacityLimits(t *testing.T) {
 	}
 	if _, err := ParseMemory("lots"); err == nil {
 		t.Error("ParseMemory accepted lots")
-	}
-}
-
-func TestAgentEnrollsWithPreflightChecks(t *testing.T) {
-	e := newEnv(t)
-	e.startAgent()
-	enroll := e.enrollment()
-	s := e.session()
-	if enroll.GetArchitecture() != runtime.GOARCH {
-		t.Fatalf("architecture %q", enroll.GetArchitecture())
-	}
-	checks := map[string]*hostproto.PreflightCheck{}
-	for _, check := range enroll.GetPreflight() {
-		checks[check.GetName()] = check
-	}
-	for name, message := range map[string]string{"docker": "Docker is reachable", "capacity.max_cpu": "using 2000m CPU", "capacity.max_memory": "using 8192 MB memory"} {
-		if check := checks[name]; !check.GetOk() || check.GetMessage() != message {
-			t.Errorf("check %s = %v, want %q", name, check, message)
-		}
-	}
-	gpus := detectGPUs(t.Context())
-	if len(gpus) > 0 && nvidiaRuntimeInstalled() {
-		capacity := enroll.GetCapacity()
-		if capacity.GetGpuCount() != int32(len(gpus)) || capacity.GetGpuType() != gpus[0].Model {
-			t.Fatalf("enrolled with %d %q GPUs, detected %v", capacity.GetGpuCount(), capacity.GetGpuType(), gpus)
-		}
-		t.Logf("this host offers %d %s", capacity.GetGpuCount(), capacity.GetGpuType())
-	}
-	if hello := s.hello.GetCapacity(); hello.GetGpuCount() != enroll.GetCapacity().GetGpuCount() || hello.GetCpuMillis() != 2000 {
-		t.Fatalf("hello capacity %v, enrolled %v", hello, enroll.GetCapacity())
-	}
-}
-
-func TestAgentWithAFailedPreflightEnrollsButDoesNotJoin(t *testing.T) {
-	e := newEnv(t)
-	tokenFile := filepath.Join(e.stateDir, "join-token")
-	if err := os.WriteFile(tokenFile, []byte(e.server.joinToken+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	a := e.startAgent(func(cfg *Config) {
-		cfg.JoinToken, cfg.JoinTokenFile = "", tokenFile
-		cfg.Limits.CPUMillis = 1 << 40
-	})
-	enroll := e.enrollment()
-	if enroll.GetJoinToken() != e.server.joinToken {
-		t.Fatalf("enrolled with token %q", enroll.GetJoinToken())
-	}
-	failed := false
-	for _, check := range enroll.GetPreflight() {
-		failed = failed || (check.GetName() == "capacity.max_cpu" && !check.GetOk() && check.GetMessage() == "requested CPU exceeds detected CPU")
-	}
-	if !failed {
-		t.Fatalf("enrollment did not report the failed CPU check: %v", enroll.GetPreflight())
-	}
-	if err := a.exited(t); !errors.Is(err, ErrPreflightFailed) {
-		t.Fatalf("Run returned %v", err)
-	}
-	for _, path := range []string{tokenFile, identityPath(e.stateDir)} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("%s remains after a failed join: %v", path, err)
-		}
 	}
 }

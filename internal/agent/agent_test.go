@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -57,6 +59,7 @@ func (e *env) startReady(s *serverSession, slots int32) string {
 }
 
 func TestAgentRunsTasksThenStops(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
@@ -84,10 +87,9 @@ func TestAgentRunsTasksThenStops(t *testing.T) {
 
 	// The supervisor is PID 1 and reaps re-parented processes.
 	e.completion(e.task(id, `{"args": ["orphan"]}`))
-	time.Sleep(time.Second)
-	if got := result(t, e.completion(e.task(id, `{"args": ["zombies"]}`))); got != "0" {
-		t.Fatalf("%s zombie processes in the container", got)
-	}
+	e.eventually("the orphan is reaped", func() bool {
+		return result(t, e.completion(e.task(id, `{"args": ["zombies"]}`))) == "0"
+	})
 
 	stop := stopCommand(id, 10)
 	s.send(t, stop)
@@ -105,6 +107,7 @@ func TestAgentRunsTasksThenStops(t *testing.T) {
 }
 
 func TestAgentCancelsAndRecoversSlots(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
@@ -135,6 +138,7 @@ func TestAgentCancelsAndRecoversSlots(t *testing.T) {
 // A cancel can reach the agent before the claim response that holds its
 // attempt; the attempt then never runs.
 func TestAgentDropsAttemptsCancelledBeforeTheirClaim(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
@@ -157,6 +161,7 @@ func TestAgentDropsAttemptsCancelledBeforeTheirClaim(t *testing.T) {
 // A slow log consumer holds the runner back instead of losing output, and
 // the result still arrives after all of it.
 func TestAgentAppliesLogBackpressure(t *testing.T) {
+	t.Parallel()
 	const lines = 8192 // 8 MiB, past every buffer between runner and server
 	e := newEnv(t)
 	e.server.appendDelay = 10 * time.Millisecond
@@ -182,6 +187,7 @@ func TestAgentAppliesLogBackpressure(t *testing.T) {
 }
 
 func TestAgentReportsLoadAndStartFailures(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()
@@ -206,17 +212,13 @@ func TestAgentReportsLoadAndStartFailures(t *testing.T) {
 }
 
 func TestAgentAdoptsRunningContainersAfterRestart(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	first := e.startAgent()
 	s := e.session()
 	id := e.startReady(s, 2)
 	attempt := e.task(id, `{"args": ["sleep", 3]}`)
-	e.eventually("task is claimed", func() bool {
-		e.server.mu.Lock()
-		defer e.server.mu.Unlock()
-		return len(e.server.queued[id]) == 0
-	})
-	time.Sleep(300 * time.Millisecond)
+	e.eventually("the attempt runs", func() bool { return strings.Contains(e.server.output(attempt), "sleeping") })
 	first.stop()
 
 	restarted := time.Now()
@@ -244,6 +246,7 @@ func TestAgentAdoptsRunningContainersAfterRestart(t *testing.T) {
 }
 
 func TestAgentReconnectsAfterServerRestart(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.startAgent()
 	s := e.session()

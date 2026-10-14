@@ -1,54 +1,27 @@
+//go:build hostruntime
+
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
-
-// releases records ReleaseDisk calls and fails the first failures of them,
-// and records the failures the agent reports.
-type releases struct {
-	mu       sync.Mutex
-	failures int
-	released []*hostproto.ReleaseDiskRequest
-	reported []*hostproto.DiskFailure
-}
-
-func (r *releases) release(req *hostproto.ReleaseDiskRequest) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.failures > 0 {
-		r.failures--
-		return status.Error(codes.Unavailable, "release refused for the test")
-	}
-	r.released = append(r.released, req)
-	return nil
-}
-
-func (r *releases) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.released)
-}
 
 // TestDiskLeasesReleaseUntilAccepted covers a lease left by a container that
 // never attached its disk: the release loop releases it without publishing,
 // keeps the record when the server fails and records the failure on the
 // disk, and retries after an agent restart until the server accepts.
 func TestDiskLeasesReleaseUntilAccepted(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.server.releases = &releases{failures: 1}
 	container, disk := uuid.NewString(), uuid.NewString()
@@ -101,35 +74,4 @@ func TestDiskLeasesReleaseUntilAccepted(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("the lease record outlived its release")
-}
-
-func (r *releases) failuresReported() []*hostproto.DiskFailure {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]*hostproto.DiskFailure(nil), r.reported...)
-}
-
-func (s *hostServer) RecordDiskFailure(_ context.Context, req *hostproto.RecordDiskFailureRequest) (*hostproto.RecordDiskFailureResponse, error) {
-	s.releases.mu.Lock()
-	defer s.releases.mu.Unlock()
-	if req.GetFailure() != nil {
-		s.releases.reported = append(s.releases.reported, req.GetFailure())
-	}
-	return &hostproto.RecordDiskFailureResponse{}, nil
-}
-
-func (r *releases) failuresLeft() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.failures
-}
-
-func (s *hostServer) ReleaseDisk(_ context.Context, req *hostproto.ReleaseDiskRequest) (*hostproto.ReleaseDiskResponse, error) {
-	if s.releases == nil {
-		return nil, status.Error(codes.Unimplemented, "no disks in this test")
-	}
-	if err := s.releases.release(req); err != nil {
-		return nil, err
-	}
-	return &hostproto.ReleaseDiskResponse{}, nil
 }

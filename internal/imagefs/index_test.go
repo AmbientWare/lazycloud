@@ -33,6 +33,7 @@ func testIndex() Index {
 // A reader refuses an index of another format version, or one whose tree
 // or frame table it cannot trust, rather than serving wrong bytes.
 func TestUnmarshalRefusesUnknownVersionsAndBrokenIndexes(t *testing.T) {
+	t.Parallel()
 	stored, err := testIndex().Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +78,7 @@ func TestUnmarshalRefusesUnknownVersionsAndBrokenIndexes(t *testing.T) {
 // An index of millions of empty records is refused before any of them is
 // allocated, so a few kilobytes cannot take gigabytes to decode.
 func TestUnmarshalCountsRecordsBeforeDecoding(t *testing.T) {
+	// The allocation it measures is the process's, so it runs alone.
 	fields := (&imagefsproto.Index{}).ProtoReflect().Descriptor().Fields()
 	entries := protowire.AppendTag(nil, fields.ByName("entries").Number(), protowire.BytesType)
 	entries = protowire.AppendBytes(entries, nil)

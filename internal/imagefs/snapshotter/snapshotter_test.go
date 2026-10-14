@@ -1,16 +1,18 @@
+//go:build hostruntime
+
 package snapshotter
 
 import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,15 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/core/snapshots/proxy"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -37,94 +36,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
-	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
-
-// testStore holds layers in a test bucket, read through
-// presigned URLs as hosts read the platform store.
-type testStore struct {
-	client  *s3.Client
-	bucket  string
-	prefix  string
-	presign *s3.PresignClient
-}
-
-func newTestStore(t *testing.T) *testStore {
-	t.Helper()
-	client := storagetest.Client()
-	return &testStore{client: client, bucket: storagetest.Config(t).Bucket, prefix: "snapshotter-test/" + uuid.NewString() + "/", presign: s3.NewPresignClient(client)}
-}
-
-func (ts *testStore) put(t *testing.T, key string, body []byte) {
-	t.Helper()
-	if _, err := ts.client.PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: aws.String(ts.bucket), Key: aws.String(ts.prefix + key), Body: bytes.NewReader(body),
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func (ts *testStore) remove(t *testing.T, key string) {
-	t.Helper()
-	if _, err := ts.client.DeleteObject(t.Context(), &s3.DeleteObjectInput{Bucket: aws.String(ts.bucket), Key: aws.String(ts.prefix + key)}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func (ts *testStore) url(t *testing.T, key string) string {
-	t.Helper()
-	req, err := ts.presign.PresignGetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(ts.bucket), Key: aws.String(ts.prefix + key)},
-		s3.WithPresignExpires(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return req.URL
-}
-
-// storedLayer is a converted layer in the test store.
-type storedLayer struct {
-	index imagefs.Index
-	grant *imagefsproto.LayerGrant
-}
-
-func (ts *testStore) layer(t *testing.T, tarball []byte) storedLayer {
-	t.Helper()
-	var data bytes.Buffer
-	ix, err := imagefs.Convert(t.Context(), bytes.NewReader(tarball), &data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := ix.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	name := strings.TrimPrefix(string(ix.Layer), "sha256:")
-	ts.put(t, name+"/index", raw)
-	ts.put(t, name+"/data", data.Bytes())
-	return storedLayer{index: ix, grant: &imagefsproto.LayerGrant{
-		DiffId: string(ix.Layer), IndexUrl: ts.url(t, name+"/index"), DataUrl: ts.url(t, name+"/data"), ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
-	}}
-}
-
-// file is a stored layer of one file, name, holding body.
-func (ts *testStore) file(t *testing.T, name string, body []byte) storedLayer {
-	t.Helper()
-	return ts.layer(t, buildTar(t, []tarEntry{{hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}, body: body}}))
-}
-
-// countingTransport counts requests and fails those fail picks.
-type countingTransport struct {
-	requests atomic.Int64
-	fail     func(*http.Request) bool
-}
-
-func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	c.requests.Add(1)
-	if c.fail != nil && c.fail(r) {
-		return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody, Request: r, Header: http.Header{}}, nil
-	}
-	return http.DefaultTransport.RoundTrip(r)
-}
 
 // service is a snapshotter served on a socket as on a host, with
 // containerd's proxy client and the agent's layer source client.
@@ -148,14 +60,6 @@ func (f *failedReads) Handle(_ context.Context, r slog.Record) error {
 		f.n.Add(1)
 	}
 	return nil
-}
-
-// testConfig is a snapshotter's configuration for a test under dir.
-func testConfig(dir string, transport http.RoundTripper, logger *slog.Logger) Config {
-	return Config{
-		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4,
-		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
-	}
 }
 
 func serve(t *testing.T, transport http.RoundTripper) *service {
@@ -273,47 +177,10 @@ func layerMounts(t *testing.T, root string) []string {
 	return found
 }
 
-type tarEntry struct {
-	hdr  tar.Header
-	body []byte
-}
-
-// buildTar writes a layer whose root the test's user owns, since overlay
-// snapshots on top take their owner from it.
-func buildTar(t *testing.T, entries []tarEntry) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	root := tarEntry{hdr: tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755, Uid: os.Getuid(), Gid: os.Getgid()}}
-	for _, e := range append([]tarEntry{root}, entries...) {
-		hdr := e.hdr
-		hdr.Size = int64(len(e.body))
-		if hdr.ModTime.IsZero() {
-			hdr.ModTime = time.Unix(1700000000, 0)
-		}
-		hdr.Format = tar.FormatPAX
-		if err := tw.WriteHeader(&hdr); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tw.Write(e.body); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
-func random(n int) []byte {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return b
-}
-
 // A lazily pulled layer is reported present without a download, and its
 // mount shows every file of the tar with its bytes and metadata.
 func TestLazyLayerServesItsFiles(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	transport := &countingTransport{}
 	s := serve(t, transport)
@@ -424,6 +291,7 @@ func TestLazyLayerServesItsFiles(t *testing.T) {
 
 // Without a live grant a layer is not made present, and the error says so.
 func TestPullingAnUngrantedLayerFails(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.file(t, "a", []byte("a"))
@@ -441,6 +309,7 @@ func TestPullingAnUngrantedLayerFails(t *testing.T) {
 // after a bounded number of attempts; it never reads as wrong or empty
 // bytes.
 func TestUnservableReadsAreIOErrors(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	var failing atomic.Bool
 	transport := &countingTransport{fail: func(*http.Request) bool { return failing.Load() }}
@@ -475,6 +344,7 @@ func TestUnservableReadsAreIOErrors(t *testing.T) {
 // A layer stays mounted while a view or container uses it and is unmounted
 // once none does; a busy mount is kept and retried.
 func TestUnusedLayersAreUnmounted(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.file(t, "a", []byte("a"))
@@ -517,6 +387,7 @@ func TestUnusedLayersAreUnmounted(t *testing.T) {
 
 // A container's overlay names its lazy layers' mounts, lowest last.
 func TestContainersStackLazyLayers(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	base := ts.file(t, "base", []byte("base"))
@@ -545,6 +416,7 @@ func TestContainersStackLazyLayers(t *testing.T) {
 
 // A container whose layers fail to mount leaves none of them mounted.
 func TestFailedMountsLeaveNoLayerMounted(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	base := ts.file(t, "base", []byte("base"))
@@ -587,6 +459,7 @@ func lowerDirs(m mount.Mount) []string {
 // Stopping the snapshotter leaves a layer a container uses mounted, and
 // returns at once even with a file of it open.
 func TestStopLeavesLayersInUseMounted(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.file(t, "a", []byte("a"))
@@ -607,147 +480,10 @@ func TestStopLeavesLayersInUseMounted(t *testing.T) {
 	}
 }
 
-// newTestCache is a frame cache in a test directory, reading through
-// transport.
-func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frameCache {
-	t.Helper()
-	cfg := testConfig("", transport, slog.New(slog.DiscardHandler))
-	cfg.CacheBytes = bound
-	c, err := newFrameCache(t.Context(), t.TempDir(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(c.background.Wait)
-	return c
-}
-
-// Mounts stay up after Close, so reads whose frames arrive once the cache
-// stopped still decode them.
-func TestReadsOutliveClose(t *testing.T) {
-	ts := newTestStore(t)
-	held := &holdingTransport{release: make(chan struct{})}
-	life, stop := context.WithCancel(t.Context())
-	c, err := newFrameCache(life, t.TempDir(), testConfig("", held, slog.New(slog.DiscardHandler)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.limit = 64 << 20
-	l := ts.file(t, "a", random(4*imagefs.FrameSize)).grantTo(c)
-	reads := make(chan error, len(l.index.Frames))
-	for frame := range l.index.Frames {
-		go func() { reads <- l.read(frame, make([]byte, 8), 0) }()
-	}
-	waitFor(t, func() bool { return held.waiting.Load() == int64(len(l.index.Frames)) })
-	stop()
-	c.background.Wait()
-	close(held.release)
-	for range l.index.Frames {
-		if err := <-reads; err != nil {
-			t.Fatalf("a read whose frame arrived after close: %v", err)
-		}
-	}
-}
-
-// grantTo grants the stored layer to c and returns an unmounted layer of it.
-func (l storedLayer) grantTo(c *frameCache) *layer {
-	c.grants.put(l.index.Layer, l.grant.GetExpiresAt().AsTime(), func() layerURLs {
-		return layerURLs{index: l.grant.GetIndexUrl(), data: l.grant.GetDataUrl()}
-	})
-	return c.newLayer(l.index)
-}
-
-// Cancelling a fill never fails a read waiting on the frame it fetches.
-func TestCancelledFillsFinishSharedFetches(t *testing.T) {
-	ts := newTestStore(t)
-	held := &holdingTransport{release: make(chan struct{})}
-	c := newTestCache(t, held, 64<<20)
-	c.fillBytes = 64 << 20
-	l := ts.file(t, "a", random(1<<20)).grantTo(c)
-	fillCtx, stopFill := context.WithCancel(t.Context())
-	filled := make(chan struct{})
-	go func() { c.fillLayer(fillCtx, l); close(filled) }()
-	waitFor(t, func() bool { return held.waiting.Load() > 0 })
-	read := make(chan error, 1)
-	go func() { read <- l.read(0, make([]byte, 16), 0) }()
-	time.Sleep(100 * time.Millisecond)
-	stopFill()
-	time.Sleep(100 * time.Millisecond)
-	close(held.release)
-	if err := <-read; err != nil {
-		t.Fatalf("a read sharing a cancelled fill's fetch: %v", err)
-	}
-	<-filled
-}
-
-// An eviction that cannot delete a frame's file keeps the frame counted, so
-// the cache never holds more on disk than it counts, and the next eviction
-// tries the frame again.
-func TestFailedEvictionsKeepTheirFramesCounted(t *testing.T) {
-	c := newTestCache(t, http.DefaultTransport, 8)
-	key := func(frame int) frameKey { return frameKey{object: string(digestOf('e')), frame: frame} }
-	store := func(frame int, step string) {
-		t.Helper()
-		if err := c.store(key(frame), []byte("12345")); err != nil {
-			t.Fatal(err)
-		}
-		c.mu.Lock()
-		used := c.used
-		c.mu.Unlock()
-		if onDisk := diskBytes(t, c.dir); used != onDisk {
-			t.Fatalf("%s the cache counts %d bytes and holds %d on disk", step, used, onDisk)
-		}
-	}
-	store(0, "after a store")
-	// A frame's file that became a directory is not removed as a file.
-	stuck := c.touch(key(0)).path
-	if err := os.Remove(stuck); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(stuck, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stuck, "held"), []byte("12345"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store(1, "after a failed eviction")
-	if err := os.RemoveAll(stuck); err != nil {
-		t.Fatal(err)
-	}
-	store(2, "after the next eviction")
-	if c.touch(key(0)) != nil || c.touch(key(2)) == nil {
-		t.Fatal("the next eviction kept the frame it failed to remove, or dropped the newest")
-	}
-}
-
-// Concurrent reads of one frame fetch it from the store once.
-func TestConcurrentReadsFetchAFrameOnce(t *testing.T) {
-	ts := newTestStore(t)
-	transport := &countingTransport{}
-	c := newTestCache(t, transport, 64<<20)
-	l := ts.file(t, "a", random(6<<20)).grantTo(c)
-	var wg sync.WaitGroup
-	errs := make(chan error, 32)
-	for range 32 {
-		wg.Go(func() {
-			p := make([]byte, 4096)
-			errs <- l.read(1, p, 100)
-		})
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := transport.requests.Load(); n != 1 {
-		t.Fatalf("32 concurrent reads of one frame made %d requests", n)
-	}
-}
-
 // A mounted layer within the fill bound is fetched whole in the background,
 // each frame once, so later reads wait for no store; a larger one is not.
 func TestMountedLayersFillInTheBackground(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	transport := &countingTransport{}
 	s := serveFilling(t, transport, 16<<20)
@@ -765,70 +501,15 @@ func TestMountedLayersFillInTheBackground(t *testing.T) {
 	if err != nil || !bytes.Equal(got, body[:12<<20]) {
 		t.Fatalf("read back %d bytes, %v", len(got), err)
 	}
-	time.Sleep(200 * time.Millisecond)
 	if n := transport.requests.Load(); n != want {
 		t.Fatalf("%d store requests, want two indexes and each frame of the small layer once (%d)", n, want)
 	}
 }
 
-// The cache keeps under its bound while two layers alternate, evicting the
-// unmounted layer's frames before the mounted one's.
-func TestFrameCacheStaysUnderItsBound(t *testing.T) {
-	ts := newTestStore(t)
-	const bound = 64 << 20
-	c := newTestCache(t, http.DefaultTransport, bound)
-	layerOf := func(size int) *layer {
-		return ts.file(t, "a", random(size)).grantTo(c)
-	}
-	mounted := c.mount(layerOf(8 * imagefs.FrameSize).index)
-	other := layerOf(24 * imagefs.FrameSize)
-	readAll := func(l *layer) {
-		for i := range l.index.Frames {
-			if err := l.read(i, make([]byte, 1), 0); err != nil {
-				t.Fatal(err)
-			}
-			if onDisk := diskBytes(t, c.dir); onDisk > bound {
-				t.Fatalf("the cache holds %d bytes on disk, bound %d", onDisk, bound)
-			}
-		}
-	}
-	for range 2 {
-		readAll(mounted)
-		readAll(other)
-	}
-	for i := range mounted.index.Frames {
-		if c.touch(mounted.key(i)) == nil {
-			t.Fatalf("frame %d of the mounted layer was evicted before the unmounted layer's", i)
-		}
-	}
-	if c.used > bound {
-		t.Fatalf("the cache counts %d bytes, bound %d", c.used, bound)
-	}
-}
-
-func diskBytes(t *testing.T, dir string) int64 {
-	t.Helper()
-	var total int64
-	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return total
-}
-
 // The grant expiring last wins whatever order grants arrive in, and a call
 // with a bad grant records none of its grants.
 func TestGrantsKeepTheLatestExpiry(t *testing.T) {
+	t.Parallel()
 	ts := newTestStore(t)
 	s := serve(t, http.DefaultTransport)
 	l := ts.file(t, "a", []byte("a"))
@@ -846,5 +527,67 @@ func TestGrantsKeepTheLatestExpiry(t *testing.T) {
 	}
 	if err := s.prepare(t, "extract", other, ""); !errdefs.IsFailedPrecondition(err) {
 		t.Fatalf("a refused call recorded its grants: %v", err)
+	}
+}
+
+// Through mounts, a trace of one start lists the frames it read, and a
+// later cold start's prefetch of that trace fetches those frames and no
+// others, so the same reads then wait for no store.
+func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
+	t.Parallel()
+	ts := newTestStore(t)
+	weights := random(5 * imagefs.FrameSize)
+	base := ts.file(t, "lib", weights[:3*imagefs.FrameSize])
+	app := ts.file(t, "weights", weights)
+	layers := []imagefs.Digest{base.index.Layer, app.index.Layer}
+	start := func(s *service) (string, string) {
+		t.Helper()
+		if err := s.sources.Grant(t.Context(), "c1", []*imagefsproto.LayerGrant{base.grant, app.grant}); err != nil {
+			t.Fatal(err)
+		}
+		return s.view(t, "base", s.pull(t, base, "")), s.view(t, "app", s.pull(t, app, ""))
+	}
+	readAt := func(path string, off int64) {
+		t.Helper()
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		if _, err := f.ReadAt(make([]byte, 4096), off); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startup := func(baseDir, appDir string) {
+		readAt(filepath.Join(appDir, "weights"), 4*imagefs.FrameSize)
+		readAt(filepath.Join(baseDir, "lib"), 0)
+		readAt(filepath.Join(appDir, "weights"), imagefs.FrameSize)
+	}
+
+	first := serve(t, http.DefaultTransport)
+	if err := first.sources.StartTrace(t.Context(), "c1", layers); err != nil {
+		t.Fatal(err)
+	}
+	startup(start(first))
+	reads, complete, err := first.sources.EndTrace(t.Context(), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][2]uint32{{1, 4}, {0, 0}, {1, 1}}; !complete || !slices.Equal(framePairs(reads), want) {
+		t.Fatalf("the first start traced %v, complete %v; want %v", reads, complete, want)
+	}
+	first.stop()
+
+	transport := &countingTransport{}
+	cold := serve(t, transport)
+	if err := cold.sources.Prefetch(t.Context(), "c1", layers, reads); err != nil {
+		t.Fatal(err)
+	}
+	baseDir, appDir := start(cold)
+	const indexes = 2
+	waitFor(t, func() bool { return transport.requests.Load() >= indexes+3 })
+	startup(baseDir, appDir)
+	if n := transport.requests.Load(); n != indexes+3 {
+		t.Fatalf("a cold start with its trace made %d store requests, want two indexes and three frames", n)
 	}
 }
