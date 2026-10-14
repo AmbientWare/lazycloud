@@ -434,3 +434,20 @@ def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> N
     assert deployment.invoke_url(url_type="stub") == f"https://{RELEASE_ID}.lazycloud.test"
     with pytest.raises(ValueError, match="only a pod"):
         deployment.invoke_url(port=8080)
+
+
+def test_an_html_error_page_shows_as_its_status_and_origin(
+    fake_api: FakeApi, capsys: pytest.CaptureFixture[str]
+) -> None:
+    page = b"<!DOCTYPE html><html><body>" + b"bad gateway " * 100 + b"</body></html>"
+    fake_api.route("GET", f"{TEAM}/apps")(lambda _: (502, {"Content-Type": "text/html"}, page))
+
+    code, lines = run_cli(capsys, "app", "list")
+    with pytest.raises(SystemExit):
+        start(["--json", "app", "list"])
+    error = json.loads(capsys.readouterr().err)["error"]
+
+    assert code == 1
+    assert f"HTTP 502 from {fake_api.url}" in lines
+    assert not any("html" in line for line in lines)
+    assert error["message"] == f"HTTP 502 from {fake_api.url}"

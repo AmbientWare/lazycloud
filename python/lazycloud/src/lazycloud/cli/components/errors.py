@@ -262,8 +262,8 @@ def mask_secrets(value: str) -> str:
 
 
 def _message_from_exception(exc: BaseException) -> str:
-    if isinstance(exc, HttpApiError):
-        return _http_api_error_message(exc)
+    if isinstance(exc, HttpApiError) or (isinstance(exc, ApiError) and exc.code is None):
+        return _response_message(exc)
     if isinstance(exc, urllib.error.HTTPError):
         return f"HTTP {exc.code}: {exc.reason}"
     raw = str(exc).strip()
@@ -275,20 +275,20 @@ def _message_from_exception(exc: BaseException) -> str:
     return _bounded_message(mask_secrets(message))
 
 
-def _http_api_error_message(exc: HttpApiError) -> str:
-    """Concise message for a non-success HTTP response.
+def _response_message(exc: HttpApiError | ApiError) -> str:
+    """Concise message for a non-success HTTP response without a typed error.
 
     Proxies and misconfigured endpoints answer with HTML pages or other large
     non-JSON bodies; collapsing those to the status and origin keeps the error
     readable and self-diagnosing.
     """
-    raw = str(exc).strip()
-    if raw:
-        extracted = _extracted_json_message(raw)
+    body = (exc.message if isinstance(exc, ApiError) else str(exc)).strip()
+    if body:
+        extracted = _extracted_json_message(body)
         if extracted:
             return mask_secrets(extracted)
-        if not _is_unreadable_body(raw):
-            return mask_secrets(raw)
+        if not _is_unreadable_body(body):
+            return mask_secrets(str(exc) if isinstance(exc, ApiError) else body)
     origin = _request_origin(exc)
     if origin:
         return f"HTTP {exc.status_code} from {origin}"
@@ -314,7 +314,7 @@ def _bounded_message(message: str) -> str:
 
 def _request_origin(exc: BaseException) -> str:
     for item in exception_chain(exc):
-        if isinstance(item, urllib.error.HTTPError):
+        if isinstance(item, urllib.error.HTTPError | ApiError):
             parts = urllib.parse.urlsplit(item.url or "")
             if parts.scheme and parts.netloc:
                 return f"{parts.scheme}://{parts.netloc}"

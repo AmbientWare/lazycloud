@@ -4,11 +4,14 @@ import time
 from dataclasses import dataclass
 from uuid import UUID
 
+from typing_extensions import Never
+
 from lazycloud.abstractions.workspace_sync import ContainerWorkspaceSyncer, sync_local_workspace
 from lazycloud.clients.api import ApiError
 from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, WorkloadsClient
 from lazycloud.contracts.api import CreateInstanceRequest, ErrorCode
 from lazycloud.control import ControlClientConfig, resolve_control_client_config, workloads_client
+from lazycloud.session.interrupts import uninterrupted
 from lazycloud.terminal_shell import InteractiveShell, ShellConnectionError
 
 # How long a shell waits for its container to start, image pull included.
@@ -20,6 +23,8 @@ class ShellSession:
     container_id: str
     stub_id: str
     sync_dir: str | None = None
+    # Started by create_standalone; Ctrl-C before the shell attaches stops it.
+    standalone: bool = False
 
 
 @dataclass(slots=True)
@@ -39,14 +44,29 @@ class Shell:
         return self.client
 
     def create_standalone(self, stub_id: str, *, sync_dir: str | None = None) -> ShellSession:
-        """Start an idle container of the release for shells; it stops after the last closes."""
-        instance = self.control_client.create_instance(
-            CreateInstanceRequest(release_id=UUID(stub_id), shell=True)
+        """Start an idle container of the release for shells; it stops after the last closes.
+
+        Ctrl-C before a shell attaches stops the container.
+        """
+        client = self.control_client
+        # Ctrl-C waits for the request, so a container it created is stopped.
+        instance, interrupted = uninterrupted(
+            lambda: client.create_instance(
+                CreateInstanceRequest(release_id=UUID(stub_id), shell=True)
+            )
         )
         session = ShellSession(
-            container_id=str(instance.id), stub_id=str(instance.release_id), sync_dir=sync_dir
+            container_id=str(instance.id),
+            stub_id=str(instance.release_id),
+            sync_dir=sync_dir,
+            standalone=True,
         )
-        self._sync_directory(session)
+        try:
+            if interrupted is not None:
+                raise interrupted
+            self._sync_directory(session)
+        except KeyboardInterrupt as exc:
+            self._stop_interrupted(session, exc)
         return session
 
     def create_existing(self, container_id: str, *, sync_dir: str | None = None) -> ShellSession:
@@ -62,7 +82,12 @@ class Shell:
         """Open an interactive shell in the session's container; returns its exit code."""
         client = self.control_client
         container_id = UUID(session.container_id)
-        wait_until_ready(client, container_id, timeout_seconds=self.ready_timeout_seconds)
+        try:
+            wait_until_ready(client, container_id, timeout_seconds=self.ready_timeout_seconds)
+        except KeyboardInterrupt as exc:
+            if session.standalone:
+                self._stop_interrupted(session, exc)
+            raise
         terminal = self.interactive_shell or InteractiveShell()
         syncer = (
             ContainerWorkspaceSyncer(
@@ -98,6 +123,16 @@ class Shell:
             sync_local_workspace(
                 container_id=session.container_id, local_dir=session.sync_dir, client=client
             )
+
+    def _stop_interrupted(self, session: ShellSession, interruption: KeyboardInterrupt) -> Never:
+        client = self.control_client
+        try:
+            _, again = uninterrupted(
+                lambda: client.api.stop_container(client.workspace, UUID(session.container_id))
+            )
+        except Exception as cleanup_error:
+            raise interruption from cleanup_error
+        raise again or interruption
 
     def _config(self) -> ControlClientConfig:
         return resolve_control_client_config(

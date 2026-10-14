@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import _thread
 import base64
 import hashlib
 import importlib
@@ -10,7 +9,6 @@ import pickle
 import re
 import sys
 import threading
-import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -43,6 +41,7 @@ from tests.api_server import (
     StreamAborted,
     error_reply,
     json_reply,
+    press_ctrl_c,
 )
 
 cli = build_public_cli()
@@ -1166,8 +1165,7 @@ def test_ctrl_c_during_submit_cancels_the_admitted_task(
     @fake_api.route("POST", RUN)
     def run(_: ApiRequest) -> Reply:
         # The user presses Ctrl-C after the server admitted the task.
-        threading.Timer(0.05, _thread.interrupt_main).start()
-        time.sleep(0.3)
+        press_ctrl_c()
         return _events({"task": _task(task_id)})
 
     cancel = f"/v1/workspaces/team/tasks/{task_id}/cancel"
@@ -1189,8 +1187,7 @@ def test_ctrl_c_during_map_cancels_every_unfinished_task_despite_a_second_interr
 
     @fake_api.route("POST", WAIT)
     def wait(_: ApiRequest) -> Reply:
-        threading.Timer(0.05, _thread.interrupt_main).start()
-        time.sleep(0.3)
+        press_ctrl_c()
         return json_reply({"tasks": [], "missing_task_ids": []})
 
     interrupted_once: list[bool] = []
@@ -1200,8 +1197,7 @@ def test_ctrl_c_during_map_cancels_every_unfinished_task_despite_a_second_interr
         if not interrupted_once:
             # A second Ctrl-C while the first cancel is in flight.
             interrupted_once.append(True)
-            threading.Timer(0.05, _thread.interrupt_main).start()
-            time.sleep(0.3)
+            press_ctrl_c()
         return json_reply(_task(request.path.split("/")[-2], "cancelled"))
 
     with pytest.raises(KeyboardInterrupt):
