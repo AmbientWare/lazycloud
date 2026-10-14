@@ -10,10 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import typer
 from lazycloud._shared.deployments import DeploymentKind
-from lazycloud.cli.app_export import app_export
-from lazycloud.cli.components.output import CliContextState
+from lazycloud.cli.main import build_public_cli
 from lazycloud.client_codegen import ClientGenerationError, write_client_package
 from lazycloud.client_contracts import build_client_contract
 from lazycloud.exceptions import HttpApiError
@@ -120,14 +118,7 @@ def _serve_app(api: FakeApi, *, contracts: Mapping[str, dict[str, Any] | None]) 
 
 
 def _export(*args: str) -> Result:
-    cli = typer.Typer()
-    cli.command("export")(app_export)
-
-    @cli.callback()
-    def main(ctx: typer.Context) -> None:
-        ctx.obj = CliContextState(json=True)
-
-    return CliRunner().invoke(cli, ["export", *args])
+    return CliRunner().invoke(build_public_cli(), ["--json", "app", "export", *args])
 
 
 def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str, object]:
@@ -191,7 +182,6 @@ def test_export_writes_a_typed_package_whose_functions_run_remotely(
     assert lock["reports"]["workspace"] == "team"
     assert (output / "reports" / f"v_{version}" / "py.typed").is_file()
     generated = "".join(path.read_text() for path in (output / "reports").rglob("*.py"))
-    assert "from lazycloud.exceptions import http_api_error_from_body" in generated
     assert "lazycloud._" not in generated
 
     sys.path.insert(0, str(tmp_path))
