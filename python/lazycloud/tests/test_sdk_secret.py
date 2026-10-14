@@ -11,6 +11,8 @@ from typer.testing import CliRunner
 
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
 
+cli = build_public_cli()
+
 SECRETS = "/v1/workspaces/team/secrets"
 NOW = "2026-09-30T12:00:00Z"
 
@@ -98,7 +100,6 @@ def test_secret_lifecycle_and_errors(secrets_api: FakeApi) -> None:
 
 
 def test_cli_masks_values_unless_revealed_and_lists_every_page(secrets_api: FakeApi) -> None:
-    cli = build_public_cli()
     runner = CliRunner()
     for name in ("A_KEY", "B_KEY", "C_KEY"):
         assert runner.invoke(cli, ["secret", "create", name, f"value-of-{name}"]).exit_code == 0

@@ -13,6 +13,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from lazycloud.abstractions import sandbox as sandbox_module
 from lazycloud.abstractions.sandbox import (
     SandboxConnectionError,
     SandboxFileSystemError,
@@ -25,6 +26,8 @@ from typer.testing import CliRunner, Result
 
 import lazycloud
 from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
+
+cli = build_public_cli()
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -79,7 +82,7 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _release(spec: dict[str, Any], **extra: object) -> dict[str, object]:
@@ -389,6 +392,7 @@ def test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     tools = _project(tmp_path, monkeypatch)
+    monkeypatch.setattr(sandbox_module, "SANDBOX_WAIT_POLL_INTERVAL_SECONDS", 0)
     stored: set[str] = set()
     _serve_releases(fake_api, stored)
     fake_api.route("POST", f"{TEAM}/instances")(lambda request: json_reply(_instance(), 201))

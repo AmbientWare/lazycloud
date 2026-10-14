@@ -14,7 +14,13 @@ Registry = tuple[dict[str, str], list[str]]
 
 @pytest.fixture
 def registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[Registry]:
-    """Answers npm's latest lookups from versions and records each request."""
+    """Answers npm's latest lookups from versions and records each request.
+
+    Replies follow registry.npmjs.org as recorded on 2026-10-14: a package's
+    `/latest` answers 200 with that release's package document (trimmed here
+    to name, version and dist), and an unknown package answers 404 with the
+    JSON string "Not Found".
+    """
     versions: dict[str, str] = {}
     requested: list[str] = []
 
@@ -27,8 +33,15 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[Registry]:
         )
         request = httpx.Request("GET", url)
         if package not in versions:
-            return httpx.Response(404, request=request)
-        return httpx.Response(200, json={"version": versions[package]}, request=request)
+            return httpx.Response(404, json="Not Found", request=request)
+        version = versions[package]
+        tarball = f"https://registry.npmjs.org/{package}/-/{package.split('/')[-1]}-{version}.tgz"
+        document: dict[str, object] = {
+            "name": package,
+            "version": version,
+            "dist": {"tarball": tarball},
+        }
+        return httpx.Response(200, json=document, request=request)
 
     monkeypatch.setattr("httpx.get", get)
     agent_harness.latest_version.cache_clear()
