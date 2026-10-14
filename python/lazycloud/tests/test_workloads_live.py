@@ -39,6 +39,8 @@ from typer.testing import CliRunner, Result
 
 from lazycloud import Disk
 
+cli = build_public_cli()
+
 _SETTINGS = {
     name: os.environ.get(name, "")
     for name in ("LAZYCLOUD_ENDPOINT", "LAZYCLOUD_WORKSPACE", "LAZYCLOUD_TOKEN")
@@ -65,7 +67,7 @@ def live(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str) -> ModuleType:

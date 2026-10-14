@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package supervisor
 
 import (
@@ -73,9 +75,22 @@ func runContainer(t *testing.T, args ...string) string {
 	if runtime == "" {
 		runtime = "runc"
 	}
-	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
+	// A run that fails may leave the container created.
 	t.Cleanup(func() { _, _ = docker(t, "rm", "-f", name) })
+	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
 	return name
+}
+
+// netfilter returns a function that applies a policy in container's
+// network namespace with the supervisor's netfilter command, as the agent
+// does.
+func netfilter(t *testing.T, bin, container string) func(policy string) (string, error) {
+	t.Helper()
+	admin := runContainer(t, "--network", "container:"+container, "--cap-add", "NET_ADMIN",
+		"-v", bin+":/supervisor:ro", busybox, "sleep", "300")
+	return func(policy string) (string, error) {
+		return docker(t, "exec", admin, "/supervisor", "netfilter", policy)
+	}
 }
 
 func TestNetfilterBlocksAndAllowsEgressInAContainer(t *testing.T) {
@@ -84,7 +99,7 @@ func TestNetfilterBlocksAndAllowsEgressInAContainer(t *testing.T) {
 	targetIP := mustDocker(t, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", target)
 	subject := runContainer(t, busybox, "sleep", "300")
 	fetch := func() bool {
-		out, err := docker(t, "exec", subject, "wget", "-q", "-T", "2", "-O-", "http://"+targetIP+":8080/")
+		out, err := docker(t, "exec", subject, "wget", "-q", "-T", "1", "-O-", "http://"+targetIP+":8080/")
 		return err == nil && out == "ok"
 	}
 	for deadline := time.Now().Add(10 * time.Second); !fetch(); time.Sleep(100 * time.Millisecond) {
@@ -92,10 +107,7 @@ func TestNetfilterBlocksAndAllowsEgressInAContainer(t *testing.T) {
 			t.Fatal("the target never answered")
 		}
 	}
-	apply := func(policy string) (string, error) {
-		return docker(t, "run", "--rm", "--network", "container:"+subject, "--cap-add", "NET_ADMIN",
-			"-v", bin+":/supervisor:ro", "--entrypoint", "/supervisor", busybox, "netfilter", policy)
-	}
+	apply := netfilter(t, bin, subject)
 	steps := []struct {
 		policy  string
 		reaches bool
@@ -148,7 +160,7 @@ for _ in range(3):
 // them with another protocol from a raw socket.
 func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
 	bin := dockerTest(t)
-	const python = "python:3.12-slim"
+	const python = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 	if _, err := docker(t, "image", "inspect", python); err != nil {
 		mustDocker(t, "pull", python)
 	}
@@ -158,7 +170,7 @@ func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
 	address := func(name, field string) string {
 		return mustDocker(t, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{."+field+"}}{{end}}", name)
 	}
-	send := func(payload string) bool {
+	send := func(payload string) {
 		out, err := docker(t, "exec", subject, "python3", "-c", rawFrame,
 			address(target, "IPAddress"), address(target, "MacAddress"), address(subject, "IPAddress"), address(subject, "MacAddress"), payload)
 		if strings.Contains(out, "packet sockets refused") {
@@ -168,21 +180,31 @@ func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("send a raw frame: %v: %s", err, out)
 		}
-		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+	}
+	arrived := func(payload string) string {
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 			if logs, _ := docker(t, "logs", target); strings.Contains(logs, payload) {
-				return true
+				return logs
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("a raw frame did not arrive without a policy: %s", payload)
 			}
 		}
-		return false
 	}
-	if !send("open-frame") {
-		t.Fatal("a raw frame did not arrive without a policy")
-	}
-	if out, err := docker(t, "run", "--rm", "--network", "container:"+subject, "--cap-add", "NET_ADMIN",
-		"-v", bin+":/supervisor:ro", "--entrypoint", "/supervisor", busybox, "netfilter", `{"block":true}`); err != nil {
+	apply := netfilter(t, bin, subject)
+	send("open-frame")
+	arrived("open-frame")
+	if out, err := apply(`{"block":true}`); err != nil {
 		t.Fatalf("apply the policy: %v: %s", err, out)
 	}
-	if send("blocked-frame") {
+	send("blocked-frame")
+	// Frames on one path arrive in order, so once a frame sent after the
+	// block lifted arrives, a blocked frame that passed would have too.
+	if out, err := apply(`{"block":false}`); err != nil {
+		t.Fatalf("lift the policy: %v: %s", err, out)
+	}
+	send("after-frame")
+	if logs := arrived("after-frame"); strings.Contains(logs, "blocked-frame") {
 		t.Fatal("a mislabelled raw frame passed the block")
 	}
 }

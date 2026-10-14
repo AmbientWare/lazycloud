@@ -36,8 +36,8 @@ func (f *fixture) container(release uuid.UUID, state string, created time.Time, 
 	// A placed container that has not stopped needs a host.
 	f.exec1(`with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
                      values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 64000, 1 << 40) returning id)
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
-select uuidv7($3::timestamptz - now()), a.workspace_id, $1, $2,
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, created_at, assigned_at, stopped_at, stop_reason)
+select uuidv7($3::timestamptz - now()), a.workspace_id, $1, (select workload_id from releases where id = $1), $2,
        case when $2 not in ('pending', 'stopped') then host.id end, 1, $6, 1 << 30, $3, $4, $5,
        case when $2 = 'stopped' then 'stopped' end
 from host, releases r join workloads w on w.id = r.workload_id join apps a on a.id = w.app_id where r.id = $1`,
@@ -50,6 +50,7 @@ const none = time.Duration(-1)
 // cold starts are the deployment's containers created in the bucket. Tasks
 // of other deployments or outside the range do not count.
 func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, _, otherWL, otherRel := f.addFunction("acme", "billing", "charge", `{}`)
 	hour := time.Now().Truncate(time.Hour)
@@ -96,6 +97,7 @@ func TestWorkloadPerformanceBucketsLatencyAndColdStarts(t *testing.T) {
 // An endpoint's calls are its request records: a 5xx answer failed and a
 // caller that left first (499) cancelled.
 func TestWorkloadPerformanceCountsEndpointRequests(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	hour := time.Now().Truncate(time.Hour)
 	early := hour.Add(-2 * time.Hour).Add(10 * time.Minute)
@@ -123,6 +125,7 @@ values (uuidv7($5::timestamptz - now()), $1, $2, $3, 'POST', '/', $4, $5, $6, 0,
 // range; activity buckets are dense and split per app, or per function of
 // one app.
 func TestTaskMetricsAndActivity(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	_, _, chargeWL, chargeRel := f.addFunction("acme", "billing", "charge", `{}`)
 	hour := time.Now().Truncate(time.Hour)
@@ -180,6 +183,7 @@ func TestTaskMetricsAndActivity(t *testing.T) {
 // concurrency in the owned ones; activity measures starts per app and the
 // average CPU live containers reserved per bucket.
 func TestAccountMetricsAndActivity(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	sharedWS, _, _, sharedRel := f.addFunction("shared", "etl", "load", `{}`)
 	_, _, _, chargeRel := f.addFunction("acme", "billing", "charge", `{"resources":{"gpu_count":2}}`)

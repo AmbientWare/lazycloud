@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	securerand "crypto/rand"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
@@ -50,8 +52,14 @@ const (
 	// mountWait bounds how long a new mount takes to appear once its
 	// container runs.
 	mountWait = 30 * time.Second
-	// mountPoll is how often a start looks for its new mount.
-	mountPoll = 100 * time.Millisecond
+	// mountPoll is how often a start looks for its new mount, and
+	// mountOutputPoll how often it reads what the mount printed.
+	mountPoll       = 100 * time.Millisecond
+	mountOutputPoll = 500 * time.Millisecond
+	// certificateFailure starts Go's error for a store certificate the
+	// trust bundle does not verify, which GeeseFS retries as it retries
+	// any request; no retry passes it.
+	certificateFailure = "tls: failed to verify certificate"
 	// GeeseFS reads ahead of every reader and holds what it read in a cache
 	// of geesefsMemoryMiB, and its runtime collects garbage before
 	// geesefsGoMemoryMiB. Its memory grows with the readers' readahead,
@@ -557,6 +565,39 @@ func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...stri
 	}
 }
 
+// fuseConnections is where the kernel lists FUSE connections, each named
+// by its device's minor number.
+const fuseConnections = "/sys/fs/fuse/connections"
+
+// fuseConnection is the control directory of the FUSE connection mounted at
+// path, or empty when path is no FUSE mount.
+func fuseConnection(path string) string {
+	var st unix.Stat_t
+	if !mounted(path) || unix.Stat(path, &st) != nil || unix.Major(st.Dev) != 0 {
+		return ""
+	}
+	connection := filepath.Join(fuseConnections, strconv.FormatUint(uint64(unix.Minor(st.Dev)), 10))
+	if _, err := os.Stat(connection); err != nil {
+		return ""
+	}
+	return connection
+}
+
+// abortConnection ends the FUSE connection whose control directory is
+// connection: its daemon's reads fail and it exits. A connection already
+// gone needs nothing.
+func abortConnection(connection string) error {
+	f, err := os.OpenFile(filepath.Join(connection, "abort"), os.O_WRONLY, 0) //nolint:gosec // A kernel control file under fuseConnections.
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open the connection's abort: %w", err)
+	}
+	_, err = f.WriteString("1")
+	return errors.Join(err, f.Close())
+}
+
 // mounted reports whether path is the root of a mount: its device differs
 // from its parent's.
 func mounted(path string) bool {
@@ -567,10 +608,12 @@ func mounted(path string) bool {
 	return self.Dev != parent.Dev
 }
 
-// start runs m's container and waits for its mount, at most mountWait;
+// start runs m's container and waits for its mount, at most mountWait or
+// until the mount reports a certificate its trust bundle does not verify;
 // release removes it after a failure, which carries the end of what it
 // printed.
 func (v *volumes) start(ctx context.Context, m *mounter, image string, spec mountSpec) error {
+	since := time.Now()
 	if err := v.runMount(ctx, m, image, spec); err != nil {
 		return err
 	}
@@ -579,6 +622,8 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 	defer timer.Stop()
 	poll := time.NewTicker(mountPoll)
 	defer poll.Stop()
+	printed := time.NewTicker(mountOutputPoll)
+	defer printed.Stop()
 	var failure string
 	for failure == "" {
 		if mounted(m.dir) && v.markUp(m) {
@@ -586,6 +631,11 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 		}
 		select {
 		case <-poll.C:
+		case now := <-printed.C:
+			if v.printedSince(ctx, m.name, since, certificateFailure) {
+				failure = "cannot verify its store's certificate"
+			}
+			since = now
 		case <-m.exited:
 			failure = "exited before it mounted"
 		case <-timer.C:
@@ -596,6 +646,21 @@ func (v *volumes) start(ctx context.Context, m *mounter, image string, spec moun
 	}
 	output := cmp.Or(v.a.containerOutput(context.WithoutCancel(ctx), m.name), "it printed nothing")
 	return fmt.Errorf("%s %s: %s", spec.what, failure, output)
+}
+
+// printedSince reports whether the container printed text at or after
+// since, reading all it printed since then.
+func (v *volumes) printedSince(ctx context.Context, name string, since time.Time, text string) bool {
+	logs, err := v.a.docker.ContainerLogs(ctx, name, client.ContainerLogsOptions{
+		ShowStdout: true, ShowStderr: true, Since: fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()),
+	})
+	if err != nil {
+		return false
+	}
+	defer func() { _ = logs.Close() }()
+	var out bytes.Buffer
+	_, _ = stdcopy.StdCopy(&out, &out, logs)
+	return bytes.Contains(out.Bytes(), []byte(text))
 }
 
 // mountSpec is what one GeeseFS mount container mounts.
@@ -777,11 +842,14 @@ func (v *volumes) markExited(m *mounter) bool {
 	return m.up && !m.stopping
 }
 
-// stop removes m's binds, stops m's container, whose script unmounts on
-// SIGTERM and waits for GeeseFS to store what it holds, then removes it and
-// its directory, which only goes when nothing is mounted on it and it is
-// empty. No later mount uses the name, so binds or a directory left behind
-// are only logged.
+// stop removes m's binds, stops m's container, whose script on SIGTERM
+// waits for GeeseFS to store what it holds and then detaches the mount,
+// then removes it and its directory, which only goes when nothing is
+// mounted on it and it is empty. A container started while the mount
+// existed keeps a copy of it in its own mount namespace, which the detach
+// does not reach and which keeps GeeseFS serving, so once the mount is
+// detached stop ends its FUSE connection. No later mount uses the name, so
+// binds or a directory left behind are only logged.
 func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	v.mu.Lock()
 	m.stopping = true
@@ -789,7 +857,26 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
 		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
 	}
-	if err := v.a.stopDocker(ctx, m.name, mounterFlushSeconds); err != nil {
+	connection := fuseConnection(m.dir)
+	stopped := make(chan error, 1)
+	go func() { stopped <- v.a.stopDocker(ctx, m.name, mounterFlushSeconds) }()
+	poll := time.NewTicker(mountPoll)
+	defer poll.Stop()
+	var err error
+	for waiting := true; waiting; {
+		select {
+		case err = <-stopped:
+			waiting = false
+		case <-poll.C:
+			if connection != "" && !mounted(m.dir) {
+				if err := abortConnection(connection); err != nil {
+					v.a.log.Warn("ending a detached mount's FUSE connection failed", "mount", m.name, "error", err)
+				}
+				connection = ""
+			}
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if err := v.a.removeContainer(ctx, m.name); err != nil {

@@ -13,6 +13,7 @@ import (
 )
 
 func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -70,13 +71,14 @@ func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
 }
 
 func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
 	rel := f.release(ws)
 	f.setAccount(owner, "payment_method_attached_at = now()")
-	f.exec(`insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count)
-		select $1, $2, 'pending', 1, 1000, 1 << 30, 2 from generate_series(1, 2)`, ws, rel.id)
+	f.exec(`insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count)
+		select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 30, 2 from generate_series(1, 2)`, ws, rel.id)
 	// Free with a card: five cards. Four are held; one two-card container
 	// would pass the limit.
 	if _, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 2}); !limitReached(err) {
@@ -113,6 +115,7 @@ func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
 // on that model alone. Work pinned to a joined machine, or in a connected
 // account's workspace, runs any model.
 func TestAdmitRefusesGPUModelsTheFleetDoesNotOffer(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -153,6 +156,7 @@ update workspaces set connection_id = (select id from conn) where id = $2`, owne
 }
 
 func TestStorageIsMeteredAndShownOnTheUsagePage(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -247,6 +251,7 @@ func TestStorageIsMeteredAndShownOnTheUsagePage(t *testing.T) {
 }
 
 func TestEgressIsPricedOncePerClosedQuarter(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -283,6 +288,7 @@ func TestEgressIsPricedOncePerClosedQuarter(t *testing.T) {
 }
 
 func TestHeldDisksPayForTheirSizeAndRetainedDataIsFree(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)

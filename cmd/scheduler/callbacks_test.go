@@ -30,15 +30,16 @@ func TestQueuedCallbacksWakeAnIdleScheduler(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(receiver.Close)
-	health := freeAddr(t)
+	health, scrape := freeAddr(t), freeAddr(t)
 	t.Setenv("LAZYCLOUD_HEALTH_ADDR", health)
+	t.Setenv("LAZYCLOUD_METRICS_ADDR", scrape)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
 	waitOK(t, "http://"+health+"/readyz")
 	// Past the start-up passes, the delivery loop waits for a wake.
-	time.Sleep(2 * time.Second)
+	settled(t, pool, []string{"http://" + scrape + "/metrics"})
 
 	queued := time.Now()
 	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {

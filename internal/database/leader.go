@@ -13,11 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// leadRetry paces new attempts after the leader connection fails.
-const leadRetry = time.Second
+// DefaultLeadRetry is how long production waits before a new attempt after
+// the leader connection fails.
+const DefaultLeadRetry = time.Second
 
 // Lead elects one leader among the processes that call it with the same
-// name, until ctx ends. It holds a session advisory lock on a connection
+// name, until ctx ends, trying again retry after its connection fails. It holds a session advisory lock on a connection
 // taken out of the pool, released when the leader's session ends. A
 // process waiting for the lock tries it every check rather than block on
 // it: a statement blocked in PostgreSQL keeps its snapshot, which holds
@@ -28,12 +29,15 @@ const leadRetry = time.Second
 // it learns within that long of a session that ended or that a proxy moved
 // to another backend, where a ping would still succeed. Another process may lead before a lost leader
 // notices, so leadership only paces work whose passes are already safe to
-// overlap.
+// overlap. It refuses a check or retry that is not positive.
 //
 // A proxy may answer pg_backend_pid() itself, so the check does not match
 // pg_locks against it. The leader instead also locks a random key only it
 // knows, and holds the lead while one backend holds both locks.
-func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check time.Duration, leading func(bool), logger *slog.Logger) error {
+func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check, retry time.Duration, leading func(bool), logger *slog.Logger) error {
+	if check <= 0 || retry <= 0 {
+		return fmt.Errorf("lead %s: check %s and retry %s must be positive", name, check, retry)
+	}
 	for {
 		err := holdLead(ctx, pool, name, check, leading)
 		if ctx.Err() != nil {
@@ -43,7 +47,7 @@ func Lead(ctx context.Context, pool *pgxpool.Pool, name string, check time.Durat
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(leadRetry):
+		case <-time.After(retry):
 		}
 	}
 }

@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -16,33 +18,24 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 )
 
-// A devbox's writes outlive its container: written on one host, stopped,
-// and started on another host whose engine holds nothing of the disk, its
-// root disk reads back the same bytes. It needs root and the nbd module, as
-// hosts run the disk engine.
-func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
+// A devbox's root disk outlives its agent and its host: written on a host
+// whose agent then updates to this tree's release, the running devbox still
+// reads the bytes, and stopped and started on another host whose engine
+// holds nothing of the disk, it reads them again. It needs root and the nbd
+// module, as hosts run the disk engine. It runs before the parallel tests:
+// an agent that starts recovers every disk under the host's disk root that
+// it does not run, as the one agent of a host does after a restart.
+func TestDevboxDiskSurvivesAnAgentUpdateAndMovesBetweenHosts(t *testing.T) {
 	if err := diskengine.Check(); err != nil {
 		t.Skip(err)
 	}
-	p := startPlatform(t)
+	old := oldRelease(t)
+	dist := t.TempDir()
+	head := offerHead(t, dist)
+	p := startServer(t, serverOptions{dist: dist})
 	ctx := t.Context()
-	var err error
-	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	p.runAgent()
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
-		var online int
-		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {
-			t.Fatal(err)
-		}
-		if online == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the second host did not join within a minute")
-		}
-	}
+	p.startHostAgent(p.installRelease(old))
+	p.awaitHost()
 	// Disks come with paid plans; the account is waived, as the local
 	// stack's is.
 	var owner uuid.UUID
@@ -70,24 +63,41 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 		if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/dev/workloads/pod/box/devbox/stop", nil, nil); status != http.StatusOK {
 			t.Fatalf("stop the devbox: %d", status)
 		}
-		for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
+		waitFor(t, "the stopped devbox to save and release its disk", func() bool {
 			var released bool
 			if err := p.pool.QueryRow(t.Context(), "select released_at is not null from disks where name = 'box'").Scan(&released); err != nil {
 				t.Fatal(err)
 			}
-			if released {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the stopped devbox did not save its disk within five minutes")
-			}
-		}
+			return released
+		})
 	}
 	start()
 
 	first, firstHost := p.readyDevbox(uuid.Nil)
 	written := p.shell(first, "head -c 33554432 /dev/urandom > /root/moved && sha256sum /root/moved")
+	p.publish(head)
+	waitFor(t, "the host to run "+head.version, func() bool { return p.agentVersion() == head.version })
+	if running, _ := p.readyDevbox(uuid.Nil); running != first {
+		t.Fatalf("the update replaced the devbox's container %s with %s", first, running)
+	}
+	if read := p.shell(first, "sha256sum /root/moved"); read != written {
+		t.Fatalf("after the update the disk holds %s, written %s", read, written)
+	}
 	stop()
+
+	// The second host joins once the disk is released.
+	var err error
+	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p.startHostAgent(p.installRelease(head))
+	waitFor(t, "the second host to join", func() bool {
+		var online int
+		if err := p.pool.QueryRow(ctx, "select count(*) from hosts where state = 'online'").Scan(&online); err != nil {
+			t.Fatal(err)
+		}
+		return online == 2
+	})
 	if _, err := p.pool.Exec(ctx, "update hosts set capacity_state = 'cordoned' where id = $1", firstHost); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +113,7 @@ func TestDevboxDiskMovesBetweenHosts(t *testing.T) {
 // than not and returns it and its host.
 func (p *platform) readyDevbox(not uuid.UUID) (uuid.UUID, uuid.UUID) {
 	p.t.Helper()
-	for deadline := time.Now().Add(5 * time.Minute); ; time.Sleep(time.Second) {
+	for deadline := time.Now().Add(settle); ; time.Sleep(50 * time.Millisecond) {
 		var container, host uuid.UUID
 		err := p.pool.QueryRow(p.t.Context(), `
 select c.id, c.host_id from containers c join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id
@@ -117,7 +127,7 @@ where w.name = 'box' and c.state = 'ready' and c.host_id <> $1`, not).Scan(&cont
 select coalesce(json_agg(json_build_object('state', c.state, 'stop', c.stop_reason, 'error', c.exit_message, 'wait', c.capacity_wait, 'host', c.host_id))::text, '[]')
        || (select json_agg(json_build_object('host', h.id, 'slots', h.disk_slots))::text from hosts h)
 from containers c join releases r on r.id = c.release_id join workloads w on w.id = r.workload_id where w.name = 'box'`).Scan(&state)
-			p.t.Fatalf("the devbox was not ready within five minutes: %v; its containers and the hosts: %s", err, state)
+			p.t.Fatalf("the devbox was not ready after %s: %v; its containers and the hosts: %s", settle, err, state)
 		}
 	}
 }

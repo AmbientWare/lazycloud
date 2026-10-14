@@ -53,6 +53,7 @@ func refusedBy(t *testing.T, c *Control, ws identity.WorkspaceID, specs ...apity
 }
 
 func TestDeployRefusesDisksPastThePlansAllowance(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	account(t, pool, ws, "free-v2", true)
@@ -74,6 +75,7 @@ func TestDeployRefusesDisksPastThePlansAllowance(t *testing.T) {
 // A paid or complimentary account deploys within its allowance, and a
 // redeploy counts each disk once against the disk it already has.
 func TestDeployCountsEachDiskOnce(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	box := devbox("box", 600<<30)
@@ -98,6 +100,7 @@ func TestDeployCountsEachDiskOnce(t *testing.T) {
 // and before anything changes; the same specs deploy on a complimentary
 // account.
 func TestDeployRefusesWhatThePlanCannotRun(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	pinned := function("pinned")
@@ -142,6 +145,7 @@ func TestDeployRefusesWhatThePlanCannotRun(t *testing.T) {
 }
 
 func TestDeployRefusesSecretsTheWorkspaceLacks(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	if _, err := pool.Exec(t.Context(), `insert into secrets (workspace_id, name, key_id, wrapped_key, nonce, ciphertext)
@@ -162,6 +166,7 @@ values ($1, 'HAVE', 'k', '\x00', '\x000000000000000000000000', '\x00')`, uuid.UU
 
 // A devbox's root disk must hold its image's unpacked root.
 func TestDeployRefusesARootDiskSmallerThanItsImage(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	// 2,560 frames of 4 MiB: a 10 GiB unpacked root.
@@ -207,6 +212,7 @@ insert into image_reference_layers (reference, position, layer_id) select 'regis
 // The plan reports each listed workload's refusals before anything builds.
 // Only a devbox's root disk has a minimum.
 func TestPlanReportsRefusalsByWorkload(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	account(t, pool, ws, "free-v2", true)
@@ -234,6 +240,7 @@ func TestPlanReportsRefusalsByWorkload(t *testing.T) {
 // A devbox root below the minimum is refused with the deploy's other
 // refusals; any other workload's disk at / takes any size.
 func TestDeployHoldsOnlyDevboxRootsToTheMinimum(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	if got := refusedBy(t, c, ws, devbox("box", 1<<30)); !slices.Equal(got, []string{"box disk_minimum: set disk to at least 10 GiB"}) {

@@ -56,8 +56,10 @@ func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 
 // Spot-tolerant containers on an on-demand host count as the Spot market's
 // load, and the rest as the on-demand market's, in the plan a pass
-// publishes.
+// publishes; CPU work packed on a GPU host counts as the CPU Spot
+// market's.
 func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	host := fleetHost(t, o, compute.PhaseReady, "c6a.4xlarge", "i-0000000000000a001")
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -67,15 +69,18 @@ func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
 		class string
 		cpu   int64
 	}{{"auto", 1000}, {"pinned", 500}, {"non_preemptible", 2000}} {
-		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
+		run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, $4, 1 << 30, $5, now(), now())`, ws, release, uuid.UUID(host), c.cpu, c.class)
 	}
 	// Spot-tolerant L4 work on an on-demand L4 host is the L4 Spot market's.
 	gpuHost := fleetHost(t, o, compute.PhaseReady, "g6.xlarge", "i-0000000000000a002")
 	run(t, o.pool, "update hosts set gpu_type = 'L4', gpu_count = 1 where id = $1", uuid.UUID(gpuHost))
 	gpuRelease := newRelease(t, o.pool, ws, `{"resources": {"gpu": ["L4"], "gpu_count": 1}}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gpuRelease, uuid.UUID(gpuHost))
+	// CPU work packed on a GPU host is the CPU Spot market's.
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, rate_class, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 250, 1 << 30, 'auto', now(), now())`, ws, release, uuid.UUID(gpuHost))
 	if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +98,8 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gp
 			cards[m.Preemptible] = m.Load.GPUs
 		}
 	}
-	if load[true] != 1500 || load[false] != 2000 {
-		t.Fatalf("Spot load %v and on-demand %v, want 1500 and 2000", load[true], load[false])
+	if load[true] != 1750 || load[false] != 2000 {
+		t.Fatalf("Spot load %v and on-demand %v, want 1750 and 2000", load[true], load[false])
 	}
 	if cards[true] != 1 || cards[false] != 0 {
 		t.Fatalf("L4 Spot load %d cards and on-demand %d, want the borrowed card in Spot", cards[true], cards[false])
@@ -107,6 +112,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, 'auto', now(), now())`, ws, gp
 // sixteen, arriving over a second and a half across a clock's five-second
 // boundary, keeps only its share of load.
 func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		created string
@@ -121,8 +127,8 @@ func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 		alice := newUser(t, o.pool, "alice@example.com")
 		ws := newWorkspace(t, o.pool, "dev", alice)
 		release := newRelease(t, o.pool, ws, `{}`)
-		run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
-select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
+		run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, created_at)
+select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, now(), now(), `+c.created+`
 from generate_series(0, 15) n`, ws, release, uuid.UUID(host))
 		if _, err := o.compute.Plan(t.Context(), discard()); err != nil {
 			t.Fatal(err)
@@ -162,6 +168,7 @@ select phase, reserve_mode from hosts where id = $1`, uuid.UUID(host)).Scan(&r.P
 }
 
 func TestPendingWorkResumesAReadyReserveBeforeBuying(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -193,6 +200,7 @@ func TestPendingWorkResumesAReadyReserveBeforeBuying(t *testing.T) {
 // this pass computes, the floor and the 8 CPU largest shape; otherwise it
 // waits for Spot.
 func TestSpotWorkResumesAnOnDemandReserveOnlyWhileSpotCannotHostItAboveTheTarget(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		reserves int
 		spot     bool
@@ -221,6 +229,7 @@ func TestSpotWorkResumesAnOnDemandReserveOnlyWhileSpotCannotHostItAboveTheTarget
 // A host still launching is not running free room, so it never lets a
 // serving host leave.
 func TestPendingLaunchesNeverJustifyRetiringServingHosts(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	serving := idleHost(t, o, "m7i.2xlarge", "i-0000000000000f201")
@@ -236,6 +245,7 @@ func TestPendingLaunchesNeverJustifyRetiringServingHosts(t *testing.T) {
 // reserve falls short, hibernating since it launched able to, and its
 // session is woken to ask the agent at once.
 func TestAnIdleHostReturnsToTheReserveWhileTheReserveIsShort(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	a := idleHost(t, o, "m7i.2xlarge", "i-0000000000000f301")
@@ -274,6 +284,7 @@ func TestAnIdleHostReturnsToTheReserveWhileTheReserveIsShort(t *testing.T) {
 // Growth stops at sixteen actions per market and pass; the next pass
 // continues.
 func TestGrowthStopsAtSixteenActionsPerMarketAndPass(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{MaxHosts: 30}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -292,6 +303,7 @@ func TestGrowthStopsAtSixteenActionsPerMarketAndPass(t *testing.T) {
 // A return to the reserve whose agent never answers terminates with its
 // failure after the limit; an agent update in flight waits.
 func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	stuck := fleetHost(t, o, compute.PhasePreparing, "m7i.large", "i-0000000000000f601")
 	updating := fleetHost(t, o, compute.PhasePreparing, "m7i.large", "i-0000000000000f602")
@@ -329,6 +341,7 @@ and region = 'us-east-2' and instance_type = $1 and market = 'on_demand' and unt
 // set. It is never asked again, so once idle it drains, and its offer cools
 // so the replacement reserve comes from another one.
 func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	publish(t, o.compute)
 	refused := idleHost(t, o, "m7i.2xlarge", "i-0000000000000fc01")
@@ -356,6 +369,7 @@ and region = 'us-east-2' and market = 'on_demand'`); n != 0 {
 // A reserve being prepared runs, so it holds host room: with the limit
 // reached, pending work waits for the limit instead of buying past it.
 func TestReservesBeingPreparedHoldHostRoom(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{MaxHosts: 2}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -373,6 +387,7 @@ func TestReservesBeingPreparedHoldHostRoom(t *testing.T) {
 // snapshot's hosts against them, so a reserve it fails in the same pass no
 // longer holds quota there.
 func TestQuotaUseIsTheSnapshotsHosts(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -392,6 +407,7 @@ func TestQuotaUseIsTheSnapshotsHosts(t *testing.T) {
 // The snapshot reads the quota rooms and Spot prices their refresh loops
 // write: a Spot quota with no room moves Spot buying to the next region.
 func TestQuotaRoomsAndSpotPricesSteerPurchases(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -410,6 +426,7 @@ func TestQuotaRoomsAndSpotPricesSteerPurchases(t *testing.T) {
 // acts or the plan is a minute old, and logs a market's decision only when
 // it changed.
 func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
@@ -460,16 +477,17 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 // The warm target shares the load containers hold now: what the market's
 // hosts run and what its pending containers ask for. The stopped target is
 // the floor beside the largest shape, 8 CPU by default, in Spot as well as
-// on-demand.
+// on-demand. The market's load peak carries to the passes after.
 func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16_000, Memory: 64 * gib})
 	release := newRelease(t, o.pool, dev, `{}`)
 	run(t, o.pool, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate_series(1, 4)`, dev, release, uuid.UUID(host))
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate_series(1, 4)`, dev, release, uuid.UUID(host))
 	for range 8 {
 		pendingContainer(t, o.pool, dev, release, 4000, 4*gib)
 	}
@@ -481,11 +499,20 @@ select $1, $2, 'ready', $3, 1, 4000, 4::bigint << 30, now(), now() from generate
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
 	}
+	// The load peak outlives the load: the next pass reads it back from the
+	// published plan, so reserves a burst needed wait for the next one.
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now()")
+	staleMarkets(t, o)
+	plan(t, o)
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 0 || spot.Peak.Load.CPUMillis != 48_000 {
+		t.Fatalf("Spot market once its work stopped %+v, want no load and the 48 CPU peak", spot)
+	}
 }
 
 // A pending container resumes a stopped reserve, the actuator starts it,
 // the host says Hello, and placement gives it the container.
 func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -520,6 +547,7 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 // A connected account keeps no reserves: its idle host leaves after the
 // idle timeout.
 func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
+	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
@@ -558,6 +586,7 @@ func publishedMarket(t *testing.T, o owners, preemptible bool) compute.Published
 // Planned capacity uses the memory hosts of a type reported, nominal until
 // one has.
 func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -585,6 +614,7 @@ func TestPlannedCapacityUsesTheMemoryHostsOfTheTypeReported(t *testing.T) {
 // GPU model, which stops, as no GPU type hibernates. On-demand GPU work
 // keeps no reserve until it runs.
 func TestAnEmptyFleetBuysTheFloorsAsServingHostsAndReserves(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	if r := plan(t, o); r.Requested == 0 {
@@ -610,6 +640,7 @@ where phase = 'requested' and gpu_count > 0 and market = 'spot' and reserve_mode
 
 // Reserves beyond the targets retire.
 func TestSurplusReservesRetire(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	if err := o.compute.PublishAgentRelease(t.Context(), compute.AgentRelease{
 		Version: "1.0.0", RolloutPercent: 100,
@@ -688,6 +719,7 @@ func placeOn(t *testing.T, o owners, container uuid.UUID, host compute.HostID) {
 // and one beside it that fits the default 8 CPU largest shape, and the
 // next pass changes nothing.
 func TestAtZeroLoadEachCPUMarketHoldsAFloorReserveAndALargeShapeReserve(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	settledFleet(t, o)
@@ -707,14 +739,15 @@ where reserve_mode is not null and market = $1 and gpu_count = 0`, string(market
 // attached: after a container with twelve disks the Spot market's reserve
 // is a type of at least twelve cores.
 func TestTheLargeShapeReserveHoldsTheDisksRecentWorkAttached(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
 	disks := strings.TrimSuffix(strings.Repeat("{}, ", 12), ", ")
 	release := newRelease(t, o.pool, ws, `{"disks": [`+disks+`]}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, rate_class, billing_owner,
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, rate_class, billing_owner,
     assigned_at, ready_at, stopped_at)
-values ($1, $2, 'stopped', 1, 1000, 1 << 30, 'auto', 'platform_fleet', now(), now(), now())`, ws, release)
+values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, 1 << 30, 'auto', 'platform_fleet', now(), now(), now())`, ws, release)
 	plan(t, o)
 	if cpus := scan[int64](t, o.pool, `select coalesce(max(cpu_millis), 0) from hosts
 where reserve_mode is not null and market = 'spot' and gpu_count = 0`); cpus < 12000 {
@@ -725,6 +758,7 @@ where reserve_mode is not null and market = 'spot' and gpu_count = 0`); cpus < 1
 // A burst of 1 CPU work beyond the warm room resumes the floor reserve; the
 // large-shape reserve stays stopped and nothing of its size is bought.
 func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, large := onDemandReserves(t, o)
@@ -749,6 +783,7 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 // it once the host has served past the idle timeout and the reserve has
 // lacked it as long.
 func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, large := onDemandReserves(t, o)
@@ -779,6 +814,7 @@ func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 // the host may return, busy within the idle timeout or idle, no replacement
 // is bought, and once idle for the timeout it returns to the reserve.
 func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, large := onDemandReserves(t, o)
@@ -830,6 +866,7 @@ where plan ? 'floor_short_since'`)
 // floor has been short for less than the idle timeout, and not while the
 // host, done and idle, is due back; once idle for the timeout it returns.
 func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, _ := onDemandReserves(t, o)
@@ -864,6 +901,7 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 // still within it; once the resumed host has idled for the timeout it
 // returns to the reserve. Nothing is bought or drained.
 func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, _ := onDemandReserves(t, o)
@@ -888,6 +926,7 @@ where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 // replaced: the host, busy since it became ready that long ago, is not due
 // back.
 func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	floor, _ := onDemandReserves(t, o)
@@ -910,6 +949,7 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 // of another build buys their replacements first and retires none of them
 // before those are ready.
 func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	release := func(version, build string) {
@@ -937,6 +977,7 @@ func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 // one, and one reserve resumes for the other four and the warm slot, so
 // nothing is bought and no slot refill follows once they run.
 func TestABurstOfFiveSmallStartsLeavesAtMostTwoHosts(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
 	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
@@ -969,8 +1010,13 @@ and phase in ('requested', 'provisioning', 'booting', 'joining', 'resuming', 're
 
 // buildShape is what a build container reserves at LAZYCLOUD_BUILD_CPU's
 // default of 4 CPUs.
-func buildShape() (cpuMillis, memoryBytes int64) {
-	reserved, memory, _ := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000}).BuildResources()
+func buildShape(t *testing.T) (cpuMillis, memoryBytes int64) {
+	t.Helper()
+	im, err := images.NewImages(nil, nil, nil, nil, images.Config{BuildCPU: 4000, PlatformTransferBackoff: images.PlatformTransferBackoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, memory, _ := im.BuildResources()
 	return int64(reserved), memory
 }
 
@@ -987,7 +1033,7 @@ func pendingBuild(t *testing.T, o owners, workspace uuid.UUID) uuid.UUID {
 func buildContainer(t *testing.T, o owners, workspace uuid.UUID, state string, age time.Duration) uuid.UUID {
 	t.Helper()
 	seed := uuid.NewString()
-	cpuMillis, memory := buildShape()
+	cpuMillis, memory := buildShape(t)
 	return scan[uuid.UUID](t, o.pool, `
 with image as (
     insert into images (digest, id, dockerfile, python_version, architecture)
@@ -1007,6 +1053,7 @@ from build returning id`, []byte(seed), workspace, state, age, cpuMillis, memory
 // once, while arrivals still batch, and nothing is launched for it then or
 // once they settle.
 func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
 	settledFleet(t, o)
@@ -1033,6 +1080,7 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 // A build placed within the hour keeps a warm slot of its shape in its
 // market; an older one does not.
 func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -1044,7 +1092,7 @@ func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
 	buildContainer(t, o, dev, "stopped", 10*time.Minute)
 	staleMarkets(t, o)
 	plan(t, o)
-	cpuMillis, memory := buildShape()
+	cpuMillis, memory := buildShape(t)
 	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
 		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
 	}

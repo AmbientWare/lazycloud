@@ -17,6 +17,7 @@ import (
 // platform's own error text. A temporary storage failure, like any other
 // error, returns to the session, which builds the start again.
 func TestOnlyStartErrorsOfTheContainerFailIt(t *testing.T) {
+	t.Parallel()
 	denied := &storage.StoreRefusedError{Code: "AccessDenied", Err: &smithy.GenericAPIError{
 		Code: "AccessDenied", Message: "arn:aws:iam::111111111111:role/platform is not authorized",
 	}}

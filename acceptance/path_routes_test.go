@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -70,6 +72,7 @@ func readAll(t *testing.T, resp *http.Response) string {
 // API host with its session: the workload sees neither credential, streams stream, and another workspace's
 // path is refused.
 func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": endpointApp, "web.py": asgiApp})
 	p.deploy("api_demo", endpointSpec(source, "count_words", "app:count_words", "/word-count", apitypes.HttpMethodPOST))
@@ -127,15 +130,20 @@ func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 		t.Fatalf("GET headers with a token: %d %s", status, body)
 	}
 
-	// Server-sent events stream through the API host.
+	// Server-sent events stream through the API host: the first arrives
+	// before the app's sleeps between the rest are over.
 	resp = p.browser(http.MethodGet, base+"/events", session, "", false)
 	reader := bufio.NewReader(resp.Body)
-	began := time.Now()
 	first, err := reader.ReadString('\n')
-	if err != nil || first != "data: 0\n" || time.Since(began) > 500*time.Millisecond {
-		t.Fatalf("first event %q after %v (%v); want it before the stream ends", first, time.Since(began), err)
+	firstAt := time.Now()
+	if err != nil || first != "data: 0\n" {
+		t.Fatalf("first event %q: %v", first, err)
 	}
+	rest, err := io.ReadAll(reader)
 	_ = resp.Body.Close()
+	if err != nil || !strings.Contains(string(rest), "data: 2") || time.Since(firstAt) < 500*time.Millisecond {
+		t.Fatalf("events %q %s after the first: %v", rest, time.Since(firstAt), err)
+	}
 
 	// Another workspace's path is refused, whatever its app is called.
 	if _, err := p.pool.Exec(t.Context(), `insert into workspaces (name) values ('other')`); err != nil {

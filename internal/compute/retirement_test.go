@@ -42,6 +42,7 @@ func terminated(e *awsEmulator) []string {
 // market's free room beyond its warm target covers them; a one-time Spot
 // host cannot stop, so it drains, and the actuator terminates it once.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	for n := 1; n <= 5; n++ {
 		ec2.add(fakeInstance{ID: fmt.Sprintf("i-0000000000000a00%d", n), State: "running"}, "")
@@ -60,8 +61,8 @@ func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
 	idleFor(t, o, other, time.Hour)
 	// A container runs on it, so it is not idle.
 	run(t, o.pool, `
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now(), now())`, dev, newRelease(t, o.pool, dev, `{}`), uuid.UUID(busy))
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values (uuidv7(interval '-1 hour'), $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1500, 1 << 28, now(), now())`, dev, newRelease(t, o.pool, dev, `{}`), uuid.UUID(busy))
 
 	if result := plan(t, o); result.Drained != 2 {
 		t.Fatalf("plan %+v, want two hosts drained", result)
@@ -83,6 +84,7 @@ values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now()
 }
 
 func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)

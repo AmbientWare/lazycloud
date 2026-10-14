@@ -10,10 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import typer
 from lazycloud._shared.deployments import DeploymentKind
-from lazycloud.cli.app_export import app_export
-from lazycloud.cli.components.output import CliContextState
+from lazycloud.cli.main import build_public_cli
 from lazycloud.client_codegen import ClientGenerationError, write_client_package
 from lazycloud.client_contracts import build_client_contract
 from lazycloud.exceptions import HttpApiError
@@ -21,7 +19,9 @@ from lazycloud.values import cloudpickle_bytes
 from pydantic import BaseModel, Field
 from typer.testing import CliRunner, Result
 
-from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply
+from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, json_reply, press_ctrl_c
+
+cli = build_public_cli()
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -120,14 +120,7 @@ def _serve_app(api: FakeApi, *, contracts: Mapping[str, dict[str, Any] | None]) 
 
 
 def _export(*args: str) -> Result:
-    cli = typer.Typer()
-    cli.command("export")(app_export)
-
-    @cli.callback()
-    def main(ctx: typer.Context) -> None:
-        ctx.obj = CliContextState(json=True)
-
-    return CliRunner().invoke(cli, ["export", *args])
+    return CliRunner().invoke(cli, ["--json", "app", "export", *args])
 
 
 def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str, object]:
@@ -191,7 +184,6 @@ def test_export_writes_a_typed_package_whose_functions_run_remotely(
     assert lock["reports"]["workspace"] == "team"
     assert (output / "reports" / f"v_{version}" / "py.typed").is_file()
     generated = "".join(path.read_text() for path in (output / "reports").rglob("*.py"))
-    assert "from lazycloud.exceptions import http_api_error_from_body" in generated
     assert "lazycloud._" not in generated
 
     sys.path.insert(0, str(tmp_path))
@@ -234,6 +226,39 @@ def test_generated_function_raises_the_remote_failure(tmp_path: Path, fake_api: 
 
     with pytest.raises(ValueError, match="no sales"):
         clients.summarize_sales.remote([])
+
+
+@pytest.mark.parametrize("pressed", ["admission", "wait"])
+def test_ctrl_c_cancels_the_task_a_generated_function_started(
+    tmp_path: Path, fake_api: FakeApi, pressed: str
+) -> None:
+    _serve_app(fake_api, contracts={"summarize_sales": _contract(summarize_sales)})
+    assert _export("reports", "-o", str(tmp_path / "lazycloud_clients")).exit_code == 0
+    sys.path.insert(0, str(tmp_path))
+    clients = importlib.import_module("lazycloud_clients.reports")
+    task_id = _uuid(204)
+    tasks = "/v1/workspaces/team/tasks"
+
+    @fake_api.route("POST", f"{FUNCTIONS}/summarize_sales/run")
+    def run(_: ApiRequest) -> Reply:
+        if pressed == "admission":
+            press_ctrl_c()
+        queued = {"task": _task(task_id, "summarize_sales", "queued")}
+        return 200, {"Content-Type": "application/x-ndjson"}, json.dumps(queued).encode() + b"\n"
+
+    @fake_api.route("GET", f"{tasks}/{task_id}")
+    def read(_: ApiRequest) -> Reply:
+        press_ctrl_c()
+        return json_reply(_task(task_id, "summarize_sales", "running"))
+
+    fake_api.route("POST", f"{tasks}/{task_id}/cancel")(
+        lambda _: json_reply(_task(task_id, "summarize_sales", "cancelled"))
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        clients.summarize_sales.remote([1])
+
+    assert len(fake_api.calls("POST", f"{tasks}/{task_id}/cancel")) == 1
 
 
 def test_a_new_release_needs_a_new_export(tmp_path: Path, fake_api: FakeApi) -> None:

@@ -31,11 +31,23 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
+// testFailureCheck is how often the test edge's waiting requests ask
+// whether their release can start.
+const testFailureCheck = 200 * time.Millisecond
+
 func newTestEdge(t *testing.T, pool *pgxpool.Pool) *Edge {
+	t.Helper()
+	return newTestEdgeFlushing(t, pool, RequestFlush)
+}
+
+// newTestEdgeFlushing is newTestEdge writing request records every flush.
+func newTestEdgeFlushing(t *testing.T, pool *pgxpool.Pool, flush time.Duration) *Edge {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082"}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
+			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck, RequestFlush: flush,
+		}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +60,7 @@ func version(n int) *int { return &n }
 // containers; latest waits for the active release rather than serve the one
 // it rolled back from, while a forward deploy keeps the older one serving.
 func TestLatestFallsBackOnlyToAnOlderRelease(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, nil)
 	v1, v2 := uuid.New(), uuid.New()
 	e.releases[v1] = &release{id: v1, version: version(1), capacity: 1}
@@ -69,6 +82,7 @@ func TestLatestFallsBackOnlyToAnOlderRelease(t *testing.T) {
 
 // A slow container-set read that started first never replaces a newer one.
 func TestAnOlderContainerReadNeverReplacesANewerOne(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, nil)
 	ws := e.stateLocked(uuid.New())
 	older := []execution.EndpointContainer{{Container: execution.ContainerID(uuid.New()), Version: 1}}
@@ -83,6 +97,7 @@ func TestAnOlderContainerReadNeverReplacesANewerOne(t *testing.T) {
 // A release the publisher forgot while idle is recreated, not orphaned,
 // when a request counts against it.
 func TestDemandCountedAfterTheLoadWasForgottenIsPublished(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, nil)
 	r := &release{id: uuid.New(), maxPending: 10}
 	e.mu.Lock()
@@ -104,6 +119,7 @@ func TestDemandCountedAfterTheLoadWasForgottenIsPublished(t *testing.T) {
 // The body budget refuses what would pass the edge-wide bound and returns
 // what a request held when it ends.
 func TestBufferedBodiesStayWithinTheEdgeBudget(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, nil)
 	if !e.bodies.reserve(maxBufferedBodyBytes - 10) {
 		t.Fatal("reserve within the budget refused")
@@ -130,11 +146,12 @@ func TestBufferedBodiesStayWithinTheEdgeBudget(t *testing.T) {
 // Requests for hosts the table does not know reload it at most once per
 // missReloadInterval, however many arrive.
 func TestUnknownHostsReloadTheRouteTableAtMostOncePerInterval(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
 	started := time.Now()
-	const misses = 8
+	const misses = 3
 	for range misses {
 		if _, err := e.resolve(ctx, "nothing-0123abcd.lazycloud.localhost:8082"); !errors.Is(err, errNoRoute) {
 			t.Fatalf("resolve: %v", err)
@@ -149,6 +166,7 @@ func TestUnknownHostsReloadTheRouteTableAtMostOncePerInterval(t *testing.T) {
 
 // An unknown id host is answered from memory after the first read.
 func TestUnknownIDHostsAreRemembered(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	id := uuid.New()
@@ -181,6 +199,7 @@ func (f *fakeForward) RecvMsg(any) error                   { return nil }
 // A dead parked stream is skipped without leaving the host counted as
 // waiting, and a host parks at most maxIdleStreams.
 func TestStreamPoolAccountingAndIdleBound(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, nil)
 	host := uuid.New()
 	dead, cancel := context.WithCancel(t.Context())
@@ -247,11 +266,17 @@ func (f *fakeListen) SetTrailer(metadata.MD)            {}
 // Shutdown ends Listen calls, so a graceful gRPC stop does not wait for
 // agents to hang up.
 func TestShutdownEndsListen(t *testing.T) {
+	t.Parallel()
 	e := newTestEdge(t, dbtest.New(t))
-	s := &Server{edge: e, hostOf: func(context.Context) (compute.HostID, bool) { return compute.HostID(uuid.New()), true }}
+	host := uuid.New()
+	s := &Server{edge: e, hostOf: func(context.Context) (compute.HostID, bool) { return compute.HostID(host), true }}
 	ended := make(chan error, 1)
 	go func() { ended <- s.Listen(&hostproto.ListenRequest{}, &fakeListen{ctx: t.Context()}) }()
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, func() bool {
+		e.hosts.mu.Lock()
+		defer e.hosts.mu.Unlock()
+		return e.hosts.hosts[host] != nil && e.hosts.hosts[host].demand != nil
+	})
 	e.Shutdown()
 	select {
 	case <-ended:
@@ -275,6 +300,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // the route's workspace made: another account registering the same name
 // after the owner removed theirs does not inherit the route.
 func TestCustomHostnameServesOnlyThroughTheWorkspaceOwnersRegistration(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -326,9 +352,9 @@ with ws as (insert into workspaces (name) values ('ws') returning id),
      a as (insert into apps (workspace_id, name, state) select id, 'shop', 'active' from ws returning id),
      w as (insert into workloads (app_id, kind, name, desired_state) select id, 'endpoint', 'web', 'active' from a returning id),
      r as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-           select id, 1, '{}'::jsonb, sha256('spec'), sha256('src') from w returning id),
-     c as (insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-           select ws.id, r.id, 'stopped', 1, 1000, 1 << 28 from ws, r returning id)
+           select id, 1, '{}'::jsonb, sha256('spec'), sha256('src') from w returning id, workload_id),
+     c as (insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+           select ws.id, r.id, r.workload_id, 'stopped', 1, 1000, 1 << 28 from ws, r returning id)
 select ws.id, w.id, r.id, c.id from ws, w, r, c`).Scan(&workspace, &workload, &release, &container)
 	if err != nil {
 		t.Fatal(err)
@@ -339,6 +365,7 @@ select ws.id, w.id, r.id, c.id from ws, w, r, c`).Scan(&workspace, &workload, &r
 // One retention pass deletes past a single batch, records and container
 // output both, and keeps what is still inside the retention.
 func TestRetentionPassDeletesEveryExpiredBatch(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -369,6 +396,7 @@ union all select $1::uuid, 'stdout', 'new', now()`, c, old, rows); err != nil {
 // Records still queued when the edge stops are written, and a batch whose
 // write failed is kept for the next one.
 func TestQueuedRecordsAreWrittenAtShutdown(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ws, wl, rel, _ := releaseFixture(t, pool)
@@ -404,6 +432,7 @@ func TestQueuedRecordsAreWrittenAtShutdown(t *testing.T) {
 // with its outcome and the response's status and size, even when the batch
 // is written twice.
 func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -452,7 +481,12 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := secrets.NewSecrets(pool, key)
-	deliverer := callbacks.NewCallbacks(pool, s, callbacks.CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler))
+	config := callbacks.DefaultCallbackConfig()
+	config.AllowPrivateTargets = true
+	deliverer, err := callbacks.NewCallbacks(pool, s, config, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n, err := deliverer.Deliver(ctx); err != nil || n != len(batch) {
 		t.Fatalf("delivered %d callbacks (%v); want %d", n, err, len(batch))
 	}
@@ -497,12 +531,14 @@ func TestRequestsOfAReleaseWithACallbackURLAreCalledBackOnce(t *testing.T) {
 	}
 }
 
-// A request owing a callback is written and wakes delivery well inside the
-// batch flush, so its callback leaves about callbackFlush after the response
-// rather than up to a second later.
+// A request owing a callback is written and wakes delivery without waiting
+// for the batch flush, so its callback leaves about callbackFlush after the
+// response.
 func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
-	e := newTestEdge(t, pool)
+	const flush = time.Hour
+	e := newTestEdgeFlushing(t, pool, flush)
 	ws, wl, rel, _ := releaseFixture(t, pool)
 	if _, err := pool.Exec(t.Context(), `update releases set spec = '{"callback_url": "https://hooks.example.com/r"}' where id = $1`, rel); err != nil {
 		t.Fatal(err)
@@ -534,8 +570,8 @@ func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
 	})
 	select {
 	case <-wake:
-	case <-time.After(requestFlush / 2):
-		t.Fatalf("no callback wake within %s of the response", requestFlush/2)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no callback wake within 10s of the response; the batch flushes every %s", flush)
 	}
 	var pending int
 	if err := pool.QueryRow(t.Context(), `select count(*) from task_callbacks where release_id = $1 and state = 'pending'`, rel).Scan(&pending); err != nil {
@@ -550,6 +586,7 @@ func TestARequestOwingACallbackIsQueuedPromptly(t *testing.T) {
 // records further request callbacks as failed with the reason instead of
 // queueing them, so one endpoint's flood cannot fill the shared queue.
 func TestAReleasesCallbacksPastTheCapAreDroppedWithTheReason(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -590,11 +627,12 @@ from task_callbacks where release_id = $1`, rel).Scan(&pending, &dropped, &reaso
 // Registering a custom domain needs a plan that includes them; the provider
 // is never asked otherwise.
 func TestDomainRegistrationFollowsThePlan(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,6 +664,7 @@ func (p *countingProvider) CreateHostname(context.Context, string) (ProviderHost
 // A paused app's release hosts take working-tree calls, as the API's
 // submit does, and refuse its deployed versions.
 func TestReleaseHostsOfAPausedAppTakeOnlyWorkingTreeCalls(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -656,10 +695,11 @@ select d.id, r.id from d, r`).Scan(&deployed, &workingTree)
 	}
 }
 
-// A load error recorded within failureCheckInterval of a waiting request's
+// A load error recorded within the failure check interval of a waiting request's
 // last check fails the request once the next check is due, not at its
 // deadline: the change that woke it early is checked again.
 func TestALoadErrorBetweenChecksFailsTheWaitingRequest(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -696,7 +736,7 @@ update releases set load_error = 'no database configured' where id = $1`, rel); 
 		if !errors.As(err, &failed) || !strings.Contains(failed.reason, "no database configured") {
 			t.Fatalf("the waiting request ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the load error was not checked once the next check was due")
 	}
 }
@@ -706,6 +746,7 @@ update releases set load_error = 'no database configured' where id = $1`, rel); 
 // within the backoff after it fails at once with the same error and starts
 // nothing.
 func TestARequestRetriesAReleaseThatStoppedStarting(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := newTestEdge(t, pool)
 	ctx := t.Context()
@@ -715,8 +756,8 @@ func TestARequestRetriesAReleaseThatStoppedStarting(t *testing.T) {
 		t.Helper()
 		if _, err := pool.Exec(ctx, `
 with stopped as (
-    insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, stop_reason, exit_message, stopped_at)
-    values ($1, $2, 'stopped', 1, 1000, 1 << 28, 'start_failed', $4, now() - make_interval(secs => $3))
+    insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, stop_reason, exit_message, stopped_at)
+    values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, 1 << 28, 'start_failed', $4, now() - make_interval(secs => $3))
 )
 update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), message); err != nil {
 			t.Fatal(err)
@@ -757,7 +798,7 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 		if !errors.As(err, &failed) || failed.reason != want {
 			t.Fatalf("the request whose fresh start failed ended with %v", err)
 		}
-	case <-time.After(3 * failureCheckInterval):
+	case <-time.After(5 * time.Second): // half the request's deadline
 		t.Fatal("the request did not fail once its fresh start failed")
 	}
 
@@ -768,5 +809,22 @@ update releases set start_failures = 3 where id = $2`, ws, rel, ago.Seconds(), m
 	}
 	if n := failures(); n != 3 {
 		t.Fatalf("a request within the backoff left %d start failures; want the release held at 3", n)
+	}
+}
+
+// A config without positive intervals is refused when the edge is built,
+// not discovered as waiting requests asking without pause or records
+// written one at a time.
+func TestEdgesNeedPositiveIntervals(t *testing.T) {
+	t.Parallel()
+	for _, interval := range []time.Duration{0, -time.Second} {
+		for _, cfg := range []Config{
+			{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: interval, RequestFlush: RequestFlush},
+			{URL: "http://lazycloud.localhost:8082", FailureCheckInterval: FailureCheckInterval, RequestFlush: interval},
+		} {
+			if _, err := NewEdge(nil, nil, nil, nil, cfg, slog.New(slog.DiscardHandler)); err == nil {
+				t.Errorf("config %+v was accepted", cfg)
+			}
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 )
 
 func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -57,6 +58,7 @@ func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
 }
 
 func TestMeteringStopsAtTheHostsLastReport(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -105,6 +107,7 @@ func TestMeteringStopsAtTheHostsLastReport(t *testing.T) {
 }
 
 func TestMeteringSplitsAtPublishedRateChanges(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -125,6 +128,7 @@ func TestMeteringSplitsAtPublishedRateChanges(t *testing.T) {
 }
 
 func TestMeteringFindsContainersThatLivedBetweenPasses(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -143,6 +147,7 @@ func TestMeteringFindsContainersThatLivedBetweenPasses(t *testing.T) {
 
 // A build reserves 8 GiB to place it and bills 2 GiB of memory.
 func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -165,6 +170,7 @@ func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
 // replacements was ready, or its own stop if that came first, and the
 // replacement from then on, so the two never bill the same instant.
 func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
+	t.Parallel()
 	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
 	ready, takeover, stop := base.Add(5*time.Minute), base.Add(40*time.Minute), base.Add(50*time.Minute)
 	for _, c := range []struct {
@@ -181,6 +187,7 @@ func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
 		{"old one stops before its replacement is ready", []*time.Time{new(stop.Add(5 * time.Minute))}, &stop, stop},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			f := newFixture(t)
 			ws := f.workspace(f.user())
 			rel := f.release(ws)
@@ -190,8 +197,8 @@ func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
 			for _, at := range c.replacements {
 				var id uuid.UUID
 				err := f.pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
-values ($1, $2, case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
+values ($1, $2, (select workload_id from releases where id = $2), case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
 					ws, rel.id, host, at, old).Scan(&id)
 				if err != nil {
 					t.Fatal(err)
@@ -228,6 +235,7 @@ func abs(n int64) int64 {
 // the start of the oldest, since preemption may yet void it. A period the
 // voided time splits bills its measured use over the time it was read.
 func TestMeteringChargesNothingForAPreemptedAttempt(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(f.user())
 	rel := f.release(ws)

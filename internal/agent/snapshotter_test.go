@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (

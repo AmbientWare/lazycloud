@@ -9,6 +9,7 @@ import (
 )
 
 func TestGitHubSignIn(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	octo := gitHubAccount{ID: 101, Login: "Octo_Cat", Name: "Octo Cat", Email: "octo@example.com", Verified: true}
@@ -78,6 +79,7 @@ func TestGitHubSignIn(t *testing.T) {
 }
 
 func TestSignInRefusals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	account := gitHubAccount{ID: 7, Login: "seven", Email: "seven@example.com", Verified: true}
@@ -123,6 +125,7 @@ func TestSignInRefusals(t *testing.T) {
 // Concurrent first sign-ins of one GitHub account create one user and one
 // workspace.
 func TestConcurrentFirstSignIn(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	account := gitHubAccount{ID: 55, Login: "racer", Email: "racer@example.com", Verified: true}
 	const n = 6
@@ -165,6 +168,7 @@ func TestConcurrentFirstSignIn(t *testing.T) {
 }
 
 func TestSignOutEndsOnlyThatSession(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	account := gitHubAccount{ID: 9, Login: "nine", Email: "nine@example.com", Verified: true}
@@ -203,6 +207,7 @@ func TestSignOutEndsOnlyThatSession(t *testing.T) {
 }
 
 func TestDeviceLogin(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	person := f.signIn(gitHubAccount{ID: 1, Login: "dev", Email: "dev@example.com", Verified: true})
@@ -313,6 +318,7 @@ func lower(s string) string {
 }
 
 func TestAccountTokens(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	owner := f.account("owner@example.com", false)
@@ -422,6 +428,7 @@ func TestAccountTokens(t *testing.T) {
 // its last renewal renews it, a sooner one leaves it, and no renewal takes
 // it past thirty days after sign-in.
 func TestASessionRollsWithUseUpToItsMaxAge(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	token := f.sessionToken(gitHubAccount{ID: 11, Login: "eleven", Email: "eleven@example.com", Verified: true}, "browser")

@@ -7,6 +7,7 @@ package hostsession
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -56,6 +57,9 @@ type Config struct {
 	// ReplicaRecheck is how often a check of a regional layer copy looks
 	// again; ReplicaRecheck in production.
 	ReplicaRecheck time.Duration
+	// GrantAckWait is how long a host may take to confirm a storage grant
+	// before it is sent again; GrantAckWait in production.
+	GrantAckWait time.Duration
 	// Secrets resolves the secrets each start carries.
 	Secrets *secrets.Secrets
 	// ContainerAPI serves container API requests; see api.NewContainerHandler.
@@ -73,6 +77,14 @@ type Config struct {
 	Tracer trace.Tracer
 	// Traces forwards the spans hosts send; nil drops them.
 	Traces *telemetry.HostTraces
+}
+
+// Validate refuses settings the host connection cannot run with.
+func (c Config) Validate() error {
+	if c.GrantAckWait <= 0 {
+		return fmt.Errorf("hostsession: the grant acknowledgement wait must be positive, not %s", c.GrantAckWait)
+	}
+	return nil
 }
 
 // Server implements hostproto.HostService.
@@ -101,7 +113,10 @@ type Server struct {
 
 // NewServer returns the host service. listener must listen on
 // database.ChannelHost and database.ChannelClaim.
-func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, im *images.Images, listener *database.Listener, config Config, logger *slog.Logger) *Server {
+func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, im *images.Images, listener *database.Listener, config Config, logger *slog.Logger) (*Server, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 	lifetime, shutdown := context.WithCancel(context.Background())
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "lazycloud_platform_image_conversion_failures_total",
@@ -120,7 +135,7 @@ func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, i
 		completions: completions{queues: map[compute.HostID][]*pendingCompletion{}},
 		platform:    platformConversions{running: map[string]bool{}, slots: make(chan struct{}, maxPlatformConversions), failures: failures},
 		replicas:    replicaChecks{running: map[string]bool{}},
-	}
+	}, nil
 }
 
 // ServerOptions are the gRPC options the service needs: host authentication,

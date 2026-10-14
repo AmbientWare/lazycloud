@@ -123,9 +123,9 @@ func (f *fixture) container(spec containerSpec) uuid.UUID {
 	}
 	var id uuid.UUID
 	err := f.pool.QueryRow(f.t.Context(), `
-insert into containers (workspace_id, release_id, image_build_id, state, host_id, slots, cpu_millis, memory_bytes,
+insert into containers (workspace_id, release_id, workload_id, image_build_id, state, host_id, slots, cpu_millis, memory_bytes,
                         assigned_at, ready_at, stopped_at, stop_reason)
-values ($1, $2, $10, $3, $4, 1, $5, $6, $7, $7, $8, $9) returning id`,
+values ($1, $2, (select workload_id from releases where id = $2), $10, $3, $4, 1, $5, $6, $7, $7, $8, $9) returning id`,
 		spec.workspace, spec.release, state, spec.host, spec.cpuMillis, spec.memoryBytes, spec.ready, spec.stopped, reason, spec.build).Scan(&id)
 	if err != nil {
 		f.t.Fatal(err)

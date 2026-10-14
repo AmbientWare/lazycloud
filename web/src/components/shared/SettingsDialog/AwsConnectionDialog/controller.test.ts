@@ -2,104 +2,80 @@ import { testQueryClient } from "@/test/query-client";
 import { createElement, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-import {
-  createAwsConnection,
-  reconnectAwsConnection,
-  removeAwsConnection,
-  retryAwsConnection,
-  validateAwsConnection,
-} from "@/lib/queries/compute";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useAwsConnectionController } from "./controller";
 
-vi.mock("@/lib/queries/compute", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/queries/compute")>();
-  return {
-    ...actual,
-    cancelAwsConnectionReconnect: vi.fn(),
-    createAwsConnection: vi.fn(),
-    reconnectAwsConnection: vi.fn(),
-    removeAwsConnection: vi.fn(),
-    retryAwsConnection: vi.fn(),
-    validateAwsConnection: vi.fn(),
-  };
-});
+type Sent = { method: string; path: string; body: unknown };
 
-const createMock = vi.mocked(createAwsConnection);
-const validateMock = vi.mocked(validateAwsConnection);
-const reconnectMock = vi.mocked(reconnectAwsConnection);
-const retryMock = vi.mocked(retryAwsConnection);
-const removeMock = vi.mocked(removeAwsConnection);
+/** Records each call and answers it with the next queued response for its method and path. */
+function serve(answers: Record<string, (() => Response | Promise<Response>)[]>): Sent[] {
+  const sent: Sent[] = [];
+  vi.stubGlobal("fetch", async (request: Request) => {
+    const path = new URL(request.url).pathname;
+    const text = await request.text();
+    sent.push({ method: request.method, path, body: text ? JSON.parse(text) : undefined });
+    const answer = answers[`${request.method} ${path}`]?.shift();
+    if (!answer) throw new Error(`Unexpected request: ${request.method} ${path}`);
+    return answer();
+  });
+  return sent;
+}
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+const unavailable = () =>
+  Response.json({ code: "unavailable", message: "AWS is unavailable" }, { status: 503 });
 
 describe("AWS connection controller", () => {
-  it("keeps failed authorization visible for retry", async () => {
-    const queryClient = testQueryClient();
-    const failure = new Error("AWS is unavailable");
-    createMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({
-      connection: awsConnection(),
-      authorization: {},
+  it("connects the trimmed account and keeps a failed attempt visible for retry", async () => {
+    const sent = serve({
+      "POST /v1/aws-connection": [
+        unavailable,
+        () => Response.json({ connection: awsConnection(), authorization: {} }, { status: 201 }),
+      ],
     });
-    const { result } = renderController(queryClient, vi.fn());
+    const { result } = renderController(testQueryClient(), vi.fn());
 
-    act(() => result.current.create("123456789012"));
-    await waitFor(() => expect(result.current.activeAction).toBeNull());
-
-    expect(result.current.createError).toBe(failure);
+    await runAndSettle(result, () => result.current.create(" 123456789012 "));
+    expect(result.current.createError?.message).toBe("AWS is unavailable");
     expect(result.current.recoveryError).toBeNull();
 
-    act(() => result.current.create("123456789012"));
-    await waitFor(() => expect(result.current.activeAction).toBeNull());
-
-    expect(createMock).toHaveBeenCalledTimes(2);
+    await runAndSettle(result, () => result.current.create("123456789012"));
     expect(result.current.createError).toBeNull();
+    expect(sent).toEqual([
+      { method: "POST", path: "/v1/aws-connection", body: { account_id: "123456789012" } },
+      { method: "POST", path: "/v1/aws-connection", body: { account_id: "123456789012" } },
+    ]);
   });
 
-  it("allows only one recovery action at a time", async () => {
-    const pendingValidation = deferred<ReturnType<typeof awsConnection>>();
-    validateMock.mockReturnValue(pendingValidation.promise);
-    retryMock.mockResolvedValue(awsConnection());
+  it("runs one recovery action at a time and keeps a failed one retryable under its own error", async () => {
+    const validation = deferred<Response>();
+    const sent = serve({
+      "POST /v1/aws-connection/validate": [unavailable, () => validation.promise],
+    });
     const { result } = renderController(testQueryClient(), vi.fn());
+
+    await runAndSettle(result, () => result.current.validate());
+    expect(result.current.recoveryError?.message).toBe("AWS is unavailable");
+    expect(result.current.createError).toBeNull();
+    expect(result.current.removalError).toBeNull();
 
     act(() => {
       result.current.validate();
       result.current.retry();
       result.current.reconnect();
     });
-
     expect(result.current.activeAction).toBe("validate");
-    await waitFor(() => expect(validateMock).toHaveBeenCalledOnce());
-    expect(retryMock).not.toHaveBeenCalled();
-    expect(reconnectMock).not.toHaveBeenCalled();
-
-    pendingValidation.resolve(awsConnection());
-    await waitFor(() => expect(result.current.activeAction).toBeNull());
-  });
-
-  it("keeps failed recovery actions retryable and scopes their error", async () => {
-    const failure = new Error("validation failed");
-    validateMock.mockRejectedValueOnce(failure).mockResolvedValueOnce(awsConnection());
-    const { result } = renderController(testQueryClient(), vi.fn());
-
-    act(() => result.current.validate());
+    validation.resolve(Response.json(awsConnection()));
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
-    expect(result.current.recoveryError).toBe(failure);
-    expect(result.current.createError).toBeNull();
-    expect(result.current.removalError).toBeNull();
-
-    act(() => result.current.validate());
-    await waitFor(() => expect(result.current.activeAction).toBeNull());
-
-    expect(validateMock).toHaveBeenCalledTimes(2);
     expect(result.current.recoveryError).toBeNull();
+    expect(sent.map((call) => `${call.method} ${call.path}`)).toEqual([
+      "POST /v1/aws-connection/validate",
+      "POST /v1/aws-connection/validate",
+    ]);
   });
 
   it("closes both dialogs and invalidates every AWS projection after accepted removal", async () => {
@@ -113,34 +89,29 @@ describe("AWS connection controller", () => {
     for (const queryKey of projections) {
       queryClient.setQueryData(queryKey, { stale: true });
     }
-    removeMock.mockResolvedValue(awsConnection("disconnect_draining"));
+    serve({
+      "DELETE /v1/aws-connection": [
+        () => Response.json({ connection: awsConnection("disconnect_draining") }, { status: 202 }),
+      ],
+    });
     const { result } = renderController(queryClient, onClose);
 
     act(() => result.current.setRemoveOpen(true));
-    expect(result.current.removeOpen).toBe(true);
-    await runAndSettle(result, result.current.remove);
+    await runAndSettle(result, () => result.current.remove());
 
     expect(result.current.removeOpen).toBe(false);
     expect(onClose).toHaveBeenCalledOnce();
-    await waitFor(() =>
-      expect(
-        projections.map((queryKey) => queryClient.getQueryState(queryKey)?.isInvalidated),
-      ).toEqual([true, true, true]),
-    );
+    expect(
+      projections.map((queryKey) => queryClient.getQueryState(queryKey)?.isInvalidated),
+    ).toEqual([true, true, true]);
   });
 });
 
 function renderController(queryClient: QueryClient, onClose: () => void) {
-  return renderHook(
-    () =>
-      useAwsConnectionController({
-        onClose,
-      }),
-    {
-      wrapper: ({ children }: PropsWithChildren) =>
-        createElement(QueryClientProvider, { client: queryClient }, children),
-    },
-  );
+  return renderHook(() => useAwsConnectionController({ onClose }), {
+    wrapper: ({ children }: PropsWithChildren) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+  });
 }
 
 async function runAndSettle(

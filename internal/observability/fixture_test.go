@@ -73,8 +73,8 @@ func (f *fixture) placedContainer(release uuid.UUID) (compute.HostID, execution.
 	err := f.pool.QueryRow(f.t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h1', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             select r.workspace_id, $1, 'ready', host.id, 4, 1000, 1 << 28, now(), now()
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             select r.workspace_id, $1, (select workload_id from releases where id = $1), 'ready', host.id, 4, 1000, 1 << 28, now(), now()
              from host, (select a.workspace_id from releases rr join workloads w on w.id = rr.workload_id
                          join apps a on a.id = w.app_id where rr.id = $1) r returning id)
 select host.id, ctr.id from host, ctr`, release).Scan(&host, &container)
@@ -110,7 +110,10 @@ func (f *fixture) exec1(sql string, args ...any) {
 // returned subscription has taken the reset that LISTEN starts with.
 func runHub(t *testing.T, pool *pgxpool.Pool, cfg observability.ChangesConfig, ws identity.WorkspaceID) (*observability.Changes, *observability.Subscription) {
 	t.Helper()
-	hub := observability.NewChanges(pool, cfg, nil, slog.New(slog.DiscardHandler))
+	hub, err := observability.NewChanges(pool, cfg, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	sub, _, err := hub.Subscribe(ws, "test", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -155,11 +158,18 @@ func decodeFrame(t *testing.T, frame []byte) apitypes.ChangeEvent {
 	return out
 }
 
-func noEvent(t *testing.T, sub *observability.Subscription, wait time.Duration) {
-	t.Helper()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("unexpected event %s", e.Frame)
-	case <-time.After(wait):
+// quiet proves that sub received nothing since its last event: a change
+// made now in ws, the subscription's workspace, is the next event it
+// receives, as the hub delivers in commit order.
+func (f *fixture) quiet(sub *observability.Subscription, ws identity.WorkspaceID) {
+	f.t.Helper()
+	var marker uuid.UUID
+	if err := f.pool.QueryRow(f.t.Context(), "insert into volumes (workspace_id, name) values ($1, 'marker-' || gen_random_uuid()) returning id",
+		uuid.UUID(ws)).Scan(&marker); err != nil {
+		f.t.Fatal(err)
+	}
+	e, event := nextEvent(f.t, sub)
+	if len(event.Changes) != 1 || event.Changes[0].ResourceId == nil || *event.Changes[0].ResourceId != marker.String() {
+		f.t.Fatalf("unexpected event %s", e.Frame)
 	}
 }

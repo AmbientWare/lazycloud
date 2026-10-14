@@ -76,6 +76,7 @@ from hosts where id = $1`, uuid.UUID(host)).Scan(&f.Phase, &f.Requested, &f.Forc
 }
 
 func TestReserveLaunchesHibernateOnAPersistentSpotRequest(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	insert := func(market compute.Market, mode compute.ReserveMode, instanceType string) compute.HostID {
 		return compute.HostID(scan[uuid.UUID](t, o.pool, `
@@ -136,6 +137,7 @@ values ('s', 'offline', 'platform', 'aws', 'requested', 4000, 16::bigint << 30, 
 }
 
 func TestStoppingReserveHibernatesOnceEC2AllowsAndSettlesIntoTheReserve(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c001")
 	ec2.add(fakeInstance{ID: "i-0000000000000c001", State: "running", Hibernation: true, Launched: time.Now().Add(-30 * time.Second)}, host.String())
@@ -175,6 +177,7 @@ func TestStoppingReserveHibernatesOnceEC2AllowsAndSettlesIntoTheReserve(t *testi
 // for the claim's two-minute lease. The recheck repeats no stop EC2 is
 // still carrying out.
 func TestAStoppingReserveIsRecheckedWithinSecondsOfItsStopCall(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c030")
 	ec2.add(fakeInstance{ID: "i-0000000000000c030", State: "running", Hibernation: true, Launched: time.Now().Add(-time.Hour)}, host.String())
@@ -202,6 +205,7 @@ func TestAStoppingReserveIsRecheckedWithinSecondsOfItsStopCall(t *testing.T) {
 // its instance's stop recorded, and a resume asked meanwhile starts it
 // once EC2 allows.
 func TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c040")
 	ec2.add(fakeInstance{ID: "i-0000000000000c040", State: "stopped", SpotRequest: "sir-0000c040"}, host.String())
@@ -240,6 +244,7 @@ func TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest(t *testing.T) {
 // long it stays active, and starts once EC2 disables it; reconcile ends a
 // reserve that never resumes.
 func TestAResumedSpotReserveWaitsForASlowDisable(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c042")
 	ec2.add(fakeInstance{ID: "i-0000000000000c042", State: "stopped", SpotRequest: "sir-0000c042"}, host.String())
@@ -261,6 +266,7 @@ func TestAResumedSpotReserveWaitsForASlowDisable(t *testing.T) {
 // A reserve stopped for an hour waits out a failed read of its Spot
 // request instead of taking it as stuck.
 func TestAResumedSpotReserveWaitsOutAnUnreadRequest(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c043")
 	ec2.add(fakeInstance{ID: "i-0000000000000c043", State: "stopped", SpotRequest: "sir-0000c043"}, host.String())
@@ -285,6 +291,7 @@ func TestAResumedSpotReserveWaitsOutAnUnreadRequest(t *testing.T) {
 // EC2 names a hibernation in the stop reason; a hibernation that stopped
 // for another reason saved no image.
 func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c007")
 	ec2.add(fakeInstance{ID: "i-0000000000000c007", State: "stopped", Hibernation: true, StateReason: "Client.InstanceInitiatedShutdown"}, host.String())
@@ -302,6 +309,7 @@ func TestAHibernationStoppedForAnotherReasonSavedNoImage(t *testing.T) {
 }
 
 func TestHibernationRefusalsRetryForTenMinutesThenTheReserveStopsPlainly(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c002")
 	ec2.add(fakeInstance{ID: "i-0000000000000c002", State: "running", Hibernation: true, Launched: time.Now().Add(-5 * time.Minute)}, host.String())
@@ -332,6 +340,7 @@ func TestHibernationRefusalsRetryForTenMinutesThenTheReserveStopsPlainly(t *test
 }
 
 func TestAnInstanceThatCannotHibernateStopsPlainlyAtOnce(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	refused := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000c003")
 	ec2.add(fakeInstance{ID: "i-0000000000000c003", State: "running", Hibernation: true, Launched: time.Now().Add(-5 * time.Minute)}, refused.String())
@@ -360,6 +369,7 @@ func TestAnInstanceThatCannotHibernateStopsPlainlyAtOnce(t *testing.T) {
 }
 
 func TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	stuck := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c005")
 	ec2.add(fakeInstance{ID: "i-0000000000000c005", State: "stopping", Launched: time.Now().Add(-time.Hour)}, stuck.String())
@@ -397,6 +407,7 @@ func TestAStopPendingTenMinutesIsForcedAndALostStopAnswerIsNotRepeated(t *testin
 // A resumed reserve starts once, and a start EC2 refuses for capacity
 // leaves it stopped in the reserve with its zone cooled.
 func TestResumeStartsTheReserveOnceAndARefusedStartKeepsIt(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseResuming, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000d001")
 	ec2.add(fakeInstance{ID: "i-0000000000000d001", State: "stopped", Hibernation: true}, host.String())
@@ -441,6 +452,7 @@ from hosts where id = $1`, uuid.UUID(spot))
 // A persistent request whose instance was replaced while the fleet was not
 // looking ends with every instance it launched.
 func TestTerminatingASpotReserveEndsEveryInstanceItsRequestLaunched(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseTerminating, compute.MarketSpot, compute.ReserveStop, "i-0000000000000d003")
 	ec2.add(fakeInstance{ID: "i-0000000000000d003", State: "stopped", SpotRequest: "sir-0000d003"}, host.String())
@@ -462,6 +474,7 @@ func TestTerminatingASpotReserveEndsEveryInstanceItsRequestLaunched(t *testing.T
 }
 
 func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	stopped := reserve(t, o, compute.PhaseStopped, compute.MarketOnDemand, compute.ReserveHibernate, "i-0000000000000e001")
 	ec2.add(fakeInstance{ID: "i-0000000000000e001", State: "stopped", Hibernation: true}, stopped.String())
@@ -523,6 +536,7 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 // A serving Spot host's one-time request ends with its instance; the
 // platform may not cancel it, so termination must not try.
 func TestServingSpotHostsTerminateWithoutTheirOneTimeRequest(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, instance_type, market)
@@ -547,6 +561,7 @@ values ('s', 'offline', 'platform', 'aws', 'requested', 1500, 6::bigint << 30, '
 }
 
 func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	// A serving one-time Spot host sent to the reserve cannot stop.
 	oneTime := reserve(t, o, compute.PhaseStopping, compute.MarketSpot, compute.ReserveStop, "i-0000000000000c010")
@@ -598,6 +613,7 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 // retires the host and cools its offer, so the next reserve pass buys the
 // reserve elsewhere instead of a host that would be refused the same way.
 func TestARefusedStopCoolsItsOfferSoTheNextPassBuysElsewhere(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c021")
 	run(t, o.pool, "update hosts set instance_type = 'c6a.2xlarge' where id = $1", uuid.UUID(host))
@@ -627,6 +643,7 @@ and region = 'us-east-2' and market = 'on_demand'`); n != 0 {
 // Reconcile reads hosts, then EC2. A host the session or actuator moves in
 // between keeps its new phase and its instance.
 func TestReconcileLeavesAHostThatMovedSinceItsSnapshot(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	stopping := reserve(t, o, compute.PhasePreparing, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000e010")
 	ec2.add(fakeInstance{ID: "i-0000000000000e010", State: "running"}, stopping.String())
@@ -664,6 +681,7 @@ func TestReconcileLeavesAHostThatMovedSinceItsSnapshot(t *testing.T) {
 // in a pool a launch walk refused first, so the work it was resumed for
 // buys a host on the next pass rather than resuming it again.
 func TestARefusedStartLetsItsWorkBuy(t *testing.T) {
+	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
 	host := stoppedReserve(t, o, "m7i.xlarge", "i-0000000000000d101")
 	ec2.add(fakeInstance{ID: "i-0000000000000d101", State: "stopped", Type: "m7i.xlarge"}, host.String())
@@ -691,6 +709,7 @@ values ('platform', 'us-east-2', 'use2-az1', 'm7i.xlarge', 'on_demand', now() + 
 // A terminating host whose instance EC2 is shutting down is ending
 // already: the actuator asks EC2 to terminate it no more.
 func TestAShuttingDownInstanceIsNotTerminatedAgain(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	host := reserve(t, o, compute.PhaseTerminating, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000d201")
 	ec2.add(fakeInstance{ID: "i-0000000000000d201", State: "shutting-down"}, host.String())
@@ -707,6 +726,7 @@ func TestAShuttingDownInstanceIsNotTerminatedAgain(t *testing.T) {
 // on interruption, so it can return to the reserve when it leaves; a Spot
 // CPU host stays on a one-time request.
 func TestSpotGPUWorkHostsLaunchOnPersistentRequests(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	insert := func(instanceType string, gpus int) compute.HostID {
 		return compute.HostID(scan[uuid.UUID](t, o.pool, `

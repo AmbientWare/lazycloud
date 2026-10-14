@@ -345,10 +345,11 @@ func hostIn(t *testing.T, pool *pgxpool.Pool, region string) compute.HostID {
 // The read URLs of a converted reference list its layers in order and read
 // them by range; a reference without converted layers is a typed error.
 func TestLayerReadURLs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
+	im := newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
 
 	reference := "registry.test/lazycloud/images/abc@sha256:" + hex64("1")
 	contents := [][]byte{bytes.Repeat([]byte("base "), 1<<20), []byte("app layer")}
@@ -393,6 +394,7 @@ func TestLayerReadURLs(t *testing.T) {
 // the same base converts only its own layer; repeated reports are answered
 // with the same uploads.
 func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -473,6 +475,7 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 // Two builds converting the same base layer at once end with one pair; the
 // other is deleted by the sweep.
 func TestConcurrentConversionsOfOneLayerEndWithOneRecord(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -548,6 +551,7 @@ func TestConcurrentConversionsOfOneLayerEndWithOneRecord(t *testing.T) {
 // What a customer's host converts serves only its workspace, and a pair
 // that does not hold the layer its config names fails the build.
 func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	machine := f.host(t)
@@ -601,6 +605,7 @@ func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
 // A host cannot claim more storage than a layer needs, and a failed build
 // aborts the data uploads it started.
 func TestLayerUploadsAreBoundedAndAbortedWithTheirBuild(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -660,6 +665,7 @@ func TestLayerUploadsAreBoundedAndAbortedWithTheirBuild(t *testing.T) {
 // The sweep retires a pair only after no live image used it through the
 // grace period. A replaced reference a running release still pins is live.
 func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
@@ -734,8 +740,8 @@ values ('oldest-source', 'amd64', 'oldest-amd64'), ('old-source', 'amd64', 'old-
        ('new-source', 'amd64', 'new-amd64'), ('new-source', 'arm64', null)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, image_reference)
-		values ($1, 'ready', 1, 100, 100, $2, $3, 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
+	if _, err := f.pool.Exec(ctx, `insert into containers (workspace_id, state, slots, cpu_millis, memory_bytes, host_id, release_id, workload_id, image_reference)
+		values ($1, 'ready', 1, 100, 100, $2, $3, (select workload_id from releases where id = $3), 'oldest-amd64')`, uuid.UUID(ws), uuid.UUID(f.host(t)), release); err != nil {
 		t.Fatal(err)
 	}
 	superseded, newest, onlyArm, running := pair("old-amd64"), pair("new-amd64"), pair("old-arm64"), pair("oldest-amd64")

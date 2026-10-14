@@ -15,6 +15,7 @@ import (
 // until a user acts: a resume and a redeploy of the same code each give it a
 // fresh start, which its warm minimum then asks for.
 func TestResumeAndUnchangedRedeployRestartAStoppedRelease(t *testing.T) {
+	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
 	e := execution.NewExecution(pool)

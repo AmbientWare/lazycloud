@@ -26,7 +26,7 @@ func (q *Queries) CountStartFailure(ctx context.Context, id uuid.UUID) (int32, e
 const failQueuedTasksOfRelease = `-- name: FailQueuedTasksOfRelease :many
 update tasks
 set status = 'failed', failure = $1, finished_at = now()
-where id = any($2::uuid[]) and status = 'queued'
+where id = any($2::uuid[])
 returning id
 `
 
@@ -35,7 +35,9 @@ type FailQueuedTasksOfReleaseParams struct {
 	Ids     []uuid.UUID
 }
 
-// The caller holds the rows from LockQueuedWithDependents.
+// The ids are queued tasks the caller locked with LockQueuedWithDependents.
+// They are read by key alone: a status test would let a generic plan scan
+// the whole queue through a queued partial index.
 func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTasksOfReleaseParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.Ids)
 	if err != nil {

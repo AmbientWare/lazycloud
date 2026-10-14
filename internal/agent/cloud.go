@@ -27,12 +27,13 @@ const (
 	hostIDHeader = "LazyCloud-Host-Id"
 	// identityExpirySeconds bounds how long a captured proof can be replayed.
 	identityExpirySeconds = "60"
-	// interruptionPoll is how often the agent asks IMDS for a Spot notice.
-	// EC2 gives two minutes' warning.
-	interruptionPoll = 5 * time.Second
-	imdsCallTimeout  = 3 * time.Second
-	spotActionPath   = "spot/instance-action"
+	imdsCallTimeout       = 3 * time.Second
+	spotActionPath        = "spot/instance-action"
 )
+
+// DefaultInterruptionPoll is how often a host asks IMDS for a Spot notice.
+// EC2 gives two minutes' warning.
+const DefaultInterruptionPoll = 5 * time.Second
 
 // DefaultIMDSEndpoint is the EC2 instance metadata service.
 const DefaultIMDSEndpoint = "http://169.254.169.254"
@@ -109,7 +110,7 @@ func (i *interruption) message() *hostproto.HostMessage {
 // watchInterruptions polls IMDS for a Spot interruption notice and reports
 // it once; every later session restates it in runSession.
 func (a *Agent) watchInterruptions(ctx context.Context) {
-	ticker := time.NewTicker(interruptionPoll)
+	ticker := time.NewTicker(a.cfg.InterruptionPoll)
 	defer ticker.Stop()
 	for {
 		notice, err := spotNotice(ctx, a.metadata)

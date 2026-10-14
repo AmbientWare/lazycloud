@@ -4,39 +4,13 @@ import json
 from pathlib import Path
 
 import pytest
-import typer
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
-from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
 from typer.testing import CliRunner
 
+from tests.api_server import ApiRequest, FakeApi, Reply, json_reply
+
 client_cli = build_public_cli()
-
-
-def test_public_cli_opens_an_existing_container_shell_without_a_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, str | None]] = []
-
-    def open_public_shell(
-        _ctx: typer.Context,
-        *,
-        container_id: str,
-        sync_dir: str | None = None,
-        workspace: str | None = None,
-    ) -> None:
-        assert sync_dir is None
-        calls.append((container_id, workspace))
-
-    monkeypatch.setattr("lazycloud.cli.execution.open_existing_shell", open_public_shell)
-
-    public_result = CliRunner().invoke(
-        client_cli,
-        ["shell", "--container-id", "container-1", "--workspace", "team"],
-    )
-
-    assert public_result.exit_code == 0, public_result.output
-    assert calls == [("container-1", "team")]
 
 
 def test_interactive_shell_rejects_json_output_before_creating_a_session() -> None:
@@ -132,17 +106,24 @@ def test_run_json_preserves_values_and_reports_unsupported_results_without_stdou
     assert json.loads(captured.err)["error"]["type"] == "result_not_json_serializable"
 
 
-def test_volume_remote_path_parser_supports_plain_and_scheme_syntax() -> None:
-    plain = parse_remote_path("myvol/subdir/file.txt")
-    schemed = parse_remote_path_if_schemed("lazycloud://myvol/subdir/file.txt")
+def test_ls_reads_plain_and_scheme_volume_paths_and_follows_pages(fake_api: FakeApi) -> None:
+    files = "/v1/workspaces/team/volumes/myvol/files"
 
-    assert plain is not None
-    assert plain.volume_name == "myvol"
-    assert plain.relative_path == "subdir/file.txt"
-    assert plain.full_path == "myvol/subdir/file.txt"
-    assert schemed is not None
-    assert schemed == plain
-    assert parse_remote_path_if_schemed("local/path.txt") is None
+    @fake_api.route("GET", files)
+    def listing(request: ApiRequest) -> Reply:
+        entry: dict[str, object] = {"path": "subdir/a.txt", "is_dir": False, "size_bytes": 3}
+        if "cursor" in request.query:
+            second: dict[str, object] = {**entry, "path": "subdir/b.txt"}
+            return json_reply({"files": [second]})
+        return json_reply({"files": [entry], "next_cursor": "c2"})
+
+    plain = CliRunner().invoke(client_cli, ["--json", "ls", "myvol/subdir"])
+    schemed = CliRunner().invoke(client_cli, ["--json", "ls", "lazycloud://myvol/subdir"])
+
+    assert plain.exit_code == 0, plain.output
+    assert [item["path"] for item in json.loads(plain.stdout)] == ["subdir/a.txt", "subdir/b.txt"]
+    assert schemed.stdout == plain.stdout
+    assert {tuple(r.query["path"]) for r in fake_api.calls("GET", files)} == {("subdir",)}
 
 
 def test_volume_delete_without_tty_requires_yes_flag(

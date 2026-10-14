@@ -12,6 +12,7 @@ import (
 // A claimed task records its queue wait only in the trace it came with; a
 // task without one, such as a cron task, starts no trace.
 func TestClaimsRecordQueueWaitsOnlyInTheirTrace(t *testing.T) {
+	t.Parallel()
 	spans := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans))
 	ctx, call := provider.Tracer("").Start(context.Background(), "ClaimTasks")

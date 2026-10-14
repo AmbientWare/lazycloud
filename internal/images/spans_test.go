@@ -16,6 +16,7 @@ import (
 // when the build failed: whether its host reported the failure or the
 // workspace that started it was deleted.
 func TestFailedBuildsAreTracedAsFailures(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	spans := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans))

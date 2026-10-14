@@ -8,7 +8,7 @@
 #            release this change replaces into .lazycloud/previous-agent:
 #            the merge base with origin/main, or on main the commit before,
 #            which hosts run until this one ships. Needs git, Go and uv.
-#   run      go test -race ./acceptance as root, as hosts run the agent, with
+#   run      go test -race -tags hostruntime ./acceptance as root, as hosts run the agent, with
 #            workloads under runsc; a skipped test fails the run
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -38,7 +38,7 @@ case "${1:-}" in
     root=()
     if [ "$(id -u)" -ne 0 ]; then root=(sudo "--preserve-env=HOME,GOPATH,GOCACHE,GOMODCACHE,GOTOOLCHAIN,LAZYCLOUD_OTLP_ENDPOINT,LAZYCLOUD_OTLP_INSECURE"); fi
     "${root[@]}" env PATH="$PATH" LAZYCLOUD_TEST_OCI_RUNTIME=runsc LAZYCLOUD_TEST_OLD_AGENT="$previous" \
-      go test -race -timeout 60m -v ./acceptance "$@" 2>&1 | tee "$log"
+      go test -race -tags hostruntime -timeout 60m -v ./acceptance "$@" 2>&1 | tee "$log"
     if grep -- '--- SKIP' "$log"; then
       echo "acceptance tests skipped" >&2
       exit 1

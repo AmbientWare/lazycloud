@@ -3,11 +3,9 @@ package imagefs
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -175,90 +172,12 @@ func checkAgainstTar(t *testing.T, layer []byte, ix Index, data RangeReader) {
 	}
 }
 
-// Every layer of python:3.12-slim reads back as the tar holds it, and its
-// index names the layer by the image's diff_id.
-func TestPythonLayersRoundTrip(t *testing.T) {
-	const image = "python:3.12-slim"
-	dir := t.TempDir()
-	if err := exec.CommandContext(t.Context(), "docker", "image", "inspect", image).Run(); err != nil {
-		if out, err := exec.CommandContext(t.Context(), "docker", "pull", image).CombinedOutput(); err != nil {
-			t.Fatalf("docker pull: %v: %s", err, out)
-		}
-	}
-	saved := filepath.Join(dir, "image.tar")
-	if out, err := exec.CommandContext(t.Context(), "docker", "save", "-o", saved, image).CombinedOutput(); err != nil {
-		t.Fatalf("docker save: %v: %s", err, out)
-	}
-	blobs := readTar(t, saved)
-	var manifest []struct {
-		Config string
-		Layers []string
-	}
-	if err := json.Unmarshal(blobs["manifest.json"], &manifest); err != nil || len(manifest) != 1 {
-		t.Fatalf("manifest: %v", err)
-	}
-	var config struct {
-		RootFS struct {
-			DiffIDs []Digest `json:"diff_ids"`
-		} `json:"rootfs"`
-	}
-	if err := json.Unmarshal(blobs[manifest[0].Config], &config); err != nil {
-		t.Fatal(err)
-	}
-	layers := manifest[0].Layers
-	if len(layers) != len(config.RootFS.DiffIDs) || len(layers) < 2 {
-		t.Fatalf("%d layers for %d diff_ids", len(layers), len(config.RootFS.DiffIDs))
-	}
-	for i, name := range layers {
-		layer := blobs[name]
-		if bytes.HasPrefix(layer, []byte{0x1f, 0x8b}) {
-			zr, err := gzip.NewReader(bytes.NewReader(layer))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if layer, err = io.ReadAll(zr); err != nil {
-				t.Fatal(err)
-			}
-		}
-		ix, data := roundTrip(t, layer)
-		if ix.Layer != config.RootFS.DiffIDs[i] {
-			t.Fatalf("layer %d digest %s, image diff_id %s", i, ix.Layer, config.RootFS.DiffIDs[i])
-		}
-		checkAgainstTar(t, layer, ix, serve(t, data))
-		t.Logf("layer %d: %d bytes tar, %d entries, %d frames, %d data bytes", i, len(layer), len(ix.Entries), len(ix.Frames), ix.DataSize)
-	}
-}
-
-func readTar(t *testing.T, file string) map[string][]byte {
-	t.Helper()
-	f, err := os.Open(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	out := map[string][]byte{}
-	tr := tar.NewReader(f)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return out
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if hdr.Typeflag == tar.TypeReg {
-			if out[hdr.Name], err = io.ReadAll(tr); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-}
-
 // A layer with every entry kind converts to the tree extraction would
 // build: whiteouts and opaque markers become overlayfs markers, hard links
 // share their target's bytes, later members replace earlier ones and
 // missing parents appear.
 func TestConvertKeepsEveryEntryKind(t *testing.T) {
+	t.Parallel()
 	mtime := time.Date(2026, 10, 5, 12, 30, 0, 0, time.UTC)
 	epoch := time.Unix(0, 0).UTC()
 	tool := make([]byte, 2*FrameSize+123)
@@ -363,6 +282,7 @@ func TestConvertKeepsEveryEntryKind(t *testing.T) {
 // Convert refuses a layer it cannot index faithfully rather than storing a
 // tree that differs from extraction.
 func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
+	t.Parallel()
 	streams := map[string][]byte{
 		"a hard link to a missing file": headersTar(t, tar.Header{Name: "b", Typeflag: tar.TypeLink, Linkname: "a"}),
 		"a hard link target replaced": headersTar(t,
@@ -382,6 +302,7 @@ func TestConvertRefusesLayersItCannotIndex(t *testing.T) {
 // A whiteout hides only the lower layers, in either order against an entry
 // of the same layer: a file stays, and a directory stays and turns opaque.
 func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
+	t.Parallel()
 	mtime := time.Date(2026, 10, 5, 12, 30, 0, 0, time.UTC)
 	headers := []tar.Header{
 		{Name: "file-first", Typeflag: tar.TypeReg},
@@ -415,6 +336,7 @@ func TestWhiteoutsHideOnlyLowerLayers(t *testing.T) {
 // An old GNU sparse member reads back with its holes filled, as extraction
 // writes it.
 func TestConvertFillsSparseFiles(t *testing.T) {
+	t.Parallel()
 	data := bytes.Repeat([]byte("x"), 1000)
 	hdr := make([]byte, 512)
 	octal := func(off, n int, v int64) { copy(hdr[off:off+n-1], fmt.Sprintf("%0*o", n-1, v)) }
@@ -452,6 +374,7 @@ func TestConvertFillsSparseFiles(t *testing.T) {
 // Every frame carries zstd's content checksum, so a frame changed in the
 // store or a cache is an error, never wrong bytes.
 func TestReadFrameRefusesCorruptFrames(t *testing.T) {
+	t.Parallel()
 	body := make([]byte, FrameSize)
 	_, _ = rand.Read(body)
 	ix, data := roundTrip(t, fileTar(t, "weights", body))
@@ -505,6 +428,7 @@ func headersTar(t *testing.T, hdrs ...tar.Header) []byte {
 // A PAX global header, which git archive and some image builders write,
 // describes no file: conversion skips it as extraction does.
 func TestConvertSkipsPAXGlobalHeaders(t *testing.T) {
+	t.Parallel()
 	global := tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "build 7"}}
 	ix, _ := roundTrip(t, fileTar(t, "app", []byte("hi"), global))
 	if len(ix.Entries) != 1 || ix.Entries[0].Path != "app" {
@@ -515,6 +439,7 @@ func TestConvertSkipsPAXGlobalHeaders(t *testing.T) {
 // ConvertFile keeps the data file of a layer it converts and leaves none
 // behind for one it refuses, for its tar or for its diff_id.
 func TestConvertFileLeavesNoFileOnFailure(t *testing.T) {
+	t.Parallel()
 	layer := fileTar(t, "app", []byte("hi"))
 	sum := sha256.Sum256(layer)
 	diffID := Digest("sha256:" + hex.EncodeToString(sum[:]))

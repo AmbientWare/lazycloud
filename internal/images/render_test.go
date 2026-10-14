@@ -73,6 +73,7 @@ func pipSteps(args ...[]string) *[]apitypes.ImageStep {
 }
 
 func TestEveryBaseInstallsPackagesWithUV(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		def     apitypes.ImageDefinition
 		from    string
@@ -137,6 +138,7 @@ func TestEveryBaseInstallsPackagesWithUV(t *testing.T) {
 // An installed Python is the exact release asked for, checked before any
 // link replaces the base's, with pip and compiled bytecode.
 func TestInstalledPythonIsExactAndLinked(t *testing.T) {
+	t.Parallel()
 	lines := renderLines(t, apitypes.ImageDefinition{PythonVersion: "3.12.4"})
 	var install string
 	for _, line := range lines {
@@ -169,6 +171,7 @@ func TestInstalledPythonIsExactAndLinked(t *testing.T) {
 // packages around it resolve; a project moves later installs into its
 // environment.
 func TestPipStepsMergeUntilAFlagOrProject(t *testing.T) {
+	t.Parallel()
 	steps := *pipSteps([]string{"numpy"}, []string{"pandas"}, []string{"--no-deps", "torch"}, []string{"scipy"})
 	steps = append(steps, apitypes.ImageStep{Kind: apitypes.UvProject, Args: &[]string{"."}})
 	steps = append(steps, *pipSteps([]string{"rich"})...)

@@ -102,6 +102,7 @@ func (e *env) nextChange(events <-chan sseEvent, topic apitypes.ChangeTopic) (ss
 // the workspace's committed changes as server-sent events, and resumes after
 // Last-Event-ID.
 func TestChangeStreamOverHTTP(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	if head, _ := e.openStream(e.outsider, ""); head.status != http.StatusForbidden {
 		t.Fatalf("outsider stream: %d", head.status)
@@ -151,6 +152,7 @@ func TestChangeStreamOverHTTP(t *testing.T) {
 // Every observability read authorizes the workspace, validates its range
 // and reports unknown resources as not found.
 func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	unknown := uuid.NewString()

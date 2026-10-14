@@ -49,6 +49,7 @@ func acceptanceRegion() string {
 // LAZYCLOUD_FLEET_SPOT_SNAPSHOT naming a file it writes the Spot prices it
 // read there.
 func TestRealEC2Fleet(t *testing.T) {
+	t.Parallel()
 	profile := os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_PROFILE")
 	if profile == "" {
 		t.Skip("set LAZYCLOUD_EC2_ACCEPTANCE_PROFILE to the platform account's AWS profile")

@@ -91,27 +91,34 @@ describe("workspace deletion controller", () => {
     expect(deleteCommand).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks protected starts but allows an accepted deleting workspace to resume", () => {
-    const owner = workspace("workspace-1", "default");
-    const deleting = {
-      ...workspace("workspace-2", "research"),
-      state: "deleting" as const,
-    };
-    const { result } = renderController({
-      canManage: true,
-      deleteCommand: vi.fn(),
-      lastWorkspaceName: null,
-      queryClient: testQueryClient(),
-      rememberWorkspaceName: vi.fn(),
-      replacePath: vi.fn(),
-      workspaces: [owner, deleting],
-    });
+  it("offers and starts deletion only for a non-default workspace that is not the last active one", () => {
+    const fallback = workspace("workspace-1", "default");
+    const research = workspace("workspace-2", "research");
+    const deleting = { ...workspace("workspace-3", "staging"), state: "deleting" as const };
+    const controller = (workspaces: Workspace[], canManage = true) =>
+      renderController({
+        canManage,
+        deleteCommand: vi.fn(),
+        lastWorkspaceName: null,
+        queryClient: testQueryClient(),
+        rememberWorkspaceName: vi.fn(),
+        replacePath: vi.fn(),
+        workspaces,
+      }).result;
 
-    act(() => result.current.begin(owner, true));
-    expect(result.current.target).toBeNull();
-    expect(result.current.availability(deleting)).toEqual({ allowed: true });
-    act(() => result.current.begin(deleting, true));
-    expect(result.current.target?.workspace).toEqual(deleting);
+    const shell = controller([fallback, research]);
+    expect(shell.current.availability(research).allowed).toBe(true);
+    expect(shell.current.availability(fallback).allowed).toBe(false);
+    act(() => shell.current.begin(fallback, true));
+    expect(shell.current.target).toBeNull();
+
+    expect(controller([fallback, research], false).current.availability(research).allowed).toBe(
+      false,
+    );
+    const last = controller([research, deleting]);
+    expect(last.current.availability(research).allowed).toBe(false);
+    // An accepted deletion can always be resumed.
+    expect(last.current.availability(deleting).allowed).toBe(true);
   });
 });
 

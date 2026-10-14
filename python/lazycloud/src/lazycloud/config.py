@@ -74,11 +74,12 @@ class ClientConfig(BaseModel):
 
 
 class ClientSettings(BaseSettings):
-    """Where the CLI is pointed: the environment, then the stored profile.
+    """Where the CLI is pointed and how it retries.
 
-    A `.env` in the working directory is deliberately not read. It would make
-    the target a property of whichever directory the operator is standing in,
-    and it outranks an explicitly activated profile.
+    The environment comes first, then the stored profile. A `.env` in the
+    working directory is deliberately not read. It would make the target a
+    property of whichever directory the operator is standing in, and it
+    outranks an explicitly activated profile.
     """
 
     model_config = SettingsConfigDict(
@@ -93,6 +94,9 @@ class ClientSettings(BaseSettings):
     workspace: str = ""
     token: str = ""
     tls: bool | None = None
+    # The first wait before retrying a transient API failure; each further
+    # failure doubles it, up to 8 seconds.
+    retry_delay_seconds: float = Field(default=0.5, ge=0)
 
     @property
     def home_path(self) -> Path:

@@ -248,10 +248,16 @@ func TestSSHSessionsExecShellSignalSFTPAndForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Start("sleep 100"); err != nil {
+	started, err := session.StdoutPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	if err := session.Start("echo started; exec sleep 100"); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(started).ReadString('\n'); err != nil || line != "started\n" {
+		t.Fatalf("the session printed %q: %v", line, err)
+	}
 	if err := session.Signal(ssh.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

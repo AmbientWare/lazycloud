@@ -46,6 +46,7 @@ func paths(files []apitypes.VolumeFile) []string {
 }
 
 func TestVolumeFiles(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -114,6 +115,7 @@ func TestVolumeFiles(t *testing.T) {
 // so uploads go from the page straight to the store, and a download URL
 // makes the browser save the file.
 func TestBrowserUploadsFromTheDashboard(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	var s *Storage
@@ -169,6 +171,7 @@ func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 // TestMoveKeepsNamesThatLookEscaped: copy sources are URL paths, so a file
 // named "a%20b" must not copy "a b".
 func TestMoveKeepsNamesThatLookEscaped(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -192,6 +195,7 @@ func TestMoveKeepsNamesThatLookEscaped(t *testing.T) {
 }
 
 func TestVolumeMultipartUpload(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -235,6 +239,7 @@ func TestVolumeMultipartUpload(t *testing.T) {
 // volume a running container mounts cannot be deleted, and a deleted
 // volume's name is free at once for a new, empty volume.
 func TestVolumeDeletionChecksLiveMounts(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage
@@ -307,6 +312,7 @@ func bucketOf(t *testing.T, f *fixture) string {
 // TestHostGrantReachesOneWorkspace proves a host credential reaches its
 // workspace bucket and nothing else, and that expired keys are revoked.
 func TestHostGrantReachesOneWorkspace(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage

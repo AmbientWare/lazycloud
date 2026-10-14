@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -42,6 +41,7 @@ func taskIDs(tasks []Task) []TaskID {
 }
 
 func TestWaitTasksReturnsOnlyFinishedTasksInRequestOrder(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -67,6 +67,7 @@ func TestWaitTasksReturnsOnlyFinishedTasksInRequestOrder(t *testing.T) {
 }
 
 func TestWaitTasksWakesOnAFinishDuringTheWait(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -78,29 +79,32 @@ func TestWaitTasksWakesOnAFinishDuringTheWait(t *testing.T) {
 		t.Fatalf("claim: %v, %v", claimed, err)
 	}
 	last := claimed[len(claimed)-1]
-	done := make(chan error, 1)
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		done <- e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
-			Attempt: last.Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("7")},
-		})
-	}()
-
-	start := time.Now()
-	found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 30*time.Second)
-	got := found.Finished
-	if err != nil || time.Since(start) > 5*time.Second {
-		t.Fatalf("wait returned after %v: %v", time.Since(start), err)
+	type got struct {
+		wait TaskWait
+		err  error
 	}
-	if err := <-done; err != nil {
+	wait := waiting(t, pool, func(e *Execution) {
+		if _, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 0); err != nil {
+			t.Fatal(err)
+		}
+	}, func(e *Execution) got {
+		found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 10*time.Second)
+		return got{found, err}
+	})
+	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+		Attempt: last.Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("7")},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Task.ID != last.Task || got[0].Result == nil || string(got[0].Result.Data) != "7" {
-		t.Fatalf("finished %+v, want the completed task with its result", got)
+	r := <-wait
+	if finished := r.wait.Finished; r.err != nil || len(finished) != 1 || finished[0].Task.ID != last.Task ||
+		finished[0].Result == nil || string(finished[0].Result.Data) != "7" {
+		t.Fatalf("finished %+v, %v; want the task completed during the wait, with its result", finished, r.err)
 	}
 }
 
 func TestWaitTasksReturnsNoneAtTheDeadline(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -108,16 +112,17 @@ func TestWaitTasksReturnsNoneAtTheDeadline(t *testing.T) {
 	tasks := submit(t, e, f, 2)
 
 	start := time.Now()
-	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 300*time.Millisecond)
+	got, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 50*time.Millisecond)
 	if err != nil || got.Finished == nil || len(got.Finished) != 0 || got.Missing == nil || len(got.Missing) != 0 {
 		t.Fatalf("got %+v, %v; want empty lists", got, err)
 	}
-	if waited := time.Since(start); waited < 300*time.Millisecond || waited > 5*time.Second {
-		t.Fatalf("returned after %v, want the 300ms wait", waited)
+	if waited := time.Since(start); waited < 50*time.Millisecond || waited > 5*time.Second {
+		t.Fatalf("returned after %v, want the 50ms wait", waited)
 	}
 }
 
 func TestWaitTasksReportsTasksOutsideTheWorkspaceAsMissing(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -144,6 +149,7 @@ func TestWaitTasksReportsTasksOutsideTheWorkspaceAsMissing(t *testing.T) {
 }
 
 func TestWaitTasksInlinesResultsWithinTheBudget(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -190,8 +196,10 @@ func finishedIDs(t *testing.T, pool *pgxpool.Pool) func() map[uuid.UUID]bool {
 }
 
 func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
+	t.Parallel()
 	const spec = `{"max_pending_tasks": 10}`
 	t.Run("logs then success or failure", func(t *testing.T) {
+		t.Parallel()
 		pool := dbtest.New(t)
 		e := NewExecution(pool)
 		l := listen(t, pool)
@@ -226,6 +234,7 @@ func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
 		}
 	})
 	t.Run("cancel and dependents failing", func(t *testing.T) {
+		t.Parallel()
 		pool := dbtest.New(t)
 		e := NewExecution(pool)
 		f := deployedFunction(t, pool, spec)
@@ -240,6 +249,7 @@ func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
 		}
 	})
 	t.Run("planning cancels a stopped workload's queue", func(t *testing.T) {
+		t.Parallel()
 		pool := dbtest.New(t)
 		e := NewExecution(pool)
 		f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
@@ -254,25 +264,19 @@ func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
 		}
 	})
 	t.Run("a load error fails the release's queue", func(t *testing.T) {
+		t.Parallel()
 		pool := dbtest.New(t)
 		e := NewExecution(pool)
-		f := runningAttempt(t, pool, `{}`, 1)
-		exec(t, pool, "update attempts set state = 'succeeded', finished_at = now() where id = $1", uuid.UUID(f.attempt))
-		exec(t, pool, "update tasks set status = 'queued', current_attempt_id = null where id = $1", f.task)
-		var container uuid.UUID
-		if err := pool.QueryRow(t.Context(), "select container_id from attempts where id = $1", uuid.UUID(f.attempt)).Scan(&container); err != nil {
-			t.Fatal(err)
-		}
+		f := deployedFunction(t, pool, spec)
+		task := submit(t, e, f, 1)[0]
+		host, container := placedContainer(t, pool, f, ContainerReady, 1)
 		finished := finishedIDs(t, pool)
-		err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
-			return e.containerExited(t.Context(), tx, ContainerID(container), ContainerExit{
-				Reason: StopLoadError, LoadError: &Failure{Kind: FailureLoadError, Message: "no module"},
-			})
-		})
-		if err != nil {
+		if _, err := e.ApplyReport(t.Context(), host, ContainerReport{Container: container, Phase: ReportExited, Exit: &ContainerExit{
+			Reason: StopLoadError, LoadError: &Failure{Kind: FailureLoadError, Message: "no module"},
+		}}); err != nil {
 			t.Fatal(err)
 		}
-		if got := finished(); len(got) != 1 || !got[f.task] {
+		if got := finished(); len(got) != 1 || !got[uuid.UUID(task.ID)] {
 			t.Fatalf("finished %v, want the failed task", got)
 		}
 	})

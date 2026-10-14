@@ -94,8 +94,8 @@ select id from rel`, workspace, app, spec)
 func pendingContainer(t *testing.T, pool *pgxpool.Pool, workspace, release uuid.UUID, cpu, memory int64) uuid.UUID {
 	t.Helper()
 	return scan[uuid.UUID](t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-values ($1, $2, 'pending', 1, $3, $4) returning id`, workspace, release, cpu, memory)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, $3, $4) returning id`, workspace, release, cpu, memory)
 }
 
 // hostSpec is a host row; zero fields take the column defaults of an online,
@@ -163,8 +163,8 @@ func runningAttempt(t *testing.T, pool *pgxpool.Pool, workspace, release uuid.UU
 	t.Helper()
 	var w work
 	err := pool.QueryRow(t.Context(), `
-with ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             values ($1, $2, 'ready', $3, 1, 1000, 1 << 28, now(), now()) returning id),
+with ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 28, now(), now()) returning id),
      task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
               select $1, r.workload_id, r.id, 'running', 1, 2, now() from releases r where r.id = $2 returning id),
      att as (insert into attempts (task_id, number, container_id, state, deadline_at)

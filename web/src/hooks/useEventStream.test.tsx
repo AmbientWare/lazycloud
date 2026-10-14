@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useEventStream, useReconnectingStream } from "@/hooks/useEventStream";
@@ -57,80 +57,51 @@ describe("useEventStream", () => {
     expect(connect).toHaveBeenCalledOnce();
   });
 
-  it("stays idle when disabled", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { result } = renderHook(() =>
-      useEventStream("/v1/workspaces/dev/changes/stream", {
-        enabled: false,
-        onEvent: () => undefined,
+  it.each([
+    ["fail to connect", () => Promise.reject(new Error("offline"))],
+    ["close before any event", () => Promise.resolve(streamResponse([]))],
+    ["answer 503", () => Promise.resolve(new Response("unavailable", { status: 503 }))],
+  ])("waits longer before each retry while connections %s", async (_, answer) => {
+    const attempts: number[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        attempts.push(Date.now());
+        return answer();
       }),
     );
-
-    expect(result.current).toBe("idle");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("backs off repeated connection failures exponentially", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
-    vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    try {
-      renderHook(() =>
-        useEventStream("/v1/workspaces/dev/changes/stream", {
-          onEvent: () => undefined,
-        }),
-      );
+    renderHook(() =>
+      useEventStream("/v1/workspaces/dev/changes/stream", { onEvent: () => undefined }),
+    );
+    await vi.waitFor(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+      expect(attempts.length).toBeGreaterThanOrEqual(4);
+    });
 
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(999);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
+    const waits = attempts.slice(1, 4).map((time, index) => time - attempts[index]!);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[1]).toBeGreaterThan(waits[0]!);
+    expect(waits[2]).toBeGreaterThan(waits[1]!);
   });
 
-  it("backs off event streams that repeatedly close before becoming healthy", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(streamResponse([]));
+  it("stops on a client error the server would repeat", async () => {
+    const fetchMock = vi.fn(async () => new Response("forbidden", { status: 403 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    try {
-      await act(async () => {
-        renderHook(() =>
-          useEventStream("/v1/workspaces/dev/changes/stream", {
-            onEvent: () => undefined,
-          }),
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+    const { result } = renderHook(() =>
+      useEventStream("/v1/workspaces/dev/changes/stream", { onEvent: () => undefined }),
+    );
+    await vi.waitFor(() => expect(result.current).toBe("error"));
+    await vi.advanceTimersByTimeAsync(120_000);
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("aborts the previous stream when the workspace URL changes", async () => {
+  it("opens nothing while disabled and aborts the previous stream when the URL changes", async () => {
     const fetchMock = vi.fn(
       (_: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_, reject) => {
@@ -141,14 +112,18 @@ describe("useEventStream", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { rerender, unmount } = renderHook(
-      ({ url }) => useEventStream(url, { onEvent: () => undefined }),
-      { initialProps: { url: "/v1/workspaces/one/changes/stream" } },
+    const { result, rerender, unmount } = renderHook(
+      ({ url, enabled }) => useEventStream(url, { enabled, onEvent: () => undefined }),
+      { initialProps: { url: "/v1/workspaces/one/changes/stream", enabled: false } },
     );
+    expect(result.current).toBe("idle");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    rerender({ url: "/v1/workspaces/one/changes/stream", enabled: true });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const firstSignal = fetchMock.mock.calls[0]?.[1]?.signal;
 
-    rerender({ url: "/v1/workspaces/two/changes/stream" });
+    rerender({ url: "/v1/workspaces/two/changes/stream", enabled: true });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(firstSignal?.aborted).toBe(true);
 

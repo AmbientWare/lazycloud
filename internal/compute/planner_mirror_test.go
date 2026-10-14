@@ -12,6 +12,7 @@ import (
 // A connected workspace's mirror build is demand on the platform, where
 // placement runs it; its other builds are demand on the connection.
 func TestMirrorBuildDemandIsThePlatforms(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	owner := newUser(t, pool, "owner@example.com")
 	ws := newWorkspace(t, pool, "connected", owner)

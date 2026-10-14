@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,11 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
 )
 
 func TestQueueDeliversEachMessageOnceInOrder(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	s := f.storage
@@ -78,66 +84,105 @@ func TestQueueDeliversEachMessageOnceInOrder(t *testing.T) {
 	}
 }
 
+// emptyReads returns a pool on pool's database whose queries send on the
+// returned channel when they come back empty, as a pop's read of an empty
+// queue does just before it waits.
+func emptyReads(t *testing.T, pool *pgxpool.Pool) (*pgxpool.Pool, <-chan struct{}) {
+	t.Helper()
+	cfg := pool.Config()
+	empty := make(chan struct{}, 16)
+	cfg.ConnConfig.Tracer = emptyTracer(empty)
+	traced, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(traced.Close)
+	return traced, empty
+}
+
+type emptyTracer chan<- struct{}
+
+func (emptyTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (e emptyTracer) TraceQueryEnd(_ context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if data.Err == nil && data.CommandTag.RowsAffected() == 0 {
+		select {
+		case e <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func TestQueuePopWaitsForPut(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	listener := database.NewListener(f.pool, slog.Default(), ChannelQueue)
+	listening, unsubscribe := listener.Subscribe(ChannelQueue, "")
+	defer unsubscribe()
 	go func() { _ = listener.Run(ctx) }()
+	<-listening // Run wakes every subscriber once LISTEN is active.
+	traced, empty := emptyReads(t, f.pool)
+	waiter := NewStorage(traced, f.cfg, compute.NewCompute(traced, nil, compute.Config{}))
 
 	type popped struct {
 		m     []byte
 		found bool
 		err   error
-		after time.Duration
 	}
 	done := make(chan popped, 1)
-	began := time.Now()
-	go func() {
-		m, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", 10*time.Second)
-		done <- popped{m, found, err, time.Since(began)}
-	}()
-	time.Sleep(300 * time.Millisecond)
+	pop := func() {
+		m, found, err := waiter.PopQueueMessage(ctx, listener, f.ws, "wake", time.Minute)
+		done <- popped{m, found, err}
+	}
+	// woken waits for the waiting pop to return; only the put's
+	// notification ends its minute early.
+	woken := func(want string) {
+		t.Helper()
+		select {
+		case r := <-done:
+			if r.err != nil || !r.found || string(r.m) != want {
+				t.Fatalf("waiting pop: %q found=%v err=%v, want %s", r.m, r.found, r.err, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the put of %s did not wake the waiting pop", want)
+		}
+	}
+
+	go pop()
+	<-empty // The pop found no queue and waits.
 	if err := f.storage.PutQueueMessages(ctx, f.ws, "wake", [][]byte{[]byte(`"hello"`)}); err != nil {
 		t.Fatal(err)
 	}
-	r := <-done
-	if r.err != nil || !r.found || string(r.m) != `"hello"` {
-		t.Fatalf("waiting pop: %q found=%v err=%v", r.m, r.found, r.err)
-	}
-	if r.after > 3*time.Second {
-		t.Fatalf("the put woke the pop after %v", r.after)
-	}
+	woken(`"hello"`)
 
 	// A waiter keeps waiting by name across a delete and a new queue of
 	// the same name.
-	go func() {
-		m, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", 10*time.Second)
-		done <- popped{m, found, err, 0}
-	}()
-	time.Sleep(300 * time.Millisecond)
+	for len(empty) > 0 {
+		<-empty
+	}
+	go pop()
+	<-empty // The pop found the queue empty and waits.
 	if err := f.storage.DeleteQueue(ctx, f.ws, "wake"); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.storage.PutQueueMessages(ctx, f.ws, "wake", [][]byte{[]byte(`"again"`)}); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case r := <-done:
-		if r.err != nil || !r.found || string(r.m) != `"again"` {
-			t.Fatalf("pop across a recreated queue: %q found=%v err=%v", r.m, r.found, r.err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("the put into the recreated queue did not wake the pop")
-	}
+	woken(`"again"`)
 
-	began = time.Now()
-	_, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", time.Second)
-	if err != nil || found || time.Since(began) < time.Second {
-		t.Fatalf("pop of an empty queue returned found=%v err=%v after %v", found, err, time.Since(began))
+	wait := 50 * time.Millisecond
+	began := time.Now()
+	_, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", wait)
+	if err != nil || found || time.Since(began) < wait {
+		t.Fatalf("pop of an empty queue returned found=%v err=%v after %v, want nothing after %v", found, err, time.Since(began), wait)
 	}
 }
 
 func TestQueueDeleteAndSizeLimit(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	if err := f.storage.PutQueueMessages(ctx, f.ws, "q/with/slashes", [][]byte{[]byte("1"), {}}); err != nil {
@@ -162,6 +207,7 @@ func TestQueueDeleteAndSizeLimit(t *testing.T) {
 }
 
 func TestMapCompareAndSet(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	s := f.storage
@@ -228,11 +274,12 @@ func TestMapCompareAndSet(t *testing.T) {
 }
 
 func TestMapExpiryKeysAndStats(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
 	s := f.storage
 
-	short := time.Second
+	short := time.Hour
 	never := time.Duration(0)
 	for _, key := range []string{"b/2", "a/1", "a/3", "a/2", "c"} {
 		if _, err := s.SetMapEntry(ctx, f.ws, "m", key, SetMapEntry{Value: []byte(`"v"`), TTL: &never}); err != nil {
@@ -267,7 +314,9 @@ func TestMapExpiryKeysAndStats(t *testing.T) {
 		t.Fatalf("second prefix page: %+v err=%v", page, err)
 	}
 
-	time.Sleep(1100 * time.Millisecond)
+	if _, err := f.pool.Exec(ctx, `update map_entries set expires_at = now() - interval '1 second' where key = 'a/expiring'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.GetMapEntry(ctx, f.ws, "m", "a/expiring"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired key: %v", err)
 	}

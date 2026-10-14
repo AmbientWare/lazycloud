@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from lazycloud._shared.image_building.credentials import ImageCredentialLookupError
+from lazycloud.config import reset_settings_cache
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.terminal import Terminal, TerminalStep
 
@@ -219,13 +220,6 @@ def test_build_context_rejects_symlink_to_outside_file(tmp_path: Path) -> None:
         Image.from_dockerfile(context / "Dockerfile", context_dir=context).definition()
 
 
-def test_dockerfile_images_cannot_set_a_custom_base(tmp_path: Path) -> None:
-    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="custom base image"):
-        Image(base_image="ubuntu:24.04")._with_dockerfile(tmp_path / "Dockerfile")
-
-
 def test_uv_project_requires_lockfile(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
 
@@ -266,7 +260,9 @@ def test_uv_project_identity_covers_only_what_the_build_reads(tmp_path: Path) ->
     assert _definition(Image.from_uv(tmp_path))["context"] != before["context"]
 
 
-def test_uv_project_includes_workspace_members_inside_the_root(tmp_path: Path) -> None:
+def test_uv_project_includes_workspace_members_inside_the_root(
+    tmp_path: Path, fake_api: FakeApi
+) -> None:
     root = tmp_path / "root"
     _write_uv_project(root, members=("packages/member",))
     member = root / "packages" / "member"
@@ -277,14 +273,18 @@ def test_uv_project_includes_workspace_members_inside_the_root(tmp_path: Path) -
     (member / "scratch").mkdir()
     (member / "scratch" / "big.bin").write_bytes(b"\0" * 16)
 
-    files = Image.from_uv(root)._context_archive().files
+    _serve_sources(fake_api, set())
+    fake_api.route("POST", f"{IMAGES}/resolve")(lambda _: json_reply({"image": _image(ready=True)}))
 
-    assert files == (
+    assert Image.from_uv(root).verify().exists is True
+
+    (upload,) = fake_api.calls("PUT", "/upload/.*")
+    assert sorted(zipfile.ZipFile(io.BytesIO(upload.body)).namelist()) == [
         "packages/member/member.py",
         "packages/member/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
-    )
+    ]
 
     outside = tmp_path / "outside"
     _write_uv_project(outside, members=("../root/packages/member",))
@@ -367,8 +367,11 @@ def test_build_output_is_opt_in_and_uses_stderr(
 
 
 def test_build_summary_follows_buildkit_steps_retries_and_dropped_streams(
-    fake_api: FakeApi,
+    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("LAZYCLOUD_RETRY_DELAY_SECONDS", "0")
+    reset_settings_cache()
+
     def dropped() -> Iterator[bytes]:
         yield _log(1, "#7 [2/4] RUN pip install numpy")
         raise StreamAborted

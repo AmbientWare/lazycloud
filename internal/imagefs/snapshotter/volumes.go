@@ -71,13 +71,16 @@ type volumes struct {
 
 // bucket is one workspace's granted bucket: its grant, the key requests
 // for it name, and the versions HEADs reported, each kept only while no
-// write of its key, or of the bucket, ended after the HEAD was sent.
-// Guarded by volumes.mu.
+// write of its key, or of the bucket, ended after the HEAD was sent, and
+// no listing of its prefix sent after the HEAD named another version.
+// listed holds when each prefix was last listed, so a HEAD sent before a
+// listing and answered after it records nothing. Guarded by volumes.mu.
 type bucket struct {
 	grant   volumeGrant
 	key     string
 	seen    map[string]observation
 	written map[string]time.Time
+	listed  map[string]time.Time
 	cleared time.Time
 }
 
@@ -145,7 +148,7 @@ func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) erro
 	}
 	b := v.buckets[vg.name]
 	if b == nil {
-		b = &bucket{seen: map[string]observation{}, written: map[string]time.Time{}}
+		b = &bucket{seen: map[string]observation{}, written: map[string]time.Time{}, listed: map[string]time.Time{}}
 		v.buckets[vg.name] = b
 	}
 	if b.key != key || !b.grant.creds.Expires.After(creds.Expires) {
@@ -327,9 +330,16 @@ func (v *volumes) sign(r *http.Request, g volumeGrant) error {
 }
 
 // observe records the version a HEAD of an object reports, unless a write
-// of it ended since the HEAD was sent.
+// of it ended since the HEAD was sent, and has a listing outdate the
+// versions it reports otherwise.
 func (v *volumes) observe(resp *http.Response) error {
 	f, _ := resp.Request.Context().Value(forwardedKey{}).(forwarded)
+	if f.key == "" && resp.Request.Method == http.MethodGet && resp.StatusCode == http.StatusOK {
+		resp.Body = &listing{ReadCloser: resp.Body, done: func(body []byte, whole bool) {
+			v.listed(f, resp.Request.URL.Query().Get("prefix"), body, whole)
+		}}
+		return nil
+	}
 	etag := resp.Header.Get("Etag")
 	if f.key == "" || resp.Request.Method != http.MethodHead || resp.StatusCode != http.StatusOK || etag == "" || resp.ContentLength < 0 {
 		return nil
@@ -346,9 +356,93 @@ func (v *volumes) observe(resp *http.Response) error {
 	if b == nil || !f.sent.After(b.cleared) || !f.sent.After(b.written[f.key]) {
 		return nil
 	}
+	for prefix, sent := range b.listed {
+		if strings.HasPrefix(f.key, prefix) && !f.sent.After(sent) {
+			return nil
+		}
+	}
 	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength}
 	b.seen[f.key] = observation{version: ver, header: header, at: f.sent}
 	return nil
+}
+
+// maxListing bounds the listing body read for versions, a page of 1000
+// keys with room to spare.
+const maxListing = 4 << 20
+
+// listing passes a listing's body through and hands it to done once read
+// whole or closed, whole false when it was cut short or past maxListing.
+type listing struct {
+	io.ReadCloser
+	body  bytes.Buffer
+	done  func(body []byte, whole bool)
+	ended bool
+}
+
+func (l *listing) Read(p []byte) (int, error) {
+	n, err := l.ReadCloser.Read(p)
+	if l.body.Len() <= maxListing {
+		l.body.Write(p[:n])
+	}
+	if err == io.EOF && !l.ended {
+		l.ended = true
+		l.done(l.body.Bytes(), l.body.Len() <= maxListing)
+	}
+	return n, err //nolint:wrapcheck // the store's own body
+}
+
+func (l *listing) Close() error {
+	if !l.ended {
+		l.ended = true
+		l.done(nil, false)
+	}
+	return l.ReadCloser.Close() //nolint:wrapcheck // the store's own body
+}
+
+// listed forgets the observations under prefix made before the listing was
+// sent whose ETag the listing contradicts, all of them when it could not
+// be read, and marks the prefix listed: a client that saw a newer version
+// in a listing must not be answered with the older one's bytes, which it
+// would keep as the newer's. A mark outlives any HEAD sent before it,
+// which fetchTimeout bounds.
+func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
+	var doc struct {
+		Contents []struct {
+			Key  string
+			ETag string
+		}
+	}
+	parsed := whole && xml.Unmarshal(body, &doc) == nil
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	b := v.buckets[f.grant.name]
+	if b == nil {
+		return
+	}
+	outdated := func(key, etag string) {
+		if o, ok := b.seen[key]; ok && o.at.Before(f.sent) && o.version.etag != etag {
+			delete(b.seen, key)
+		}
+	}
+	if parsed {
+		for _, c := range doc.Contents {
+			outdated(c.Key, c.ETag)
+		}
+	} else {
+		for key := range b.seen {
+			if strings.HasPrefix(key, prefix) {
+				outdated(key, "")
+			}
+		}
+	}
+	if f.sent.After(b.listed[prefix]) {
+		b.listed[prefix] = f.sent
+	}
+	for p, sent := range b.listed {
+		if time.Since(sent) > fetchTimeout {
+			delete(b.listed, p)
+		}
+	}
 }
 
 // wrote records that a write of key, or with "" of any key, ended, and

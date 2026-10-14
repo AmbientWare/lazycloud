@@ -65,8 +65,8 @@ func pendingContainer(t testing.TB, pool *pgxpool.Pool, r release, cpu, memory i
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
-values ($1, $2, 'pending', 1, $3, $4, now() - make_interval(secs => $5)) returning id`,
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, $3, $4, now() - make_interval(secs => $5)) returning id`,
 		r.workspace, r.id, cpu, memory, age.Seconds()).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -86,6 +86,7 @@ func place(t testing.TB, s *Scheduling) PlacementResult {
 const gib = 1 << 30
 
 func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 8*gib, 0)
@@ -131,6 +132,7 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 // it, whose frame cache still holds the disk, and each disk takes one of a
 // host's disk slots.
 func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	tight := newHost(t, pool, 2000, 2*gib, 0)
@@ -140,8 +142,8 @@ func TestDisksReturnToTheirWarmHostWithinItsSlots(t *testing.T) {
 	exec(t, pool, `update releases set spec = '{"disks":[{"name":"root","size_bytes":1073741824,"mount_path":"/"}]}' where id = $1`, r.id)
 	var holder uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
-values ($1, $2, 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, host_id, stop_reason, stopped_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'stopped', 1, 1000, $3, $4, 'stopped', now()) returning id`, r.workspace, r.id, gib, warm).Scan(&holder); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, pool, `insert into disks (workspace_id, name, size_bytes, holder_container_id, lease_token, released_at)
@@ -168,6 +170,7 @@ values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.wor
 // workspace bucket's region before a tighter one elsewhere, even a GPU
 // host whose spare room it could pack into; one that mounts none packs.
 func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	west := newHost(t, pool, 5000, 5*gib, 0)
@@ -178,8 +181,8 @@ func TestVolumesPlaceWorkInTheirBucketsRegion(t *testing.T) {
 	exec(t, pool, `update releases set spec = '{"kind": "function", "volumes":[{"name":"models","mount_path":"/models"}]}' where id = $1`, mounts.id)
 	exec(t, pool, `update releases set spec = '{"kind": "function"}' where id = $1`, plain.id)
 	exec(t, pool, `update releases set spec = '{"kind": "function", "resources": {"gpu": ["T4"]}}' where id = $1`, gpu.id)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace, gpu.id, west)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, gpu_count, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace, gpu.id, west)
 	exec(t, pool, "insert into workspace_buckets (workspace_id, bucket, region) select id, 'ws-' || id, 'us-east-1' from workspaces where id = $1", mounts.workspace)
 	exec(t, pool, "insert into volumes (workspace_id, name, size_bytes) values ($1, 'models', 16000000000)", mounts.workspace)
 	reads := pendingContainer(t, pool, mounts, 2000, gib, time.Minute)
@@ -200,6 +203,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, 1, now(), now())`, gpu.workspace,
 }
 
 func TestPackChoosesTheTightestFit(t *testing.T) {
+	t.Parallel()
 	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
 	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
 	pending := []PendingContainersRow{
@@ -219,6 +223,7 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 // borrowed room never crowds it out. The host holding a container's disk
 // wins only among hosts it may take.
 func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
+	t.Parallel()
 	host := func(market compute.Market, freeCPU cpu.Millis) compute.HostCapacity {
 		return compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, Market: market,
 			CPUMillis: 4000, MemoryBytes: 16 * gib, FreeCPUMillis: freeCPU, FreeMemoryBytes: 16 * gib}
@@ -268,6 +273,7 @@ func TestSpotTolerantWorkBorrowsOnDemandRoomLast(t *testing.T) {
 // Placers racing over the same hosts never reserve more than a host holds:
 // the placement lock serializes them over one capacity snapshot.
 func TestConcurrentPlacersNeverOversubscribeHosts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	for range 3 {
@@ -309,6 +315,7 @@ select count(*) from (
 // placement either commits first, so host loss stops the container, or skips
 // the host.
 func TestPlacementSkipsAHostMarkedLostConcurrently(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 8*gib, 0)
@@ -377,6 +384,7 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 // then the busy one whose attempt started last, which stops with its task
 // preempted and queued again. CPU work it need not evict keeps running.
 func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	s := newScheduling(pool)
 	host := newHost(t, pool, 4000, 16*gib, 0)
@@ -388,8 +396,8 @@ func TestGPUWorkEvictsIdleCPUWorkFirstThenBusyAndFits(t *testing.T) {
 	live := func(ago time.Duration) (container, task uuid.UUID) {
 		t.Helper()
 		if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 2 << 30, now(), now()) returning id`, cpuWork.workspace, cpuWork.id, host).Scan(&container); err != nil {
 			t.Fatal(err)
 		}
 		if ago == 0 {

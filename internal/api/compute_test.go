@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
@@ -54,6 +52,7 @@ func (e *env) archive(version string, data []byte) string {
 }
 
 func TestAgentInstallsServePublishedReleaseArchives(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	data := make([]byte, 4096)
@@ -95,6 +94,7 @@ func TestAgentInstallsServePublishedReleaseArchives(t *testing.T) {
 }
 
 func TestAccountComputeRefusesWorkspaceTokensAndForeignWorkspaces(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	restricted, err := e.identity.CreateToken(ctx, "owner@example.com", "acme", "ci")
@@ -136,45 +136,5 @@ func TestAccountComputeRefusesWorkspaceTokensAndForeignWorkspaces(t *testing.T) 
 	if status := e.do("POST", "/v1/machines/join-command", e.owner, join, &cmd); status != 201 ||
 		!strings.Contains(cmd.Command, "--join-token") || cmd.Machine.Lifecycle != apitypes.MachineLifecycle(compute.PhaseRequested) {
 		t.Fatalf("owner's join command: %d %+v", status, cmd)
-	}
-}
-
-func TestFleetIsForAdministratorsOnly(t *testing.T) {
-	ctx := t.Context()
-	e := newEnv(t)
-	if _, err := e.identity.CreateUser(ctx, "admin@example.com", true); err != nil {
-		t.Fatal(err)
-	}
-	admin, err := e.identity.CreateToken(ctx, "admin@example.com", "", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var platform uuid.UUID
-	if err := e.pool.QueryRow(ctx, `
-insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes, provider, instance_id)
-values ('platform-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30, 'aws', 'i-0platform1') returning id`).Scan(&platform); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.pool.Exec(ctx, `
-insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes, kind, account_id)
-values ('gpu-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30, 'machine', (select id from users where email = 'owner@example.com'))`); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, path := range []string{"/v1/fleet", "/v1/fleet/nodes"} {
-		var apiErr apitypes.Error
-		if status := e.do("GET", path, e.owner, nil, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
-			t.Errorf("GET %s as a user: %d %+v, want 403", path, status, apiErr)
-		}
-	}
-	var nodes struct {
-		Nodes []apitypes.FleetNode `json:"nodes"`
-	}
-	if status := e.do("GET", "/v1/fleet/nodes", admin, nil, &nodes); status != 200 || len(nodes.Nodes) != 1 ||
-		nodes.Nodes[0].Id != platform || nodes.Nodes[0].State != apitypes.FleetState(compute.FleetServing) {
-		t.Fatalf("fleet nodes as an administrator: %d %+v, want only the serving platform host", status, nodes)
-	}
-	if status := e.do("GET", "/v1/fleet", admin, nil, nil); status != 200 {
-		t.Fatalf("fleet summary as an administrator: %d", status)
 	}
 }

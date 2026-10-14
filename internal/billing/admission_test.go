@@ -26,8 +26,8 @@ func (f *fixture) admit(req Request) (Grant, error) {
 func (f *fixture) live(workspace uuid.UUID, n int) {
 	f.t.Helper()
 	rel := f.release(workspace)
-	f.exec(`insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-		select $1, $2, 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, workspace, rel.id, n)
+	f.exec(`insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+		select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, workspace, rel.id, n)
 }
 
 func (f *fixture) setAccount(user uuid.UUID, assignments string, args ...any) {
@@ -47,6 +47,7 @@ func limitReached(err error) bool {
 }
 
 func TestAdmitRefusesWorkTheAccountCannotPayFor(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -87,6 +88,7 @@ func TestAdmitRefusesWorkTheAccountCannotPayFor(t *testing.T) {
 }
 
 func TestAdmitCapsContainersAtTheAccountsConcurrency(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -115,6 +117,7 @@ func TestAdmitCapsContainersAtTheAccountsConcurrency(t *testing.T) {
 }
 
 func TestConcurrentStartsCountEachOther(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -127,8 +130,8 @@ func TestConcurrentStartsCountEachOther(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				_, err = tx.Exec(t.Context(), `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-					select $1, $2, 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, ws, rel.id, grant.Start)
+				_, err = tx.Exec(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+					select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 30 from generate_series(1, $3)`, ws, rel.id, grant.Start)
 				return err
 			})
 			if err != nil {
@@ -171,6 +174,7 @@ func (f *fixture) email(user uuid.UUID) string {
 }
 
 func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	if err := f.admitWorkspace(owner); err != nil {
@@ -225,6 +229,7 @@ func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
 }
 
 func TestCapabilitiesFollowThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -263,6 +268,7 @@ func TestCapabilitiesFollowThePlan(t *testing.T) {
 }
 
 func TestRetentionFollowsThePlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -289,6 +295,7 @@ func TestRetentionFollowsThePlan(t *testing.T) {
 }
 
 func TestPlanChangesCannotGoBelowHeldLimits(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.setAccount(owner, "terms_version = 'team-v3', payment_method_attached_at = now()")

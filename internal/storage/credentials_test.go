@@ -51,7 +51,8 @@ func TestDefaultChainReadsTheEnvironment(t *testing.T) {
 }
 
 // TestDefaultChainUsesPodIdentity serves credentials the way the EKS Pod
-// Identity agent does: a container credentials endpoint and a token file.
+// Identity agent does: a container credentials endpoint and a token file,
+// answering with the fields the EKS user guide documents for it.
 func TestDefaultChainUsesPodIdentity(t *testing.T) {
 	isolate(t)
 	expires := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -85,10 +86,11 @@ func TestDefaultChainWithoutSourceFails(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
+	t.Parallel()
 	ok := []Config{
-		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
-		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Provider: ProviderAWS, Prefix: "lazycloud-prod-workspace", AccountID: "123456789012", RoleARN: "arn:aws:iam::1:role/hosts"}},
-		{Endpoint: "http://garage", Region: "garage", Bucket: "b", LayerBucket: "l", AccessKeyID: "k", SecretAccessKey: "s",
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", DeleteChunk: DefaultDeleteChunk},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", DeleteChunk: 1, Workspaces: WorkspaceBuckets{Provider: ProviderAWS, Prefix: "lazycloud-prod-workspace", AccountID: "123456789012", RoleARN: "arn:aws:iam::1:role/hosts"}},
+		{Endpoint: "http://garage", Region: "garage", Bucket: "b", LayerBucket: "l", AccessKeyID: "k", SecretAccessKey: "s", DeleteChunk: DefaultDeleteChunk,
 			Workspaces: WorkspaceBuckets{Provider: ProviderGarage, Prefix: "lazycloud-ws", AccountID: "000000000000"}},
 	}
 	for _, c := range ok {
@@ -97,6 +99,8 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 	bad := []Config{
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l"},
+		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", DeleteChunk: DefaultDeleteChunk + 1},
 		{Bucket: "b", LayerBucket: "l"},
 		{Region: "us-east-2", Bucket: "b"},
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", AccessKeyID: "k"},

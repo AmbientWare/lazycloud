@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -11,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -18,9 +22,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -34,7 +36,7 @@ import (
 // registry. Every host reads images through its snapshotter, so TestMain
 // converts their layers into layerBucket, as the server does, and start
 // commands and sessions carry the grants it would send.
-var lazyImages = []string{testImage, "python:3.12-alpine", testDockerImage, platformimages.Builder, platformimages.Mount}
+var lazyImages = []string{testImage, alpineImage, testDockerImage, platformimages.Builder, platformimages.Mount}
 
 // imageLayers holds the layer grants of each of lazyImages.
 var imageLayers = map[string][]*imagefsproto.LayerGrant{}
@@ -52,13 +54,9 @@ func convertLazyImages(ctx context.Context) error {
 	presign := s3.NewPresignClient(store)
 	expires := time.Now().Add(12 * time.Hour)
 	for _, ref := range lazyImages {
-		r, err := name.ParseReference(ref)
+		img, err := imagefstest.Image(ctx, ref, v1.Platform{OS: "linux", Architecture: runtime.GOARCH})
 		if err != nil {
 			return err
-		}
-		img, err := remote.Image(r, remote.WithContext(ctx), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}))
-		if err != nil {
-			return fmt.Errorf("resolve %s: %w", ref, err)
 		}
 		layers, err := img.Layers()
 		if err != nil {
@@ -154,5 +152,36 @@ func noLayerSince(t *testing.T, image string, since time.Time) {
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestStartupTracesEndWithTheFirstTask: the host's snapshotter traces a
+// start until its first task, request or command ends, the agent reports
+// the frames read, and a later start prefetches them. No other package
+// unpacks this image without the snapshotter, so its layers mount lazily
+// and reads reach FUSE.
+func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
+	t.Parallel()
+	const image = alpineImage
+	e := newEnv(t)
+	e.startAgent()
+	s := e.session()
+	command := &hostproto.PodWorkload{Command: []string{"python3", "-c", "import email, http.client, json, sqlite3"}}
+
+	start := withImage(e.podCommand(command), image)
+	id := start.GetStart().GetContainerId()
+	start.GetStart().RecordTrace = true
+	s.send(t, start)
+	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
+		t.Fatalf("the host reported %v", reported)
+	}
+	s.phase(t, id, exited)
+
+	next := withImage(e.podCommand(command), image)
+	next.GetStart().Prefetch = reported.GetTrace()
+	s.send(t, next)
+	if exit := s.phase(t, next.GetStart().GetContainerId(), exited).GetExit(); exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != 0 {
+		t.Fatalf("a start prefetching the trace exited %v", exit)
 	}
 }

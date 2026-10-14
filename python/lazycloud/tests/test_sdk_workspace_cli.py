@@ -1,18 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-import typer
-from lazycloud.cli import workspaces as workspace_commands
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import CliContextState
-from lazycloud.cli.main import build_public_cli
+from lazycloud.cli.main import build_public_cli, start
 from lazycloud.config import ClientProfile, get_profile, reset_settings_cache, set_profile
-from typer.core import TyperCommand
 from typer.testing import CliRunner
 
 from tests.api_server import (
@@ -25,8 +22,12 @@ from tests.api_server import (
     running_fake_api,
 )
 
+cli = build_public_cli()
 
-class _InteractiveInput:
+
+class _Terminal(io.StringIO):
+    """Standard input typed at an interactive terminal."""
+
     def isatty(self) -> bool:
         return True
 
@@ -99,7 +100,6 @@ def _profile(api: FakeApi, workspace: str) -> None:
 def test_workspace_create_and_rename_keep_the_profile_selected(api: FakeApi) -> None:
     _Workspaces(api, "default")
     _profile(api, "default")
-    cli = build_public_cli()
 
     created = CliRunner().invoke(cli, ["--json", "workspace", "create", "review"])
     assert created.exit_code == 0, created.output
@@ -122,7 +122,6 @@ def test_workspace_create_and_rename_keep_the_profile_selected(api: FakeApi) -> 
 def test_workspace_create_in_a_cloud_names_the_cloud(api: FakeApi) -> None:
     _Workspaces(api, "default")
     _profile(api, "default")
-    cli = build_public_cli()
 
     created = CliRunner().invoke(cli, ["--json", "workspace", "create", "review", "--cloud", "aws"])
     assert created.exit_code == 0, created.output
@@ -138,7 +137,6 @@ def test_workspace_create_in_a_cloud_names_the_cloud(api: FakeApi) -> None:
 def test_workspace_use_selects_only_an_accessible_workspace(api: FakeApi) -> None:
     _Workspaces(api, "default", "team")
     _profile(api, "default")
-    cli = build_public_cli()
 
     selected = CliRunner().invoke(cli, ["--json", "workspace", "use", "team"])
     assert selected.exit_code == 0, selected.output
@@ -151,26 +149,19 @@ def test_workspace_use_selects_only_an_accessible_workspace(api: FakeApi) -> Non
 
 
 def test_workspace_delete_requires_the_exact_name_and_selects_a_fallback(
-    api: FakeApi, monkeypatch: pytest.MonkeyPatch
+    api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _Workspaces(api, "default", "review")
     _profile(api, "review")
 
-    def wrong_prompt(*_args: object, **_kwargs: object) -> str:
-        return "wrong"
-
-    monkeypatch.setattr(sys, "stdin", _InteractiveInput())
-    monkeypatch.setattr(typer, "prompt", wrong_prompt)
-    context = typer.Context(TyperCommand(name="delete"))
-    context.obj = CliContextState()
-    with pytest.raises(ClientError, match="confirmation did not match"):
-        workspace_commands.workspace_delete(context, "review", False)
+    monkeypatch.setattr(sys, "stdin", _Terminal("wrong\n"))
+    with pytest.raises(SystemExit) as refused:
+        start(["workspace", "delete", "review"])
+    assert refused.value.code == 1
+    assert "confirmation did not match" in capsys.readouterr().err
     assert not api.calls("DELETE", "/v1/workspaces/review")
 
-    deleted = CliRunner().invoke(
-        build_public_cli(),
-        ["--json", "workspace", "delete", "review", "--yes"],
-    )
+    deleted = CliRunner().invoke(cli, ["--json", "workspace", "delete", "review", "--yes"])
     assert deleted.exit_code == 0, deleted.output
     assert json.loads(deleted.stdout) == {
         "current": "default",
@@ -190,10 +181,7 @@ def test_workspace_create_refuses_an_environment_owned_selection(
     monkeypatch.setenv("LAZYCLOUD_WORKSPACE", "environment")
     reset_settings_cache()
 
-    result = CliRunner().invoke(
-        build_public_cli(),
-        ["--json", "workspace", "create", "review"],
-    )
+    result = CliRunner().invoke(cli, ["--json", "workspace", "create", "review"])
 
     assert result.exit_code == 1
     assert not api.calls("POST", "/v1/workspaces")

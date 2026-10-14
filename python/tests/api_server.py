@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import json
 import re
+import signal
+import threading
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
-
-from tests.http_server import running_http_server
 
 TOKEN = "lc_test-token-0123456789"
 WORKSPACE = "team"
@@ -69,6 +70,9 @@ class FakeApi:
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Headers and body are separate writes; with Nagle on, the body waits for
+    # the client's delayed acknowledgement of the headers.
+    disable_nagle_algorithm = True
     api: ClassVar[FakeApi]
 
     def log_message(self, format: str, *args: object) -> None:
@@ -127,6 +131,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"0\r\n\r\n")
 
 
+def press_ctrl_c() -> None:
+    """Send SIGINT to the main thread, as Ctrl-C at a terminal does.
+
+    A route calls this before it answers, so the client is still waiting on
+    the request the server is handling.
+    """
+    main = threading.main_thread().ident
+    assert main is not None
+    signal.pthread_kill(main, signal.SIGINT)
+
+
 @contextmanager
 def running_fake_api() -> Iterator[FakeApi]:
     api = FakeApi()
@@ -134,5 +149,13 @@ def running_fake_api() -> Iterator[FakeApi]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
     api.url = f"http://127.0.0.1:{server.server_address[1]}"
-    with running_http_server(server):
+    # The stdlib's 500 ms default is also the delay before shutdown notices it.
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    try:
         yield api
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "test HTTP server did not stop"

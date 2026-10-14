@@ -23,6 +23,7 @@ func sample(host compute.HostID, container execution.ContainerID, at time.Time, 
 // Samples count only from the host the container is assigned to, and
 // points report CPU as millicores over the time each covers.
 func TestMetricSamplesComeOnlyFromTheAssignedHost(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	host, container := f.placedContainer(f.release)
 	stranger, _ := f.placedContainer(f.release)
@@ -60,6 +61,7 @@ func TestMetricSamplesComeOnlyFromTheAssignedHost(t *testing.T) {
 // points plus the samples not yet folded, and retention deletes only what
 // was folded.
 func TestRollupFoldsMinutesAndKeepsWhatIsNotFolded(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	host, container := f.placedContainer(f.release)
 	minute := time.Now().Truncate(time.Minute).Add(-20 * time.Minute)
@@ -127,6 +129,7 @@ func TestRollupFoldsMinutesAndKeepsWhatIsNotFolded(t *testing.T) {
 // A container's lifecycle combines its durable transitions with the stages
 // its host reported, which only that host may report, once.
 func TestLifecycleCombinesTransitionsAndHostStages(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, `{}`)
 	host, container := f.placedContainer(f.release)
 	stranger, _ := f.placedContainer(f.release)

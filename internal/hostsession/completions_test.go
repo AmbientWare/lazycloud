@@ -26,11 +26,12 @@ import (
 // queryCounter counts the statements a pool runs, and the completion
 // transactions among them: each sets its attempts' states in one statement.
 type queryCounter struct {
-	all, writes atomic.Int64
-	settled     int64
+	all, writes, running atomic.Int64
+	settled              int64
 }
 
 func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	c.running.Add(1)
 	c.all.Add(1)
 	if strings.Contains(data.SQL, "name: SetAttemptStates") {
 		c.writes.Add(1)
@@ -38,22 +39,29 @@ func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pg
 	return ctx
 }
 
-func (*queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+	c.running.Add(-1)
+}
 
 func (c *queryCounter) completions() int64 { return c.writes.Load() }
 
-// settle waits until the pool has run no statement for half a second and
-// returns the statements run since the last settle.
+// settle waits until the pool runs no statement and has started none for
+// a quarter of a second, and returns the statements run since the last
+// settle.
 func (c *queryCounter) settle() int64 {
-	for last := int64(-1); ; time.Sleep(500 * time.Millisecond) {
-		if n := c.all.Load(); n != last {
-			last = n
+	const quiet = 250 * time.Millisecond
+	last, since := c.all.Load(), time.Now()
+	for {
+		time.Sleep(25 * time.Millisecond)
+		if n := c.all.Load(); n != last || c.running.Load() != 0 {
+			last, since = n, time.Now()
 			continue
 		}
-		n := c.all.Load()
-		out := n - c.settled
-		c.settled = n
-		return out
+		if time.Since(since) >= quiet {
+			out := last - c.settled
+			c.settled = last
+			return out
+		}
 	}
 }
 
@@ -114,6 +122,7 @@ func completeRequest(container execution.ContainerID, attempt string) *hostproto
 // Completions that arrive while a write runs share the next transaction
 // and its notifications. A stale attempt among them is rejected alone.
 func TestABurstOfCompletionsSharesTransactionsAndNotifications(t *testing.T) {
+	t.Parallel()
 	h, base, writes := countedHarness(t)
 	host, ctx := h.enroll()
 	const n = 60
@@ -201,7 +210,8 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 }
 
 // A completion that arrives alone is written at once, in its own
-// transaction, about as fast as writing it directly.
+// transaction, about as fast as writing it directly. It compares
+// latencies, so it runs alone.
 func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
 	h, _, writes := countedHarness(t)
 	host, ctx := h.enroll()

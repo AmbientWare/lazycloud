@@ -13,6 +13,7 @@ import (
 )
 
 func TestWorkspaceLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
@@ -124,6 +125,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 
 // Two deletions racing for the last two workspaces leave one.
 func TestConcurrentDeletionKeepsOneWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
@@ -145,6 +147,7 @@ func TestConcurrentDeletionKeepsOneWorkspace(t *testing.T) {
 }
 
 func TestMembers(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	owner := f.account("owner@example.com", false)
@@ -218,6 +221,7 @@ func TestMembers(t *testing.T) {
 }
 
 func TestInvitations(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	owner := f.signIn(gitHubAccount{ID: 1, Login: "owner", Name: "Olive Owner", Email: "owner@example.com", Verified: true})
@@ -343,6 +347,7 @@ func TestInvitations(t *testing.T) {
 
 // Concurrent accepts of one link admit one account.
 func TestConcurrentAcceptIsSingleUse(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	owner := f.account("owner@example.com", false)
@@ -385,6 +390,7 @@ func TestConcurrentAcceptIsSingleUse(t *testing.T) {
 // Answering an invitation while its workspace is being deleted never
 // deadlocks: both lock the workspace before the invitation.
 func TestAnswerRacingDeletionDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)

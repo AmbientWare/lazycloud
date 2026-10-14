@@ -173,7 +173,7 @@ func newJoinFlags(name string) *joinFlags {
 	j := &joinFlags{set: flag.NewFlagSet(name, flag.ContinueOnError)}
 	j.cfg = agent.Config{
 		Labels: map[string]string{}, Version: agentVersion(), Executable: executable, AgentRoot: os.Getenv("LAZYCLOUD_AGENT_ROOT"),
-		TraceSocket: telemetry.HostTraceSocket,
+		TraceSocket: telemetry.HostTraceSocket, InterruptionPoll: agent.DefaultInterruptionPoll,
 	}
 	f, cfg := j.set, &j.cfg
 	f.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")

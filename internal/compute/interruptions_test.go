@@ -14,6 +14,7 @@ import (
 // nothing for a Spot instance it reclaims in its first hour. The fleet
 // terminates it only once the reclaim is overdue.
 func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, ec2 := reserveFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -24,8 +25,8 @@ func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
 		InstanceID: "i-soon"})
 	ec2.add(fakeInstance{ID: "i-soon", State: "running"}, soon.String())
 	running := runningAttempt(t, o.pool, dev, release, later)
-	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
+	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
 	doomed := runningAttempt(t, o.pool, dev, release, soon)
 
 	reclaim := time.Now().Add(2 * time.Minute).Truncate(time.Microsecond)
