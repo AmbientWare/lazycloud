@@ -104,7 +104,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		t.Fatal(err)
 	}
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
-	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", FailureCheckInterval: edge.FailureCheckInterval}, logger)
+	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
