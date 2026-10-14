@@ -207,14 +207,17 @@ func planNumber(line, key string) int {
 	return v
 }
 
+// costSlack is the buffers a scan's reads may grow by with the rows.
+const costSlack = 20
+
 // constantCost fails each scan whose buffers grew from small to large by
-// more than slack and to more than double: a read that walks the grown rows
+// more than costSlack and to more than double: a read that walks the grown rows
 // exceeds both many times, while a lookup by key grows by an index level or
 // the dead row versions earlier explained writes left.
-func constantCost(t *testing.T, small, large map[string]int, slack int, grown string) {
+func constantCost(t *testing.T, small, large map[string]int, grown string) {
 	t.Helper()
 	for name, before := range small {
-		if after := large[name]; after > before+slack && after > 2*before {
+		if after := large[name]; after > before+costSlack && after > 2*before {
 			t.Errorf("%s reads %d buffers after %s, %d before: its cost follows the grown rows", name, after, grown, before)
 		}
 	}
@@ -256,5 +259,5 @@ func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 	addHistory(t, pool, f, host, 20_000)
 	exec(t, pool, "analyze")
 	large := costAt(t, pool, scans, "21,000 finished tasks", 500)
-	constantCost(t, small, large, 20, "20,000 more finished tasks and 2,000 more stopped containers")
+	constantCost(t, small, large, "20,000 more finished tasks and 2,000 more stopped containers")
 }

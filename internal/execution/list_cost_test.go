@@ -43,5 +43,5 @@ func TestListingsReadOnePageOfAnIndex(t *testing.T) {
 	addHistory(t, pool, f, host, 10_000)
 	exec(t, pool, "analyze")
 	large := costAt(t, pool, scans, "11,000 finished tasks", 500)
-	constantCost(t, small, large, 20, "10,000 finished tasks and 1,000 stopped containers")
+	constantCost(t, small, large, "10,000 finished tasks and 1,000 stopped containers")
 }

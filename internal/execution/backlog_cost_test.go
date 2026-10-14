@@ -51,8 +51,8 @@ func TestPerCompletionCostIgnoresBacklog(t *testing.T) {
 	small := costAt(t, pool, scans, "100 queued", 0)
 	queueTasks(t, pool, f, 9_900, 0)
 	stale := costAt(t, pool, scans, "10,000 queued, statistics from 100", 500)
-	constantCost(t, small, stale, 20, "9,900 more queued tasks with statistics from before them")
+	constantCost(t, small, stale, "9,900 more queued tasks with statistics from before them")
 	exec(t, pool, "analyze")
 	fresh := costAt(t, pool, scans, "10,000 queued", 500)
-	constantCost(t, small, fresh, 20, "9,900 more queued tasks")
+	constantCost(t, small, fresh, "9,900 more queued tasks")
 }
