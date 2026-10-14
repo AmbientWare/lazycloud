@@ -31,6 +31,7 @@ import (
 // fleet sells, with no host connected and no start asking, so the first start
 // after a deploy finds it. Other architectures wait for a host to ask.
 func TestAStartingServerConvertsTheManagedImage(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	server := httptest.NewServer(memregistry.New(memregistry.Logger(log.New(io.Discard, "", 0))))
 	t.Cleanup(server.Close)

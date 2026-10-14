@@ -16,6 +16,7 @@ import (
 // TestSchemaPatternsCompile guards against patterns Go's regexp rejects,
 // such as repeat counts above 1000, which only fail when a request uses them.
 func TestSchemaPatternsCompile(t *testing.T) {
+	t.Parallel()
 	spec, err := api.GetSwagger()
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestSchemaPatternsCompile(t *testing.T) {
 // travel escaped, absence differs from errors, and typed errors keep their
 // codes.
 func TestStorageRoutes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ws := "/v1/workspaces/acme"
 	var failure apitypes.Error

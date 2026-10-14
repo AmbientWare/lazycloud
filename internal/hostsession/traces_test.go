@@ -18,6 +18,7 @@ import (
 // frame the image does not have, or a container the host does not run, is
 // dropped.
 func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	base, app := h.storeLayer("base"), h.storeLayer("app")

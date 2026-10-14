@@ -238,6 +238,7 @@ func (e *env) deploy() apitypes.Deployment {
 // A deployed function answers on its own host, so deploy and workload
 // reads say where, as they do for endpoints.
 func TestDeployedFunctionsReportWhereTheyAnswer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	release := e.deploy().Releases[0]
 	if release.Url == nil || !strings.HasPrefix(*release.Url, "https://summarize-sales-") || release.InvokePath == nil ||
@@ -252,6 +253,7 @@ func TestDeployedFunctionsReportWhereTheyAnswer(t *testing.T) {
 }
 
 func TestAuthenticationAuthorizationAndValidation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var apiErr apitypes.Error
 	if status := e.do("GET", "/v1/me", "", nil, &apiErr); status != 401 || apiErr.Code != apitypes.Unauthenticated {
@@ -317,7 +319,6 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 		e.t.Error(err)
 		return
 	}
-	time.Sleep(100 * time.Millisecond)
 	if err := e.execution.CompleteAttempt(ctx, host, container, execution.AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: execution.AttemptSucceeded,
 		Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(result)},
@@ -328,6 +329,7 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 }
 
 func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
@@ -400,6 +402,7 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 }
 
 func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	var submitted apitypes.SubmitTasksResponse
@@ -448,6 +451,7 @@ func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
 }
 
 func TestWaitTasksResponseStaysWithinTheInlineBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	inputs := make([]apitypes.TaskInput, 30)
@@ -544,6 +548,7 @@ func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (int, string,
 }
 
 func TestRunTaskStreamsTheTaskItsLogsAndResult(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"

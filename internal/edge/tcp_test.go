@@ -8,6 +8,7 @@ import (
 
 // One pod cannot take every TCP slot of an edge.
 func TestTCPConnectionsAreBoundedPerTarget(t *testing.T) {
+	t.Parallel()
 	var targets tcpTargets
 	busy, other := uuid.New(), uuid.New()
 	for range maxTCPPerTarget {

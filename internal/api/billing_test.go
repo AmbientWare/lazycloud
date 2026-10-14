@@ -27,6 +27,7 @@ func (e *env) token(email string, admin bool, workspace string) string {
 }
 
 func TestBillingOperationsActForTheCallersOwnAccount(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var failure apitypes.Error
 
@@ -65,9 +66,19 @@ func TestBillingOperationsActForTheCallersOwnAccount(t *testing.T) {
 	if status := e.do("GET", "/v1/billing", "", nil, &failure); status != http.StatusUnauthorized {
 		t.Fatalf("anonymous: %d", status)
 	}
+	// Stripe deliveries need the endpoint secret this server lacks.
+	resp, err := http.Post(e.url+"/webhooks/stripe", "application/json", http.NoBody) //nolint:noctx // A one-off test request.
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("delivery to a server without Stripe: %d", resp.StatusCode)
+	}
 }
 
 func TestOnlyAdministratorsSeeAndWaiveAccounts(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	admin := e.token("admin@example.com", true, "")
 	member := e.token("member@example.com", false, "")
@@ -97,17 +108,5 @@ func TestOnlyAdministratorsSeeAndWaiveAccounts(t *testing.T) {
 	var unwaived apitypes.BillingAccountAdmin
 	if status := e.do("PUT", path, admin, apitypes.ComplimentaryRequest{Complimentary: false}, &unwaived); status != http.StatusOK || unwaived.ComplimentarySince != nil {
 		t.Fatalf("admin stops waiving: %d %+v", status, unwaived)
-	}
-}
-
-func TestStripeDeliveriesNeedTheEndpointSecret(t *testing.T) {
-	e := newEnv(t)
-	resp, err := http.Post(e.url+"/webhooks/stripe", "application/json", http.NoBody) //nolint:noctx // A one-off test request.
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("delivery to a server without Stripe: %d", resp.StatusCode)
 	}
 }

@@ -345,6 +345,7 @@ func hostIn(t *testing.T, pool *pgxpool.Pool, region string) compute.HostID {
 // The read URLs of a converted reference list its layers in order and read
 // them by range; a reference without converted layers is a typed error.
 func TestLayerReadURLs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
@@ -393,6 +394,7 @@ func TestLayerReadURLs(t *testing.T) {
 // the same base converts only its own layer; repeated reports are answered
 // with the same uploads.
 func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -473,6 +475,7 @@ func TestImagePublishesOnceEveryLayerIsConverted(t *testing.T) {
 // Two builds converting the same base layer at once end with one pair; the
 // other is deleted by the sweep.
 func TestConcurrentConversionsOfOneLayerEndWithOneRecord(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -548,6 +551,7 @@ func TestConcurrentConversionsOfOneLayerEndWithOneRecord(t *testing.T) {
 // What a customer's host converts serves only its workspace, and a pair
 // that does not hold the layer its config names fails the build.
 func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	machine := f.host(t)
@@ -601,6 +605,7 @@ func TestCustomerHostLayersServeOnlyTheirWorkspace(t *testing.T) {
 // A host cannot claim more storage than a layer needs, and a failed build
 // aborts the data uploads it started.
 func TestLayerUploadsAreBoundedAndAbortedWithTheirBuild(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -660,6 +665,7 @@ func TestLayerUploadsAreBoundedAndAbortedWithTheirBuild(t *testing.T) {
 // The sweep retires a pair only after no live image used it through the
 // grace period. A replaced reference a running release still pins is live.
 func TestSweepRetiresOnlyPairsNoLiveImageUses(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")

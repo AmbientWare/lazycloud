@@ -31,6 +31,7 @@ func (s *sentStream) Send(m *hostproto.ServerMessage) error {
 // by a fresh attempt of the same request, and only the fresh one's answer
 // counts.
 func TestAnUnansweredReserveAttemptIsSupersededAfterItsTimeout(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	c := compute.NewCompute(pool, execution.NewExecution(pool), compute.Config{})
 	var host uuid.UUID
