@@ -266,6 +266,9 @@ type requestedHost struct {
 	HoldsCPUMillis     *cpu.Millis  `json:"holds_cpu_millis"`
 	HoldsMemoryBytes   *int64       `json:"holds_memory_bytes"`
 	HoldsDisks         *int         `json:"holds_disks"`
+	// MarginWaived is set on a purchase made at a loss, which its launch
+	// walk keeps.
+	MarginWaived bool `json:"margin_waived"`
 }
 
 type idleRow struct {
@@ -510,7 +513,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 	h := requestedHost{
 		ID: id, Kind: KindPlatform, ConnectionID: connection, CPUMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		GPUType: o.Type.GPU, GPUCount: o.Type.GPUCount, Region: o.Region, AvailabilityZone: o.Zone, AvailabilityZoneID: o.ZoneID,
-		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros,
+		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros, MarginWaived: a.Reason == ReasonSpotWait,
 	}
 	if !a.Holds.Empty() {
 		h.HoldsCPUMillis, h.HoldsMemoryBytes = &a.Holds.CPUMillis, &a.Holds.MemoryBytes

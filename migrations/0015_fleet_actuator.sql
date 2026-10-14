@@ -23,3 +23,7 @@ alter table containers add constraint containers_capacity_wait_check check (capa
 -- When an idle serving host last ran work or held a warm slot; it leaves
 -- once that is its market's idle timeout ago.
 alter table hosts add column free_since timestamptz;
+
+-- A purchase made at a loss, as for Spot-tolerant GPU work Spot refused
+-- past its wait; its launch walk sets the margin aside as well.
+alter table hosts add column margin_waived boolean not null default false;

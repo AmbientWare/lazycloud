@@ -367,6 +367,8 @@ func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in Off
 				})
 		})
 	}
+	// A purchase made at a loss walks at one.
+	in.WaiveMargin = h.MarginWaived
 	offers, refs := walkable(in), sizeRefs(p, need, reserve, in)
 	soon := offers
 	if refs != nil {

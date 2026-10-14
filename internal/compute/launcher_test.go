@@ -900,3 +900,27 @@ func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
 		}
 	}
 }
+
+// An on-demand GPU host bought at a loss for Spot-tolerant work keeps the
+// margin set aside when EC2 refuses its pool, and moves to the next one.
+func TestARefusedPurchaseAtALossMovesToTheNextPool(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	typ, _ := compute.CatalogTypeNamed("g4dn.xlarge")
+	usable := typ.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
+                   availability_zone_id, instance_type, market, margin_waived)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'T4', 1, 'us-east-2', 'us-east-2a', 'use2-az1', 'g4dn.xlarge', 'on_demand', true)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	waiting := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["T4"]}}`), 1000, 4*gib)
+	run(t, o.pool, "update containers set capacity_host_id = $2, capacity_wait = 'provisioning' where id = $1", waiting, host)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	if calls := emulator.calls("RunInstances"); len(calls) != 2 || pool(calls[0]) == pool(calls[1]) {
+		t.Fatalf("%d launches, want the refused pool and then another", len(calls))
+	}
+}

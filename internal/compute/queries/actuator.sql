@@ -42,7 +42,7 @@ where h.id = claimed.id
 returning h.id, h.action_token, h.name, h.kind, h.connection_id, h.phase, h.region, h.availability_zone, h.availability_zone_id,
           h.instance_type, h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools,
           h.reserve_mode, h.replaces, h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks, h.instance_id, h.spot_request_id,
-          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.stopped_at;
+          h.hibernation_configured, h.stop_requested_at, h.force_stop_at, h.hibernate_refused_at, h.stopped_at, h.margin_waived;
 
 -- name: ReleaseHostActions :exec
 -- Hosts a pass is done with come up again after @recheck_seconds, unless

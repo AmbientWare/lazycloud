@@ -1025,6 +1025,11 @@ func TestSpotGPUWorkBuysOnDemandOnceItHasWaitedTheSpotWait(t *testing.T) {
 		if (len(bought) == 1) != c.buys {
 			t.Errorf("after %s: bought %v, want a purchase %t", c.waited, bought, c.buys)
 		}
+		for _, a := range actionsOf(plan, ActionBuy) {
+			if a.Reason != ReasonSpotWait {
+				t.Errorf("after %s: bought %s for %s, want the Spot wait, which its launch walk keeps", c.waited, a.Offer.Type.Name, a.Reason)
+			}
+		}
 		if w := waitOf(t, plan, id); !c.buys && (w.Wait == nil || *w.Wait != WaitCooldown) {
 			t.Errorf("after %s: wait %+v, want the cooling Spot pools", c.waited, w)
 		}
