@@ -75,14 +75,15 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 	cfg := smallHub()
 	cfg.Idle = 50 * time.Millisecond
 	_, sub := runHub(t, f.pool, cfg, f.workspace)
-	// listener waits for the hub's connection, other than not, to have
-	// last run a statement like query and be idle, and returns its pid.
-	listener := func(query string, not int) int {
+	// listener waits for the hub's connection, other than not, to be idle
+	// having last run a statement like one of queries, and returns its pid.
+	// An idle listener runs "select 1" every Idle after its LISTEN.
+	listener := func(not int, queries ...string) int {
 		t.Helper()
 		for deadline := time.Now().Add(10 * time.Second); ; {
 			var pid int
 			err := f.pool.QueryRow(t.Context(), `select pid from pg_stat_activity
-				where datname = current_database() and pid not in (pg_backend_pid(), $2) and query like $1 and state = 'idle'`, query, not).Scan(&pid)
+				where datname = current_database() and pid not in (pg_backend_pid(), $2) and query like any($1) and state = 'idle'`, queries, not).Scan(&pid)
 			if err == nil {
 				return pid
 			}
@@ -90,13 +91,13 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 				t.Fatal(err)
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("no idle listener connection that last ran %q", query)
+				t.Fatalf("no idle listener connection that last ran one of %q", queries)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	// The connection checks itself once idle.
-	pid := listener("select 1", 0)
+	pid := listener(0, "select 1")
 	f.submit(1)
 	nextEvent(t, sub)
 	if reason := sub.TakeReset(); reason != "" {
@@ -113,7 +114,7 @@ func TestChangeListenerSurvivesIdleAndRecoversFromALostConnection(t *testing.T) 
 		t.Fatalf("reset reason %q", reason)
 	}
 	// Changes committed once the hub listens again reach the stream.
-	listener("listen %", pid)
+	listener(pid, "listen %", "select 1")
 	f.submit(1)
 	nextEvent(t, sub)
 }
