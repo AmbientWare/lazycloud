@@ -18,6 +18,7 @@ import (
 // The platform generates every external ID, and a role backs one
 // connection, so one account cannot aim the platform at another's role.
 func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -41,6 +42,7 @@ func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
 // preflight failed, is failed and its instance terminated rather than
 // counted as capacity on the way forever.
 func TestCloudHostsThatNeverServeAreReplaced(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	stuck := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseJoining, Region: "us-east-2", InstanceID: "i-0000000000000d001"})
 	run(t, o.pool, "update hosts set phase_at = now() - interval '1 hour', launched_at = now() - interval '1 hour' where id = $1", uuid.UUID(stuck))
@@ -68,6 +70,7 @@ func TestCloudHostsThatNeverServeAreReplaced(t *testing.T) {
 // instance EC2 does not list yet is not taken for gone; and a configured
 // region without hosts is still swept for orphans.
 func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	terminating := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseTerminating, Region: "us-east-2", InstanceID: "i-0000000000000e001"})
 	fresh := cloudHost(t, o, compute.MarketSpot, "i-0000000000000e002")
@@ -101,6 +104,7 @@ func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
 // that offer cools down and the next pass buys another instead of the same
 // one again.
 func TestABoughtHostThatCannotTakeItsContainerCoolsItsOffer(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -128,6 +132,7 @@ func TestABoughtHostThatCannotTakeItsContainerCoolsItsOffer(t *testing.T) {
 // Agent releases reach a share of hosts, and an updating host is not lost
 // while it restarts.
 func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	release := compute.AgentRelease{Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("c", 64)}, RolloutPercent: 50}
@@ -177,6 +182,7 @@ func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
 // it runs it; one that cannot update itself, or rolled back from the
 // target, keeps serving on the release it runs.
 func TestOnlyHostsOnTheTargetAgentReleaseTakeWork(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -230,6 +236,7 @@ func openAgent(t *testing.T, o owners, host compute.HostID, version, rejected st
 // address they can reach with TLS, and the region of the storage it prices
 // transfer from.
 func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
+	t.Parallel()
 	fleet := compute.Fleet{Networks: fleetNetworks(), StorageRegion: "us-east-1"}
 	for name, c := range map[string]compute.Config{
 		"no storage region":    {InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: compute.Fleet{Networks: fleetNetworks()}},
@@ -255,6 +262,7 @@ func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
 // Dropping a workspace from a machine drains that workspace's containers on
 // it, and placement stops sending it more.
 func TestDroppingAWorkspaceDrainsItsWorkOnTheMachine(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -280,6 +288,7 @@ func TestDroppingAWorkspaceDrainsItsWorkOnTheMachine(t *testing.T) {
 // A connection host launches only when the authorization names the node
 // role its identity proof will be checked against.
 func TestConnectionLaunchesNeedTheNodeRole(t *testing.T) {
+	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
@@ -324,6 +333,7 @@ func releaseArchive(t *testing.T, version, agent string) *bytes.Buffer {
 // a host on the older one is on the target, so it is offered no update and
 // takes work. A release of another build updates it.
 func TestAReleaseOfTheSameBuildUpdatesNoHost(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	build := func(version, agent string) string {

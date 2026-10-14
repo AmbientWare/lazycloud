@@ -15,6 +15,7 @@ import (
 // or offline, and never waits or falls back; a deployed call pinned to the
 // same offline machine is admitted and waits for it.
 func TestRunsPinnedToAnUnavailableMachineFailAtOnce(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")

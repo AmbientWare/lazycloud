@@ -200,6 +200,7 @@ func current(t *testing.T, o owners, account identity.UserID) *compute.Connectio
 }
 
 func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
+	t.Parallel()
 	o, _, _ := connectionFleet(t)
 	free := identity.UserID(scan[uuid.UUID](t, o.pool, "insert into users (email) values ('free@example.com') returning id"))
 	var unpaid *billing.PaymentRequiredError
@@ -215,6 +216,7 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 // deployment and the customer's own account, and the objects in them, and
 // only while that account owns the bucket.
 func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
+	t.Parallel()
 	o, _, _ := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	stack := o.compute.View(connect(t, o, alice, "111111111111")).Stack
@@ -270,6 +272,7 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 }
 
 func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -328,6 +331,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 }
 
 func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
+	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	ready, denied, open, drifted := newUser(t, o.pool, "ready@example.com"), newUser(t, o.pool, "denied@example.com"),
 		newUser(t, o.pool, "open@example.com"), newUser(t, o.pool, "drifted@example.com")
@@ -384,6 +388,7 @@ func code(a *compute.Authorization) compute.AuthorizationError {
 }
 
 func TestReconnectRetiresTheReplacedStack(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -425,6 +430,7 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 }
 
 func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -490,6 +496,7 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 }
 
 func TestFailedStackDeletionAsksTheCustomerAndRetryResumes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")

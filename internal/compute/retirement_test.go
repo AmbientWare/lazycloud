@@ -39,6 +39,7 @@ func terminated(e *awsEmulator) []string {
 // market's free room beyond its warm target covers them; a one-time Spot
 // host cannot stop, so it drains and terminates.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("TerminateInstances", terminateInstancesReply)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -82,6 +83,7 @@ values (uuidv7(interval '-1 hour'), $1, $2, 'ready', $3, 1, 1500, 1 << 28, now()
 }
 
 func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)

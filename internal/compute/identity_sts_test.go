@@ -21,6 +21,7 @@ import (
 // disposable AWS profile. STS answers a proof signed for the host and
 // refuses the same signature presented for another host.
 func TestRealSTSVerifiesASignedHostHeader(t *testing.T) {
+	t.Parallel()
 	profile := os.Getenv("LAZYCLOUD_STS_ACCEPTANCE_PROFILE")
 	if profile == "" {
 		t.Skip("set LAZYCLOUD_STS_ACCEPTANCE_PROFILE to a disposable AWS profile")
@@ -84,6 +85,7 @@ func presign(ctx context.Context, t *testing.T, cfg aws.Config, host HostID) Ide
 
 // Only STS endpoints pass: a lookalike such as an S3 website host does not.
 func TestIdentityProofsTargetOnlySTS(t *testing.T) {
+	t.Parallel()
 	for host, want := range map[string]bool{
 		"sts.amazonaws.com":                      true,
 		"sts.us-east-2.amazonaws.com":            true,

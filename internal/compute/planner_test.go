@@ -132,6 +132,7 @@ func capacityWait(t *testing.T, o owners, container uuid.UUID) string {
 }
 
 func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -182,6 +183,7 @@ func equal(a, b []string) bool {
 }
 
 func TestCapacityPacksDemandOntoOneHostAndCountsHostsInFlight(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -208,6 +210,7 @@ func TestCapacityPacksDemandOntoOneHostAndCountsHostsInFlight(t *testing.T) {
 }
 
 func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -266,6 +269,7 @@ func submitOne(t *testing.T, o owners, workspace uuid.UUID, app string) executio
 }
 
 func TestFleetLimitAndPurchasesExplainPendingTasks(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, fleetConfig(compute.Fleet{MaxHosts: 1}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -301,6 +305,7 @@ func TestFleetLimitAndPurchasesExplainPendingTasks(t *testing.T) {
 // buys once it closes. A stream that may have begun before the pass looks
 // back has run its five seconds and holds nothing.
 func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
+	t.Parallel()
 	stream := func(from time.Duration) []time.Duration {
 		var ages []time.Duration
 		for age := from; age > 0; age -= 500 * time.Millisecond {
@@ -347,6 +352,7 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 // ready room took at once leave a settled platform container's purchase
 // alone.
 func TestArrivalsElsewhereDoNotHoldAPlatformPurchase(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		arrive func(t *testing.T, o owners, owner identity.UserID)
@@ -392,6 +398,7 @@ values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t,
 // disks and public addresses cost. Expected transfer is an estimate, so it
 // ranks the regions but stays out of the price a host records.
 func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	ws := newWorkspace(t, o.pool, "connected", alice)
@@ -435,6 +442,7 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 // host leaves on its idle timeout, evicting what still runs there, whose
 // task is preempted and queued again.
 func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)

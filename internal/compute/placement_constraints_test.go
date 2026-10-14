@@ -27,6 +27,7 @@ func constrained(t *testing.T, o owners, workspace uuid.UUID, specs ...string) [
 func on(got *uuid.UUID, host compute.HostID) bool { return got != nil && *got == uuid.UUID(host) }
 
 func TestGPUWorkTakesAnAcceptedModelAndCountsReservedGPUs(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -67,6 +68,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4)
 }
 
 func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -102,6 +104,7 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 // running GPU work ahead of a CPU host, and none of one running none. Work
 // that cannot move stays off it.
 func TestMovableCPUWorkFillsAFleetGPUInstanceOnlyWhileItRunsGPUWork(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -120,6 +123,7 @@ func TestMovableCPUWorkFillsAFleetGPUInstanceOnlyWhileItRunsGPUWork(t *testing.T
 }
 
 func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -163,6 +167,7 @@ func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 }
 
 func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -187,6 +192,7 @@ func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
 // An on-demand host handing Spot-tolerant work back lends that work no room
 // and still takes work that cannot run on Spot.
 func TestAHostHandingWorkBackTakesOnlyWorkThatCannotRunOnSpot(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -199,6 +205,7 @@ func TestAHostHandingWorkBackTakesOnlyWorkThatCannotRunOnSpot(t *testing.T) {
 }
 
 func TestRegionAndZonePinsChooseTheHost(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
