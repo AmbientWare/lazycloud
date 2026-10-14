@@ -327,9 +327,16 @@ func (v *volumes) sign(r *http.Request, g volumeGrant) error {
 }
 
 // observe records the version a HEAD of an object reports, unless a write
-// of it ended since the HEAD was sent.
+// of it ended since the HEAD was sent, and has a listing outdate the
+// versions it reports otherwise.
 func (v *volumes) observe(resp *http.Response) error {
 	f, _ := resp.Request.Context().Value(forwardedKey{}).(forwarded)
+	if f.key == "" && resp.Request.Method == http.MethodGet && resp.StatusCode == http.StatusOK {
+		resp.Body = &listing{ReadCloser: resp.Body, done: func(body []byte, whole bool) {
+			v.listed(f, resp.Request.URL.Query().Get("prefix"), body, whole)
+		}}
+		return nil
+	}
 	etag := resp.Header.Get("Etag")
 	if f.key == "" || resp.Request.Method != http.MethodHead || resp.StatusCode != http.StatusOK || etag == "" || resp.ContentLength < 0 {
 		return nil
@@ -349,6 +356,74 @@ func (v *volumes) observe(resp *http.Response) error {
 	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength}
 	b.seen[f.key] = observation{version: ver, header: header, at: f.sent}
 	return nil
+}
+
+// maxListing bounds the listing body read for versions, a page of 1000
+// keys with room to spare.
+const maxListing = 4 << 20
+
+// listing passes a listing's body through and hands it to done once read
+// whole or closed, whole false when it was cut short or past maxListing.
+type listing struct {
+	io.ReadCloser
+	body  bytes.Buffer
+	done  func(body []byte, whole bool)
+	ended bool
+}
+
+func (l *listing) Read(p []byte) (int, error) {
+	n, err := l.ReadCloser.Read(p)
+	if l.body.Len() <= maxListing {
+		l.body.Write(p[:n])
+	}
+	if err == io.EOF && !l.ended {
+		l.ended = true
+		l.done(l.body.Bytes(), l.body.Len() <= maxListing)
+	}
+	return n, err //nolint:wrapcheck // the store's own body
+}
+
+func (l *listing) Close() error {
+	if !l.ended {
+		l.ended = true
+		l.done(nil, false)
+	}
+	return l.ReadCloser.Close() //nolint:wrapcheck // the store's own body
+}
+
+// listed forgets the observations under prefix made before the listing was
+// sent whose ETag the listing contradicts, all of them when it could not
+// be read: a client that saw a newer version in a listing must not be
+// answered with the older one's bytes, which it would keep as the newer's.
+func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
+	var doc struct {
+		Contents []struct {
+			Key  string
+			ETag string
+		}
+	}
+	listed := map[string]string{}
+	if whole && xml.Unmarshal(body, &doc) == nil {
+		for _, c := range doc.Contents {
+			listed[c.Key] = c.ETag
+		}
+	} else {
+		listed = nil
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	b := v.buckets[f.grant.name]
+	if b == nil {
+		return
+	}
+	for key, o := range b.seen {
+		if !strings.HasPrefix(key, prefix) || !o.at.Before(f.sent) {
+			continue
+		}
+		if etag, ok := listed[key]; listed == nil || ok && etag != o.version.etag {
+			delete(b.seen, key)
+		}
+	}
 }
 
 // wrote records that a write of key, or with "" of any key, ended, and

@@ -910,13 +910,22 @@ func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2 * time.Second)
-	if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
-		t.Fatalf("the volume lists %v", names)
-	}
+	// The reader reads at once, while its mount's stat cache may still hold
+	// the old version, and reads the new bytes once its mount has seen them,
+	// within the stat cache's TTL.
 	want := sha256.Sum256(rewritten)
-	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != `"`+hex.EncodeToString(want[:])+`"` {
-		t.Fatalf("after the overwrite the container reads %s", got)
+	sum = `"` + hex.EncodeToString(want[:]) + `"`
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
+			t.Fatalf("the volume lists %v", names)
+		}
+		got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`)))
+		if got == sum {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("5 s after the overwrite the container reads %s, want %s", got, sum)
+		}
 	}
 }
 
