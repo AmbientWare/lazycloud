@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -542,101 +541,73 @@ func TestWarmingFillsTheTraceAtCurrentVersions(t *testing.T) {
 	}
 }
 
-// slowDisk returns a directory on a filesystem of its own whose writes
-// this process makes at bytesPerSecond, synchronously, until the test ends.
-func slowDisk(t *testing.T, size int64, bytesPerSecond int) string {
+// frozenDisk returns a directory on a filesystem of its own and a freeze
+// that blocks every write to it until the test ends.
+func frozenDisk(t *testing.T) (string, func()) {
 	t.Helper()
 	if os.Geteuid() != 0 {
-		t.Fatal("a throttled disk needs root")
+		t.Fatal("a frozen filesystem needs root")
 	}
-	run := func(name string, args ...string) string {
+	run := func(name string, args ...string) {
 		t.Helper()
-		out, err := exec.CommandContext(context.Background(), name, args...).CombinedOutput()
-		if err != nil {
+		if out, err := exec.CommandContext(context.Background(), name, args...).CombinedOutput(); err != nil {
 			t.Fatalf("%s %v: %v: %s", name, args, err, out)
 		}
-		return strings.TrimSpace(string(out))
 	}
 	image := filepath.Join(t.TempDir(), "disk")
 	if err := os.WriteFile(image, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(image, size); err != nil {
+	if err := os.Truncate(image, 1<<30); err != nil {
 		t.Fatal(err)
 	}
-	device := run("losetup", "--find", "--show", image)
-	t.Cleanup(func() { run("losetup", "--detach", device) })
-	run("mkfs.ext4", "-q", device)
+	run("mkfs.ext4", "-q", image)
 	dir := t.TempDir()
-	run("mount", "-o", "sync", device, dir)
+	run("mount", "-o", "loop", image, dir)
 	t.Cleanup(func() { run("umount", dir) })
-	number, err := os.ReadFile("/sys/class/block/" + filepath.Base(device) + "/dev")
-	if err != nil {
-		t.Fatal(err)
+	return dir, func() {
+		run("fsfreeze", "--freeze", dir)
+		t.Cleanup(func() { run("fsfreeze", "--unfreeze", dir) })
 	}
-	self, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Writes count against the cgroup that dirtied them with both
-	// controllers on.
-	if err := os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+io +memory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	group := filepath.Join("/sys/fs/cgroup", fmt.Sprintf("lazycloud-slow-disk-%d", os.Getpid()))
-	if err := os.Mkdir(group, 0o755); err != nil { //nolint:gosec // A cgroup.
-		t.Fatal(err)
-	}
-	limit := fmt.Sprintf("%s wbps=%d", strings.TrimSpace(string(number)), bytesPerSecond)
-	pid := []byte(strconv.Itoa(os.Getpid()))
-	if err := os.WriteFile(filepath.Join(group, "io.max"), []byte(limit), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(group, "cgroup.procs"), pid, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		home := filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(strings.TrimSpace(string(self)), "0::"))
-		if err := os.WriteFile(filepath.Join(home, "cgroup.procs"), pid, 0o600); err != nil {
-			t.Error(err)
-		}
-		if err := os.Remove(group); err != nil {
-			t.Error(err)
-		}
-	})
-	return dir
 }
 
-// A read never waits for the cache's disk: a large object reads whole at
-// the store's speed, intact, through a frame cache whose disk writes far
-// slower.
+// A read never waits for the cache's disk: with every write to it blocked,
+// a large object still reads whole and intact from the store, and none of
+// its frames is stored yet.
 func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
-	const size, diskSpeed = 512 << 20, 5 << 20
-	dir := slowDisk(t, 3<<30, diskSpeed)
+	dir, freeze := frozenDisk(t)
 	ts := newTestStore(t)
 	up := &upstream{}
 	cfg := testConfig("", up, slog.New(slog.DiscardHandler))
-	cfg.CacheBytes = 2 << 30
+	cfg.CacheBytes = 1 << 30
 	c, err := newFrameCache(t.Context(), filepath.Join(dir, "cache"), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The writer finishes its frame before the disk unmounts.
 	t.Cleanup(c.writer.Wait)
 	t.Cleanup(c.background.Wait)
 	_, base := serveVolumes(t, ts, up, c, true)
-	body := randomBytes(12, size)
+	body := randomBytes(12, 12*volumeFrame)
 	ts.put(t, "weights", body)
-	began := time.Now()
-	resp, got := get(t, base+"weights", "")
-	took := time.Since(began)
-	if resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
-		t.Fatalf("the read: %s, intact %v", resp.Status, bytes.Equal(got, body))
+	freeze()
+	read := make(chan []byte, 1)
+	go func() {
+		_, got := get(t, base+"weights", "")
+		read <- got
+	}()
+	select {
+	case got := <-read:
+		if !bytes.Equal(got, body) {
+			t.Fatal("the read came back changed")
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the read waits for the frozen disk")
 	}
-	if disk := time.Duration(size / diskSpeed * int(time.Second)); took > disk/2 {
-		t.Fatalf("a read of %d MiB took %v, against %v for the disk to write it", size>>20, took, disk)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.frames) != 0 {
+		t.Fatalf("%d frames stored on a frozen disk", len(c.frames))
 	}
-	t.Logf("read %d MiB in %v", size>>20, took)
 }
 
 // On a host whose disk reads back slower than the stores deliver, volume
