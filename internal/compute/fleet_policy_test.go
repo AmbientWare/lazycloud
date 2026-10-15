@@ -30,7 +30,7 @@ func TestLargeShapeReserveFitsAtLeastTheDefault(t *testing.T) {
 		{"beyond the cap", cpuGiB(32000, 256), 64, cpuGiB(32000, 256).Lower(s.Cap), s.CapDisks},
 	}
 	for _, c := range cases {
-		if got, disks := s.of(spot, c.recent, c.disks); got != c.want || disks != c.wantDisks {
+		if got, disks := s.of(spot, c.recent, c.disks, FleetCatalog()); got != c.want || disks != c.wantDisks {
 			t.Errorf("%s: %+v with %d disks, want %+v with %d", c.name, got, disks, c.want, c.wantDisks)
 		}
 	}
