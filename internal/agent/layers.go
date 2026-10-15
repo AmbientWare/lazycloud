@@ -266,17 +266,27 @@ func (l *layerSources) await(ctx context.Context, log *slog.Logger, container st
 		log.Warn("ending the startup read trace failed", "error", err)
 		return nil
 	}
-	if !report {
-		return nil
+	reason := "the container was released before its trace began"
+	if ok {
+		// A start that began while the trace ended shares it too.
+		l.smu.Lock()
+		shared := s.shared
+		l.smu.Unlock()
+		switch {
+		case !report:
+			reason = "the container exited before it was served"
+		case !complete:
+			reason = "the snapshotter could not tell its reads from others'"
+		case shared:
+			reason = "another start shares a layer"
+		case len(reads) == 0:
+			reason = "it read nothing"
+		default:
+			return &hostproto.ImageTrace{Reads: reads}
+		}
 	}
-	// A start that began while the trace ended shares it too.
-	l.smu.Lock()
-	shared := s.shared
-	l.smu.Unlock()
-	if !complete || shared || len(reads) == 0 {
-		return nil
-	}
-	return &hostproto.ImageTrace{Reads: reads}
+	log.Info("startup trace dropped", "reason", reason)
+	return nil
 }
 
 // release forgets container once it exited or failed to start, stops its

@@ -127,7 +127,24 @@ func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
 	id := start.GetStart().GetContainerId()
 	start.GetStart().RecordTrace = true
 	s.send(t, start)
-	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	// The agent decides at the container's exit whether it reports the
+	// trace, and logs why it drops one.
+	var reported *hostproto.StartupTrace
+	for deadline := time.After(120 * time.Second); reported == nil; {
+		select {
+		case m, ok := <-s.msgs:
+			if !ok {
+				t.Fatal("session closed")
+			}
+			reported = m.GetStartupTrace()
+		case <-time.After(50 * time.Millisecond):
+			if dropped := e.logged("startup trace dropped", id); dropped != "" {
+				t.Fatal(dropped)
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the startup trace")
+		}
+	}
 	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
 		t.Fatalf("the host reported %v", reported)
 	}

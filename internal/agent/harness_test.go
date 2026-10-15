@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,6 +105,33 @@ type env struct {
 	geesefs         string
 	// running is the agent startAgent last started.
 	running *runningAgent
+	// logs holds what the test's agents logged.
+	logs *lockedLog
+}
+
+// lockedLog collects log lines from the agents' goroutines.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// logged returns the first line the test's agents logged holding every
+// one of words, or empty.
+func (e *env) logged(words ...string) string {
+	e.logs.mu.Lock()
+	defer e.logs.mu.Unlock()
+	for line := range strings.Lines(e.logs.buf.String()) {
+		if !slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(line, w) }) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func newEnv(t *testing.T) *env {
@@ -112,7 +143,7 @@ func newEnv(t *testing.T) *env {
 	if _, err := docker.Ping(t.Context(), client.PingOptions{}); err != nil {
 		t.Fatalf("docker is required for agent tests: %v", err)
 	}
-	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker}
+	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker, logs: &lockedLog{}}
 	// As the server does once it converted them, sessions answer the
 	// platform images the Hello names with their grants.
 	e.server.answerPlatform = func(named []string) []*hostproto.PlatformImage {
@@ -197,7 +228,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		Version:         "test",
 		MetricsInterval: e.metricsInterval,
 		CommitAfter:     time.Second,
-		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		Logger:          slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, e.logs), &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	for _, fn := range configure {
 		fn(&cfg)
