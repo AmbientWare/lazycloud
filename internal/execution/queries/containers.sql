@@ -22,6 +22,13 @@ returning id;
 -- name: RecordLoadError :exec
 update releases set load_error = @load_error where id = @id;
 
+-- name: ReleaseHasPlacedContainer :one
+-- Whether a container of the release other than this one holds a host, and
+-- so takes the release's queued work.
+select exists (
+    select 1 from containers where release_id = @release_id::uuid and id <> @id and state not in ('pending', 'stopped')
+)::bool;
+
 -- name: CountStartFailure :one
 update releases set start_failures = start_failures + 1 where id = @id returning start_failures;
 

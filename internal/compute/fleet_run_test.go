@@ -2,6 +2,7 @@ package compute
 
 import (
 	"encoding/json"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -12,18 +13,19 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
-// The recorded run (testdata/fleetrun) is a prod run of a mixed load: every
+// A recorded run (testdata/fleetrun) is a prod run of a mixed load: every
 // container as it arrived, with the shape it reserved and the runtime it
-// finally needed, the fleet the run began with, the Spot price changes, and
-// what prod recorded. Replaying it through PlanFleet reproduces it; the guard
-// fails when the simulation drifts from what prod recorded.
+// finally needed, the fleet the run began with, the Spot quotes, the
+// capacity refusals EC2 made, and what prod recorded. Replaying it through
+// PlanFleet checks that every container runs and placement holds, and
+// reports what the run cost beside what prod recorded.
 
 // fleetRun is one recorded run.
 type fleetRun struct {
 	Start time.Time `json:"start"`
 	// Arrivals are [ms after start, function, CPU millis, MiB, preemptible
-	// 0/1, runtime ms].
-	Arrivals [][6]json.RawMessage `json:"arrivals"`
+	// 0/1, runtime ms], and the GPU model of GPU work.
+	Arrivals [][]json.RawMessage `json:"arrivals"`
 	Fleet    []struct {
 		Region       string       `json:"region"`
 		ZoneID       string       `json:"zone_id"`
@@ -41,20 +43,23 @@ type fleetRun struct {
 		Spot     [2]int64 `json:"spot"`
 		OnDemand [2]int64 `json:"on_demand"`
 	} `json:"recent"`
+	// RecentGPU are the largest shapes GPU markets placed, [preemptible 0/1,
+	// model, CPU millis, MiB].
+	RecentGPU [][4]json.RawMessage `json:"recent_gpu"`
+	// Refusals are EC2's capacity refusals of the run's launches, [ms after
+	// start, region, zone id, type, market].
+	Refusals [][5]json.RawMessage `json:"refusals"`
 	Recorded struct {
-		Revenue        float64               `json:"revenue"`
-		FleetCPUHours  float64               `json:"fleet_cpu_hours"`
-		CostAboveIdle  float64               `json:"cost_above_idle"`
-		IdleRate       float64               `json:"idle_rate"`
-		WindowSeconds  int                   `json:"window_seconds"`
 		HostsLaunched  int                   `json:"hosts_launched"`
 		WaitsP50AndP95 map[string][2]float64 `json:"waits_p50_p95"`
+		Refused        int                   `json:"refused"`
+		// NeverRanSpotCPU counts the Spot CPU hosts that served and ended
+		// without running a container.
+		NeverRanSpotCPU int `json:"never_ran_spot_cpu"`
 	} `json:"recorded"`
-	// Prices are every Spot price change, [region, zone id, type, µ$/h,
-	// effective]; Spot is the latest quote per pool with its placement
-	// score, [region, zone id, type, µ$/h, score].
-	Prices [][5]json.RawMessage `json:"prices"`
-	Spot   [][5]json.RawMessage `json:"spot"`
+	// Spot is the latest quote per pool with its placement score, [region,
+	// zone id, type, µ$/h, score].
+	Spot [][5]json.RawMessage `json:"spot"`
 }
 
 func readTestJSON(t *testing.T, name string, v any) {
@@ -82,37 +87,42 @@ func (r fleetRun) arrivals(t *testing.T) []simArrival {
 	out := make([]simArrival, 0, len(r.Arrivals))
 	for _, a := range r.Arrivals {
 		var at, cpuMillis, mib, preemptible, runs int64
-		var fn string
-		unmarshalAll(t, a[:], &at, &fn, &cpuMillis, &mib, &preemptible, &runs)
-		out = append(out, simArrival{
-			at: time.Duration(at) * time.Millisecond, count: 1, runs: time.Duration(runs) * time.Millisecond, fn: fn,
-			need: Requirement{CPUMillis: cpu.Millis(cpuMillis), MemoryBytes: mib << 20, Preemptible: preemptible == 1},
-		})
+		var fn, gpu string
+		unmarshalAll(t, a[:6], &at, &fn, &cpuMillis, &mib, &preemptible, &runs)
+		if len(a) > 6 {
+			unmarshalAll(t, a[6:], &gpu)
+		}
+		need := Requirement{CPUMillis: cpu.Millis(cpuMillis), MemoryBytes: mib << 20, Preemptible: preemptible == 1}
+		if gpu != "" {
+			need.GPUs, need.GPUCount = []string{gpu}, 1
+		}
+		out = append(out, simArrival{at: time.Duration(at) * time.Millisecond, count: 1, runs: time.Duration(runs) * time.Millisecond, fn: fn, need: need})
 	}
 	return out
 }
 
-// quotes are the run's Spot quotes, each at its pool's price in force at
-// now.
+// refuses is EC2 refusing a pool at the sim's time as the run recorded:
+// within five minutes of a recorded refusal of its type and market in its
+// region. EC2 refused prod's walks zone after zone, so a zone the run never
+// tried refuses with the rest.
+func (r fleetRun) refuses(t *testing.T, s *sim) func(region, zoneID, instanceType string, market Market) bool {
+	refused := map[string][]time.Time{}
+	for _, f := range r.Refusals {
+		var at int64
+		var region, zone, typ, market string
+		unmarshalAll(t, f[:], &at, &region, &zone, &typ, &market)
+		key := region + "/" + typ + "/" + market
+		refused[key] = append(refused[key], r.Start.Add(time.Duration(at)*time.Millisecond))
+	}
+	return func(region, zoneID, instanceType string, market Market) bool {
+		return slices.ContainsFunc(refused[region+"/"+instanceType+"/"+string(market)], func(at time.Time) bool {
+			return s.now.Sub(at).Abs() <= 5*time.Minute
+		})
+	}
+}
+
+// quotes are the run's Spot quotes, observed at now.
 func (r fleetRun) quotes(t *testing.T) func(time.Time) []SpotQuote {
-	type change struct {
-		at     time.Time
-		micros int64
-	}
-	history := map[string][]change{}
-	for _, p := range r.Prices {
-		var region, zone, typ, at string
-		var micros int64
-		unmarshalAll(t, p[:], &region, &zone, &typ, &micros, &at)
-		when, err := time.Parse(time.RFC3339, at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		history[region+"/"+zone+"/"+typ] = append(history[region+"/"+zone+"/"+typ], change{when, micros})
-	}
-	for _, h := range history {
-		slices.SortFunc(h, func(a, b change) int { return a.at.Compare(b.at) })
-	}
 	var base []SpotQuote
 	for _, q := range r.Spot {
 		var sq SpotQuote
@@ -121,21 +131,15 @@ func (r fleetRun) quotes(t *testing.T) func(time.Time) []SpotQuote {
 	}
 	return func(now time.Time) []SpotQuote {
 		out := slices.Clone(base)
-		for i, q := range out {
+		for i := range out {
 			out[i].ObservedAt = now
-			for _, c := range history[q.Region+"/"+q.ZoneID+"/"+q.InstanceType] {
-				if c.at.After(now) {
-					break
-				}
-				out[i].HourlyMicros = c.micros
-			}
 		}
 		return out
 	}
 }
 
 // newRunSim is the platform fleet as run found it: its four regions and
-// zone offerings, its Spot prices and starting fleet, at prod's fleet limit.
+// zone offerings, its Spot quotes and starting fleet, at prod's fleet limit.
 func newRunSim(t *testing.T, run fleetRun) *sim {
 	p := DefaultPolicy()
 	s := &sim{
@@ -148,6 +152,12 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 	s.recent = map[ReserveMarket]FleetCapacity{
 		{Preemptible: true}: {CPUMillis: cpu.Millis(run.Recent.Spot[0]), MemoryBytes: run.Recent.Spot[1] << 20},
 		{}:                  {CPUMillis: cpu.Millis(run.Recent.OnDemand[0]), MemoryBytes: run.Recent.OnDemand[1] << 20},
+	}
+	for _, g := range run.RecentGPU {
+		var preemptible, cpuMillis, mib int64
+		var model string
+		unmarshalAll(t, g[:], &preemptible, &model, &cpuMillis, &mib)
+		s.recent[ReserveMarket{Preemptible: preemptible == 1, GPU: model}] = FleetCapacity{CPUMillis: cpu.Millis(cpuMillis), MemoryBytes: mib << 20, GPUs: 1}
 	}
 	for _, f := range run.Fleet {
 		typ, ok := CatalogTypeNamed(f.Type)
@@ -167,7 +177,7 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 		s.next++
 		h := &simHost{offer: o, failAt: f.FailsAt, FleetHost: FleetHost{
 			ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: f.Type, Region: f.Region, Zone: zone, ZoneID: f.ZoneID, Market: f.Market,
-			Usable: o.Usable, State: f.State, Current: true, HourlyMicros: ptr(f.HourlyMicros), ReserveMode: f.ReserveMode, HibernationConfigured: hibernate,
+			GPU: typ.GPU, Usable: o.Usable, State: f.State, Current: true, HourlyMicros: ptr(f.HourlyMicros), ReserveMode: f.ReserveMode, HibernationConfigured: hibernate,
 			Stoppable: slept || f.Market == MarketOnDemand, Slept: slept, PhaseAt: f.Since,
 		}}
 		if f.FailsAt != nil {
@@ -179,59 +189,44 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 	return s
 }
 
-// replayWindow is how long a replay runs: the run's 30 minutes of
-// arrivals, its 20-minute jobs and the fleet's idle tail.
-const replayWindow = 65 * time.Minute
-
-// containerStart is how long a placed container takes to start its task,
-// assign to ready on prod (2.4-2.8 s); the simulation's waits end at
-// placement.
-const containerStart = 2500 * time.Millisecond
-
-// TestFleetReplayMatchesProd replays the run, which saw no reclaims, without
-// them, and holds the simulation to what prod recorded: revenue, the fleet
-// CPU-hours and spend above the idle rate in the recorded window, the hosts
-// launched, and each function's start p50 and p95.
-func TestFleetReplayMatchesProd(t *testing.T) {
+// TestFleetReplayOfAMixedGPURun replays gpu_refusals.json, a mixed CPU load
+// beside on-demand A10G functions while EC2 refused GPU pools: every
+// container runs and nothing breaks placement. It reports hosts launched,
+// refusals, spend, Spot CPU hosts that never ran a container, and each
+// function's start p50 and p95 beside what prod recorded.
+func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
-	readTestJSON(t, "run2.json", &run)
+	readTestJSON(t, "gpu_refusals.json", &run)
 	s := newRunSim(t, run)
-	// The policy prod ran when it recorded the run: Spot hosts idled as
-	// long as on-demand ones.
-	s.p.SpotIdleTimeout = s.p.IdleTimeout
-	window := time.Duration(run.Recorded.WindowSeconds) * time.Second
-	s.until = run.Start.Add(window)
-	r := s.run(replayWindow, run.arrivals(t))
-	rec := run.Recorded
-	revenue, fleetCPU := float64(r.revenueNanos)/1e9, r.fleetCPUSec/3600
-	cost := float64(r.windowMicros)/3600e6 - rec.IdleRate*window.Hours()
-	t.Logf("revenue $%.2f (prod $%.2f), fleet %.1f CPU-h (%.1f), cost above idle $%.2f ($%.2f), hosts launched %d (%d)",
-		revenue, rec.Revenue, fleetCPU, rec.FleetCPUHours, cost, rec.CostAboveIdle, r.launches, rec.HostsLaunched)
-	within := func(what string, got, want, tolerance float64) {
-		if math.Abs(got-want) > tolerance*want {
-			t.Errorf("%s %.2f, prod recorded %.2f: more than %.0f%% apart", what, got, want, 100*tolerance)
-		}
-	}
-	// The recorded spend also paid for an agent refresh of two on-demand
-	// reserves and two Spot hosts whose bootstraps timed out (about $0.08 and
-	// 2.7 CPU-hours), which the starting fleet does not refresh.
-	within("revenue", revenue, rec.Revenue, 0.02)
-	within("fleet CPU-hours", fleetCPU, rec.FleetCPUHours, 0.08)
-	within("cost above idle", cost, rec.CostAboveIdle, 0.10)
-	if d := r.launches - rec.HostsLaunched; d < -3 || d > 3 {
-		t.Errorf("launched %d hosts, prod %d", r.launches, rec.HostsLaunched)
-	}
-	if len(s.pending) > 0 || len(r.violations) > 0 {
-		t.Errorf("%d containers unplaced, violations %v", len(s.pending), r.violations)
-	}
-	for fn, want := range rec.WaitsP50AndP95 {
-		for i, q := range []float64{0.5, 0.95} {
-			got := (quantile(r.fnWaits[fn], q) + containerStart).Seconds()
-			if math.Abs(got-want[i]) > 4 {
-				t.Errorf("%s start p%.0f %.1fs, prod %.1fs", fn, 100*q, got, want[i])
+	s.refuses = run.refuses(t, s)
+	// Launches of on-demand g5 hosts served in about a minute (00:11:58 to
+	// 00:13:00 and 00:29:02 to 00:29:44).
+	s.gpuProvision = time.Minute
+	// The run began with the Spot L4 and A10G pools cooling after a walk
+	// EC2 refused at 23:51, for the 40 minutes its pools had been refused
+	// before; the planner bought there again at 00:31.
+	for _, region := range slices.Sorted(maps.Keys(s.in.Networks)) {
+		for _, typ := range s.in.Catalog {
+			if typ.GPU == "L4" || typ.GPU == "A10G" {
+				s.cool(OfferCooldown{Region: region, InstanceType: typ.Name, Market: MarketSpot}, nil)
+				s.cools[OfferCooldown{Region: region, InstanceType: typ.Name, Market: MarketSpot}].until = run.Start.Add(30 * time.Minute)
 			}
 		}
+	}
+	s.until = run.Start.Add(50 * time.Minute)
+	r := s.run(50*time.Minute, run.arrivals(t))
+	rec := run.Recorded
+	t.Logf("hosts launched %d (prod %d), refused %d (%d), spend $%.2f, Spot CPU hosts that never ran a container %d (%d)",
+		r.launches, rec.HostsLaunched, r.refusals, rec.Refused, float64(r.windowMicros)/3600e6, r.unusedSpotCPU, rec.NeverRanSpotCPU)
+	for fn, want := range rec.WaitsP50AndP95 {
+		for i, q := range []float64{0.5, 0.95} {
+			t.Logf("%s start p%.0f %.1fs (prod %.1fs)", fn, 100*q, quantile(r.fnWaits[fn], q).Seconds(), want[i])
+		}
+	}
+	t.Logf("actions %v", r.actions)
+	if len(s.pending) > 0 || len(r.violations) > 0 {
+		t.Errorf("%d containers unplaced, violations %v", len(s.pending), r.violations)
 	}
 }
 

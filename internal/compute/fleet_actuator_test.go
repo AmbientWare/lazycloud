@@ -1,8 +1,11 @@
 package compute_test
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -490,13 +493,17 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 	live := reserve(t, o, compute.PhaseStopped, compute.MarketSpot, compute.ReserveStop, "i-0000000000000e006")
 	ec2.add(fakeInstance{ID: "i-0000000000000e006", State: "stopped", SpotRequest: "sir-0000e006"}, live.String())
 	ec2.addRequest(fakeSpotRequest{ID: "sir-0000e006", State: "disabled", Instance: "i-0000000000000e006"}, live.String())
+	run(t, o.pool, "update hosts set spot_request_id = 'sir-0000e006' where id = $1", uuid.UUID(live))
+	// A request a stale launch made for the live reserve, which records
+	// another.
+	ec2.addRequest(fakeSpotRequest{ID: "sir-0000e007", State: "open"}, live.String())
 
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		stopped: compute.PhaseStopped, settling: compute.PhaseStopping, preparing: compute.PhaseFailed,
-		woken: compute.PhaseFailed, live: compute.PhaseStopped,
+		stopped: compute.PhaseStopped, settling: compute.PhaseStopping, preparing: compute.PhaseTerminating,
+		woken: compute.PhaseTerminating, live: compute.PhaseStopped,
 	} {
 		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {
 			t.Errorf("host %s is %s, want %s", host, phase, want)
@@ -505,6 +512,8 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 	if _, failure := hostPhase(t, o.pool, preparing); failure == nil || *failure != string(compute.FailureProviderStopped) {
 		t.Errorf("preparing host failure %v, want provider_stopped", failure)
 	}
+	// Reconcile ends the orphan; the actuator ends the hosts it moved.
+	actuate(t, o)
 	for id, want := range map[string]string{
 		"i-0000000000000e001": "stopped", "i-0000000000000e003": "shutting-down", "i-0000000000000e004": "shutting-down",
 		"i-0000000000000e005": "shutting-down", "i-0000000000000e006": "stopped",
@@ -515,6 +524,9 @@ func TestReconcileKeepsReservesStoppedAndCancelsOrphanSpotRequests(t *testing.T)
 	}
 	if s := ec2.request("sir-0000e005").State; s != "cancelled" {
 		t.Errorf("orphan request %s, want cancelled", s)
+	}
+	if s := ec2.request("sir-0000e007").State; s != "cancelled" {
+		t.Errorf("stale request %s, want cancelled", s)
 	}
 	if s := ec2.request("sir-0000e006").State; s != "disabled" {
 		t.Errorf("live reserve's request %s, want kept", s)
@@ -582,14 +594,16 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 		}
 	}
 
-	// A stop that never completes fails once its window passes.
+	// A stop that never completes ends once its window passes.
 	ago(t, o, throttled, "phase_at", 25*time.Minute)
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
-	if phase, _ := hostPhase(t, o.pool, throttled); phase != string(compute.PhaseFailed) {
-		t.Fatalf("host stopping for 25 minutes is %s, want failed", phase)
+	if phase, _ := hostPhase(t, o.pool, throttled); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("host stopping for 25 minutes is %s, want terminating", phase)
 	}
+	expireLeases(t, o)
+	actuate(t, o)
 	if s := ec2.get("i-0000000000000c012").State; s != "shutting-down" {
 		t.Fatalf("its instance is %s, want shutting down", s)
 	}
@@ -738,5 +752,122 @@ values ('w', 'offline', 'platform', 'aws', 'requested', 2000, 8::bigint << 30, '
 	request := scan[*string](t, o.pool, "select spot_request_id from hosts where id = $1", uuid.UUID(gpu))
 	if instance := scan[string](t, o.pool, "select instance_id from hosts where id = $1", uuid.UUID(gpu)); request == nil || *request != ec2.get(instance).SpotRequest {
 		t.Fatalf("Spot GPU work host recorded request %v, want its persistent request", request)
+	}
+}
+
+// Two scheduler replicas run the actuator and retirement on every wake while
+// reconcile compares the fleet with EC2, whose reads lag its writes by two
+// seconds. Every instance a host row records is terminated once, by a
+// caller that holds the row's lease.
+func TestOneActuatorTerminatesEachInstanceOnce(t *testing.T) {
+	o, emulator, ec2 := reserveFleet(t)
+	ec2.lag = 2 * time.Second
+	var instances []string
+	for n := range 4 {
+		id := fmt.Sprintf("i-00000000000007%03d", n)
+		host := newHost(t, o.pool, hostSpec{
+			Provider: compute.ProviderAWS, Phase: compute.PhaseDraining, Market: compute.MarketOnDemand,
+			Region: "us-east-2", Zone: "us-east-2a", InstanceID: id,
+		})
+		ec2.add(fakeInstance{ID: id, State: "running"}, host.String())
+		instances = append(instances, id)
+	}
+	for n := range 2 {
+		id := fmt.Sprintf("i-00000000000008%03d", n)
+		host := reserve(t, o, compute.PhaseStopped, compute.MarketOnDemand, compute.ReserveStop, id)
+		run(t, o.pool, "update hosts set phase = 'terminating', state = 'retired' where id = $1", uuid.UUID(host))
+		ec2.add(fakeInstance{ID: id, State: "stopped"}, host.String())
+		instances = append(instances, id)
+	}
+	var unleased []string
+	var mu sync.Mutex
+	ec2.refuse = func(call awsCall) (awsReply, bool) {
+		if call.Action != "TerminateInstances" {
+			return awsReply{}, false
+		}
+		for _, id := range list(call.Form, "InstanceId") {
+			var leased bool
+			if err := o.pool.QueryRow(context.Background(),
+				"select coalesce(launch_lease_until > now(), false) from hosts where instance_id = $1", id).Scan(&leased); err != nil || !leased {
+				mu.Lock()
+				unleased = append(unleased, id)
+				mu.Unlock()
+			}
+		}
+		return awsReply{}, false
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	loop := func(every time.Duration, pass func(context.Context)) {
+		wg.Go(func() {
+			for ctx.Err() == nil {
+				pass(ctx)
+				select {
+				case <-ctx.Done():
+				case <-time.After(every):
+				}
+			}
+		})
+	}
+	for range 2 {
+		loop(50*time.Millisecond, func(ctx context.Context) {
+			_, _ = o.compute.Actuate(ctx, discard())
+			_, _ = o.compute.Retire(ctx, discard())
+		})
+	}
+	loop(300*time.Millisecond, func(ctx context.Context) { _ = o.compute.Reconcile(ctx, discard()) })
+	wg.Wait()
+	calls := map[string]int{}
+	for _, c := range emulator.calls("TerminateInstances") {
+		for _, id := range list(c.Form, "InstanceId") {
+			calls[id]++
+		}
+	}
+	for _, id := range instances {
+		if calls[id] != 1 {
+			t.Errorf("instance %s: %d TerminateInstances calls, want 1", id, calls[id])
+		}
+	}
+	if len(unleased) > 0 {
+		t.Errorf("terminated %v without the row's lease", unleased)
+	}
+}
+
+// A drained host that runs nothing moves to terminating as the actuator
+// claims it, and its session and the planners are woken in that statement.
+func TestADrainedHostTerminatingWakesItsSessionAndThePlanners(t *testing.T) {
+	o, _, ec2 := reserveFleet(t)
+	host := newHost(t, o.pool, hostSpec{
+		Provider: compute.ProviderAWS, Phase: compute.PhaseDraining, Market: compute.MarketOnDemand,
+		Region: "us-east-2", Zone: "us-east-2a", InstanceID: "i-0000000000000d901",
+	})
+	ec2.add(fakeInstance{ID: "i-0000000000000d901", State: "running"}, host.String())
+	conn, err := o.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(t.Context(), "listen lc_host; listen lc_compute"); err != nil {
+		t.Fatal(err)
+	}
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("drained host is %s, want terminating", phase)
+	}
+	woke := map[string]bool{}
+	for range 2 {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		n, err := conn.Conn().WaitForNotification(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("after %v: %v", woke, err)
+		}
+		if n.Payload == host.String() {
+			woke[n.Channel] = true
+		}
+	}
+	if !woke["lc_host"] || !woke["lc_compute"] {
+		t.Fatalf("woke %v, want the host's session and the planners", woke)
 	}
 }

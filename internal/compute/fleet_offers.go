@@ -87,8 +87,9 @@ type OfferInputs struct {
 	Quotas    []VCPUQuota
 	QuotaUsed map[QuotaKey]int64
 	// OwnerPays is set for a connected account's offers: the account pays
-	// its own hosts, so no purchase margin applies.
-	OwnerPays bool
+	// its own hosts, so no purchase margin applies. WaiveMargin sets the
+	// margin aside for a purchase the policy makes at a loss.
+	OwnerPays, WaiveMargin bool
 	// StorageRegion holds the platform's registry, object store and
 	// workspace buckets, and ReadBytes is what a start of each market reads
 	// from its workspace's bucket, on average over the market's starts
@@ -354,7 +355,8 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 						TransferMicros: transferMicros(in.StorageRegion, region, t), ReadMicros: readMicros(p, need.Read, region),
 						PlacementPenalty: penalty, Quota: quota,
 					}
-					if _, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays {
+					if why, rejected := marginRejection(p, rates, o, need); rejected && !in.OwnerPays &&
+						(!in.WaiveMargin || why != rejectInsufficientMargin) {
 						continue
 					}
 					offers = append(offers, o)

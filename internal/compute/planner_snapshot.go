@@ -208,12 +208,6 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 // asked again, so retention drains it.
 func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 	market := marketOf(h.Market)
-	// Spot-tolerant work on an on-demand host is lent to the Spot market of
-	// the host's GPU model, or of CPU.
-	var lent FleetCapacity
-	if market == MarketOnDemand {
-		lent = FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory, GPUs: int(h.TolerantGpus)}
-	}
 	moves := make([]Requirement, len(h.MoveCpu))
 	for n := range moves {
 		moves[n] = Requirement{Region: h.MoveRegion[n], Preemptible: true, GPUCount: int(h.MoveGpuCount[n]),
@@ -227,26 +221,16 @@ func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Lent:       lent,
 		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
 		Requested: Phase(h.Phase) == PhaseRequested,
 		Current:   h.PreparedCurrent, UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
+		HourlyMicros:          h.HourlyMicros, PhaseAt: h.PhaseAt,
 		StartRefused: h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays, StoppedAt: h.StoppedAt,
 		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},
 	}
-}
-
-// busySince is when the host's newest live container was placed; nil
-// without one.
-func busySince(h PlannerHostsRow) *time.Time {
-	if h.Containers == 0 {
-		return nil
-	}
-	return &h.BusySince
 }
 
 // refusedReserve reports a host serving after its agent refused to prove a
@@ -286,7 +270,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes), Packs: r.Packs,
 		}}}
 		for n, id := range r.Ids {
-			c := PendingContainer{ID: id}
+			c := PendingContainer{ID: id, Since: r.Created[n]}
 			if r.Bought[n] != uuid.Nil {
 				c.Host = ptr(HostID(r.Bought[n]))
 			}
@@ -299,8 +283,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 
 func recentShapesParams(p Policy) RecentShapesParams {
 	return RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, ArrivalSeconds: p.ArrivalWindow.Seconds(),
 		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}
 }
@@ -336,15 +319,14 @@ type shapeKind string
 
 const (
 	shapeRecent  shapeKind = "recent"
-	shapeBuild   shapeKind = "build"
 	shapeArrived shapeKind = "arrived"
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the most disks one attached, the largest its
-// finished builds reserved, and what arrived within the arrival window.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
-	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+// containers reserved and the most disks one attached, and what arrived
+// within the arrival window.
+func shapesByMarket(rows []RecentShapesRow) (recent, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
+	recent, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
 		m, ok := r.market()
@@ -355,13 +337,11 @@ func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[Reserve
 		switch shapeKind(r.Kind) {
 		case shapeRecent:
 			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
-		case shapeBuild:
-			builds[m] = builds[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived, disks
+	return recent, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

@@ -96,31 +96,10 @@ func (q *Queries) BatchWaits(ctx context.Context, arg BatchWaitsParams) ([]Batch
 	return items, nil
 }
 
-const coolOffers = `-- name: CoolOffers :exec
-insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
-select v.connection_key, v.region, v.instance_type, v.market, now() + make_interval(secs => $1::float8),
-       'the host bought for a container could not take it'
-from jsonb_to_recordset($2::jsonb) as v(connection_key text, region text, instance_type text, market text)
-on conflict (connection_key, region, availability_zone_id, instance_type, market)
-do update set until = excluded.until, reason = excluded.reason
-`
-
-type CoolOffersParams struct {
-	Seconds float64
-	Offers  []byte
-}
-
-// Offers whose bought host joined and still could not take its container
-// cool in every zone of their region.
-func (q *Queries) CoolOffers(ctx context.Context, arg CoolOffersParams) error {
-	_, err := q.db.Exec(ctx, coolOffers, arg.Seconds, arg.Offers)
-	return err
-}
-
 const drainHosts = `-- name: DrainHosts :many
 update hosts h
 set phase = 'draining', capacity_state = 'draining', capacity_reason = $1, reserve_mode = null,
-    idle_since = null, hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    hands_back_at = null, phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
 where h.id = any($2::uuid[]) and h.phase in ('ready', 'preparing')
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -158,8 +137,8 @@ func (q *Queries) DrainHosts(ctx context.Context, arg DrainHostsParams) ([]uuid.
 
 const failPreparing = `-- name: FailPreparing :many
 update hosts
-set phase = 'failed', failure = 'service_lost', phase_message = $1, phase_at = now(), state = 'retired',
-    token_hash = null, launch_lease_until = null, updated_at = now()
+set phase = 'terminating', failure = 'service_lost', phase_message = $1, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
 where id = any($2::uuid[]) and phase = 'preparing' and phase_at < now() - make_interval(secs => $3::float8)
   and (updating_until is null or updating_until < now())
 returning id
@@ -171,8 +150,8 @@ type FailPreparingParams struct {
 	Seconds float64
 }
 
-// Reserves whose agent never proved them within the limit fail, and
-// reconcile terminates their instances. An agent update in flight waits.
+// Reserves whose agent never proved them within the limit terminate with
+// the failure recorded. An agent update in flight waits.
 func (q *Queries) FailPreparing(ctx context.Context, arg FailPreparingParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, failPreparing, arg.Message, arg.Ids, arg.Seconds)
 	if err != nil {
@@ -289,16 +268,16 @@ func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsR
 const insertRequestedHosts = `-- name: InsertRequestedHosts :exec
 insert into hosts (id, name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
                    gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
-                   hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes, holds_disks)
+                   hourly_micros, reserve_mode, replaces, holds_cpu_millis, holds_memory_bytes, holds_disks, margin_waived)
 select v.id, 'lazycloud-' || split_part(v.id::text, '-', 5), 'offline', v.kind, 'aws', v.connection_id, 'requested',
        'Waiting for the machine to be launched', v.cpu_millis, v.memory_bytes, v.gpu_type, v.gpu_count, v.region,
        v.availability_zone, v.availability_zone_id, v.instance_type, v.market, v.hourly_micros, v.reserve_mode,
-       v.replaces, v.holds_cpu_millis, v.holds_memory_bytes, v.holds_disks
+       v.replaces, v.holds_cpu_millis, v.holds_memory_bytes, v.holds_disks, v.margin_waived
 from jsonb_to_recordset($1::jsonb) as v(
     id uuid, kind text, connection_id uuid, cpu_millis bigint, memory_bytes bigint, gpu_type text, gpu_count integer,
     region text, availability_zone text, availability_zone_id text, instance_type text, market text,
     hourly_micros bigint, reserve_mode text, replaces uuid, holds_cpu_millis bigint,
-    holds_memory_bytes bigint, holds_disks smallint)
+    holds_memory_bytes bigint, holds_disks smallint, margin_waived boolean)
 `
 
 // Hosts to buy, for the launcher. The planner names each id, so container
@@ -351,7 +330,7 @@ func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error 
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
-           c.purpose
+           c.purpose, c.created_at
     from containers c
     where c.state = 'pending'
     order by c.created_at
@@ -370,7 +349,8 @@ select ws.connection_id, b.cpu_millis, b.memory_bytes,
        array_agg(b.id order by b.id)::uuid[] as ids,
        array_agg(coalesce(b.capacity_host_id, '00000000-0000-0000-0000-000000000000'::uuid) order by b.id)::uuid[]
            as bought,
-       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents
+       array_agg(coalesce(b.traceparent, '') order by b.id)::text[] as traceparents,
+       array_agg(b.created_at order by b.id)::timestamptz[] as created
 from batch b
 left join image_builds ib on ib.id = b.image_build_id
 left join workspaces ws on ws.id = b.workspace_id and ib.mirror is not true
@@ -398,10 +378,12 @@ type PendingDemandRow struct {
 	Ids          []uuid.UUID
 	Bought       []uuid.UUID
 	Traceparents []string
+	Created      []time.Time
 }
 
 // The oldest pending containers, up to the batch, grouped by what they need
-// from a host, each with the host bought for it (the zero id for none). The
+// from a host, each with when it was created and the host bought for it
+// (the zero id for none). The
 // batch follows the pending index alone: ordering ties by id would sort a
 // whole backlog created in one statement. A mirror build runs on the
 // platform, as placement puts it, whatever its workspace's connection.
@@ -431,6 +413,7 @@ func (q *Queries) PendingDemand(ctx context.Context, batchSize int32) ([]Pending
 			&i.Ids,
 			&i.Bought,
 			&i.Traceparents,
+			&i.Created,
 		); err != nil {
 			return nil, err
 		}
@@ -491,29 +474,24 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.last_seen_at, h.session_epoch, h.region, h.availability_zone, h.availability_zone_id, h.instance_type,
        h.market, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.hourly_micros,
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
-       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.idle_since, h.replaces,
+       h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
        on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
        coalesce(h.start_refused_at > now() - make_interval(secs => $1::float8), false)::bool as start_refused,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,
        coalesce(used.disks, 0)::int as used_disks,
-       coalesce(used.tolerant_cpu, 0)::bigint as tolerant_cpu, coalesce(used.tolerant_memory, 0)::bigint as tolerant_memory,
-       coalesce(used.tolerant_gpus, 0)::int as tolerant_gpus,
        coalesce(used.stays, false)::bool as stays,
        coalesce(used.packed_cpu, 0)::bigint as packed_cpu, coalesce(used.packed_memory, 0)::bigint as packed_memory,
        coalesce(used.packed_ids, '{}')::uuid[] as packed_ids,
        coalesce(used.move_cpu, '{}')::bigint[] as move_cpu, coalesce(used.move_memory, '{}')::bigint[] as move_memory,
        coalesce(used.move_gpu_count, '{}')::int[] as move_gpu_count, coalesce(used.move_gpus, '{}')::text[] as move_gpus,
        coalesce(used.move_region, '{}')::text[] as move_region,
-       coalesce(used.busy_since, h.phase_at)::timestamptz as busy_since,
        exists (select 1 from agent_updates u where u.host_id = h.id)::bool as update_due
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(c.cpu_millis) filter (where c.rate_class in ('auto', 'pinned') and not p.packed) as tolerant_cpu,
-           sum(c.memory_bytes) filter (where c.rate_class in ('auto', 'pinned') and not p.packed) as tolerant_memory,
-           sum(m.gpus) as gpus, sum(m.gpus) filter (where c.rate_class in ('auto', 'pinned')) as tolerant_gpus,
+           sum(m.gpus) as gpus,
            sum(c.cpu_millis) filter (where p.packed) as packed_cpu, sum(c.memory_bytes) filter (where p.packed) as packed_memory,
            array_agg(c.id order by c.id) filter (where p.packed) as packed_ids,
            bool_or(not m.moves) as stays,
@@ -525,7 +503,7 @@ left join lateral (
                filter (where m.moves) as move_gpus,
            array_agg(coalesce(r.spec -> 'placement' ->> 'region', '')) filter (where m.moves) as move_region,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
-           count(*) filter (where not p.packed) as containers, max(c.assigned_at) filter (where not p.packed) as busy_since
+           count(*) filter (where not p.packed) as containers
     from containers c
     left join releases r on r.id = c.release_id
     cross join lateral (
@@ -567,7 +545,6 @@ type PlannerHostsRow struct {
 	PreparedAgentVersion  *string
 	RolloutBucket         int32
 	UpdatingUntil         *time.Time
-	IdleSince             *time.Time
 	Replaces              *uuid.UUID
 	RightsizeRefusedAt    *time.Time
 	HandsBackAt           *time.Time
@@ -579,9 +556,6 @@ type PlannerHostsRow struct {
 	UsedGpus              int32
 	Containers            int32
 	UsedDisks             int32
-	TolerantCpu           int64
-	TolerantMemory        int64
-	TolerantGpus          int32
 	Stays                 bool
 	PackedCpu             int64
 	PackedMemory          int64
@@ -591,7 +565,6 @@ type PlannerHostsRow struct {
 	MoveGpuCount          []int32
 	MoveGpus              []string
 	MoveRegion            []string
-	BusySince             time.Time
 	UpdateDue             bool
 }
 
@@ -639,7 +612,6 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 			&i.PreparedAgentVersion,
 			&i.RolloutBucket,
 			&i.UpdatingUntil,
-			&i.IdleSince,
 			&i.Replaces,
 			&i.RightsizeRefusedAt,
 			&i.HandsBackAt,
@@ -651,9 +623,6 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 			&i.UsedGpus,
 			&i.Containers,
 			&i.UsedDisks,
-			&i.TolerantCpu,
-			&i.TolerantMemory,
-			&i.TolerantGpus,
 			&i.Stays,
 			&i.PackedCpu,
 			&i.PackedMemory,
@@ -663,7 +632,6 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 			&i.MoveGpuCount,
 			&i.MoveGpus,
 			&i.MoveRegion,
-			&i.BusySince,
 			&i.UpdateDue,
 		); err != nil {
 			return nil, err
@@ -690,13 +658,6 @@ with recent as (
         limit $2
     ) c
     left join releases r on r.id = c.release_id
-), builds as (
-    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
-    from image_builds b
-    join containers c on c.image_build_id = b.id
-    where b.id > (select uuidv7(- make_interval(secs => $3::float8)))
-      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.state = 'stopped'
-      and c.stopped_at > now() - make_interval(secs => $4::float8)
 )
 select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
@@ -705,27 +666,22 @@ from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
-select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
-from builds
-group by 2, 3
-union all
 select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
         select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $5::float8) as part
+               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $3::float8) as part
         from (
             select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
             from (
                 select id, cpu_millis, memory_bytes, created_at,
                        coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
-                           >= make_interval(secs => $6::float8) as opens
+                           >= make_interval(secs => $4::float8) as opens
                 from recent
                 where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
                   and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => $7::float8)))
+                  and id > (select uuidv7(- make_interval(secs => $5::float8)))
             ) gaps
         ) runs
     ) parts
@@ -736,13 +692,11 @@ order by 1, 2, 3
 `
 
 type RecentShapesParams struct {
-	WindowSeconds      float64
-	SampleSize         int32
-	BuildScanSeconds   float64
-	BuildWindowSeconds float64
-	BatchMaxSeconds    float64
-	BatchQuietSeconds  float64
-	ArrivalSeconds     float64
+	WindowSeconds     float64
+	SampleSize        int32
+	BatchMaxSeconds   float64
+	BatchQuietSeconds float64
+	ArrivalSeconds    float64
 }
 
 type RecentShapesRow struct {
@@ -760,23 +714,18 @@ type RecentShapesRow struct {
 // By purchase market and GPU model: the largest CPU, memory and GPUs placed
 // platform containers reserved, the most disks one attached, and the bytes
 // of platform volumes they read with how many started, among the newest
-// containers created within the window, up to the sample (recent); the
-// same among the build containers that stopped within the build window
-// (build), since a running build's host holds its slot once it ends; and
+// containers created within the window, up to the sample (recent); and
 // what the placed Spot-tolerant platform CPU containers of the sample
 // created within the arrival window reserve, less their largest batch
-// (arrived): a steady rate of work, which a single burst is not. A batch is arrivals less than
-// batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
-// builds read are those created within build_scan, the window and the
-// longest a build runs. Both reads follow primary keys, so they read at
-// most sample_size containers and the scan's builds whatever the history;
-// the subqueries make their bounds constants the indexes can use.
+// (arrived): a steady rate of work, which a single burst is not. A batch is
+// arrivals less than batch_quiet apart, at most batch_max long, as
+// BatchWaits forms them. The read follows the primary key, so it reads at
+// most sample_size containers whatever the history; the subqueries make
+// its bounds constants the index can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
 	rows, err := q.db.Query(ctx, recentShapes,
 		arg.WindowSeconds,
 		arg.SampleSize,
-		arg.BuildScanSeconds,
-		arg.BuildWindowSeconds,
 		arg.BatchMaxSeconds,
 		arg.BatchQuietSeconds,
 		arg.ArrivalSeconds,
@@ -812,7 +761,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 const resumeReserves = `-- name: ResumeReserves :many
 update hosts
 set phase = 'resuming', phase_message = 'Starting from the reserve', phase_at = now(),
-    reserve_mode = null, idle_since = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
+    reserve_mode = null, stopped_at = case when phase = 'stopping' then stopped_at end, updated_at = now()
 where id = any($1::uuid[]) and (phase = 'stopped' or phase = 'stopping' and stopped_at is not null)
 returning id
 `
@@ -880,7 +829,7 @@ const returnToReserve = `-- name: ReturnToReserve :many
 update hosts h
 set phase = 'preparing', phase_message = 'Preparing to stop into the reserve', phase_at = now(),
     reserve_mode = case when h.id = any($1::uuid[]) then 'hibernate' else 'stop' end,
-    idle_since = null, hands_back_at = null, updated_at = now()
+    hands_back_at = null, updated_at = now()
 where h.id = any($2::uuid[]) and h.phase = 'ready' and h.capacity_state = 'available'
   and not exists (
       select 1 from containers c where c.host_id = h.id and c.state <> 'stopped' and not packed(h.provider, h.gpu_count, c.gpu_count)
@@ -973,19 +922,6 @@ func (q *Queries) SetHandsBack(ctx context.Context, arg SetHandsBackParams) ([]u
 		return nil, err
 	}
 	return items, nil
-}
-
-const setIdleSince = `-- name: SetIdleSince :exec
-update hosts h
-set idle_since = v.idle_since
-from jsonb_to_recordset($1::jsonb) as v(id uuid, idle_since timestamptz)
-where h.id = v.id and h.idle_since is distinct from v.idle_since
-`
-
-// When each changed serving host became idle; null clears it.
-func (q *Queries) SetIdleSince(ctx context.Context, hosts []byte) error {
-	_, err := q.db.Exec(ctx, setIdleSince, hosts)
-	return err
 }
 
 const upsertFleetMarkets = `-- name: UpsertFleetMarkets :exec

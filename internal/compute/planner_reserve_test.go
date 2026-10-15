@@ -46,19 +46,27 @@ func stoppedReserve(t *testing.T, o owners, typ, instance string) compute.HostID
 	return host
 }
 
+// keepWindowPassed ages a market's held running target past the keep
+// window, as waiting it out would.
+func keepWindowPassed(t *testing.T, o owners, market string) {
+	t.Helper()
+	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{holds,running,at}', to_jsonb(now() - make_interval(secs => $2)))
+where market = $1`, market, (3 * compute.DefaultPolicy().Keep).Seconds())
+}
+
 // idleHost is a serving on-demand host idle for an hour.
 func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	t.Helper()
 	host := fleetHost(t, o, compute.PhaseReady, typ, instance)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set phase_at = now() - interval '1 hour' where id = $1", uuid.UUID(host))
 	return host
 }
 
-// Spot-tolerant containers on an on-demand host count as the Spot market's
-// load, and the rest as the on-demand market's, in the plan a pass
-// publishes; CPU work packed on a GPU host counts as the CPU Spot
-// market's.
-func TestAPassCountsLoadInTheMarketOfTheWork(t *testing.T) {
+// A market's load is what runs on its hosts: Spot-tolerant containers on
+// an on-demand host are the on-demand market's, so the host that ran them
+// is held once they end; CPU work packed on a GPU host is the CPU Spot
+// market's, and never holds the GPU host.
+func TestAPassCountsLoadWhereItRuns(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 	host := fleetHost(t, o, compute.PhaseReady, "c6a.4xlarge", "i-0000000000000a001")
@@ -98,11 +106,11 @@ values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1
 			cards[m.Preemptible] = m.Load.GPUs
 		}
 	}
-	if load[true] != 1750 || load[false] != 2000 {
-		t.Fatalf("Spot load %v and on-demand %v, want 1750 and 2000", load[true], load[false])
+	if load[true] != 250 || load[false] != 3500 {
+		t.Fatalf("Spot load %v and on-demand %v, want the 250 packed and the 3500 on the on-demand host", load[true], load[false])
 	}
-	if cards[true] != 1 || cards[false] != 0 {
-		t.Fatalf("L4 Spot load %d cards and on-demand %d, want the borrowed card in Spot", cards[true], cards[false])
+	if cards[true] != 0 || cards[false] != 1 {
+		t.Fatalf("L4 Spot load %d cards and on-demand %d, want the card on the on-demand host", cards[true], cards[false])
 	}
 }
 
@@ -300,8 +308,8 @@ func TestGrowthStopsAtSixteenActionsPerMarketAndPass(t *testing.T) {
 	}
 }
 
-// A return to the reserve whose agent never answers fails after the limit
-// and reconcile ends its instance; an agent update in flight waits.
+// A return to the reserve whose agent never answers terminates with its
+// failure after the limit; an agent update in flight waits.
 func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -317,10 +325,10 @@ func TestAReserveWhoseAgentNeverAnswersFails(t *testing.T) {
 		t.Fatalf("plan %+v, want one reserve failed", r)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		stuck: compute.PhaseFailed, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
+		stuck: compute.PhaseTerminating, updating: compute.PhasePreparing, recent: compute.PhasePreparing,
 	} {
 		phase, failure := hostPhase(t, o.pool, host)
-		if phase != string(want) || (want == compute.PhaseFailed && (failure == nil || *failure != string(compute.FailureServiceLost))) {
+		if phase != string(want) || (want == compute.PhaseTerminating && (failure == nil || *failure != string(compute.FailureServiceLost))) {
 			t.Errorf("host %s is %s (%v), want %s", host, phase, failure, want)
 		}
 	}
@@ -348,7 +356,7 @@ func TestARefusedReserveDrainsAndCoolsItsOffer(t *testing.T) {
 	other := idleHost(t, o, "c6a.2xlarge", "i-0000000000000fc02")
 	run(t, o.pool, "update hosts set hibernation_configured = true where id = any($1)", []uuid.UUID{uuid.UUID(refused), uuid.UUID(other)})
 	// The agent's refusal returned it to ready just now. The other host
-	// costs less, so it keeps the warm slot and the refused one leaves.
+	// costs less, so it keeps the floor and the refused one leaves.
 	run(t, o.pool, "update hosts set reserve_mode = 'hibernate', phase_at = now() where id = $1", uuid.UUID(refused))
 
 	if r := plan(t, o); r.Drained != 1 || r.Returned != 0 {
@@ -452,7 +460,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 		if d := m.ExpiresAt.Sub(m.GeneratedAt); d != 5*time.Minute {
 			t.Errorf("market %+v expires %s after it was generated", m, d)
 		}
-		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.ReasonNoOffer) {
+		if m.GPUType == "" && (m.WarmTarget.CPUMillis != 1000 || m.Reason != compute.WaitNoOffer) {
 			t.Errorf("CPU market %+v, want the 1 CPU warm floor short for want of an offer", m)
 		}
 	}
@@ -499,13 +507,14 @@ select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1,
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
 	}
-	// The load peak outlives the load: the next pass reads it back from the
-	// published plan, so reserves a burst needed wait for the next one.
+	// The held running target outlives the load: the next pass reads it
+	// back from the published plan, so the hosts a burst needed stay for the
+	// next one.
 	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now()")
 	staleMarkets(t, o)
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 0 || spot.Peak.Load.CPUMillis != 48_000 {
-		t.Fatalf("Spot market once its work stopped %+v, want no load and the 48 CPU peak", spot)
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 0 || spot.Holds.Running.Load.CPUMillis < 48_000 {
+		t.Fatalf("Spot market once its work stopped %+v, want no load and a running target still holding the 48 CPU burst", spot)
 	}
 }
 
@@ -544,17 +553,22 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 	}
 }
 
-// A connected account keeps no reserves: its idle host leaves after the
-// idle timeout.
-func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
+// A connected account keeps no reserves and no headroom: an idle host of
+// its leaves at once, and one whose work just ended leaves once the keep
+// window has passed, held by its market's running target carried from the
+// pass that saw the work.
+func TestAConnectedAccountsIdleHostLeavesAfterTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
 	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")
 	recent := idleHost(t, o, "m7i.large", "i-0000000000000f902")
 	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, []uuid.UUID{uuid.UUID(idle), uuid.UUID(recent)})
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
+	work := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, gib)
+	placeOn(t, o, work, recent)
 
 	if r := planCapacity(t, o); r.Drained != 1 || r.Returned != 0 {
 		t.Fatalf("plan %+v, want the idle connection host drained", r)
@@ -562,8 +576,16 @@ func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
 	if phase, _ := hostPhase(t, o.pool, idle); phase != string(compute.PhaseDraining) {
 		t.Fatalf("idle connection host is %s, want draining", phase)
 	}
-	if phase, _ := hostPhase(t, o.pool, recent); phase != string(compute.PhaseReady) {
-		t.Fatalf("connection host idle for a minute is %s, want ready", phase)
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", work)
+	if r := planCapacity(t, o); r.Drained != 0 {
+		t.Fatalf("plan %+v once the work ended, want its host held for the keep window", r)
+	}
+	keepWindowPassed(t, o, conn.ID.String()+"/on_demand:cpu")
+	if r := planCapacity(t, o); r.Drained != 1 {
+		t.Fatalf("plan %+v once the keep window passed, want the host drained", r)
+	}
+	if phase, _ := hostPhase(t, o.pool, recent); phase != string(compute.PhaseDraining) {
+		t.Fatalf("connection host whose work ended is %s, want draining", phase)
 	}
 }
 
@@ -653,8 +675,8 @@ func TestSurplusReservesRetire(t *testing.T) {
 		reserves = append(reserves, uuid.UUID(stoppedReserve(t, o, "c6a.4xlarge", instance)))
 	}
 	// Two keep the stopped target, the floor and the 8 CPU largest shape,
-	// and two retire. The empty warm slot buys a small host: running a
-	// 16-CPU reserve for it costs more.
+	// and two retire. The floor, free on no host, buys a small one: running
+	// a 16-CPU reserve for it costs more.
 	if r := plan(t, o); r.Retired != 2 || r.Resumed != 0 || r.Requested != 1 {
 		t.Fatalf("plan %+v, want two of four reserves retired and a host bought for the slot", r)
 	}
@@ -671,14 +693,12 @@ func TestSurplusReservesRetire(t *testing.T) {
 func settledFleet(t *testing.T, o owners) {
 	t.Helper()
 	plan(t, o)
-	// A floor short since longer than the idle timeout is bought now.
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '1 hour'))
-where plan ? 'floor_short_since'`)
 	plan(t, o)
 	run(t, o.pool, `
 update hosts set phase = case when reserve_mode is null then 'ready' else 'stopped' end,
        state = case when reserve_mode is null then 'online' else 'offline' end, last_seen_at = now(),
-       phase_at = now() - interval '1 hour', prepared_agent_version = '1.0.0',
+       phase_at = now() - interval '1 hour', prepared_agent_version = case when reserve_mode is null then null else '1.0.0' end,
+       spot_request_id = case when reserve_mode is not null and market = 'spot' then 'sir-' || left(id::text, 8) end,
        image_evidence = case when reserve_mode = 'hibernate' then 'saved' else 'unavailable' end
 where phase = 'requested'`)
 }
@@ -780,7 +800,7 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 }
 
 // An 8 CPU request resumes the large-shape reserve, and the pass replaces
-// it once the host has served past the idle timeout and the reserve has
+// it once the host has served past the keep window and the reserve has
 // lacked it as long.
 func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 	t.Parallel()
@@ -804,16 +824,15 @@ func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 		t.Fatal("bought a large host while the resumed one may still return")
 	}
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
-	ageFloorShortfall(t, o)
 	if plan(t, o); largeBought(t, o) != 1 {
-		t.Fatalf("%d large hosts bought once the resumed one served past the idle timeout, want 1", largeBought(t, o))
+		t.Fatalf("%d large hosts bought once the resumed one served past the keep window, want 1", largeBought(t, o))
 	}
 }
 
 // Small work that nothing else fits resumes the large-shape reserve. While
-// the host may return, busy within the idle timeout or idle, no replacement
+// the host may return, busy within the keep window or idle, no replacement
 // is bought, and once idle for the timeout it returns to the reserve.
-func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
+func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
@@ -833,14 +852,14 @@ func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *te
 	serveFromReserve(t, o, large)
 	placeOn(t, o, burst, large)
 	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one serves within the idle timeout")
+		t.Fatal("bought a large host while the resumed one serves within the keep window")
 	}
 	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
 	if plan(t, o); largeBought(t, o) != 0 {
 		t.Fatal("bought a large host while the resumed one idles")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	keepWindowPassed(t, o, "on_demand:cpu")
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
 		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
@@ -854,17 +873,9 @@ func floorBought(t *testing.T, o owners) int {
 where market = 'on_demand' and reserve_mode is not null and phase = 'requested' and cpu_millis < 16000`)
 }
 
-// ageFloorShortfall makes every market's floor shortfall older than the
-// idle timeout.
-func ageFloorShortfall(t *testing.T, o owners) {
-	t.Helper()
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '6 minutes'))
-where plan ? 'floor_short_since'`)
-}
-
 // A burst that resumes the floor reserve buys no replacement: not while the
-// floor has been short for less than the idle timeout, and not while the
-// host, done and idle, is due back; once idle for the timeout it returns.
+// host runs the burst within the keep window, and not while the host, done
+// and idle, is due back; once the keep window has passed it returns.
 func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -885,21 +896,20 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 	}
 	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
 	plan(t, o)
-	ageFloorShortfall(t, o)
 	if plan(t, o); floorBought(t, o) != 0 {
 		t.Fatal("bought a floor reserve while the idle resumed host is due back")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	keepWindowPassed(t, o, "on_demand:cpu")
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) || floorBought(t, o) != 0 {
 		t.Fatalf("plan %+v, floor host %s, %d floor reserves bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, floor).Phase, floorBought(t, o))
 	}
 }
 
-// After a burst the warm host, idle for the timeout, stays to hold the warm
-// target while the resumed floor reserve, idle since the burst ended, is
-// still within it; once the resumed host has idled for the timeout it
-// returns to the reserve. Nothing is bought or drained.
+// After a burst the warm host stays to hold the warm target while the
+// resumed floor reserve, idle since the burst ended, is held with it for
+// the keep window; once the window has passed the resumed host returns to
+// the reserve. Nothing is bought or drained.
 func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -907,13 +917,17 @@ func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
 	floor, _ := onDemandReserves(t, o)
 	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
 where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	burst := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, 8*gib)
 	serveFromReserve(t, o, floor)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
+	placeOn(t, o, burst, floor)
+	plan(t, o)
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
 	if r := plan(t, o); r.Returned != 0 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
 		t.Fatalf("plan %+v, warm host %s; want the warm host kept and nothing else done yet", r, hostRowOf(t, o, warm).Phase)
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	keepWindowPassed(t, o, "on_demand:cpu")
 	r := plan(t, o)
 	if r.Returned != 1 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) ||
 		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
@@ -922,10 +936,10 @@ where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	}
 }
 
-// A floor reserve resumed for work that runs past the idle timeout is
+// A floor reserve resumed for work that runs past the keep window is
 // replaced: the host, busy since it became ready that long ago, is not due
 // back.
-func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
+func TestAFloorReserveBusyPastTheKeepWindowIsReplaced(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
@@ -939,9 +953,8 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 	placeOn(t, o, work, floor)
 	plan(t, o)
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
-	ageFloorShortfall(t, o)
 	if plan(t, o); floorBought(t, o) != 1 {
-		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the idle timeout, want 1", floorBought(t, o))
+		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the keep window, want 1", floorBought(t, o))
 	}
 }
 
@@ -974,8 +987,8 @@ func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 }
 
 // Five 1 CPU starts in a burst leave at most two hosts: the warm host takes
-// one, and one reserve resumes for the other four and the warm slot, so
-// nothing is bought and no slot refill follows once they run.
+// one, and one reserve resumes for the other four and the floor, so
+// nothing is bought and no floor refill follows once they run.
 func TestABurstOfFiveSmallStartsLeavesAtMostTwoHosts(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
@@ -1074,29 +1087,5 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 	}
 	if r := plan(t, o); r.Requested != 0 {
 		t.Fatalf("plan once arrivals settled %+v, want nothing bought", r)
-	}
-}
-
-// A build placed within the hour keeps a warm slot of its shape in its
-// market; an older one does not.
-func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
-	t.Parallel()
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	buildContainer(t, o, dev, "stopped", 2*time.Hour)
-	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("Spot warm target %+v after a build two hours ago, want the 1 CPU floor alone", spot.WarmTarget)
-	}
-	buildContainer(t, o, dev, "stopped", 10*time.Minute)
-	staleMarkets(t, o)
-	plan(t, o)
-	cpuMillis, memory := buildShape(t)
-	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
-		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
-	}
-	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)
 	}
 }

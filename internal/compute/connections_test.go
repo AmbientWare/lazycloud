@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -452,8 +453,18 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
 		Region: "us-east-2", InstanceID: "i-0000000000000c001"})
 	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(host))
-	emulator.on("TerminateInstances", terminateInstancesReply)
-	emulator.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
+	var ended atomic.Bool
+	emulator.on("TerminateInstances", func(call awsCall) awsReply {
+		ended.Store(true)
+		return terminateInstancesReply(call)
+	})
+	emulator.on("DescribeInstances", func(call awsCall) awsReply {
+		if ended.Load() || !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+			return describeInstancesReply()
+		}
+		return describeInstancesReply(ec2Instance{ID: "i-0000000000000c001", State: "running",
+			Tags: map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": uuid.UUID(host).String()}})
+	})
 
 	draining, err := o.compute.Disconnect(ctx, alice)
 	if err != nil || draining == nil || draining.Phase != compute.ConnDraining {
@@ -466,6 +477,7 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	if _, err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
+	actuate(t, o)
 	terms := emulator.calls("TerminateInstances")
 	if len(terms) != 1 || terms[0].AccessKey != assumedKey(conn.Active.RoleARN) {
 		t.Fatalf("TerminateInstances calls %v, want the account's instance terminated through its role", terms)

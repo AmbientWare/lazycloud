@@ -647,9 +647,10 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
-// A launcher whose host another launcher moved on in the meantime neither
-// records its instance nor moves the host again; the instance ends.
-func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing.T) {
+// A launch whose claim passed to another actuator in the meantime neither
+// records its instance, moves the host nor ends the instance: reconcile
+// ends it once the host records another.
+func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
 	t.Parallel()
 	for _, refuse := range []bool{false, true} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
@@ -657,7 +658,7 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 		succeed := launched(t)
 		emulator.on("RunInstances", func(call awsCall) awsReply {
-			if _, err := o.pool.Exec(t.Context(), "update hosts set launch_pools = 1 where id = $1", uuid.UUID(host)); err != nil {
+			if _, err := o.pool.Exec(t.Context(), "update hosts set action_token = gen_random_uuid() where id = $1", uuid.UUID(host)); err != nil {
 				t.Error(err)
 			}
 			if refuse {
@@ -665,9 +666,8 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 			}
 			return succeed(call)
 		})
-		emulator.on("TerminateInstances", terminateInstancesReply)
 		if n := launch(t, o); n != 0 {
-			t.Fatalf("refuse %v: launched %d for a host another launcher moved", refuse, n)
+			t.Fatalf("refuse %v: launched %d for a host another claim holds", refuse, n)
 		}
 		if n := len(emulator.calls("RunInstances")); n != 1 {
 			t.Fatalf("refuse %v: %d launches, want the fenced one alone", refuse, n)
@@ -678,10 +678,10 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 			t.Fatal(err)
 		}
 		if phase != string(compute.PhaseRequested) || instanceType != emulator.calls("RunInstances")[0].Form.Get("InstanceType") {
-			t.Fatalf("refuse %v: host %s as %s, want it requested where the other launcher left it", refuse, phase, instanceType)
+			t.Fatalf("refuse %v: host %s as %s, want it requested where it was", refuse, phase, instanceType)
 		}
-		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{false: 1, true: 0}[refuse] {
-			t.Fatalf("refuse %v: %d terminations, want the fenced instance ended", refuse, terminated)
+		if terminated := len(emulator.calls("TerminateInstances")); terminated != 0 {
+			t.Fatalf("refuse %v: the launcher made %d terminations, want the fenced instance left to reconcile", refuse, terminated)
 		}
 	}
 }
@@ -906,7 +906,7 @@ func callTypes(calls []awsCall) []string {
 }
 
 // A purchase whose container stopped before EC2 launched it is removed at
-// the next pass and never launched: an L4 host no warm slot holds either.
+// the next pass and never launched: an L4 host no headroom holds either.
 func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
 	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
@@ -923,5 +923,29 @@ func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
 		if c.Form.Get("ClientToken") == uuid.UUID(host).String() {
 			t.Fatal("launched a purchase nothing waits for")
 		}
+	}
+}
+
+// An on-demand GPU host bought at a loss for Spot-tolerant work keeps the
+// margin set aside when EC2 refuses its pool, and moves to the next one.
+func TestARefusedPurchaseAtALossMovesToTheNextPool(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	typ, _ := compute.CatalogTypeNamed("g4dn.xlarge")
+	usable := typ.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
+                   availability_zone_id, instance_type, market, margin_waived)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'T4', 1, 'us-east-2', 'us-east-2a', 'use2-az1', 'g4dn.xlarge', 'on_demand', true)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	waiting := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["T4"]}}`), 1000, 4*gib)
+	run(t, o.pool, "update containers set capacity_host_id = $2, capacity_wait = 'provisioning' where id = $1", waiting, host)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	if calls := emulator.calls("RunInstances"); len(calls) != 2 || pool(calls[0]) == pool(calls[1]) {
+		t.Fatalf("%d launches, want the refused pool and then another", len(calls))
 	}
 }

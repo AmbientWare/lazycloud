@@ -1,35 +1,15 @@
--- name: ClaimLaunches :many
--- Requested hosts whose launch is not held by another launcher. The lease
--- outlasts one pool's RunInstances call and each move to a next pool
--- renews it; a launcher that dies leaves it to expire.
-update hosts h
-set launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
-    launch_attempts = launch_attempts + 1, updated_at = now()
-where h.id in (
-    select r.id from hosts r
-    where r.provider = 'aws' and r.phase = 'requested'
-      and (r.launch_lease_until is null or r.launch_lease_until < now())
-    order by r.created_at
-    limit @batch_size
-    for update skip locked
-)
-returning h.id, h.name, h.kind, h.connection_id, h.region, h.availability_zone, h.instance_type, h.market, h.gpu_type,
-          h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts, h.launch_pools, h.reserve_mode, h.replaces,
-          h.holds_cpu_millis, h.holds_memory_bytes, h.holds_disks;
-
 -- name: MoveLaunchPool :execrows
 -- Moves a requested host whose pool EC2 refused to the next pool at that
 -- pool's cost and capacity, with its attempts counted afresh there, and
--- renews the launcher's lease for lease_seconds, which 0 releases. Every
--- pool it moves to holds what it was bought to hold. A host another
--- launcher moved on since it was claimed stays where that one put it.
+-- renews the claim's lease for lease_seconds, which 0 releases. Every pool
+-- it moves to holds what it was bought to hold.
 update hosts
 set instance_type = @instance_type, region = @region, availability_zone = @availability_zone,
     availability_zone_id = @availability_zone_id, hourly_micros = @hourly_micros,
     cpu_millis = @cpu_millis, memory_bytes = @memory_bytes, launch_pools = launch_pools + 1, launch_attempts = 0,
     launch_lease_until = now() + make_interval(secs => @lease_seconds::float8),
     updated_at = now()
-where id = @id and phase = 'requested' and launch_pools = @launch_pools;
+where id = @id and action_token = @token and phase = 'requested';
 
 -- name: HostWaiters :many
 -- The placement each pending container waiting for a host asks for, the
@@ -48,8 +28,8 @@ left join workspace_buckets sb on sb.workspace_id = c.workspace_id and vb.bytes 
 where c.state = 'pending' and c.capacity_host_id = @host_id;
 
 -- name: RecordLaunch :execrows
--- Records the instance launched in the pool the launcher holds; a host
--- another launcher moved on records nothing, and its instance ends.
+-- Records the instance launched in the pool the claim holds; a host the
+-- claim no longer holds records nothing, and its instance ends.
 update hosts
 set instance_id = @instance_id, availability_zone = @availability_zone, availability_zone_id = @availability_zone_id,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
@@ -57,13 +37,29 @@ set instance_id = @instance_id, availability_zone = @availability_zone, availabi
     authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn,
     spot_request_id = sqlc.narg(spot_request_id), node_image = @node_image,
     hibernation_configured = @hibernation_configured
-where id = @id and phase = 'requested' and launch_pools = @launch_pools;
+where id = @id and action_token = @token and phase = 'requested';
 
--- name: FailHost :execrows
--- Fails a host still in the phase its caller read.
+-- name: FailLaunch :execrows
+-- Fails a requested host the claim holds that could not launch.
 update hosts
 set phase = 'failed', failure = @failure, phase_message = @message, phase_at = now(), state = 'retired',
     token_hash = null, launch_lease_until = null, updated_at = now()
+where id = @id and action_token = @token and phase = 'requested';
+
+-- name: FailHost :execrows
+-- Fails a host still in the phase its caller read whose instance is gone.
+update hosts
+set phase = 'failed', failure = @failure, phase_message = @message, phase_at = now(), state = 'retired',
+    token_hash = null, launch_lease_until = null, updated_at = now()
+where id = @id and phase = @from_phase;
+
+-- name: EndHost :execrows
+-- A host still in the phase its caller read whose instance must end
+-- terminates with its failure recorded; the actuator terminates the
+-- instance, and the host fails once EC2 reports it gone.
+update hosts
+set phase = 'terminating', failure = @failure, phase_message = @message, phase_at = now(), state = 'retired',
+    token_hash = null, updated_at = now()
 where id = @id and phase = @from_phase;
 
 -- name: RefuseRightsize :exec
@@ -72,7 +68,8 @@ update hosts set rightsize_refused_at = now(), updated_at = now() where id = @id
 
 -- name: InsertCooldown :exec
 -- Cools an offer in one zone, or in its whole region for the zone '', for
--- seconds, and records the launch walk that refused it, if any. Refused
+-- seconds, and records the launch walk that refused it, if any. Every
+-- cooldown of an offer is written here. Refused
 -- again while it cools, it keeps its end and the walk that refused it
 -- first, so no walk moves another walk's end; refused after its cooldown
 -- ended, it cools twice as long as that cooldown lasted, up to max_seconds.
@@ -128,19 +125,6 @@ from cloud_connections cc
 where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase = 'requested'
   and (h.launch_lease_until is null or h.launch_lease_until < now());
 
--- name: ClaimTerminations :many
--- Draining cloud hosts that run nothing move to terminating. An interrupted
--- host is left for the provider to reclaim until @reclaim_grace_seconds
--- past its reclaim time.
-update hosts h
-set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired',
-    token_hash = null, updated_at = now()
-where h.provider = 'aws' and h.phase = 'draining' and h.instance_id is not null
-  and (h.interruption_at is null
-       or h.interruption_at < now() - make_interval(secs => @reclaim_grace_seconds::float8))
-  and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
-returning h.id, h.connection_id, h.region, h.instance_id;
-
 -- name: ManagedConnectionNetworks :many
 -- Connections whose account may still hold fleet instances, with the
 -- networks of their active authorization.
@@ -151,8 +135,8 @@ where cc.phase not in ('awaiting_authorization', 'validating');
 
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
-       interruption_at
+select id, phase, phase_message, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
+       interruption_at, failure
 from hosts
 where provider = 'aws' and region = @region
   and connection_id is not distinct from sqlc.narg(connection_id)::uuid
@@ -164,9 +148,10 @@ order by id;
 select distinct connection_id, region from hosts
 where provider = 'aws' and phase not in ('deleted', 'failed', 'requested') and region <> '';
 
--- name: KnownHostIDs :many
--- Which of these hosts still exist and are not failed or deleted.
-select id from hosts where id = any(@ids::uuid[]) and phase not in ('deleted', 'failed');
+-- name: LiveHosts :many
+-- Which of these hosts are neither failed nor deleted, with the instance and
+-- Spot request each records.
+select id, instance_id, spot_request_id from hosts where id = any(@ids::uuid[]) and phase not in ('deleted', 'failed');
 
 -- name: SetHostPhase :execrows
 update hosts

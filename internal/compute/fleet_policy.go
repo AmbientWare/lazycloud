@@ -130,8 +130,8 @@ type MarketReserve struct {
 	// market's largest recent shape (Policy.LargestShape), and one of the
 	// machines that hold the target must fit that shape.
 	FitLargest bool
-	// AwaitReturn holds the market's reserve purchases while any host that
-	// could return to the reserve serves or starts, past the return wait.
+	// AwaitReturn counts every host of the market that could return to the
+	// reserve as reserve supply, busy ones included.
 	AwaitReturn bool
 }
 
@@ -141,7 +141,7 @@ type MarketReserve struct {
 // disk slot each. A CPU market without such containers keeps one of
 // Default, a Spot GPU market one of SpotGPU, so the first start after a
 // quiet window resumes, and an on-demand GPU market none. Cap also bounds
-// a warm slot.
+// a part of headroom.
 type LargestShape struct {
 	Window                time.Duration
 	Default, SpotGPU, Cap FleetCapacity
@@ -194,12 +194,6 @@ type Policy struct {
 	// keeps none.
 	GPU          map[string]GPUReserve
 	LargestShape LargestShape
-	// BuildWindow is how long a build placed in a CPU market keeps a warm slot
-	// of its shape there once it ends.
-	BuildWindow time.Duration
-	// LongestBuild is the most an image build runs, the images owner's
-	// build timeout.
-	LongestBuild time.Duration
 	// ArrivalWindow is a margin over how long a Spot launch takes to serve
 	// work, about a minute: the Spot market keeps warm at least what was
 	// placed from arrivals within it, less their largest batch, so work
@@ -207,20 +201,20 @@ type Policy struct {
 	// launch, while a single burst buys no headroom it cannot use.
 	ArrivalWindow time.Duration
 	Batch         BatchWindow
-	// IdleTimeout is how long a serving host stays idle before it leaves;
-	// SpotIdleTimeout is the same for a Spot CPU host that holds no warm
-	// slot, which a launch replaces in about 25 s.
-	IdleTimeout, SpotIdleTimeout time.Duration
-	// ReturnWait is how long a market waits for a host that could return to
-	// the reserve, as one resumed for a burst or a build does, before it
-	// buys what the reserve lacks.
-	ReturnWait time.Duration
+	// Keep is how long a market holds its running target once its load
+	// falls, so its hosts stay through the gap between bursts, and how long
+	// a host resumed from the reserve for a burst counts as due back.
+	Keep time.Duration
 	// SpotPriceAge is how old a Spot quote may be and still price a
 	// purchase.
 	SpotPriceAge time.Duration
-	// FloorHold is how long a warm floor slot that new work took from a host
-	// able to hold it waits for that work to end before it buys a host.
-	FloorHold time.Duration
+	// SpotWait is how long Spot-tolerant GPU work waits while no Spot offer
+	// of a model it accepts can host it within the purchase margin before it
+	// buys a host of its own with the margin set aside, Spot first.
+	SpotWait time.Duration
+	// QueueTimeout is how long pending fleet work waits for a host that has
+	// not launched before execution ends it as a start failure.
+	QueueTimeout time.Duration
 	// Starts is how long work waits for each way a host starts.
 	Starts StartTimes
 }
@@ -250,12 +244,13 @@ func DefaultPolicy() Policy {
 	// so reserves sized to load cost more than the starts they speed up.
 	spotMarket := cpuMarket
 	spotMarket.Stopped.LoadPercent = 0
+	// GPU work keeps a share of its load warm, which rounds up to a whole
+	// card beside each few jobs: without it the start after a job resumes a
+	// stopped reserve, a minute or more. A Spot GPU host that serves counts
+	// as reserve supply: a purchase runs about five minutes of a GPU host
+	// for the next concurrent start alone.
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
-	// Spot GPU work keeps nothing warm: an idle Spot GPU host costs more
-	// than the starts it speeds up over resuming a stopped one. Nor does it
-	// buy a reserve while one it resumed serves: the purchase runs about
-	// five minutes of a GPU host for the next concurrent start alone.
-	spotCard := MarketReserve{Stopped: card.Stopped, FitLargest: true, AwaitReturn: true}
+	spotCard := MarketReserve{Warm: card.Warm, Stopped: card.Stopped, FitLargest: true, AwaitReturn: true}
 	gpus := map[string]GPUReserve{}
 	for _, model := range []string{"T4", "A10G", "L4"} {
 		gpus[model] = GPUReserve{Spot: spotCard, OnDemand: card}
@@ -277,15 +272,12 @@ func DefaultPolicy() Policy {
 		LargestShape: LargestShape{
 			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
 		},
-		BuildWindow:     time.Hour,
-		LongestBuild:    time.Hour,
-		ArrivalWindow:   2 * time.Minute,
-		Batch:           BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
-		IdleTimeout:     2 * time.Minute,
-		SpotIdleTimeout: 30 * time.Second,
-		ReturnWait:      5 * time.Minute,
-		FloorHold:       time.Minute,
-		SpotPriceAge:    time.Hour,
+		ArrivalWindow: 2 * time.Minute,
+		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
+		Keep:          2 * time.Minute,
+		SpotWait:      2 * time.Minute,
+		QueueTimeout:  20 * time.Minute,
+		SpotPriceAge:  time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
 			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second, Update: 10 * time.Second,
@@ -304,63 +296,6 @@ func (p Policy) Reserve(m ReserveMarket) MarketReserve {
 		return p.Spot
 	}
 	return p.OnDemand
-}
-
-// slotKind is why a market keeps a warm slot.
-type slotKind string
-
-const (
-	// slotFloor is part of the market's floor.
-	slotFloor slotKind = "floor"
-	// slotLoad is part of the share of load the market adds beyond its
-	// floor; it follows the load.
-	slotLoad slotKind = "load"
-	// slotBuild is a recent build's shape.
-	slotBuild slotKind = "build"
-)
-
-// warmSlot is room a market keeps free on a serving host.
-type warmSlot struct {
-	shape FleetCapacity
-	kind  slotKind
-}
-
-// slots are the warm slots that hold warm, a target's headroom: its floor,
-// then what warm adds beyond it. Each part splits into the fewest equal
-// slots within its bound, the cap for the floor and the floor for the
-// rest, so the slots hold the whole headroom and one fits a start of the
-// floor's shape.
-func (p Policy) slots(target HeadroomTarget, warm FleetCapacity) []warmSlot {
-	rest := warm.Minus(target.Floor).Clamp()
-	bound := p.LargestShape.Cap
-	if !target.Floor.Empty() {
-		bound = target.Floor.Lower(bound)
-	}
-	var out []warmSlot
-	for _, shape := range split(target.Floor, p.LargestShape.Cap) {
-		out = append(out, warmSlot{shape: shape, kind: slotFloor})
-	}
-	for _, shape := range split(rest, bound) {
-		out = append(out, warmSlot{shape: shape, kind: slotLoad})
-	}
-	return out
-}
-
-// split divides c into the fewest equal parts, rounded up, that each fit
-// within bound in every dimension bound has; none when c is empty.
-func split(c, bound FleetCapacity) []FleetCapacity {
-	if c.Empty() {
-		return nil
-	}
-	n := int64(1)
-	for _, d := range [][2]int64{{int64(c.CPUMillis), int64(bound.CPUMillis)}, {c.MemoryBytes, bound.MemoryBytes}, {int64(c.GPUs), int64(bound.GPUs)}} {
-		if d[1] > 0 {
-			n = max(n, (d[0]+d[1]-1)/d[1])
-		}
-	}
-	up := func(v int64) int64 { return (v + n - 1) / n }
-	part := FleetCapacity{CPUMillis: cpu.Millis(up(int64(c.CPUMillis))), MemoryBytes: up(c.MemoryBytes), GPUs: int(up(int64(c.GPUs)))}
-	return slices.Repeat([]FleetCapacity{part}, int(n))
 }
 
 // Markets are the markets the policy keeps headroom in, in a fixed order.

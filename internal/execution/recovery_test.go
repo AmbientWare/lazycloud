@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -173,6 +174,105 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	}
 	if state := containerState(t, pool, starting); state != ContainerStarting {
 		t.Fatalf("container within the start timeout is %s, want starting", state)
+	}
+}
+
+// A platform fleet container the fleet could not get a host for within the
+// queue timeout stops as a start failure naming why it waited, and its
+// queued work fails at once; one younger, one a launched host will take,
+// one waiting on the fleet's host limit, one pinned to a joined machine and
+// a connected account's keep waiting. A release with a container on a host
+// keeps its queued work when a stale pending one stops.
+func TestPendingWorkFailsAfterTheQueueTimeout(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{}`)
+	queueTasks(t, pool, f, 1, 0)
+	pending := func(age time.Duration, wait string, host *uuid.UUID) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at, capacity_wait, capacity_host_id)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - make_interval(secs => $3), nullif($4, ''), $5) returning id`,
+			f.workspace, f.release, age.Seconds(), wait, host).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	timeout := compute.DefaultPolicy().QueueTimeout
+	stale := pending(timeout+time.Minute, string(compute.WaitCooldown), nil)
+	young := pending(timeout-time.Minute, string(compute.WaitCooldown), nil)
+	launched := newHost(t, pool)
+	exec(t, pool, "update hosts set provider = 'aws', phase = 'booting' where id = $1", launched)
+	coming := pending(timeout+time.Minute, string(compute.WaitProvisioning), &launched)
+	limited := pending(timeout+time.Minute, string(compute.WaitLimit), nil)
+	served := newRelease(t, pool, `{}`)
+	queueTasks(t, pool, served, 1, 0)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 29, now(), now())`, served.workspace, served.release, launched)
+	var spare uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at, capacity_wait)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - make_interval(secs => $3), 'cooldown') returning id`,
+		served.workspace, served.release, (timeout + time.Minute).Seconds()).Scan(&spare); err != nil {
+		t.Fatal(err)
+	}
+	connected := newRelease(t, pool, `{}`)
+	var account uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+with u as (insert into users (email) values ('c-' || gen_random_uuid() || '@example.com') returning id),
+     conn as (insert into cloud_connections (account_id, aws_account_id, phase) select id, '111122223333', 'ready' from u returning id)
+update workspaces set connection_id = conn.id from conn where workspaces.id = $1 returning conn.id`, connected.workspace).Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	var theirs uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
+		t.Fatal(err)
+	}
+	machine := newRelease(t, pool, `{"placement": {"machine": "studio"}}`)
+	var pinned uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returning id`, machine.workspace, machine.release).Scan(&pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := e.TimeOutStarts(t.Context(), discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reason, message string
+	if err := pool.QueryRow(t.Context(), "select coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1", stale).
+		Scan(&reason, &message); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
+		t.Fatalf("stopped %d, reason %q message %q; want the two stale containers stopped as start_failed naming their wait", n, reason, message)
+	}
+	if state := containerState(t, pool, spare); state != ContainerStopped {
+		t.Errorf("the served release's stale container is %s, want stopped", state)
+	}
+	var servedStatus string
+	if err := pool.QueryRow(t.Context(), "select status from tasks where release_id = $1", served.release).Scan(&servedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if servedStatus != string(TaskQueued) {
+		t.Errorf("the served release's task is %s, want queued for its running container", servedStatus)
+	}
+	var status, kind string
+	if err := pool.QueryRow(t.Context(), "select status, coalesce(failure ->> 'kind', '') from tasks where release_id = $1", f.release).
+		Scan(&status, &kind); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(TaskFailed) || kind != string(FailureStartFailed) {
+		t.Fatalf("queued task %s (%s), want failed as start_failed", status, kind)
+	}
+	for _, c := range []uuid.UUID{young, coming, limited, pinned, theirs} {
+		if state := containerState(t, pool, c); state != ContainerPending {
+			t.Errorf("container %s is %s, want pending", c, state)
+		}
 	}
 }
 

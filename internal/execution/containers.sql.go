@@ -153,6 +153,26 @@ func (q *Queries) RecordLoadError(ctx context.Context, arg RecordLoadErrorParams
 	return err
 }
 
+const releaseHasPlacedContainer = `-- name: ReleaseHasPlacedContainer :one
+select exists (
+    select 1 from containers where release_id = $1::uuid and id <> $2 and state not in ('pending', 'stopped')
+)::bool
+`
+
+type ReleaseHasPlacedContainerParams struct {
+	ReleaseID uuid.UUID
+	ID        uuid.UUID
+}
+
+// Whether a container of the release other than this one holds a host, and
+// so takes the release's queued work.
+func (q *Queries) ReleaseHasPlacedContainer(ctx context.Context, arg ReleaseHasPlacedContainerParams) (bool, error) {
+	row := q.db.QueryRow(ctx, releaseHasPlacedContainer, arg.ReleaseID, arg.ID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const retryReleaseStarts = `-- name: RetryReleaseStarts :exec
 update releases set start_failures = $1, load_error = null where id = any($2::uuid[])
 `

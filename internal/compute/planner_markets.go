@@ -6,24 +6,27 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // PublishedMarket is one market's plan as the planner publishes it in
 // fleet_markets, for every replica and the admin page.
 type PublishedMarket struct {
-	Preemptible   bool          `json:"preemptible"`
-	GPUType       string        `json:"gpu_type"`
+	Preemptible bool   `json:"preemptible"`
+	GPUType     string `json:"gpu_type"`
+	// ConnectionID names the connected account whose market this is; the
+	// platform's markets have none. A connection's plan carries only its
+	// held targets to the next pass and is not part of the published plan.
+	ConnectionID  *uuid.UUID    `json:"connection_id,omitempty"`
 	Load          FleetCapacity `json:"load"`
 	WarmTarget    FleetCapacity `json:"warm_target"`
 	WarmFree      FleetCapacity `json:"warm_free"`
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
-	Reason        MarketReason  `json:"reason"`
-	// FloorShortSince is when the stopped target went short; the next pass
-	// reads it back.
-	FloorShortSince *time.Time `json:"floor_short_since,omitempty"`
-	// Peak is the market's load peak; the next pass reads it back.
-	Peak   LoadPeak             `json:"peak"`
+	Reason        CapacityWait  `json:"reason"`
+	// Holds are the market's held targets; the next pass reads them back.
+	Holds  MarketHolds          `json:"holds"`
 	States []FleetStateCapacity `json:"states"`
 	// Decision summarizes the market's plan; the planner logs it when it
 	// changes.
@@ -40,7 +43,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out := PublishedMarket{
 		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Load: mp.Load, WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree,
 		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States,
-		FloorShortSince: mp.FloorShortSince, Peak: mp.Peak,
+		Holds: mp.Holds,
 	}
 	var names []string
 	for _, a := range actions {
@@ -54,7 +57,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out.Decision = fmt.Sprintf("load %s, running free %s of %s, starting %s, reserve ready %s of %s, preparing %s, short %s and %s, actions [%s], reason %q",
 		describe(mp.Load), describe(mp.WarmFree), describe(mp.WarmTarget), describe(mp.WarmPending), describe(mp.ReserveReady),
 		describe(mp.StoppedTarget), describe(mp.ReservePending), describe(mp.Shortfall), describe(mp.StoppedShortfall),
-		strings.Join(names, ", "), mp.Reason)
+		strings.Join(names, ", "), mp.Reason.Message())
 	return out
 }
 
@@ -74,8 +77,8 @@ type marketRow struct {
 	ExpiresAt   time.Time       `json:"expires_at"`
 }
 
-// PublishedPlan returns every market's last published plan, current or
-// expired; the caller treats an expired one as no plan.
+// PublishedPlan returns every platform market's last published plan,
+// current or expired; the caller treats an expired one as no plan.
 func (c *Compute) PublishedPlan(ctx context.Context) ([]PublishedMarket, error) {
 	rows, err := c.queries.FleetMarkets(ctx)
 	if err != nil {
@@ -86,6 +89,9 @@ func (c *Compute) PublishedPlan(ctx context.Context) ([]PublishedMarket, error) 
 		var m PublishedMarket
 		if err := json.Unmarshal(r.Plan, &m); err != nil {
 			return nil, fmt.Errorf("decode the plan of market %s: %w", r.Market, err)
+		}
+		if m.ConnectionID != nil {
+			continue
 		}
 		m.GeneratedAt, m.ExpiresAt = r.GeneratedAt, r.ExpiresAt
 		out = append(out, m)

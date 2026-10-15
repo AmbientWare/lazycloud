@@ -100,6 +100,19 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 			return fmt.Errorf("record load error: %w", err)
 		}
 	case StopStartFailed:
+		// A container that never got a host found no capacity in the queue
+		// timeout, and the release's starts are not to blame. Its work fails
+		// unless another container of the release holds a host and takes it.
+		if ContainerState(row.State) == ContainerPending {
+			placed, err := q.ReleaseHasPlacedContainer(ctx, ReleaseHasPlacedContainerParams{ReleaseID: release, ID: uuid.UUID(container)})
+			if err != nil {
+				return fmt.Errorf("read the release's placed containers: %w", err)
+			}
+			if !placed {
+				failQueued = &Failure{Kind: FailureStartFailed, Message: exit.Message}
+			}
+			break
+		}
 		failures, err := q.CountStartFailure(ctx, release)
 		if err != nil {
 			return fmt.Errorf("count start failure: %w", err)

@@ -166,7 +166,8 @@ func (c reserveCase) name() string {
 }
 
 // launchReserve asks for a reserve of the case and launches it through the
-// launcher, in the next zone when one refuses the type for capacity.
+// launcher, in the next zone when one refuses the type for capacity or does
+// not sell it.
 func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.Network, c reserveCase, timings *lifecycleTimings) (liveReserve, time.Time) {
 	typ, ok := compute.CatalogTypeNamed(c.instanceType)
 	if !ok {
@@ -193,7 +194,7 @@ returning id`, typ.CPUMillis(), typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegi
 				return liveReserve{t: t, o: o, client: client, host: host, c: c, timings: timings}, launched
 			}
 			if phase == string(compute.PhaseFailed) {
-				if !strings.Contains(message, "InsufficientInstanceCapacity") {
+				if !strings.Contains(message, "InsufficientInstanceCapacity") && !strings.Contains(message, "Unsupported") {
 					t.Fatalf("%s launch failed: %s", c.name(), message)
 				}
 				t.Logf("%s in %s: %s", c.name(), subnet.Zone, message)
@@ -440,10 +441,14 @@ func (r liveReserve) checkLaunch() {
 	for _, tag := range sr.Tags {
 		rtags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
 	}
-	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != ec2types.InstanceInterruptionBehaviorStop ||
+	interruption := ec2types.InstanceInterruptionBehaviorStop
+	if hibernates {
+		interruption = ec2types.InstanceInterruptionBehaviorHibernate
+	}
+	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != interruption ||
 		rtags["lazycloud:fleet"] != acceptanceFleet || rtags["lazycloud:host-id"] != r.host.String() {
-		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that stops", *request, sr.Type,
-			sr.InstanceInterruptionBehavior, rtags)
+		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that does what the reserve does, %s",
+			*request, sr.Type, sr.InstanceInterruptionBehavior, rtags, interruption)
 	}
 }
 
