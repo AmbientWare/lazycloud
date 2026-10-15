@@ -15,6 +15,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,11 +43,11 @@ const (
 	volumeFrame   = 8 << 20
 	// minCachedObject is the smallest object reads take from the cache.
 	minCachedObject = 1 << 20
-	// readAheadFrames is how far past a sequential read the frames it will
-	// want are fetched, and readAheadFetches bounds those fetches, and the
-	// parallel fetches of the frames one read spans, across the host: a few
-	// fetches in parallel bring a reader to the store's full speed, which a
-	// fill paced by the disk may not.
+	// readAheadFrames is how many frames past a sequential read are fetched
+	// for it. readAheadFetches bounds those fetches across the host, with
+	// the parallel fetches of the frames one read spans: a few fetches in
+	// parallel bring a reader to the store's full speed, which a fill paced
+	// by the disk may not.
 	readAheadFrames  = 4
 	readAheadFetches = 16
 	// yieldPoll is how often a fill or warm checks for the reads it yields
@@ -112,7 +113,6 @@ type bucket struct {
 type volumeMount struct {
 	key, bucket string
 	reads       []*imagefsproto.VolumeRead
-	seen        map[string]bool
 	ended       bool
 	last        map[string]int
 }
@@ -197,7 +197,7 @@ func (v *volumes) grant(workspace string, g *imagefsproto.BucketGrant, container
 	if m := v.mounts[container]; m != nil {
 		m.key, m.bucket = key, vg.name
 	} else if container != "" {
-		v.mounts[container] = &volumeMount{key: key, bucket: vg.name, seen: map[string]bool{}, last: map[string]int{}}
+		v.mounts[container] = &volumeMount{key: key, bucket: vg.name, last: map[string]int{}}
 	}
 	return nil
 }
@@ -665,20 +665,19 @@ func (v *volumes) record(m *volumeMount, ver objectVersion) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if m.ended || m.seen[ver.name] || len(m.reads) >= hostproto.MaxVolumeReads {
+	if m.ended || len(m.reads) >= hostproto.MaxVolumeReads ||
+		slices.ContainsFunc(m.reads, func(r *imagefsproto.VolumeRead) bool { return r.GetVolumeId() == volume && r.GetPath() == path }) {
 		return
 	}
-	m.seen[ver.name] = true
 	m.reads = append(m.reads, &imagefsproto.VolumeRead{VolumeId: volume, Path: path})
 }
 
 // fill fetches the frames of a version the cache lacks in the background,
 // behind reads, unless a fill of the version runs.
 func (v *volumes) fill(ver objectVersion) {
-	if !v.startFill(ver, 0) {
-		return
+	if started, _ := v.startFill(ver, 0); started {
+		v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
 	}
-	v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
 }
 
 // readAhead fetches, in parallel, the frames a read of from to to spans
@@ -718,17 +717,18 @@ func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
 
 // startFill marks a fill of ver, which a warm counts as warmed bytes until
 // it ends, and reports whether it may run: no fill of ver runs and the
-// warms stay within half the cache.
-func (v *volumes) startFill(ver objectVersion, warmed int64) bool {
+// warms stay within half the cache. full reports that the warms are at
+// their bound.
+func (v *volumes) startFill(ver objectVersion, warmed int64) (started, full bool) {
 	name := ver.key(0).object
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.filling[name] || v.warming+warmed > v.cache.limit/2 {
-		return false
+	if full = v.warming+warmed > v.cache.limit/2; full || v.filling[name] {
+		return false, full
 	}
 	v.filling[name] = true
 	v.warming += warmed
-	return true
+	return true, false
 }
 
 // fillWhole fetches the frames of ver startFill marked until ctx ends or
@@ -933,13 +933,11 @@ func (v *volumes) warm(ctx context.Context, g volumeGrant, keys []string) {
 		if !ok || ver.size < minCachedObject || ver.size > v.cache.limit/4 {
 			continue
 		}
-		if !v.startFill(ver, ver.size) {
-			v.mu.Lock()
-			full := v.warming+ver.size > v.cache.limit/2
-			v.mu.Unlock()
-			if full {
-				return
-			}
+		started, full := v.startFill(ver, ver.size)
+		if full {
+			return
+		}
+		if !started {
 			continue
 		}
 		warmed += ver.size

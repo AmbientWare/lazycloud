@@ -36,11 +36,11 @@ import (
 
 // A container's platform volumes share one mount container, which mounts the
 // volumes/ prefix of its workspace bucket through the snapshotter's
-// endpoint, which holds the workspace's credential: the mount signs with a
-// key of its container's only. Each cloud bucket the container names gets
-// one more mount container, which holds the bucket's keys. The workload
-// binds each volume's own directory of the mount, never the keys or other
-// volumes, through a bind the agent makes of it, which needs root.
+// endpoint. The endpoint holds the workspace's credential; the mount signs
+// with a key that names its container. Each cloud bucket the container
+// names gets one more mount container, which holds the bucket's keys. The
+// workload binds each volume's own directory of the mount, never the keys
+// or other volumes, through a bind the agent makes of it, which needs root.
 // A mount container shares its mount with the host through a
 // shared-propagation bind of the mount directory, so it outlives agent
 // restarts, like its workload.
@@ -317,7 +317,7 @@ func (v *volumes) mountKey(mounter string) (string, error) {
 // readKey reads the access key of the credential_process files in dir.
 func readKey(dir string) (string, error) {
 	var c processCredentials
-	data, err := os.ReadFile(filepath.Join(dir, "credentials.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "credentials.json")) //nolint:gosec // The agent's own key file.
 	if err != nil {
 		return "", fmt.Errorf("read mount key: %w", err)
 	}
@@ -509,20 +509,18 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	return slice, binds, nil
 }
 
-// peerAddresses lists the peers a start names.
+// peerAddresses lists the peers a start names, nil for none.
 func peerAddresses(spec *hostproto.StartContainer) []string {
 	var peers []string
 	for _, p := range spec.GetVolumePeers() {
-		if p.GetAddress() != "" {
-			peers = append(peers, p.GetAddress())
-		}
+		peers = append(peers, p.GetAddress())
 	}
 	return peers
 }
 
-// cacheLibrary returns the mount of the preload library and the
-// environment that has a container's workload open cached volume objects
-// through it, for a start that mounts platform volumes; nothing otherwise.
+// cacheLibrary returns the bind of the preload library and the environment
+// that has a workload with platform volumes open cached objects through
+// it; nothing for a start without them or an agent without the library.
 func (v *volumes) cacheLibrary(spec *hostproto.StartContainer) ([]mount.Mount, []string) {
 	var paths []string
 	for _, s := range spec.GetVolumes() {

@@ -636,9 +636,9 @@ func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 }
 
 // evictLocked unlists frames and objects, least recently used first and
-// held frames last, until the cache is within its bound and the volume has
-// reserve free with incoming more bytes, and returns them with evicted for
-// remove. An object goes whole: a workload may hold its file open.
+// held frames last, until the cache with incoming more bytes is within its
+// bound and the volume has its reserve free, and returns them with evicted
+// for remove. An object goes whole: a workload may hold its file open.
 func (c *frameCache) evictLocked(evicted victims, incoming int64) victims {
 	short := c.reserve - c.free + incoming
 	for c.used+incoming > c.limit || short > 0 {

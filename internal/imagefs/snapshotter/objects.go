@@ -150,9 +150,9 @@ func (c *frameCache) storeObjectFrame(src objectSource, k frameKey, data []byte)
 
 // linkObject puts o's complete file at its link path, in place of any
 // file there, with the store's modification time. o takes the path under
-// mu before any file moves, and the move runs under linkMu once o still
-// holds the path, as every removal does, so a version evicted as another
-// is linked never removes the other's link.
+// mu before any file moves. The move, like every removal in the tree, runs
+// under linkMu and only while o still holds the path, so a version evicted
+// as another is linked never removes the other's link.
 func (c *frameCache) linkObject(o *storedObject) error {
 	link := o.info.link
 	c.mu.Lock()
