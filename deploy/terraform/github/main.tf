@@ -152,11 +152,6 @@ resource "github_repository_ruleset" "main" {
   }
 }
 
-import {
-  to = github_repository_ruleset.main
-  id = "lazycloud:22999127"
-}
-
 resource "github_repository_ruleset" "prod" {
   name        = "prod branch"
   repository  = local.repository
