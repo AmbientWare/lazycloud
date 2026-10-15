@@ -2,9 +2,10 @@ name: Go backend and host runtime
 
 on:
   pull_request:
-  # Dependencies and tools are what the build cache saves, and a pull
-  # request restores main's entry: a main run after they change, or one
-  # started by hand to seed it, leaves every pull request a warm cache.
+  # Dependencies and tools are what the build cache saves. A pull request
+  # restores the nearest entry it can see, main's or its own branch's, and
+  # a main run after a dependency change keeps the base current; a run
+  # started by hand seeds it.
   push:
     branches: [main]
     paths:
@@ -102,7 +103,9 @@ jobs:
             ~/.cache/go-build
             ~/.cache/golangci-lint
           key: go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
-          restore-keys: go-${{ hashFiles('go.sum') }}-
+          restore-keys: |
+            go-${{ hashFiles('go.sum') }}-
+            go-
       - name: PostgreSQL, stripe-mock and the object store
         run: docker compose -f compose.test.yaml up -d --wait
       - name: Generated code is current
@@ -145,7 +148,9 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
           key: go-${{ hashFiles('go.sum') }}-
-          restore-keys: go-${{ hashFiles('go.sum') }}-
+          restore-keys: |
+            go-${{ hashFiles('go.sum') }}-
+            go-
       # Test images, pinned by digest, from the run that last pulled them.
       - uses: actions/cache@v6
         with:
@@ -225,7 +230,9 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
           key: go-${{ hashFiles('go.sum') }}-
-          restore-keys: go-${{ hashFiles('go.sum') }}-
+          restore-keys: |
+            go-${{ hashFiles('go.sum') }}-
+            go-
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.29"
