@@ -173,9 +173,10 @@ root="$(cd "$here/../../.." && pwd)"
 image="volume-cache-test:$$"
 mkdir -p "$work/context/deploy/agent/volume-cache" "$work/release"
 cp "$here/volume_cache.c" "$work/context/deploy/agent/volume-cache/"
-docker build --target volume-cache -t "$image" -f "$root/deploy/images/Dockerfile" "$work/context" >"$work/build.log" 2>&1 \
-  && docker run --rm -v "$work/release:/out" "$image" cp /out-volume-cache.so /out/volume-cache.so >>"$work/build.log" 2>&1 \
-  || fail "the release build failed: $(tail -5 "$work/build.log")"
+if ! { docker build --target volume-cache -t "$image" -f "$root/deploy/images/Dockerfile" "$work/context" >"$work/build.log" 2>&1 &&
+       docker run --rm -v "$work/release:/out" "$image" cp /out-volume-cache.so /out/volume-cache.so >>"$work/build.log" 2>&1; }; then
+  fail "the release build failed: $(tail -5 "$work/build.log")"
+fi
 docker rmi "$image" >/dev/null 2>&1 || true
 old="$(docker run --rm --platform linux/amd64 -v "$work/release:/lib-under-test:ro" \
   -e LD_PRELOAD=/lib-under-test/volume-cache.so -e LAZYCLOUD_VOLUME_CACHE=/cache -e LAZYCLOUD_VOLUME_PATHS=/models \
