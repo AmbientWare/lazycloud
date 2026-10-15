@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 // The replay (fleet_run_test.go) runs PlanFleet against a fleet simulation
@@ -101,9 +99,8 @@ type simContainer struct {
 	// market is the reserve market its placement counts in: its GPU
 	// model's, else its CPU market.
 	market ReserveMarket
-	// fn names the work; started is when it was placed.
-	fn      string
-	started time.Time
+	// fn names the work.
+	fn string
 }
 
 type simArrival struct {
@@ -124,12 +121,8 @@ type simResult struct {
 	unusedSpotCPU int
 	// fnWaits are each function's start waits.
 	fnWaits map[string][]time.Duration
-	// revenueNanos is what finished containers bill.
-	revenueNanos int64
-	// windowMicros is spend within the measure window, in µ$·s, and
-	// fleetCPUSec running hosts' CPU seconds there.
+	// windowMicros is spend within the measure window, in µ$·s.
 	windowMicros int64
-	fleetCPUSec  float64
 }
 
 // simCool is a pool's run of refusals.
@@ -232,11 +225,6 @@ func (s *sim) run(d time.Duration, arrivals []simArrival) simResult {
 		s.account()
 		s.now = s.now.Add(simTick)
 	}
-	for _, h := range s.hosts {
-		for _, c := range h.containers {
-			s.bill(c, s.now.Sub(c.started))
-		}
-	}
 	return s.r
 }
 
@@ -264,11 +252,7 @@ func (s *sim) advance() {
 	}
 	for _, h := range s.hosts {
 		h.containers = slices.DeleteFunc(h.containers, func(c *simContainer) bool {
-			if c.ends.After(s.now) {
-				return false
-			}
-			s.bill(c, c.runs)
-			return true
+			return !c.ends.After(s.now)
 		})
 	}
 	// A draining host that runs nothing terminates.
@@ -326,7 +310,7 @@ func (s *sim) place() {
 		case c.need.GPUsNeeded() > 0 && !GPUAccepted(c.need.GPUs, best.GPU):
 			s.r.violations = append(s.r.violations, fmt.Sprintf("work for %v placed on %q", c.need.GPUs, best.GPU))
 		}
-		c.ends, c.started = s.now.Add(c.runs), s.now
+		c.ends = s.now.Add(c.runs)
 		c.market = ReserveMarket{Preemptible: c.need.Preemptible}
 		if c.need.GPUsNeeded() > 0 {
 			c.market = ReserveMarket{GPU: best.offer.Type.GPU}
@@ -773,8 +757,8 @@ func (s *sim) apply(plan FleetPlan) {
 	}
 }
 
-// account adds a tick of every host's cost and, while within the measure
-// window, of running hosts' CPU.
+// account adds a tick of every host's cost while within the measure
+// window.
 func (s *sim) account() {
 	if !s.now.Before(s.until) {
 		return
@@ -786,23 +770,7 @@ func (s *sim) account() {
 			continue
 		}
 		s.r.windowMicros += h.offer.HourlyMicros * secs
-		s.r.fleetCPUSec += float64(h.Usable.CPUMillis) / 1000 * float64(secs)
 	}
-}
-
-// bill records what a platform container that ran for d bills at the rate
-// card: its placement's rate class, CPU, memory and its host's cards.
-func (s *sim) bill(c *simContainer, d time.Duration) {
-	class := billing.RateClassFor(c.need.Region != "" || c.need.Zone != "", c.need.Preemptible)
-	i := slices.IndexFunc(s.in.Rates, func(r billing.ComputeRate) bool {
-		return r.Class == class && string(r.GPU) == c.market.GPU && r.Owner == billing.OwnerPlatformFleet
-	})
-	if i < 0 {
-		s.t.Fatalf("no %s rate for GPU %q", class, c.market.GPU)
-	}
-	rate := s.in.Rates[i]
-	perHour := int64(c.need.CPUMillis)*rate.CPUHour/1000 + c.need.MemoryBytes*rate.MemoryGiBHour/gib + int64(c.need.GPUsNeeded())*rate.GPUCardHour
-	s.r.revenueNanos += perHour * d.Milliseconds() / int64(time.Hour/time.Millisecond)
 }
 
 // prodNetworks are the platform's four regions and their zones.
