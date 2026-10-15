@@ -219,3 +219,31 @@ func TestPeersServeCachedFramesToGrantedHosts(t *testing.T) {
 		t.Fatal("the gone peer is not left alone")
 	}
 }
+
+// A cache start empties the link tree of files and keeps its directories:
+// a container keeps its volume's directory bound while the snapshotter
+// restarts under it.
+func TestACacheStartKeepsTheLinkTreeDirectories(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "links")
+	volume := filepath.Join(dir, "workspace", "volume")
+	if err := os.MkdirAll(volume, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(volume, "model.bin"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig("", http.DefaultTransport, slog.New(slog.DiscardHandler))
+	cfg.LinkDir = dir
+	c, err := newFrameCache(t.Context(), t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.writer.Wait)
+	if _, err := os.Stat(filepath.Join(volume, "model.bin")); err == nil {
+		t.Fatal("a file of the last life stays in the link tree")
+	}
+	if info, err := os.Stat(volume); err != nil || !info.IsDir() {
+		t.Fatalf("the volume's directory: %v", err)
+	}
+}

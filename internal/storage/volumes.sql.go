@@ -449,6 +449,17 @@ func (q *Queries) MarkVolumeDeleting(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const readWorkspacePeerKey = `-- name: ReadWorkspacePeerKey :one
+select volume_peer_key from workspaces where id = $1
+`
+
+func (q *Queries) ReadWorkspacePeerKey(ctx context.Context, workspaceID uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, readWorkspacePeerKey, workspaceID)
+	var volume_peer_key []byte
+	err := row.Scan(&volume_peer_key)
+	return volume_peer_key, err
+}
+
 const recordVolumeSize = `-- name: RecordVolumeSize :exec
 update volumes set size_bytes = $1, size_measured_at = now() where id = $2
 `

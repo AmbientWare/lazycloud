@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/netutil"
+
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/v2/contrib/snapshotservice"
 	"google.golang.org/grpc"
@@ -76,6 +78,7 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 			_ = endpoint.Close()
 			return fmt.Errorf("serve volume peers: %w", err)
 		}
+		peerListener = netutil.LimitListener(peerListener, peerConnections)
 	}
 	var serving sync.WaitGroup
 	served := make(chan error, 3)

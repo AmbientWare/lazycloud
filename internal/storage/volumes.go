@@ -573,6 +573,13 @@ func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 		if spec.CloudBucket == nil && strings.Contains(target, ":") {
 			return invalid("volume %s cannot mount at %s: no ':' in a volume's mount path", spec.Name, target)
 		}
+		// The cache tree mirrors each volume's path as a read-only bind,
+		// which a volume below it could not be mounted into.
+		for _, other := range specs {
+			if other.CloudBucket == nil && spec.CloudBucket == nil && strings.HasPrefix(target, MountPath(other)+"/") {
+				return invalid("volume %s cannot mount at %s, below volume %s", spec.Name, target, other.Name)
+			}
+		}
 		for _, root := range reservedMountRoots {
 			if target == root || strings.HasPrefix(target, root+"/") {
 				return invalid("volume %s cannot mount under %s", spec.Name, root)

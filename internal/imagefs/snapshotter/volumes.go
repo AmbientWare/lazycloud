@@ -90,6 +90,8 @@ type volumes struct {
 	// peerDown when a failed peer is asked again. Guarded by mu.
 	peers    map[string][]string
 	peerDown map[string]time.Time
+	// peerServes holds a token per frame being read for a peer.
+	peerServes chan struct{}
 }
 
 // bucket is one workspace's granted bucket: its grant, the key requests
@@ -140,7 +142,7 @@ func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger) *volum
 		cache: cache, http: client, log: log,
 		signer:  v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }),
 		buckets: map[string]*bucket{}, mounts: map[string]*volumeMount{}, filling: map[string]bool{},
-		peers: map[string][]string{}, peerDown: map[string]time.Time{},
+		peers: map[string][]string{}, peerDown: map[string]time.Time{}, peerServes: make(chan struct{}, peerServes),
 		ahead: make(chan struct{}, readAheadFetches),
 	}
 	// Forwarding has no deadline: a server-side copy of gigabytes runs for
@@ -191,9 +193,7 @@ func (v *volumes) grant(workspace string, g *imagefsproto.BucketGrant, container
 	if !b.grant.creds.Expires.After(creds.Expires) {
 		b.grant = vg
 	}
-	if peers != nil {
-		v.peers[workspace] = peers
-	}
+	v.peers[workspace] = peers
 	if m := v.mounts[container]; m != nil {
 		m.key, m.bucket = key, vg.name
 	} else if container != "" {
@@ -420,6 +420,9 @@ func (v *volumes) observe(resp *http.Response) error {
 	modified, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
 	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength, modified: modified}
 	b.seen[f.key] = observation{version: ver, header: header, at: f.sent}
+	// A workload's open through the link tree reaches the cache only as
+	// this HEAD: it keeps the version from eviction.
+	v.cache.touchObject(ver.key(0).object)
 	return nil
 }
 
@@ -506,20 +509,25 @@ func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
 // forgets the observations it outdates. A mark outlives any HEAD sent
 // before it, which fetchTimeout bounds.
 func (v *volumes) wrote(name, key string) {
+	if link := v.forget(name, key); link != "" {
+		v.cache.dropLink(link, "")
+	}
+}
+
+// forget drops the observations a write of key, or with "" of any key,
+// outdates, and returns the link path the key's object may hold.
+func (v *volumes) forget(name, key string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	b := v.buckets[name]
 	if b == nil {
-		return
-	}
-	if key != "" {
-		v.cache.dropLink(objectVersion{v: v, workspace: b.grant.workspace, name: key}.object().link, "")
+		return ""
 	}
 	now := time.Now()
 	if key == "" {
 		b.cleared = now
 		clear(b.seen)
-		return
+		return ""
 	}
 	b.written[key] = now
 	delete(b.seen, key)
@@ -528,6 +536,7 @@ func (v *volumes) wrote(name, key string) {
 			delete(b.written, k)
 		}
 	}
+	return objectVersion{v: v, workspace: b.grant.workspace, name: key}.object().link
 }
 
 // version returns the object's version, observed within observationLife
@@ -592,7 +601,7 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 	v.cache.dropLink(ver.object().link, ver.key(0).object)
 	v.reading.Add(1)
 	defer v.reading.Add(-1)
-	if ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
+	if ver.size <= v.cache.limit/4 && v.cache.canStore(ver.size) && !v.cache.cached(ver.key(int(first/volumeFrame))) {
 		v.fill(ver) //nolint:contextcheck // a fill runs under the cache's life, not the read's
 	}
 	v.readAhead(f.mount, ver, int(first/volumeFrame), int(last/volumeFrame)) //nolint:contextcheck // a fetch runs under the cache's life

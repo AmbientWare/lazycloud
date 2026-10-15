@@ -29,7 +29,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <pthread.h>
+#include <sched.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -70,9 +70,20 @@ struct config {
 	size_t volume_len[MAX_VOLUMES];
 };
 
+// dlsym binds to the oldest version glibc exports, so an image with glibc
+// 2.17 or newer loads the library; a newer binding would have ld.so refuse
+// the preload on older images and every exec print an error.
+#if defined(__x86_64__)
+__asm__(".symver dlsym,dlsym@GLIBC_2.2.5");
+#elif defined(__aarch64__)
+__asm__(".symver dlsym,dlsym@GLIBC_2.17");
+#endif
+
 static struct real real;
 static bool real_resolved;
-static pthread_once_t config_once = PTHREAD_ONCE_INIT;
+// config_state is 0 before load_config runs, 1 while a thread runs it and
+// 2 once it is loaded.
+static int config_state;
 static struct config config;
 
 // Set while dlsym runs. dlsym may allocate, and an allocator's first call
@@ -119,6 +130,8 @@ static void debug_line(const char *decision, const char *path, const char *reaso
 	(void)written;
 }
 
+static void load_config_once(void);
+
 static void load_config(void)
 {
 	config.debug = getenv("LAZYCLOUD_VOLUME_CACHE_DEBUG") != NULL;
@@ -159,6 +172,22 @@ static void load_config(void)
 	}
 }
 
+// load_config_once runs load_config in the first thread that calls it and
+// has the others wait for it; a benign race here would tear the strings.
+static void load_config_once(void)
+{
+	int state = 0;
+	if (__atomic_load_n(&config_state, __ATOMIC_ACQUIRE) == 2)
+		return;
+	if (__atomic_compare_exchange_n(&config_state, &state, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+		load_config();
+		__atomic_store_n(&config_state, 2, __ATOMIC_RELEASE);
+		return;
+	}
+	while (__atomic_load_n(&config_state, __ATOMIC_ACQUIRE) != 2)
+		sched_yield();
+}
+
 static bool under_volume(const char *path)
 {
 	if (path[0] != '/')
@@ -186,7 +215,7 @@ static const char *cache_copy(int dirfd, const char *path, int flags, char *cach
 {
 	if (dirfd != AT_FDCWD || path == NULL)
 		return NULL;
-	pthread_once(&config_once, load_config);
+	load_config_once();
 	if (config.volume_count == 0 || (flags & O_ACCMODE) != O_RDONLY || (flags & REFUSED_FLAGS) != 0 || !under_volume(path))
 		return NULL;
 	size_t path_len = strlen(path);
@@ -215,12 +244,6 @@ static const char *cache_copy(int dirfd, const char *path, int flags, char *cach
 	return NULL;
 }
 
-// opened records whether the cache copy was opened, or refused the open.
-static void opened(const char *path, bool from_cache)
-{
-	debug_line(from_cache ? "cache" : "mount", path, from_cache ? "" : "(cache open failed)");
-}
-
 static int raw_open(int dirfd, const char *path, int flags, mode_t mode)
 {
 	return (int)syscall(SYS_openat, dirfd, path, flags | O_LARGEFILE, mode);
@@ -237,7 +260,7 @@ static int openat_common(openat_fn *real_openat, int dirfd, const char *path, in
 	const char *cached = cache_copy(dirfd, path, flags, buf);
 	if (cached != NULL) {
 		int fd = fn(AT_FDCWD, cached, flags);
-		opened(path, fd >= 0);
+		debug_line(fd >= 0 ? "cache" : "mount", path, fd >= 0 ? "" : "(cache open failed)");
 		if (fd >= 0)
 			return fd;
 	}
@@ -256,7 +279,7 @@ static int openat2_common(openat2_fn *real_openat, int dirfd, const char *path, 
 	const char *cached = cache_copy(dirfd, path, flags, buf);
 	if (cached != NULL) {
 		int fd = fn(AT_FDCWD, cached, flags);
-		opened(path, fd >= 0);
+		debug_line(fd >= 0 ? "cache" : "mount", path, fd >= 0 ? "" : "(cache open failed)");
 		if (fd >= 0)
 			return fd;
 	}
@@ -279,7 +302,7 @@ static FILE *fopen_common(fopen_fn *real_fopen, const char *path, const char *mo
 		cached = cache_copy(AT_FDCWD, path, O_RDONLY, buf);
 	if (cached != NULL) {
 		FILE *f = fn(cached, mode);
-		opened(path, f != NULL);
+		debug_line(f != NULL ? "cache" : "mount", path, f != NULL ? "" : "(cache open failed)");
 		if (f != NULL)
 			return f;
 	}

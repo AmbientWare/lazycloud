@@ -25,6 +25,12 @@ import (
 const (
 	peerTimeout = 3 * time.Second
 	peerDownFor = time.Minute
+	// peerConnections bounds the connections the peer port holds open and
+	// peerServes the frames read for peers at once: the port is reachable
+	// by every host of the region, workloads' traffic included, and must
+	// not starve the host's own mounts.
+	peerConnections = 256
+	peerServes      = 16
 	// peerSkew bounds how old a signed peer request may be.
 	peerSkew   = 5 * time.Minute
 	peerHeader = "X-Lazycloud-Peer"
@@ -80,8 +86,7 @@ func (v *volumes) fromPeers(ctx context.Context, o objectVersion, frame int) ([]
 		if err == nil {
 			return data, true
 		}
-		var status *peerStatus
-		if !errors.As(err, &status) {
+		if !errors.Is(err, errNotHeld) {
 			v.mu.Lock()
 			v.peerDown[p] = time.Now().Add(peerDownFor)
 			v.mu.Unlock()
@@ -91,11 +96,8 @@ func (v *volumes) fromPeers(ctx context.Context, o objectVersion, frame int) ([]
 	return nil, false
 }
 
-// peerStatus is a peer's answer other than the frame: 404 for a frame it
-// does not hold.
-type peerStatus struct{ code int }
-
-func (s *peerStatus) Error() string { return "peer answered " + strconv.Itoa(s.code) }
+// errNotHeld is a peer's answer that it holds no such frame.
+var errNotHeld = errors.New("the peer does not hold the frame")
 
 func (v *volumes) askPeer(ctx context.Context, peer string, r peerRequest, key []byte, size int) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerTimeout)
@@ -110,8 +112,11 @@ func (v *volumes) askPeer(ctx context.Context, peer string, r peerRequest, key [
 		return nil, fmt.Errorf("ask a peer: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errNotHeld
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &peerStatus{code: resp.StatusCode}
+		return nil, fmt.Errorf("ask a peer: %s", resp.Status)
 	}
 	data := make([]byte, size)
 	if _, err := io.ReadFull(resp.Body, data); err != nil {
@@ -132,6 +137,13 @@ func (s peerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet || r.URL.Path != "/frame" || err != nil || frame < 0 || !ok || g.workspace != req.workspace ||
 		len(g.peerKey) == 0 || !req.signed(g.peerKey, r.Header.Get(peerHeader), time.Now()) {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	select {
+	case s.v.peerServes <- struct{}{}:
+		defer func() { <-s.v.peerServes }()
+	default:
+		http.Error(w, "busy", http.StatusServiceUnavailable)
 		return
 	}
 	k := objectVersion{workspace: req.workspace, bucket: req.bucket, name: req.key, etag: req.etag}.key(frame)

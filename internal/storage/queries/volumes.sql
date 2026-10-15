@@ -20,6 +20,9 @@ values (@workspace_id, @bucket, @region)
 on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
 returning bucket, region;
 
+-- name: ReadWorkspacePeerKey :one
+select volume_peer_key from workspaces where id = @workspace_id;
+
 -- name: WorkspacePeerKey :one
 -- The workspace's volume peer key: this one, or the one another server
 -- made first.

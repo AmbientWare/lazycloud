@@ -165,6 +165,11 @@ except FileNotFoundError as e:
 run "unset cache dir" MOUNT env -u LAZYCLOUD_VOLUME_CACHE "${py_read[@]}" "$mount/proof.bin" r
 run "empty volume paths" MOUNT env LAZYCLOUD_VOLUME_PATHS= "${py_read[@]}" "$mount/proof.bin" r
 
+# The library binds no symbol past glibc 2.17, so images on older glibc load it.
+if objdump -T "$preload" | grep -o 'GLIBC_[0-9.]*' | sort -u | grep -qE 'GLIBC_2\.(1[8-9]|[2-9][0-9])'; then
+  fail "the library binds symbols newer than glibc 2.17: $(objdump -T "$preload" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' ')"
+fi
+
 if [[ "$failures" != 0 ]]; then
   echo "$failures failure(s)" >&2
   exit 1

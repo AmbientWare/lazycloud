@@ -197,11 +197,8 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		linkDir:    cfg.LinkDir,
 	}
 	if cfg.LinkDir != "" {
-		if err := os.RemoveAll(cfg.LinkDir); err != nil {
-			return nil, fmt.Errorf("clear volume link tree: %w", err)
-		}
-		if err := os.MkdirAll(cfg.LinkDir, 0o755); err != nil { //nolint:gosec // Workloads read the tree.
-			return nil, fmt.Errorf("create volume link tree: %w", err)
+		if err := clearLinks(cfg.LinkDir); err != nil {
+			return nil, err
 		}
 	}
 	c.free = c.freeBytes()

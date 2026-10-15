@@ -245,3 +245,45 @@ func (c *frameCache) removeObject(o *storedObject) int64 {
 	}
 	return o.stored
 }
+
+// clearLinks empties the link tree of files, keeping its directories: a
+// container keeps the directory of its volume bound while the snapshotter
+// restarts under it.
+func clearLinks(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Workloads read the tree.
+		return fmt.Errorf("create volume link tree: %w", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("clear volume link tree: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		return root.Remove(path)
+	})
+	if err != nil {
+		return fmt.Errorf("clear volume link tree: %w", err)
+	}
+	return nil
+}
+
+// touchObject marks the version's object used, if stored.
+func (c *frameCache) touchObject(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if o := c.objects[key]; o != nil {
+		o.used = time.Now()
+		c.objectList.MoveToFront(o.elem)
+	}
+}
+
+// canStore reports whether n more bytes fit the volume's free space above
+// its reserve: a fill of what cannot be stored would only read the store.
+func (c *frameCache) canStore(n int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.free-n >= c.reserve
+}
