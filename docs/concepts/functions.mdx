@@ -141,32 +141,8 @@ results cap at 16 MiB each, so larger output goes in a
 
 ### Retries and timeouts
 
-`timeout_seconds` caps one attempt, and `retries`, 3 by default, adds attempts
-after a failure. One call can therefore run four times, so writes should be
-safe to repeat, for example keyed on the input, or `retries=0`. A `RetryPolicy`
-replaces the default and adds backoff:
-
-```python
-import urllib.request
-
-from lazycloud import RetryBackoff, RetryPolicy
-
-
-@app.function(
-    retry_policy=RetryPolicy(
-        max_attempts=4,
-        delay_seconds=2,
-        backoff=RetryBackoff.Exponential,
-        max_delay_seconds=30,
-    ),
-)
-def fetch_text(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=30) as response:
-        return response.read().decode("utf-8")
-```
-
-A [preempted](/concepts/resources#preemptible-capacity) call retries too, even
-when its code never failed.
+`timeout_seconds` caps one attempt and `retries`, 3 by default, adds attempts
+after a failure; see [Timeouts and retries](/concepts/timeouts-and-retries).
 
 ### Lifecycle hooks
 

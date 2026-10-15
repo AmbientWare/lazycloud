@@ -108,7 +108,7 @@ options, and their pages list the rest.
 | `gpu` | `GpuType \| list[GpuType]` | GPU model, or a preference list. |
 | `gpu_count` | `int` | GPUs per container. Set it with `gpu`. |
 | `timeout_seconds` | `int` | Limit for one call or request. |
-| `retries`, `retry_policy` | `int`, `RetryPolicy` | Extra attempts after a failure. Functions and endpoints. See [retries](/concepts/functions#retries-and-timeouts). |
+| `retries`, `retry_policy` | `int`, `RetryPolicy` | Extra attempts after a failure. Functions and endpoints. See [retries](/concepts/timeouts-and-retries). |
 | `keep_warm` | `int` | Idle seconds a container waits for the next call. `keep_warm_seconds` on ASGI and realtime. |
 | `concurrency` | `int` | Calls or requests one process serves at once. `concurrent_requests` on ASGI and realtime. |
 | `workers` | `int` | Server processes per container. Not on functions. |

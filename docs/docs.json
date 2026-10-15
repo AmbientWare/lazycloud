@@ -89,7 +89,8 @@
           {
             "group": "Guides",
             "pages": [
-              "concepts/cold-starts"
+              "concepts/cold-starts",
+              "concepts/timeouts-and-retries"
             ]
           }
         ]
