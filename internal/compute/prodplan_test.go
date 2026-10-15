@@ -68,8 +68,8 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 			held++
 		}
 	}
-	recent, arrived, disks := shapesByMarket(r.recent)
-	s := FleetSnapshot{Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Arrived: arrived, Offers: in,
+	recent, started, arrived, disks := shapesByMarket(r.recent)
+	s := FleetSnapshot{Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Arrived: arrived, Offers: in,
 		HostRoom: max(0, fleet.MaxHosts-held), ReserveRoom: max(0, fleet.MaxHosts-reserves), BatchWait: r.batchWait}
 	s.Holds = (&fleetPass{r: r}).holds(nil)
 	fmt.Printf("HOSTS %d (held %d reserves %d) pending groups %d offers spot=%d cooldowns=%d\n", len(hosts), held, reserves, len(pending), len(in.Spot), len(in.Cooldowns))

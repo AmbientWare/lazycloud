@@ -117,18 +117,24 @@ func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 		}
 	}
 	r := ps.p.Reserve(m)
-	warm := r.Warm.Of(t.load)
+	// A market with a floor keeps room for the largest shape, within the
+	// cap, that started within the warm window, and at least the floor.
+	floor := r.Warm.Floor
+	if !floor.Empty() {
+		floor = floor.Upper(ps.s.Started[m].Lower(ps.p.LargestShape.Cap))
+	}
+	warm := floor.Upper(t.load.Percent(r.Warm.LoadPercent))
 	if m.spotCPU() && r.Warm != (HeadroomTarget{}) {
-		arrivals := r.Warm.Floor.Plus(ps.s.Arrived[m])
+		arrivals := floor.Plus(ps.s.Arrived[m])
 		t.arriving = !ps.s.Arrived[m].Empty() && arrivals.Covers(warm)
 		warm = warm.Upper(arrivals)
 	}
 	t.want = t.load.Plus(warm)
 	t.holds.Running = ps.s.Holds[m].Running.hold(t.want, ps.s.Now, ps.p.Keep)
-	t.headroom, t.floor = warm, r.Warm.Floor
+	t.headroom, t.floor = warm, floor
 	stopped := r.Stopped.Of(t.load)
 	if r.FitLargest {
-		t.largest, t.largestDisks = ps.p.LargestShape.of(m, largest, disks)
+		t.largest, t.largestDisks = ps.p.LargestShape.of(m, largest, disks, ps.s.Offers.Catalog)
 		stopped = stopped.Upper(r.Stopped.Floor.Plus(t.largest))
 	}
 	t.holds.Stopped = ps.s.Holds[m].Stopped.hold(stopped, ps.s.Now, ps.p.CostHorizon)

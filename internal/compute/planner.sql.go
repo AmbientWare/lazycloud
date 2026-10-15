@@ -663,22 +663,29 @@ from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
+select 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, count(*)::int
+from recent
+where billing_owner = 'platform_fleet' and assigned_at is not null
+  and id > (select uuidv7(- make_interval(secs => $3::float8)))
+group by 2, 3
+union all
 select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
         select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $3::float8) as part
+               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $4::float8) as part
         from (
             select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
             from (
                 select id, cpu_millis, memory_bytes, created_at,
                        coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
-                           >= make_interval(secs => $4::float8) as opens
+                           >= make_interval(secs => $5::float8) as opens
                 from recent
                 where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
                   and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => $5::float8)))
+                  and id > (select uuidv7(- make_interval(secs => $6::float8)))
             ) gaps
         ) runs
     ) parts
@@ -691,6 +698,7 @@ order by 1, 2, 3
 type RecentShapesParams struct {
 	WindowSeconds     float64
 	SampleSize        int32
+	WarmSeconds       float64
 	BatchMaxSeconds   float64
 	BatchQuietSeconds float64
 	ArrivalSeconds    float64
@@ -711,10 +719,12 @@ type RecentShapesRow struct {
 // By purchase market and GPU model: the largest CPU, memory and GPUs placed
 // platform containers reserved, the most disks one attached, and the bytes
 // of platform volumes they read with how many started, among the newest
-// containers created within the window, up to the sample (recent); and
-// what the placed Spot-tolerant platform CPU containers of the sample
-// created within the arrival window reserve, less their largest batch
-// (arrived): a steady rate of work, which a single burst is not. A batch is
+// containers created within the window, up to the sample (recent); the
+// largest shape among those created within the warm window (started),
+// which sizes the warm floor; and what the placed Spot-tolerant platform
+// CPU containers of the sample created within the arrival window reserve,
+// less their largest batch (arrived): a steady rate of work, which a
+// single burst is not. A batch is
 // arrivals less than batch_quiet apart, at most batch_max long, as
 // BatchWaits forms them. The read follows the primary key, so it reads at
 // most sample_size containers whatever the history; the subqueries make
@@ -723,6 +733,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 	rows, err := q.db.Query(ctx, recentShapes,
 		arg.WindowSeconds,
 		arg.SampleSize,
+		arg.WarmSeconds,
 		arg.BatchMaxSeconds,
 		arg.BatchQuietSeconds,
 		arg.ArrivalSeconds,

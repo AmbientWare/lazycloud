@@ -46,11 +46,18 @@ func (a FleetCapacity) Lower(b FleetCapacity) FleetCapacity {
 func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
 
 // Percent is p percent of a: CPU and memory rounded up, GPUs rounded down,
-// since a fraction of a card is no card. A share of one GPU job holds no
-// warm card; a share of four holds one.
+// since a fraction of a card is no card. GPU load is held in cards, so a
+// share of it that rounds to no card is nothing: the CPU and memory beside
+// a card are not headroom a GPU host should be bought for. A share of one
+// GPU job holds nothing; a share of four holds one card with its share of
+// CPU and memory.
 func (a FleetCapacity) Percent(p int64) FleetCapacity {
 	up := func(v int64) int64 { return (v*p + 99) / 100 }
-	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(int64(a.GPUs) * p / 100)}
+	gpus := int64(a.GPUs) * p / 100
+	if a.GPUs > 0 && gpus == 0 {
+		return FleetCapacity{}
+	}
+	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(gpus)}
 }
 
 // Empty reports whether a has nothing positive in any dimension.
@@ -139,11 +146,11 @@ type MarketReserve struct {
 
 // LargestShape sizes the reserve that fits a market's largest shape: the
 // largest CPU, memory and GPUs its containers reserved within Window,
-// capped at Cap, and the most disks one attached, capped at CapDisks, a
-// disk slot each. A CPU market without such containers keeps one of
-// Default, a Spot GPU market one of SpotGPU, so the first start after a
-// quiet window resumes, and an on-demand GPU market none. Cap also bounds
-// a part of headroom.
+// bounded by what the largest type within Cap offers, and the most disks
+// one attached, capped at CapDisks, a disk slot each. A CPU market without
+// such containers keeps one of Default, a Spot GPU market one of SpotGPU,
+// so the first start after a quiet window resumes, and an on-demand GPU
+// market none. Cap also bounds a part of headroom.
 type LargestShape struct {
 	Window                time.Duration
 	Default, SpotGPU, Cap FleetCapacity
@@ -151,10 +158,13 @@ type LargestShape struct {
 }
 
 // of is the shape market m's reserve fits and the disks it holds, given
-// the largest shape its containers reserved and the most disks one
-// attached; empty for none. A GPU reserve holds one card; a CPU reserve
-// fits at least the default.
-func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (FleetCapacity, int) {
+// the largest shape its containers reserved, the most disks one attached
+// and the types a reserve may be; empty for none. A GPU reserve holds one
+// card; a CPU reserve fits at least the default. A reserve is a type
+// within the cap, so the shape is bounded by the most such a type of the
+// market's model offers: work larger than that launches a host of its own,
+// and the market still keeps a reserve for the rest.
+func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int, catalog []CatalogType) (FleetCapacity, int) {
 	switch {
 	case m.GPU == "":
 		largest = largest.Upper(s.Default)
@@ -165,7 +175,13 @@ func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (Fle
 	default:
 		return FleetCapacity{}, 0
 	}
-	return largest.Lower(s.Cap), min(disks, s.CapDisks)
+	var offered FleetCapacity
+	for _, t := range catalog {
+		if u := t.Usable(0); t.GPU == m.GPU && s.Cap.Covers(u) {
+			offered = offered.Upper(u)
+		}
+	}
+	return largest.Lower(s.Cap).Lower(offered), min(disks, s.CapDisks)
 }
 
 // GPUReserve is the headroom one GPU model keeps for Spot-tolerant work
@@ -202,7 +218,14 @@ type Policy struct {
 	// arriving at a steady rate finds room rather than waiting for a
 	// launch, while a single burst buys no headroom it cannot use.
 	ArrivalWindow time.Duration
-	Batch         BatchWindow
+	// WarmWindow is how far back a market's starts size its warm floor: the
+	// floor is at least the largest shape started within it, so a shape
+	// that recurs finds room, and shrinks back to the policy's floor once
+	// none has started for the window. An hour spans the gaps measured
+	// between recurring work on prod and in the recorded runs: bursts ten
+	// minutes apart, idle gaps of 2 min at the median and 5.5 min at p90.
+	WarmWindow time.Duration
+	Batch      BatchWindow
 	// Keep is how long a market holds its running target once its load
 	// falls, so its hosts stay through the gap between bursts, and how long
 	// a host resumed from the reserve for a burst counts as due back.
@@ -272,6 +295,7 @@ func DefaultPolicy() Policy {
 			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
 		},
 		ArrivalWindow: 2 * time.Minute,
+		WarmWindow:    time.Hour,
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		Keep:          2 * time.Minute,
 		SpotWait:      2 * time.Minute,

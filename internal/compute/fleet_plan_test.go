@@ -1083,12 +1083,40 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 // A GPU market keeps its warm share in whole cards: four running L4 jobs
 // keep one idle card beside them, one job keeps none, so a lone GPU job
 // never holds a second GPU host (prod held one beside every on-demand GPU
-// job on 2026-10-15). The card is bought within the size rule.
+// job on 2026-10-15), not even for the CPU and memory beside its card
+// while its own host still starts (prod bought three g5.2xlarge for a
+// quarter CPU of headroom the same day). The card is bought within the
+// size rule.
+// The warm floor follows the shapes that start: a market whose largest
+// start within the warm window was larger than its floor keeps room for
+// that shape, and keeps only the floor once nothing that large has started
+// for the window.
+func TestTheWarmFloorFollowsTheShapesThatStartedWithinTheWindow(t *testing.T) {
+	t.Parallel()
+	p := planPolicy(small, FleetCapacity{})
+	warm := idle(planHost(1, planSmall, FleetServing))
+	for _, c := range []struct {
+		started FleetCapacity
+		buys    bool
+	}{
+		{FleetCapacity{}, false},
+		{small, false},
+		{large, true},
+	} {
+		s := planSnapshot(t, warm)
+		s.Started = map[ReserveMarket]FleetCapacity{onDemand: c.started}
+		got := actionsOf(PlanFleet(p, s), ActionBuy)
+		if (len(got) == 1) != c.buys || c.buys && !got[0].Offer.Usable.Covers(large) {
+			t.Errorf("started %+v: bought %+v, want a host for the shape %t", c.started, got, c.buys)
+		}
+	}
+}
+
 func TestGPUWarmShareIsWholeCards(t *testing.T) {
 	t.Parallel()
 	typ := mustType(t, "g6.xlarge")
-	busy := func(id byte) FleetHost {
-		h := planHost(id, typ, FleetServing)
+	busy := func(id byte, state FleetState) FleetHost {
+		h := planHost(id, typ, state)
 		h.Market, h.GPU, h.Containers = MarketSpot, "L4", 1
 		h.Load = FleetCapacity{CPUMillis: 1000, MemoryBytes: 8 * gib, GPUs: 1}
 		return h
@@ -1098,10 +1126,12 @@ func TestGPUWarmShareIsWholeCards(t *testing.T) {
 		s.Offers.Catalog = FleetCatalog()
 		return s
 	}
-	if got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1))), ActionBuy); len(got) > 0 {
-		t.Fatalf("one job: bought %+v, want no warm card", got)
+	for _, state := range []FleetState{FleetServing, FleetStarting} {
+		if got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1, state))), ActionBuy); len(got) > 0 {
+			t.Fatalf("one job on a %s host: bought %+v, want no warm card", state, got)
+		}
 	}
-	got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1), busy(2), busy(3), busy(4))), ActionBuy)
+	got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1, FleetServing), busy(2, FleetServing), busy(3, FleetServing), busy(4, FleetServing))), ActionBuy)
 	if len(got) != 1 || got[0].Offer.Type.Name != "g6.xlarge" || got[0].Offer.Market != MarketSpot {
 		t.Fatalf("four jobs: bought %+v, want one Spot g6.xlarge warm card", got)
 	}

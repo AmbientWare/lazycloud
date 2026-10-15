@@ -153,12 +153,13 @@ type FleetSnapshot struct {
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
 	// within the policy's LargestShape window, and RecentDisks the most
-	// disks one of them attached; Arrived is what the CPU Spot market's
+	// disks one of them attached; Started the largest within the WarmWindow,
+	// which sizes the warm floor; Arrived is what the CPU Spot market's
 	// placed containers created within the ArrivalWindow reserve, less
 	// their largest batch.
-	Recent, Arrived map[ReserveMarket]FleetCapacity
-	RecentDisks     map[ReserveMarket]int
-	Offers          OfferInputs
+	Recent, Started, Arrived map[ReserveMarket]FleetCapacity
+	RecentDisks              map[ReserveMarket]int
+	Offers                   OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
@@ -687,8 +688,9 @@ func binRooms(bins []bin) []HostCapacity {
 // cover places pending containers. Each takes room on the host bought for
 // it while that serves with room, else on the ready host placement would
 // give it, else on the host bought for it while that starts, else on a
-// starting host. Ready reserves resume for what is left, and purchases
-// cover the rest.
+// starting host that serves sooner than a ready reserve of its market
+// would. Ready reserves resume for what is left, and purchases cover the
+// rest.
 func (ps *pass) cover(items []coverItem) {
 	var ready, coming []bin
 	for i := range ps.hosts {
@@ -748,7 +750,7 @@ func (ps *pass) cover(items []coverItem) {
 		// waits on one booting.
 		booting := it
 		booting.need.Packs = false
-		if i := take(coming, comingRooms, booting, floor); i >= 0 {
+		if i := ps.comingFor(coming, comingRooms, booting, floor); i >= 0 {
 			coming[i].host.Load = coming[i].host.Load.Plus(reservedShape(it.need))
 			ps.claimed[coming[i].host.ID] = true
 			ps.provisioning(it, ptr(coming[i].host.ID), nil)
@@ -772,6 +774,53 @@ func (ps *pass) cover(items []coverItem) {
 // roomOf is the capacity a host's room for work has free.
 func roomOf(r HostCapacity) FleetCapacity {
 	return FleetCapacity{CPUMillis: r.FreeCPUMillis, MemoryBytes: r.FreeMemoryBytes, GPUs: r.FreeGPUs}
+}
+
+// comingFor is the starting host pending container it waits for, with its
+// room taken, or -1: none has room, or the one placement would pick is
+// expected to serve later than a ready reserve of the container's market
+// that fits it, which resumeFor takes instead. A host that has booted for
+// a while serves soon; one just requested does not.
+func (ps *pass) comingFor(coming []bin, rooms []HostCapacity, it coverItem, floor FleetCapacity) int {
+	i := ChooseHost(rooms, it.need, floor)
+	if i < 0 {
+		return -1
+	}
+	h := coming[i].host
+	if ps.remaining(*h) > ps.resumeTime(it.need) && ps.reserveFits(it) {
+		return -1
+	}
+	coming[i].room.Reserve(it.need)
+	rooms[i] = forWork(*h, coming[i].room)
+	return i
+}
+
+// remaining is how long starting host h is expected to take to serve: its
+// market's launch time less the time since it began, and nothing once that
+// has passed.
+func (ps *pass) remaining(h FleetHost) time.Duration {
+	launch := ps.p.Starts.Launch
+	if h.GPU != "" {
+		launch = ps.p.Starts.GPULaunch
+	}
+	return max(0, launch-ps.s.Now.Sub(h.PhaseAt))
+}
+
+// resumeTime is how long a resumed reserve takes to serve need.
+func (ps *pass) resumeTime(need Requirement) time.Duration {
+	if need.GPUsNeeded() > 0 {
+		return ps.p.Starts.GPUResume
+	}
+	return ps.p.Starts.Resume
+}
+
+// reserveFits reports a ready reserve of pending container it's market with
+// room for it.
+func (ps *pass) reserveFits(it coverItem) bool {
+	shape := reservedShape(it.need)
+	return slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
+		return h.market() == it.market && ps.ready(h, true) && h.Usable.Covers(shape) && ps.room(it.market) > 0
+	})
 }
 
 // boughtBin is the ready bin of the serving host bought for a pending
