@@ -50,7 +50,7 @@ const (
 	// by the disk may not.
 	readAheadFrames  = 4
 	readAheadFetches = 16
-	// yieldPoll is how often a fill or warm checks for the reads it yields
+	// yieldPoll is how often a warm checks for the reads it yields
 	// to having ended.
 	yieldPoll = 100 * time.Millisecond
 	// observationLife is how long a HEAD's answer names an object's
@@ -83,8 +83,9 @@ type volumes struct {
 	warming int64
 	// ahead holds a token per read-ahead fetch running.
 	ahead chan struct{}
-	// reading counts the mounts' reads in flight, which fills and warms
-	// yield to: on a small host the disk's writes slow its reads.
+	// reading counts the mounts' reads in flight, which warms yield to: on
+	// a small host the disk's writes slow its reads. A fill serves the read
+	// of its own object and runs through.
 	reading atomic.Int64
 	// peers are each workspace's peer addresses, as last granted, and
 	// peerDown when a failed peer is asked again. Guarded by mu.
@@ -685,7 +686,7 @@ func (v *volumes) record(m *volumeMount, ver objectVersion) {
 // behind reads, unless a fill of the version runs.
 func (v *volumes) fill(ver objectVersion) {
 	if started, _ := v.startFill(ver, 0); started {
-		v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
+		v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver, ver.frames()) })
 	}
 }
 
@@ -740,9 +741,9 @@ func (v *volumes) startFill(ver objectVersion, warmed int64) (started, full bool
 	return true, false
 }
 
-// fillWhole fetches the frames of ver startFill marked until ctx ends or
-// the store refuses one because the object changed.
-func (v *volumes) fillWhole(ctx context.Context, ver objectVersion) {
+// fillWhole fetches frames of ver, which startFill marked, until ctx ends
+// or the store refuses one because the object changed.
+func (v *volumes) fillWhole(ctx context.Context, ver objectVersion, frames iter.Seq2[frameSource, int]) {
 	defer func() {
 		v.mu.Lock()
 		delete(v.filling, ver.key(0).object)
@@ -752,14 +753,14 @@ func (v *volumes) fillWhole(ctx context.Context, ver objectVersion) {
 	defer cancel()
 	ver.changed = cancel
 	began := time.Now()
-	fetched := v.cache.loadEach(ctx, v.yielding(ctx, ver.frames()))
+	fetched := v.cache.loadEach(ctx, frames)
 	v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
 		"seconds", time.Since(began).Seconds(), "error", ctx.Err())
 }
 
-// yielding yields frames while no mount read is in flight, so a fill or
-// warm never slows a load: it waits out each read, checking every
-// yieldPoll, until ctx ends.
+// yielding yields frames while no mount read is in flight, so a warm never
+// slows a load: it waits out each read, checking every yieldPoll, until
+// ctx ends.
 func (v *volumes) yielding(ctx context.Context, frames iter.Seq2[frameSource, int]) iter.Seq2[frameSource, int] {
 	return func(yield func(frameSource, int) bool) {
 		for src, i := range frames {
@@ -950,7 +951,7 @@ func (v *volumes) warm(ctx context.Context, g volumeGrant, keys []string) {
 			continue
 		}
 		warmed += ver.size
-		v.fillWhole(ctx, ver)
+		v.fillWhole(ctx, ver, v.yielding(ctx, ver.frames()))
 	}
 }
 
