@@ -684,3 +684,23 @@ func (q *Queries) WorkspaceBucket(ctx context.Context, workspaceID uuid.UUID) (W
 	err := row.Scan(&i.ConnectionID, &i.Bucket, &i.Region)
 	return i, err
 }
+
+const workspacePeerKey = `-- name: WorkspacePeerKey :one
+update workspaces set volume_peer_key = coalesce(volume_peer_key, $1::bytea)
+where id = $2
+returning volume_peer_key
+`
+
+type WorkspacePeerKeyParams struct {
+	Key         []byte
+	WorkspaceID uuid.UUID
+}
+
+// The workspace's volume peer key: this one, or the one another server
+// made first.
+func (q *Queries) WorkspacePeerKey(ctx context.Context, arg WorkspacePeerKeyParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, workspacePeerKey, arg.Key, arg.WorkspaceID)
+	var volume_peer_key []byte
+	err := row.Scan(&volume_peer_key)
+	return volume_peer_key, err
+}

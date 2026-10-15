@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -101,6 +102,7 @@ func run(args []string) int {
 	cfg := snapshotter.Config{
 		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
 		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes, VolumeAddr: layersource.VolumeEndpoint,
+		PeerAddr: ":" + strconv.Itoa(layersource.VolumePeerPort), LinkDir: layersource.VolumeLinkDir,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

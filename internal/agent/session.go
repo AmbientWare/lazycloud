@@ -196,6 +196,7 @@ func (a *Agent) hello(running []string) (*hostproto.HostMessage, []*container) {
 		RejectedVersion:       readMarker(a.cfg.StateDir, RejectedFile),
 		SleptSeconds:          sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
 		SleepAttemptId:        a.sleep.ID,
+		PeerAddress:           a.peerAddress,
 		PlatformImages:        a.platform.named,
 		RunningPlatformImages: running,
 	}}}, exited

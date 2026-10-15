@@ -2,23 +2,60 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
+// WorkspaceGrant is a host's credential for a workspace bucket and the
+// workspace's peer key, which hosts holding its grant sign reads of each
+// other's cached volume frames with.
+type WorkspaceGrant struct {
+	Grant
+	PeerKey []byte
+}
+
 // HostGrant issues host a credential for the workspace bucket, creating the
-// bucket on first use. The object store's refusal is a *StoreRefusedError.
-func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) (Grant, error) {
+// bucket and the workspace's peer key on first use. The object store's
+// refusal is a *StoreRefusedError.
+func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) (WorkspaceGrant, error) {
 	store, err := s.workspaceStore(ctx, workspace)
 	if err != nil {
-		return Grant{}, err
+		return WorkspaceGrant{}, err
 	}
-	return s.grant(ctx, host, store, uuid.UUID(workspace), "")
+	grant, err := s.grant(ctx, host, store, uuid.UUID(workspace), "")
+	if err != nil {
+		return WorkspaceGrant{}, err
+	}
+	key, err := s.peerKey(ctx, workspace)
+	if err != nil {
+		return WorkspaceGrant{}, err
+	}
+	return WorkspaceGrant{Grant: grant, PeerKey: key}, nil
+}
+
+// peerKey returns the workspace's peer key, making it the first time: every
+// server proposes a random one, and the row keeps the first written.
+func (s *Storage) peerKey(ctx context.Context, workspace identity.WorkspaceID) ([]byte, error) {
+	proposed := make([]byte, 32)
+	if _, err := rand.Read(proposed); err != nil {
+		return nil, fmt.Errorf("make peer key: %w", err)
+	}
+	key, err := s.queries.WorkspacePeerKey(ctx, WorkspacePeerKeyParams{Key: proposed, WorkspaceID: uuid.UUID(workspace)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read peer key: %w", err)
+	}
+	return key, nil
 }
 
 // grant issues host a credential for store, the bucket of workspace, that

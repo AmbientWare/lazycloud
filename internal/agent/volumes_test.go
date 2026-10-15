@@ -18,6 +18,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/pprof"
 	"slices"
@@ -890,14 +891,30 @@ func TestSlicesOutliveADroppedSystemdConnection(t *testing.T) {
 	}
 }
 
+// testVolumeCacheLib builds the preload library workloads open cached
+// volume objects through.
+func testVolumeCacheLib(t *testing.T) string {
+	t.Helper()
+	src, err := filepath.Abs("../../deploy/agent/volume-cache/volume_cache.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := filepath.Join(t.TempDir(), "volume-cache.so")
+	if out, err := exec.CommandContext(t.Context(), "cc", "-shared", "-fPIC", "-O2", "-o", lib, src, "-ldl").CombinedOutput(); err != nil {
+		t.Fatalf("build the volume cache library: %v: %s", err, out)
+	}
+	return lib
+}
+
 // TestPlatformVolumesMountThroughTheSnapshotter: the mount container of a
 // container's platform volumes reaches only the snapshotter's loopback
 // endpoint and holds only its container's key, no store credential. What
 // one container writes, another container's mount reads, symlinks
-// included, and a file overwritten in the bucket reads anew once listed
-// again.
+// included; a file read whole is linked for the workload, which opens the
+// host's copy in place of the mount's; and a file overwritten in the
+// bucket reads anew once listed again.
 func TestPlatformVolumesMountThroughTheSnapshotter(t *testing.T) {
-	e, s, store := volumeEnv(t)
+	e, s, store := volumeEnv(t, func(c *Config) { c.VolumeCacheLib = testVolumeCacheLib(t) })
 	source := serveSource(t, "testdata/volumes")
 	workspace, volume := uuid.NewString(), uuid.NewString()
 	s.send(t, store.grant(workspace))
@@ -940,6 +957,21 @@ func TestPlatformVolumesMountThroughTheSnapshotter(t *testing.T) {
 	}
 	if got := result(t, e.completion(e.task(reader, `{"args": ["readlink", "/volumes/data/link"]}`))); got != `"model.bin"` {
 		t.Fatalf("readlink: %s", got)
+	}
+	linked := filepath.Join(layersource.VolumeLinkDir, workspace, volume, "model.bin")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if body, err := os.ReadFile(linked); err == nil { //nolint:gosec // The test's own volume.
+			if got := sha256.Sum256(body); `"`+hex.EncodeToString(got[:])+`"` != sum {
+				t.Fatal("the linked file differs from the volume's")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s is not linked 30 s after it was read whole", linked)
+		}
+	}
+	if got := result(t, e.completion(e.task(reader, `{"args": ["opened", "/volumes/data/model.bin"]}`))); got != "true" {
+		t.Fatalf("a read of the linked file opens the mount's copy: %s", got)
 	}
 
 	rewritten := make([]byte, 3<<20)

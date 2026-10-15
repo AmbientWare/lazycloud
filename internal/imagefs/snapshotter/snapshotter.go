@@ -81,9 +81,16 @@ type Config struct {
 	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
 	// on.
 	VolumeAddr string
-	HTTP       *http.Client
-	Logger     *slog.Logger
-	Tracer     oteltrace.Tracer
+	// PeerAddr is the address the volume cache serves other hosts' frame
+	// reads on; empty serves none.
+	PeerAddr string
+	// LinkDir is the volume link tree: complete volume objects linked at
+	// <workspace>/<volume>/<path> for workloads to open in place of the
+	// mount's file. Empty links none.
+	LinkDir string
+	HTTP    *http.Client
+	Logger  *slog.Logger
+	Tracer  oteltrace.Tracer
 }
 
 // snapshotter is a containerd snapshotter with lazy layers: the overlay

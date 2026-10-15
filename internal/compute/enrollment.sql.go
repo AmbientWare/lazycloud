@@ -232,13 +232,14 @@ set session_epoch = session_epoch + 1,
     agent_version = $7,
     agent_updatable = $8,
     agent_rejected_version = $9,
+    peer_address = $10,
     updating_until = null,
     phase = case when phase = 'joining' then 'ready' else phase end,
     phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
     phase_at = case when phase = 'joining' then now() else phase_at end,
     last_seen_at = now(),
     updated_at = now()
-where id = $10 and state <> 'retired'
+where id = $11 and state <> 'retired'
 returning session_epoch
 `
 
@@ -252,6 +253,7 @@ type OpenHostSessionParams struct {
 	AgentVersion         string
 	AgentUpdatable       bool
 	AgentRejectedVersion *string
+	PeerAddress          string
 	ID                   uuid.UUID
 }
 
@@ -268,6 +270,7 @@ func (q *Queries) OpenHostSession(ctx context.Context, arg OpenHostSessionParams
 		arg.AgentVersion,
 		arg.AgentUpdatable,
 		arg.AgentRejectedVersion,
+		arg.PeerAddress,
 		arg.ID,
 	)
 	var session_epoch int64

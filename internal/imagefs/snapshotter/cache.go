@@ -88,12 +88,16 @@ type cachedFrame struct {
 	size int64
 	// held says the frame is on the list of held frames.
 	held bool
+	// used is when the frame was last read or stored, which orders
+	// eviction against objects.
+	used time.Time
 }
 
 // unstored is a volume frame the cache holds in memory, readable, until
 // the writer stores it or a newer kept frame drops it. Guarded by
 // frameCache.mu.
 type unstored struct {
+	src    frameSource
 	data   []byte
 	queued bool
 }
@@ -164,6 +168,13 @@ type frameCache struct {
 	// or kept, oldest first in kept, at most keptFrames.
 	unstored map[frameKey]*unstored
 	kept     []frameKey
+	// objects are the volume object versions stored as one file each, most
+	// recently used first in objectList, and links the complete ones in
+	// the link tree under linkDir by link path.
+	objects    map[string]*storedObject
+	objectList list.List
+	links      map[string]*storedObject
+	linkDir    string
 }
 
 func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, error) {
@@ -191,6 +202,17 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		mountWake:  make(chan struct{}),
 		writes:     make(chan frameKey, writeQueue),
 		unstored:   make(map[frameKey]*unstored),
+		objects:    make(map[string]*storedObject),
+		links:      make(map[string]*storedObject),
+		linkDir:    cfg.LinkDir,
+	}
+	if cfg.LinkDir != "" {
+		if err := os.RemoveAll(cfg.LinkDir); err != nil {
+			return nil, fmt.Errorf("clear volume link tree: %w", err)
+		}
+		if err := os.MkdirAll(cfg.LinkDir, 0o755); err != nil { //nolint:gosec // Workloads read the tree.
+			return nil, fmt.Errorf("create volume link tree: %w", err)
+		}
 	}
 	c.free = c.freeBytes()
 	c.writer.Go(c.write)
@@ -308,6 +330,9 @@ func (c *frameCache) cached(k frameKey) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, stored := c.frames[k]
+	if o := c.objects[k.object]; o != nil && k.frame < len(o.frames) && o.frames[k.frame] {
+		stored = true
+	}
 	return stored || c.unstored[k] != nil && c.unstored[k].queued
 }
 
@@ -316,6 +341,9 @@ func (c *frameCache) cached(k frameKey) bool {
 func (c *frameCache) read(src frameSource, frame int, p []byte, off int64) (bool, time.Duration, error) {
 	// A frame evicted since the lookup, or unreadable, is fetched again.
 	if f := c.touch(src.key(frame)); f != nil && readAt(f.path, p, off) == nil {
+		return true, 0, nil
+	}
+	if o, ok := src.(objectSource); ok && c.storedFrame(o, frame, p, off) {
 		return true, 0, nil
 	}
 	began := time.Now()
@@ -405,6 +433,12 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 		if data, ok := c.fromMemory(k); ok {
 			return data, nil
 		}
+		if o, ok := src.(objectSource); ok {
+			data := make([]byte, src.frameLen(frame))
+			if c.storedFrame(o, frame, data, 0) {
+				return data, nil
+			}
+		}
 		ctx, cancel := context.WithTimeout(c.life, fetchTimeout)
 		defer cancel()
 		select {
@@ -423,7 +457,7 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 				c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
 			}
 		case storeBehind:
-			c.holdFrame(k, data)
+			c.holdFrame(src, k, data)
 		}
 		return data, nil
 	})
@@ -472,10 +506,10 @@ func retryable(err error) bool {
 // queue has room, and otherwise kept for the reads that come back to it,
 // dropping the oldest kept frame past keptFrames. A fill stores what a
 // read's frames the queue had no room for later, at the disk's pace.
-func (c *frameCache) holdFrame(k frameKey, data []byte) {
+func (c *frameCache) holdFrame(src frameSource, k frameKey, data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	u := &unstored{data: data}
+	u := &unstored{src: src, data: data}
 	c.unstored[k] = u
 	select {
 	case c.writes <- k:
@@ -542,7 +576,13 @@ func (c *frameCache) write() {
 		if u == nil {
 			continue
 		}
-		if err := c.store(k, u.data); err != nil {
+		var err error
+		if o, ok := u.src.(objectSource); ok {
+			err = c.storeObjectFrame(o, k, u.data)
+		} else {
+			err = c.store(k, u.data)
+		}
+		if err != nil {
 			c.log.Warn("frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
 		}
 		c.mu.Lock()
@@ -557,9 +597,9 @@ func (c *frameCache) write() {
 // cache must to stay within its bounds with it, and keeps it.
 func (c *frameCache) store(k frameKey, data []byte) error {
 	c.mu.Lock()
-	victims := c.evictLocked(nil, int64(len(data)))
+	evicted := c.evictLocked(victims{}, int64(len(data)))
 	c.mu.Unlock()
-	c.remove(victims)
+	c.remove(evicted)
 	file, err := os.CreateTemp(c.dir, "frame-")
 	if err != nil {
 		return fmt.Errorf("store frame: %w", err)
@@ -604,35 +644,46 @@ func (c *frameCache) take(dir, prefix string) {
 // written bytes of the volume as used, and evicts down to the bounds.
 func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 	c.mu.Lock()
-	var victims []*cachedFrame
+	var evicted victims
 	if e, ok := c.frames[k]; ok {
-		victims = append(victims, c.unlinkLocked(e))
+		evicted.frames = append(evicted.frames, c.unlinkLocked(e))
 	}
-	c.linkLocked(&cachedFrame{key: k, path: path, size: size}, true)
+	c.linkLocked(&cachedFrame{key: k, path: path, size: size, used: time.Now()}, true)
 	c.free -= written
-	victims = c.evictLocked(victims, 0)
+	evicted = c.evictLocked(evicted, 0)
 	c.mu.Unlock()
-	c.remove(victims)
+	c.remove(evicted)
 }
 
-// evictLocked unlists frames, least recently used first, until the cache
-// is within its bound and the volume has reserve free with incoming more
-// bytes, and returns them with victims for remove.
-func (c *frameCache) evictLocked(victims []*cachedFrame, incoming int64) []*cachedFrame {
+// evictLocked unlists frames and objects, least recently used first and
+// held frames last, until the cache is within its bound and the volume has
+// reserve free with incoming more bytes, and returns them with evicted for
+// remove. An object goes whole: a workload may hold its file open.
+func (c *frameCache) evictLocked(evicted victims, incoming int64) victims {
 	short := c.reserve - c.free + incoming
 	for c.used+incoming > c.limit || short > 0 {
-		from := &c.idle
-		if from.Len() == 0 {
-			from = &c.held
+		var frame *list.Element
+		if c.idle.Len() > 0 {
+			frame = c.idle.Back()
 		}
-		if from.Len() == 0 {
-			break
+		object := c.objectList.Back()
+		switch {
+		case object != nil && (frame == nil || object.Value.(*storedObject).used.Before(frame.Value.(*cachedFrame).used)): //nolint:forcetypeassert // the lists hold their own types
+			o := object.Value.(*storedObject) //nolint:forcetypeassert // objectList holds *storedObject
+			c.unlistObjectLocked(o)
+			short -= o.stored
+			evicted.objects = append(evicted.objects, o)
+			continue
+		case frame == nil && c.held.Len() > 0:
+			frame = c.held.Back()
+		case frame == nil:
+			return evicted
 		}
-		f := c.unlinkLocked(from.Back())
+		f := c.unlinkLocked(frame)
 		short -= f.size
-		victims = append(victims, f)
+		evicted.frames = append(evicted.frames, f)
 	}
-	return victims
+	return evicted
 }
 
 // freeBytes is the space the cache's volume has free, or the reserve when
@@ -660,18 +711,19 @@ func (c *frameCache) trim(ctx context.Context) {
 		free := c.freeBytes()
 		c.mu.Lock()
 		c.free = free
-		victims := c.evictLocked(nil, 0)
+		evicted := c.evictLocked(victims{}, 0)
 		c.mu.Unlock()
-		c.remove(victims)
+		c.remove(evicted)
 	}
 }
 
-// remove deletes the files of unlisted frames. A file it cannot delete is
-// listed and counted again, oldest, so the next eviction tries it first.
-func (c *frameCache) remove(frames []*cachedFrame) {
+// remove deletes the files of unlisted frames and objects. A frame file it
+// cannot delete is listed and counted again, oldest, so the next eviction
+// tries it first.
+func (c *frameCache) remove(evicted victims) {
 	var freed int64
 	var kept []*cachedFrame
-	for _, f := range frames {
+	for _, f := range evicted.frames {
 		if err := os.Remove(f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			c.log.Warn("evicting a cached frame failed", "object", f.key.object, "frame", f.key.frame, "error", err)
 			kept = append(kept, f)
@@ -679,7 +731,10 @@ func (c *frameCache) remove(frames []*cachedFrame) {
 		}
 		freed += f.size
 	}
-	if len(frames) == 0 {
+	for _, o := range evicted.objects {
+		freed += c.removeObject(o)
+	}
+	if len(evicted.frames) == 0 && len(evicted.objects) == 0 {
 		return
 	}
 	c.mu.Lock()
@@ -721,6 +776,7 @@ func (c *frameCache) touch(k frameKey) *cachedFrame {
 		return nil
 	}
 	f := e.Value.(*cachedFrame) //nolint:forcetypeassert // the lists hold *cachedFrame
+	f.used = time.Now()
 	c.list(f.held).MoveToFront(e)
 	return f
 }

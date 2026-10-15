@@ -1,6 +1,8 @@
 package hostsession_test
 
 import (
+	"bytes"
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
@@ -148,5 +151,68 @@ func TestVolumeTracesComeBackWithTheirWorkload(t *testing.T) {
 	}
 	if next.GetVolumeTrace().GetRecord() || !slices.Equal(paths, []string{"model.bin", "vae.bin"}) {
 		t.Fatalf("the workload's next start carries %v", next.GetVolumeTrace())
+	}
+}
+
+// openPeer opens a session whose Hello names the host's volume peer address.
+func openPeer(t *testing.T, ctx context.Context, client hostproto.HostServiceClient, address string) hostStream {
+	t.Helper()
+	stream, err := client.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Hello{Hello: &hostproto.Hello{
+		BootId: "boot-1", Capacity: &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30}, PeerAddress: address,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	return stream
+}
+
+// TestVolumePeersStayInTheirRegionAndWorkspace: a start that mounts a
+// platform volume names the other hosts of its region that run the
+// workspace's containers and serve a volume cache, not the host itself, a
+// host of another region or one running another workspace's containers,
+// and the workspace's storage grant carries the same peer key on every
+// host of the workspace.
+func TestVolumePeersStayInTheirRegionAndWorkspace(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	host, ctx := h.enroll()
+	sibling, siblingCtx := h.enroll()
+	elsewhere, elsewhereCtx := h.enroll()
+	other, otherCtx := h.enroll()
+	h.exec(`update hosts set region = case when id = $1 then 'us-west-2' else 'us-east-2' end`, uuid.UUID(elsewhere))
+	spec := `{"handler": "a:b", "image": {"python_version": "3.12"}, "volumes": [{"name": "data", "mount_path": "data"}]}`
+	ws, mine := h.startingWith(host, spec)
+	for _, on := range []compute.HostID{sibling, elsewhere} {
+		h.exec(`insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+			select workspace_id, release_id, workload_id, 'starting', $2, 1, 1000, 1 << 28, now() from containers where id = $1`, mine, uuid.UUID(on))
+	}
+	h.startingWith(other, spec)
+
+	// The others are online with their addresses before the host syncs:
+	// each has sent its first command.
+	grant := func(ctx context.Context, address string) *hostproto.StorageGrant {
+		t.Helper()
+		in := commands(t, openPeer(t, ctx, h.client, address))
+		return next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStorageGrant() != nil }).GetStorageGrant()
+	}
+	siblingGrant := grant(siblingCtx, "10.0.0.2:12122")
+	grant(elsewhereCtx, "10.0.1.2:12122")
+	grant(otherCtx, "10.0.0.3:12122")
+
+	in := commands(t, openPeer(t, ctx, h.client, "10.0.0.1:12122"))
+	mineGrant := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStorageGrant() != nil }).GetStorageGrant()
+	if mineGrant.GetWorkspaceId() != ws.String() || len(mineGrant.GetPeerKey()) != 32 || !bytes.Equal(mineGrant.GetPeerKey(), siblingGrant.GetPeerKey()) {
+		t.Fatalf("the host's grant for %s carries peer key %x, the sibling's %x", mineGrant.GetWorkspaceId(), mineGrant.GetPeerKey(), siblingGrant.GetPeerKey())
+	}
+	s := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart()
+	var peers []string
+	for _, p := range s.GetVolumePeers() {
+		peers = append(peers, p.GetHostId()+" "+p.GetAddress())
+	}
+	if want := []string{sibling.String() + " 10.0.0.2:12122"}; !slices.Equal(peers, want) {
+		t.Fatalf("the start names peers %v, want %v", peers, want)
 	}
 }

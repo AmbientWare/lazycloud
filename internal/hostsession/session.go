@@ -345,8 +345,10 @@ type syncCache struct {
 	pulls  map[pullKey]pulled
 	layers map[string]issuedLayers
 	traces map[traceKey]startTrace
-	// volumeTraces holds the volume traces read, by workload.
+	// volumeTraces holds the volume traces read, by workload, and
+	// volumePeers the hosts read, by workspace.
 	volumeTraces map[uuid.UUID]*hostproto.VolumeTrace
+	volumePeers  map[identity.WorkspaceID][]*hostproto.VolumePeer
 	started      []string
 	waits        map[string]bool
 }
@@ -365,7 +367,8 @@ func (sess *session) syncCommands(ctx context.Context) error {
 	derived := map[string]bool{}
 	cache := &syncCache{
 		pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{},
-		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, waits: map[string]bool{},
+		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, volumePeers: map[identity.WorkspaceID][]*hostproto.VolumePeer{},
+		waits: map[string]bool{},
 	}
 	// Builds, volume mounts and network holders run the platform images,
 	// so they go first.
@@ -666,6 +669,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		Prefetch:       trace.prefetch,
 		RecordTrace:    trace.record,
 		VolumeTrace:    s.volumeTrace(ctx, cache, start, volumes),
+		VolumePeers:    sess.volumePeers(ctx, cache, start, volumes),
 	}}}, grant, nil
 }
 

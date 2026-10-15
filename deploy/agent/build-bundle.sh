@@ -2,8 +2,8 @@
 # Builds the agent release archives the install script and self-update
 # download: <out_dir>/<version>/lazycloud-agent-linux-<arch>.tar.gz, each
 # holding VERSION, lazycloud-agent, lazycloud-snapshotter, supervisor,
-# runtime/<python> and, on amd64, geesefs at its root. Prints one
-# "<arch> <sha256>" line per archive.
+# volume-cache.so, runtime/<python> and, on amd64, geesefs at its root.
+# Prints one "<arch> <sha256>" line per archive.
 #
 # Usage: deploy/agent/build-bundle.sh [--arch amd64,arm64] [--python "3.12 3.13"] <out_dir> <version>
 set -euo pipefail
@@ -54,9 +54,17 @@ for arch in "${arch_list[@]}"; do
     -o "$stage/supervisor" ./cmd/supervisor)
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/lazycloud-snapshotter" ./cmd/snapshotter)
+  # volume-cache.so is preloaded into workload containers, so it is built
+  # for the host's architecture against glibc.
+  case "$arch" in
+    amd64) cc=gcc ;;
+    arm64) cc=aarch64-linux-gnu-gcc ;;
+  esac
+  "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden \
+    -o "$stage/volume-cache.so" "$root/deploy/agent/volume-cache/volume_cache.c" -ldl
   # shellcheck disable=SC2086 # the Python versions are separate words
   LAZYCLOUD_RUNTIME_PLATFORM="$platform" "$root/deploy/local/build-runtime.sh" "$stage/runtime" $pythons
-  files=(VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime)
+  files=(VERSION lazycloud-agent lazycloud-snapshotter supervisor volume-cache.so runtime)
   # GeeseFS mounts volumes; its pinned release exists for amd64.
   if [[ "$arch" == amd64 ]]; then
     "$root/deploy/local/fetch-geesefs.sh"

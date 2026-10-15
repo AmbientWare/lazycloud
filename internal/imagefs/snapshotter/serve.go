@@ -58,10 +58,22 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 		_ = listener.Close()
 		return fmt.Errorf("serve the volume endpoint: %w", err)
 	}
+	peers := &http.Server{Handler: peerServer{v: s.volumes}, ReadHeaderTimeout: stopGrace}
+	var peerListener net.Listener
+	if cfg.PeerAddr != "" {
+		if peerListener, err = lc.Listen(ctx, "tcp", cfg.PeerAddr); err != nil {
+			_ = listener.Close()
+			_ = endpoint.Close()
+			return fmt.Errorf("serve volume peers: %w", err)
+		}
+	}
 	var serving sync.WaitGroup
-	served := make(chan error, 2)
+	served := make(chan error, 3)
 	serving.Go(func() { served <- server.Serve(listener) })
 	serving.Go(func() { served <- volumes.Serve(endpoint) })
+	if peerListener != nil {
+		serving.Go(func() { served <- peers.Serve(peerListener) })
+	}
 	ready()
 	select {
 	case err = <-served:
@@ -76,6 +88,9 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	defer cancel()
 	if volumes.Shutdown(shutdown) != nil {
 		_ = volumes.Close()
+	}
+	if peers.Shutdown(shutdown) != nil {
+		_ = peers.Close()
 	}
 	serving.Wait()
 	return err

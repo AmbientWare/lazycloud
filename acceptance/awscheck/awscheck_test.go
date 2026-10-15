@@ -193,7 +193,7 @@ func TestHostGrantMountsAVolume(t *testing.T) {
 		}
 	}
 
-	creds := grantCredentials(t, grant)
+	creds := grantCredentials(t, grant.Grant)
 	source := grant.Bucket + ":" + prefix
 	mount(t, creds, grant.Location, source, `
 echo hello >/mnt/v/a.txt

@@ -186,7 +186,7 @@ func (sess *session) ensureGrant(ctx context.Context, workspace identity.Workspa
 			Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
 				WorkspaceId: workspace.String(), Endpoint: grant.Endpoint, Region: grant.Region, Bucket: grant.Bucket, ForcePathStyle: grant.PathStyle,
 				AccessKeyId: grant.AccessKeyID, SecretAccessKey: grant.SecretAccessKey, SessionToken: grant.SessionToken,
-				ExpiresAt: timestamppb.New(grant.ExpiresAt),
+				ExpiresAt: timestamppb.New(grant.ExpiresAt), PeerKey: grant.PeerKey,
 			}},
 		},
 	})

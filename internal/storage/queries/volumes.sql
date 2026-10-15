@@ -20,6 +20,13 @@ values (@workspace_id, @bucket, @region)
 on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
 returning bucket, region;
 
+-- name: WorkspacePeerKey :one
+-- The workspace's volume peer key: this one, or the one another server
+-- made first.
+update workspaces set volume_peer_key = coalesce(volume_peer_key, @key::bytea)
+where id = @workspace_id
+returning volume_peer_key;
+
 -- name: DeleteWorkspaceBucket :exec
 delete from workspace_buckets where workspace_id = @workspace_id;
 

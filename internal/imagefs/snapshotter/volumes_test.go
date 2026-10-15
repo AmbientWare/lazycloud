@@ -57,7 +57,7 @@ func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if r.Method == http.MethodGet && !r.URL.Query().Has("list-type") {
+	if r.Method == http.MethodGet && !r.URL.Query().Has("list-type") && r.URL.Path != "/frame" {
 		u.gets++
 	}
 	if r.Method == http.MethodHead {
@@ -105,7 +105,7 @@ func serveVolumes(t *testing.T, ts *testStore, up *upstream, c *frameCache) (*vo
 	t.Helper()
 	ts.prefix = "volumes/" + uuid.NewString() + "/"
 	v := newVolumes(c, &http.Client{Transport: up}, slog.New(slog.DiscardHandler))
-	if err := v.grant(uuid.NewString(), testGrant(t, ts.bucket), testContainer, testKey); err != nil {
+	if err := v.grant(uuid.NewString(), testGrant(t, ts.bucket), testContainer, testKey, nil); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(v)
@@ -480,7 +480,7 @@ func TestTheVolumeEndpointRefusesOtherKeysAndPrefixes(t *testing.T) {
 	v, base := volumeEndpoint(t, ts, &upstream{})
 	ts.put(t, "file", []byte("volume"))
 	bucket := base[:len(base)-len(ts.prefix)]
-	if err := v.grant(uuid.NewString(), testGrant(t, "other-workspace-bucket"), uuid.NewString(), "other-workspace-key-0123"); err != nil {
+	if err := v.grant(uuid.NewString(), testGrant(t, "other-workspace-bucket"), uuid.NewString(), "other-workspace-key-0123", nil); err != nil {
 		t.Fatal(err)
 	}
 	other := bucket[:len(bucket)-len(ts.bucket)-1] + "other-workspace-bucket/"
@@ -517,7 +517,7 @@ func TestVolumeTracesArePerContainerAndBounded(t *testing.T) {
 	v, base := volumeEndpoint(t, ts, &upstream{})
 	sources := volumeSources{volumes: v}
 	other, otherKey := uuid.NewString(), "other-container-key-0123"
-	if err := v.grant(v.buckets[ts.bucket].grant.workspace, testGrant(t, ts.bucket), other, otherKey); err != nil {
+	if err := v.grant(v.buckets[ts.bucket].grant.workspace, testGrant(t, ts.bucket), other, otherKey, nil); err != nil {
 		t.Fatal(err)
 	}
 	volume := strings.TrimSuffix(strings.TrimPrefix(ts.prefix, volumesPrefix), "/")

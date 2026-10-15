@@ -126,6 +126,8 @@ jobs:
       # Tests that need root, a host's runtime or Docker images carry the
       # hostruntime tag and run in the host-runtime and acceptance jobs.
       - run: go test -race ./...
+      - name: The volume cache preload
+        run: bash deploy/agent/volume-cache/volume_cache_test.sh
 
   # The agent pulls workload images lazily through lazycloud-snapshotter,
   # which needs root and Docker reconfigured, so this job sets the runner up

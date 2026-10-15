@@ -60,10 +60,13 @@ COPY --from=go /out/snapshotter /stage/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /stage/geesefs
 COPY --from=runtimes /out/runtimes /stage/runtime
 COPY --from=go /out/VERSION /stage/VERSION
-RUN mkdir -p /out/${VERSION} && \
+COPY deploy/agent/volume-cache/volume_cache.c /src/volume_cache.c
+# The preload library workloads open cached volume objects through.
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden -o /stage/volume-cache.so /src/volume_cache.c -ldl && \
+    mkdir -p /out/${VERSION} && \
     tar -C /stage --sort=name --mtime=@${SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner \
       --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
-      -cf - VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
+      -cf - VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs volume-cache.so | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
 
 # The server serves the agent archive of its own version at /install/agent;
 # the chart's post-sync Job publishes it as the hosts' target release.

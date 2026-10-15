@@ -225,7 +225,7 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 		return err
 	}
 	location, err := json.Marshal(bucketLocation{
-		Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket(), PathStyle: g.GetForcePathStyle(),
+		Endpoint: g.GetEndpoint(), Region: g.GetRegion(), Bucket: g.GetBucket(), PathStyle: g.GetForcePathStyle(), PeerKey: g.GetPeerKey(),
 	})
 	if err != nil {
 		return fmt.Errorf("encode grant: %w", err)
@@ -240,8 +240,9 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 }
 
 // grantVolumes hands the stored grant of a workspace to the snapshotter,
-// with a container's mount key, or with "" none.
-func (v *volumes) grantVolumes(ctx context.Context, workspace, container, key string) error {
+// with a container's mount key, or with "" none, and the peers the
+// workspace's frames are asked of.
+func (v *volumes) grantVolumes(ctx context.Context, workspace, container, key string, peers []string) error {
 	c, err := v.credentials(workspace)
 	if err != nil {
 		return err
@@ -252,9 +253,10 @@ func (v *volumes) grantVolumes(ctx context.Context, workspace, container, key st
 	}
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, ContainerId: container, Key: key, Grant: &imagefsproto.BucketGrant{
+	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, ContainerId: container, Key: key, Peers: peers, Grant: &imagefsproto.BucketGrant{
 		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
 		AccessKeyId: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: timestamppb.New(c.Expires),
+		PeerKey: loc.PeerKey,
 	}}); err != nil {
 		return fmt.Errorf("grant volumes to the snapshotter: %w", err)
 	}
@@ -276,14 +278,14 @@ func (v *volumes) refreshGrant(ctx context.Context, workspace string) error {
 	}
 	v.mu.Unlock()
 	if len(mounts) == 0 {
-		return v.grantVolumes(ctx, workspace, "", "")
+		return v.grantVolumes(ctx, workspace, "", "", nil)
 	}
 	for _, m := range mounts {
 		key, err := v.mountKey(m.name)
 		if err != nil {
 			return err
 		}
-		if err := v.grantVolumes(ctx, workspace, m.container, key); err != nil {
+		if err := v.grantVolumes(ctx, workspace, m.container, key, nil); err != nil {
 			return err
 		}
 	}
@@ -329,7 +331,7 @@ func (v *volumes) warm(c *container, spec *hostproto.StartContainer) {
 		if v.waitGrant(ctx, workspace) != nil {
 			return
 		}
-		if err := v.grantVolumes(ctx, workspace, "", ""); err != nil {
+		if err := v.grantVolumes(ctx, workspace, "", "", peerAddresses(spec)); err != nil {
 			c.log.Warn("warming volumes failed", "error", err)
 			return
 		}
@@ -374,6 +376,8 @@ type bucketLocation struct {
 	Region    string `json:"region"`
 	Bucket    string `json:"bucket"`
 	PathStyle bool   `json:"path_style"`
+	// PeerKey signs the frame reads of the workspace's peers.
+	PeerKey []byte `json:"peer_key,omitempty"`
 }
 
 func (v *volumes) location(workspace string) (bucketLocation, error) {
@@ -450,7 +454,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 			if group[0].GetCloudBucket() != nil {
 				ms, dirs[n], err = v.bucketSpec(mounters[n].name, group)
 			} else {
-				ms, dirs[n], err = v.volumeSpec(startCtx, c.id, mounters[n].name, group)
+				ms, dirs[n], err = v.volumeSpec(startCtx, c.id, mounters[n].name, group, peerAddresses(spec))
 			}
 			if err != nil {
 				return err
@@ -470,9 +474,46 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 				return "", nil, fmt.Errorf("bind the volume at %s: %w; the mount printed: %s", s.GetMountPath(), err, v.a.containerOutput(ctx, mounters[n].name))
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
+			if s.GetVolume() != nil {
+				// The link tree's directory of the volume, which the
+				// snapshotter fills with the complete objects it caches.
+				dir := filepath.Join(layersource.VolumeLinkDir, s.GetVolume().GetWorkspaceId(), s.GetVolume().GetVolumeId())
+				if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Workloads read the tree.
+					return "", nil, fmt.Errorf("create the volume cache directory: %w", err)
+				}
+				binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: dir, Target: containerVolumeCache + s.GetMountPath(), ReadOnly: true})
+			}
 		}
 	}
 	return slice, binds, nil
+}
+
+// peerAddresses lists the peers a start names.
+func peerAddresses(spec *hostproto.StartContainer) []string {
+	var peers []string
+	for _, p := range spec.GetVolumePeers() {
+		if p.GetAddress() != "" {
+			peers = append(peers, p.GetAddress())
+		}
+	}
+	return peers
+}
+
+// cacheLibrary returns the mount of the preload library and the
+// environment that has a container's workload open cached volume objects
+// through it, for a start that mounts platform volumes; nothing otherwise.
+func (v *volumes) cacheLibrary(spec *hostproto.StartContainer) ([]mount.Mount, []string) {
+	var paths []string
+	for _, s := range spec.GetVolumes() {
+		if s.GetVolume() != nil {
+			paths = append(paths, s.GetMountPath())
+		}
+	}
+	if v.a.cfg.VolumeCacheLib == "" || len(paths) == 0 {
+		return nil, nil
+	}
+	return []mount.Mount{{Type: mount.TypeBind, Source: v.a.cfg.VolumeCacheLib, Target: containerVolumeCacheLib, ReadOnly: true}},
+		[]string{"LD_PRELOAD=" + containerVolumeCacheLib, "LAZYCLOUD_VOLUME_CACHE=" + containerVolumeCache, "LAZYCLOUD_VOLUME_PATHS=" + strings.Join(paths, ":")}
 }
 
 func (v *volumes) bindsDir() string { return filepath.Join(v.a.cfg.StateDir, "binds") }
@@ -603,7 +644,7 @@ func platformMounts(container string, specs []*hostproto.VolumeMount) (string, s
 // volumeSpec mounts the volumes/ prefix of the workspace bucket through the
 // snapshotter's endpoint with the mounter's key, and returns each volume's
 // directory in it.
-func (v *volumes) volumeSpec(ctx context.Context, container, mounter string, group []*hostproto.VolumeMount) (mountSpec, []string, error) {
+func (v *volumes) volumeSpec(ctx context.Context, container, mounter string, group []*hostproto.VolumeMount, peers []string) (mountSpec, []string, error) {
 	_, workspace, dirs, err := platformMounts(container, group)
 	if err != nil {
 		return mountSpec{}, nil, err
@@ -620,7 +661,7 @@ func (v *volumes) volumeSpec(ctx context.Context, container, mounter string, gro
 		return mountSpec{}, nil, err
 	}
 	// The snapshotter may have restarted since it last held the grant.
-	if err := v.grantVolumes(ctx, workspace, container, key); err != nil {
+	if err := v.grantVolumes(ctx, workspace, container, key, peers); err != nil {
 		return mountSpec{}, nil, err
 	}
 	return mountSpec{

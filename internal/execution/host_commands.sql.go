@@ -256,3 +256,49 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 	}
 	return items, nil
 }
+
+const volumePeers = `-- name: VolumePeers :many
+select h.id, h.peer_address
+from containers c
+join hosts h on h.id = c.host_id
+where c.workspace_id = $1 and c.state <> 'stopped' and c.host_id <> $2
+  and h.state = 'online' and h.peer_address <> ''
+  and h.region = (select region from hosts where id = $2)
+group by h.id
+order by max(c.created_at) desc
+limit $3
+`
+
+type VolumePeersParams struct {
+	WorkspaceID uuid.UUID
+	HostID      *uuid.UUID
+	MaxPeers    int32
+}
+
+type VolumePeersRow struct {
+	ID          uuid.UUID
+	PeerAddress string
+}
+
+// The other online hosts of the host's region that run a live container of
+// the workspace and serve a volume cache, those with the newest container
+// first.
+func (q *Queries) VolumePeers(ctx context.Context, arg VolumePeersParams) ([]VolumePeersRow, error) {
+	rows, err := q.db.Query(ctx, volumePeers, arg.WorkspaceID, arg.HostID, arg.MaxPeers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VolumePeersRow
+	for rows.Next() {
+		var i VolumePeersRow
+		if err := rows.Scan(&i.ID, &i.PeerAddress); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
