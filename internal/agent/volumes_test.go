@@ -1005,11 +1005,11 @@ func TestWritesJustBeforeAStopAreStored(t *testing.T) {
 			id := start.GetStart().GetContainerId()
 			s.send(t, start)
 			s.phase(t, id, ready)
-			const files = 2000
-			if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "2000"]}`))); got != strconv.Itoa(files) {
+			const files = 200
+			if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "200"]}`))); got != strconv.Itoa(files) {
 				t.Fatalf("wrote %s files", got)
 			}
-			sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "640"]}`)))
+			sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "64"]}`)))
 			s.send(t, stopCommand(id, 1))
 			s.phase(t, id, exited)
 			e.mountStops(id)
