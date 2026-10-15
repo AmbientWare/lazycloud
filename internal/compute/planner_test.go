@@ -332,10 +332,15 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 			alice := newUser(t, o.pool, "alice@example.com")
 			dev := newWorkspace(t, o.pool, "dev", alice)
 			release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
+			var ids []uuid.UUID
+			var ages []float64
 			for _, age := range c.ages {
-				id := pendingContainer(t, o.pool, dev, release, 1000, gib)
-				run(t, o.pool, "update containers set created_at = now() - $2::interval where id = $1", id, age)
+				ids, ages = append(ids, pendingContainer(t, o.pool, dev, release, 1000, gib)), append(ages, age.Seconds())
 			}
+			// One statement dates every arrival from the same instant, just
+			// before the pass, so setup time does not age the stream.
+			run(t, o.pool, `update containers c set created_at = now() - make_interval(secs => v.age)
+from unnest($1::uuid[], $2::float8[]) as v(id, age) where c.id = v.id`, ids, ages)
 			r, err := o.compute.Plan(t.Context(), discard())
 			if err != nil {
 				t.Fatal(err)
