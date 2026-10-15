@@ -79,7 +79,7 @@ returning id`).Scan(&container); err != nil {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- run(ctx, slog.New(slog.DiscardHandler), testTicks()) }()
 	defer func() {
 		cancel()
 		<-done

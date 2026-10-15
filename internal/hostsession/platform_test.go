@@ -166,7 +166,7 @@ func TestAFailedPlatformImageIsReadAgainAfterItsRetryPeriod(t *testing.T) {
 	_, ctx := h.enroll()
 	mirror, layer := reference("mount-copy"), h.storeLayer("mount")
 	if _, err := h.pool.Exec(t.Context(), `insert into platform_images (reference, architecture, failure, failed_at)
-		values ($1, 'amd64', 'a layer cannot be converted', now() - interval '10 minutes' + interval '2 seconds')`, platformimages.Mount); err != nil {
+		values ($1, 'amd64', 'a layer cannot be converted', now() - interval '10 minutes' + interval '200 milliseconds')`, platformimages.Mount); err != nil {
 		t.Fatal(err)
 	}
 	in := commands(t, openNaming(t, ctx, h.client, platformimages.Mount))
