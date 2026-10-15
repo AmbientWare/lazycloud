@@ -60,8 +60,8 @@ func (s *serverSession) reserveReady(t *testing.T, attempt string) *hostproto.Re
 }
 
 // A resume reconnects the session at once, without waiting for TCP to see
-// the dead connection, and the new Hello names the attempt and how long the
-// host slept.
+// the dead connection or out the session backoff, and the new Hello names
+// the attempt and how long the host slept.
 func TestAgentReconnectsAndReportsTheSleepAfterAResume(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -77,13 +77,25 @@ func TestAgentReconnectsAndReportsTheSleepAfterAResume(t *testing.T) {
 		t.Fatalf("reserve ready %v", ready)
 	}
 
+	// Four sessions the server ends in a row raise the backoff the next
+	// reconnect would wait to backoff at least.
+	backoff := minSessionBackoff
+	for range 4 {
+		close(s.end)
+		s = e.session()
+		backoff *= 2
+	}
+	backoff /= 2
 	resumed := time.Now()
 	clock.sleep(t, 42*time.Second)
-	s = e.session()
-	t.Logf("resume to new session: %s", time.Since(resumed))
-	if time.Since(resumed) > 2*time.Second {
-		t.Fatalf("the session took %s to reconnect after a resume", time.Since(resumed))
+	waited := time.NewTimer(backoff)
+	defer waited.Stop()
+	select {
+	case s = <-e.server.sessions:
+	case <-waited.C:
+		t.Fatalf("no session %s after a resume, the backoff the reconnect would wait", backoff)
 	}
+	t.Logf("resume to new session: %s", time.Since(resumed))
 	if got := s.hello.GetSleepAttemptId(); got != prepare.GetPrepareReserve().GetAttemptId() {
 		t.Fatalf("hello names attempt %q", got)
 	}
