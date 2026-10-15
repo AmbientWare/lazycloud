@@ -370,12 +370,18 @@ func (e *env) session() *serverSession {
 	}
 }
 
+// phase waits for container's report of phase; a container that exits
+// first fails the test with its exit.
 func (s *serverSession) phase(t *testing.T, container string, phase hostproto.ContainerPhase) *hostproto.ContainerReport {
 	t.Helper()
-	return s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
+	report := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
 		r := m.GetContainer()
-		return r.GetContainerId() == container && r.GetPhase() == phase
+		return r.GetContainerId() == container && (r.GetPhase() == phase || r.GetPhase() == exited)
 	}).GetContainer()
+	if report.GetPhase() != phase {
+		t.Fatalf("container %s exited before %v: %v", container, phase, report.GetExit())
+	}
+	return report
 }
 
 // adoptedReady waits until an adopted container is ready: in the Hello when
