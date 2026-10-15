@@ -674,7 +674,7 @@ func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
 	}
 	frames := int((ver.size + volumeFrame - 1) / volumeFrame)
 	for frame := from + 1; frame < min(frames, end+1); frame++ {
-		if _, ok := v.cache.fromMemory(ver.key(frame)); ok {
+		if _, ok := v.cache.fromMemory(ver.key(frame)); ok || v.cache.cached(ver.key(frame)) {
 			continue
 		}
 		select {
