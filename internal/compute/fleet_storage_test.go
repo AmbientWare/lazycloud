@@ -51,10 +51,12 @@ func TestReadsRankOffersInTheBucketsRegionFirst(t *testing.T) {
 	}
 }
 
-// A ready Spot L4 reserve outside the region its market's starts read from
-// stays until the market's reserve there is ready, then retires; each step
-// is stable, so the same inputs again plan nothing. One not launched yet
-// is awaited wherever its launch's walk points it.
+// A Spot L4 reserve outside the region its market's starts read from holds
+// the stopped target like any other: the market buys no replacement for it,
+// whether it is ready or still preparing after its launch walk landed it
+// there (prod bought one every pass on 2026-10-15 until the GPU quota
+// filled). Once the market holds more than it needs, the reserve outside
+// the read region retires first; each step is stable.
 func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 	t.Parallel()
 	in, read := readRegions(t)
@@ -76,17 +78,16 @@ func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 		t.Fatalf("while a reserve not launched yet points at us-west-2: %+v, want it awaited", got)
 	}
 	west := reserve(1, "us-west-2", "us-west-2a", "usw2-az2", FleetStopped)
-	bought := actionsOf(plan(west), ActionBuyReserve, ActionRetireReserve)
-	if len(bought) != 1 || bought[0].Kind != ActionBuyReserve || bought[0].Offer.Region != read.Region {
-		t.Fatalf("with a reserve in us-west-2: %+v, want a reserve bought in us-east-1", bought)
+	if got := plan(west).Actions; len(got) > 0 {
+		t.Fatalf("with a ready reserve in us-west-2: %+v, want nothing bought", got)
 	}
-	east := reserve(2, "us-east-1", "us-east-1a", "use1-az6", FleetPreparing)
-	if got := plan(west, east).Actions; len(got) > 0 {
-		t.Fatalf("while the us-east-1 reserve prepares: %+v", got)
+	preparing := reserve(1, "us-west-2", "us-west-2a", "usw2-az2", FleetPreparing)
+	if got := plan(preparing).Actions; len(got) > 0 {
+		t.Fatalf("with a reserve preparing in us-west-2: %+v, want nothing bought", got)
 	}
-	east.State = FleetStopped
+	east := reserve(2, "us-east-1", "us-east-1a", "use1-az6", FleetStopped)
 	if retired := hostsOf(actionsOf(plan(west, east), ActionRetireReserve)); !slices.Equal(retired, []HostID{west.ID}) {
-		t.Fatalf("once it is ready, retired %v, want the us-west-2 reserve", retired)
+		t.Fatalf("with reserves in both regions, retired %v, want the us-west-2 reserve", retired)
 	}
 	if got := plan(east).Actions; len(got) > 0 {
 		t.Fatalf("with the us-east-1 reserve alone: %+v", got)
