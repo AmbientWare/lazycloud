@@ -91,7 +91,7 @@ the machine from being reclaimed mid-run. Checkpoints in a
 Workloads run on [preemptible capacity](/concepts/resources#preemptible-capacity)
 by default, which the provider can reclaim without notice. A preempted
 attempt goes back to the queue at once, with no delay, and does not spend a
-retry: the task's attempt limit grows by one for each preemption. After five
+retry. The task's attempt limit grows by one for each preemption. After five
 preemptions the task fails with a message that names `preemptible=False` as
 the way out.
 
@@ -99,7 +99,7 @@ the way out.
 
 A task is `queued` again between attempts until its delay passes, and
 `uv run lazycloud task show <task-id>` prints the attempt as `2 of 4` next to
-the status. The `on_retry` [hook](/concepts/functions#lifecycle-hooks) runs in
+the status. The `on_retry` [hook](/concepts/functions#load-a-model-once-per-container) runs in
 the container after a failed attempt that will be retried, and the task's
 [callback](/concepts/tasks-and-logs#callbacks) carries `attempt_number` and
 `max_attempts` with every event.

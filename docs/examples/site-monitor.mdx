@@ -169,7 +169,7 @@ lets a snapshot left by a removed watch expire on its own.
 
 ## One alert per run across retries
 
-A [retried](/concepts/functions#function-options) call reruns from the top,
+A [retried](/concepts/timeouts-and-retries) call reruns from the top,
 so the snapshot carries the run's ID; a retry in the same run finds its own
 snapshot, resends an alert that failed to deliver and skips one already
 sent.
@@ -191,7 +191,7 @@ sent.
 
 ## An ASGI app behind platform auth
 
-An [ASGI app](/concepts/endpoints#asgi-applications) is authorized by
+An [ASGI app](/concepts/endpoints#serve-an-existing-fastapi-app) is authorized by
 default, so a plain FastAPI app bound to a module attribute needs no auth
 code of its own.
 

@@ -141,7 +141,7 @@ def train(run: str = DEFAULT_RUN, settings: TrainingConfig | None = None) -> Tra
 
 ## Fan out scoring with `.map`
 
-[`.map`](/concepts/functions#call-it) runs one call per batch, the
+[`.map`](/concepts/functions#run-many-inputs-at-once) runs one call per batch, the
 [autoscaler](/concepts/scaling#more-containers) spreads them over up to ten
 containers, and a batch that fails after its retries yields `None`.
 

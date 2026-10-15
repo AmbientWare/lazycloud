@@ -61,7 +61,7 @@ is whether it started a container at all.
 
 `on_start` runs once before a container accepts calls, so a model loaded there
 serves every call the container handles. Loading inside the function body
-repeats the work per call. [Lifecycle hooks](/concepts/functions#lifecycle-hooks)
+repeats the work per call. [Lifecycle hooks](/concepts/functions#load-a-model-once-per-container)
 covers the hook's arguments.
 
 On endpoints, `checkpoint_enabled=True` lets a new container restore a worker
