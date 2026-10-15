@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
+	cerrdefs "github.com/containerd/errdefs"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -791,8 +792,11 @@ func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
 	})
 }
 
-// stopMounts removes this test's binds and stops its mount containers so
-// GeeseFS unmounts before the state directory is removed, then its slices.
+// stopMounts removes this test's binds and its other containers, then
+// stops its mount containers so GeeseFS unmounts before the state
+// directory is removed, then its slices. The other containers go first: a
+// mount whose copy a workload still holds keeps serving after its stop
+// signal, and Docker waits out the stop timeout before killing it.
 func (e *env) stopMounts() {
 	ctx := context.Background()
 	binds, _ := os.ReadDir(filepath.Join(e.stateDir, "binds"))
@@ -801,15 +805,25 @@ func (e *env) stopMounts() {
 			e.t.Errorf("remove binds: %v", err)
 		}
 	}
-	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
-		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind)})
+	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", "lazycloud.agent="+e.id)})
 	if err != nil {
-		e.t.Errorf("list mount containers: %v", err)
+		e.t.Errorf("list containers: %v", err)
 		return
 	}
-	timeout := 10
+	var mounts []string
 	for _, c := range list.Items {
-		if _, err := e.docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if c.Labels[labelKind] == kindMount {
+			mounts = append(mounts, c.ID)
+			continue
+		}
+		// The agent may be removing a container it saw exit.
+		if _, err := e.docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
+			e.t.Errorf("remove test container: %v", err)
+		}
+	}
+	timeout := 10
+	for _, id := range mounts {
+		if _, err := e.docker.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 			e.t.Errorf("stop mount container: %v", err)
 		}
 	}
