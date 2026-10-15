@@ -163,13 +163,30 @@ func TestAnAgentOfAnotherReleaseGetsItsUpdate(t *testing.T) {
 func TestAFailedPlatformImageIsReadAgainAfterItsRetryPeriod(t *testing.T) {
 	t.Parallel()
 	h := start(t)
-	_, ctx := h.enroll()
+	host, ctx := h.enroll()
 	mirror, layer := reference("mount-copy"), h.storeLayer("mount")
-	if _, err := h.pool.Exec(t.Context(), `insert into platform_images (reference, architecture, failure, failed_at)
-		values ($1, 'amd64', 'a layer cannot be converted', now() - interval '10 minutes' + interval '200 milliseconds')`, platformimages.Mount); err != nil {
+	// The session's open waits on the host row, so the failure is recorded,
+	// its retry due retryIn later, moments before the session first reads
+	// it.
+	const retryIn = time.Second
+	hold, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(context.WithoutCancel(t.Context())) }()
+	if _, err := hold.Exec(t.Context(), "select 1 from hosts where id = $1 for update", host); err != nil {
 		t.Fatal(err)
 	}
 	in := commands(t, openNaming(t, ctx, h.client, platformimages.Mount))
+	waitForLockWait(t, h.pool)
+	if _, err := hold.Exec(t.Context(), `insert into platform_images (reference, architecture, failure, failed_at)
+		values ($1, 'amd64', 'a layer cannot be converted', clock_timestamp() - interval '10 minutes' + make_interval(secs => $2))`,
+		platformimages.Mount, retryIn.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	if err := hold.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	first := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetPlatformImages() != nil }).GetPlatformImages().GetImages()
 	if len(first) != 1 || first[0].GetFailure() == "" {
 		t.Fatalf("the failure is sent: %v", first)

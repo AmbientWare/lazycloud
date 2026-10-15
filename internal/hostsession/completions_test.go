@@ -3,7 +3,6 @@ package hostsession_test
 import (
 	"context"
 	"crypto/rand"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,15 +180,7 @@ func TestABurstOfCompletionsSharesTransactionsAndNotifications(t *testing.T) {
 	errs := make([]error, n+1)
 	var calls sync.WaitGroup
 	calls.Go(func() { _, errs[0] = h.client.CompleteTask(ctx, completeRequest(container, attempts[0])) })
-	for blocked, deadline := 0, time.Now().Add(5*time.Second); blocked == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the first write never waited on the lock")
-		}
-		if err := base.QueryRow(t.Context(), `select count(*) from pg_stat_activity
-where datname = current_database() and wait_event_type = 'Lock' and query like '%LockTasksForAttempts%'`).Scan(&blocked); err != nil {
-			t.Fatal(err)
-		}
-	}
+	waitForLockWait(t, base)
 	for i := 1; i <= n; i++ {
 		attempt := uuid.NewString()
 		if i < n {
@@ -239,41 +230,57 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 	}
 }
 
-// A completion that arrives alone is written at once, in its own
-// transaction, about as fast as writing it directly. It compares
-// latencies, so it runs alone.
-func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
-	h, _, writes := countedHarness(t)
-	host, ctx := h.enroll()
-	const n = 9
-	container, attempts := h.runningAttempts(host, 2*n)
-	var direct, queued []time.Duration
-	for i, attempt := range attempts {
-		before := writes.completions()
-		start := time.Now()
-		if i < n {
-			id := execution.AttemptID(uuid.MustParse(attempt))
-			err := h.execution.CompleteAttempt(t.Context(), host, container, execution.AttemptOutcome{
-				Attempt: id, State: execution.AttemptSucceeded, Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte("1")},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			direct = append(direct, time.Since(start))
-		} else {
-			if _, err := h.client.CompleteTask(ctx, completeRequest(container, attempt)); err != nil {
-				t.Fatal(err)
-			}
-			queued = append(queued, time.Since(start))
+// waitForLockWait waits until a statement in the test's database waits on
+// a lock the test holds.
+func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for blocked, deadline := 0, time.Now().Add(5*time.Second); blocked == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no statement waited on the lock within 5s")
 		}
-		if got := writes.completions() - before; got != 1 {
-			t.Fatalf("completion %d took %d transactions, want 1", i, got)
+		if err := pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
+where datname = current_database() and wait_event_type = 'Lock'`).Scan(&blocked); err != nil {
+			t.Fatal(err)
 		}
 	}
-	slices.Sort(direct)
-	slices.Sort(queued)
-	t.Logf("median write: direct %s, through CompleteTask %s", direct[n/2], queued[n/2])
-	if queued[n/2] > direct[n/2]+25*time.Millisecond {
-		t.Fatalf("a lone completion took %s, want about the %s of a direct write", queued[n/2], direct[n/2])
+}
+
+// A completion that arrives alone is written at once, in its own
+// transaction: its write reaches PostgreSQL without waiting for company,
+// and the call returns once that transaction commits.
+func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	h, base, writes := countedHarness(t)
+	host, ctx := h.enroll()
+	container, attempts := h.runningAttempts(host, 2)
+	hold, err := base.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(context.WithoutCancel(t.Context())) }()
+	if _, err := hold.Exec(t.Context(), "select 1 from tasks t join attempts a on a.task_id = t.id where a.id = $1 for update of t", attempts[0]); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.client.CompleteTask(ctx, completeRequest(container, attempts[0]))
+		done <- err
+	}()
+	// The lone completion's write is in PostgreSQL, held only by the lock.
+	waitForLockWait(t, base)
+	if err := hold.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := writes.completions(); got != 1 {
+		t.Fatalf("a lone completion took %d transactions, want its own", got)
+	}
+	if _, err := h.client.CompleteTask(ctx, completeRequest(container, attempts[1])); err != nil {
+		t.Fatal(err)
+	}
+	if got := writes.completions(); got != 2 {
+		t.Fatalf("two lone completions took %d transactions, want one each", got)
 	}
 }
