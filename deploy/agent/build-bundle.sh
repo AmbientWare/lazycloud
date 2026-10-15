@@ -55,13 +55,13 @@ for arch in "${arch_list[@]}"; do
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/lazycloud-snapshotter" ./cmd/snapshotter)
   # volume-cache.so is preloaded into workload containers, so it is built
-  # for the host's architecture against glibc.
+  # against glibc 2.17, the oldest an image may run.
   case "$arch" in
-    amd64) cc=gcc ;;
-    arm64) cc=aarch64-linux-gnu-gcc ;;
+    amd64) image=quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5 ;;
+    arm64) image=quay.io/pypa/manylinux2014_aarch64@sha256:c10b5d2ce68a4426011b5b9b8492f01037b9d0fd2187ed1956b346aa42faeb17 ;;
   esac
-  "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden \
-    -o "$stage/volume-cache.so" "$root/deploy/agent/volume-cache/volume_cache.c" -ldl
+  docker run --rm --platform "linux/$arch" -v "$root/deploy/agent/volume-cache:/src:ro" -v "$stage:/out" "$image" \
+    gcc -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden -o /out/volume-cache.so /src/volume_cache.c -ldl
   # shellcheck disable=SC2086 # the Python versions are separate words
   LAZYCLOUD_RUNTIME_PLATFORM="$platform" "$root/deploy/local/build-runtime.sh" "$stage/runtime" $pythons
   files=(VERSION lazycloud-agent lazycloud-snapshotter supervisor volume-cache.so runtime)

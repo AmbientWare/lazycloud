@@ -165,10 +165,18 @@ except FileNotFoundError as e:
 run "unset cache dir" MOUNT env -u LAZYCLOUD_VOLUME_CACHE "${py_read[@]}" "$mount/proof.bin" r
 run "empty volume paths" MOUNT env LAZYCLOUD_VOLUME_PATHS= "${py_read[@]}" "$mount/proof.bin" r
 
-# The library binds no symbol past glibc 2.17, so images on older glibc load it.
-if objdump -T "$preload" | grep -o 'GLIBC_[0-9.]*' | sort -u | grep -qE 'GLIBC_2\.(1[8-9]|[2-9][0-9])'; then
-  fail "the library binds symbols newer than glibc 2.17: $(objdump -T "$preload" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' ')"
-fi
+# The release build, against glibc 2.17 as deploy/images/Dockerfile builds
+# it, loads on an image with glibc 2.31; ld.so refuses a preload needing a
+# newer symbol version than the image's libc, which would end every exec.
+mkdir -p "$work/release"
+docker run --rm --platform linux/amd64 -v "$here:/src:ro" -v "$work/release:/out" \
+  quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5 \
+  gcc -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden -o /out/volume-cache.so /src/volume_cache.c -ldl \
+  || fail "the release build failed"
+old="$(docker run --rm --platform linux/amd64 -v "$work/release:/lib-under-test:ro" \
+  -e LD_PRELOAD=/lib-under-test/volume-cache.so -e LAZYCLOUD_VOLUME_CACHE=/cache -e LAZYCLOUD_VOLUME_PATHS=/models \
+  ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 sh -c 'cat /etc/os-release | head -1' 2>&1)" || fail "glibc 2.31 image: $old"
+[[ "$old" == 'NAME="Ubuntu"' ]] || fail "the release build does not load on glibc 2.31: $old"
 
 if [[ "$failures" != 0 ]]; then
   echo "$failures failure(s)" >&2

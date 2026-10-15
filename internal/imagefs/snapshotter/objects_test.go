@@ -2,6 +2,8 @@ package snapshotter
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -245,5 +247,45 @@ func TestACacheStartKeepsTheLinkTreeDirectories(t *testing.T) {
 	}
 	if info, err := os.Stat(volume); err != nil || !info.IsDir() {
 		t.Fatalf("the volume's directory: %v", err)
+	}
+}
+
+// storedSource is a test object of n frames of volumeFrame, linked nowhere.
+type storedSource struct {
+	name string
+	n    int
+}
+
+func (s storedSource) key(frame int) frameKey { return frameKey{object: s.name, frame: frame} }
+func (s storedSource) frameLen(int) int       { return volumeFrame }
+func (s storedSource) fetch(context.Context, int) ([]byte, error) {
+	return nil, errors.New("not fetched")
+}
+func (s storedSource) object() objectInfo { return objectInfo{size: int64(s.n) * volumeFrame} }
+
+// An object being stored is never evicted to make room for its own frame:
+// with the cache at its bound and two objects stored frame about, the
+// older completes instead of both restarting forever.
+func TestAnObjectUnderStoreIsNotItsOwnVictim(t *testing.T) {
+	t.Parallel()
+	c := linkedCache(t, &upstream{})
+	c.limit = 20 << 20
+	a, b := storedSource{name: "a", n: 2}, storedSource{name: "b", n: 2}
+	data := make([]byte, volumeFrame)
+	for _, step := range []struct {
+		src   storedSource
+		frame int
+	}{{a, 0}, {b, 0}, {a, 1}} {
+		if err := c.storeObjectFrame(step.src, step.src.key(step.frame), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if o := c.objects["a"]; o == nil || !o.complete() {
+		t.Fatalf("object a after its second frame: %+v", o)
+	}
+	if c.used > c.limit {
+		t.Fatalf("the cache holds %d bytes over its %d bound", c.used, c.limit)
 	}
 }

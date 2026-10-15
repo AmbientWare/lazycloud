@@ -574,7 +574,7 @@ func (c *frameCache) write() {
 // cache must to stay within its bounds with it, and keeps it.
 func (c *frameCache) store(k frameKey, data []byte) error {
 	c.mu.Lock()
-	evicted := c.evictLocked(victims{}, int64(len(data)))
+	evicted := c.evictLocked(victims{}, int64(len(data)), nil)
 	c.mu.Unlock()
 	c.remove(evicted)
 	file, err := os.CreateTemp(c.dir, "frame-")
@@ -627,7 +627,7 @@ func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 	}
 	c.linkLocked(&cachedFrame{key: k, path: path, size: size, used: time.Now()}, true)
 	c.free -= written
-	evicted = c.evictLocked(evicted, 0)
+	evicted = c.evictLocked(evicted, 0, nil)
 	c.mu.Unlock()
 	c.remove(evicted)
 }
@@ -636,7 +636,8 @@ func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 // held frames last, until the cache with incoming more bytes is within its
 // bound and the volume has its reserve free, and returns them with evicted
 // for remove. An object goes whole: a workload may hold its file open.
-func (c *frameCache) evictLocked(evicted victims, incoming int64) victims {
+// keep, the object incoming is stored into, stays.
+func (c *frameCache) evictLocked(evicted victims, incoming int64, keep *storedObject) victims {
 	short := c.reserve - c.free + incoming
 	for c.used+incoming > c.limit || short > 0 {
 		var frame *list.Element
@@ -644,6 +645,9 @@ func (c *frameCache) evictLocked(evicted victims, incoming int64) victims {
 			frame = c.idle.Back()
 		}
 		object := c.objectList.Back()
+		if object != nil && object.Value == keep {
+			object = nil
+		}
 		switch {
 		case object != nil && (frame == nil || object.Value.(*storedObject).used.Before(frame.Value.(*cachedFrame).used)): //nolint:forcetypeassert // the lists hold their own types
 			o := object.Value.(*storedObject) //nolint:forcetypeassert // objectList holds *storedObject
@@ -688,7 +692,7 @@ func (c *frameCache) trim(ctx context.Context) {
 		free := c.freeBytes()
 		c.mu.Lock()
 		c.free = free
-		evicted := c.evictLocked(victims{}, 0)
+		evicted := c.evictLocked(victims{}, 0, nil)
 		c.mu.Unlock()
 		c.remove(evicted)
 	}

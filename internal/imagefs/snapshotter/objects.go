@@ -81,8 +81,12 @@ func (c *frameCache) objectFrame(k frameKey) (path string, n int, ok bool) {
 func (c *frameCache) storeObjectFrame(src objectSource, k frameKey, data []byte) error {
 	info := src.object()
 	c.mu.Lock()
-	evicted := c.evictLocked(victims{}, int64(len(data)))
 	o := c.objects[k.object]
+	if o != nil {
+		o.used = time.Now()
+		c.objectList.MoveToFront(o.elem)
+	}
+	evicted := c.evictLocked(victims{}, int64(len(data)), o)
 	c.mu.Unlock()
 	c.remove(evicted)
 	if o == nil {

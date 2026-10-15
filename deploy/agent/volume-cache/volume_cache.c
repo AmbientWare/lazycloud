@@ -69,15 +69,9 @@ struct config {
 	size_t volume_len[MAX_VOLUMES];
 };
 
-// dlsym binds to the oldest version glibc exports, so an image with glibc
-// 2.17 or newer loads the library; a newer binding would have ld.so refuse
-// the preload on older images and every exec print an error.
-#if defined(__x86_64__)
-__asm__(".symver dlsym,dlsym@GLIBC_2.2.5");
-#elif defined(__aarch64__)
-__asm__(".symver dlsym,dlsym@GLIBC_2.17");
-#endif
-
+// The library is built against glibc 2.17 (deploy/images/Dockerfile), the
+// oldest an image may run, since ld.so refuses a preload that needs a
+// newer symbol version than the image's libc has.
 static struct real real;
 static bool real_resolved;
 static struct config config;
