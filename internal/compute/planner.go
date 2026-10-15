@@ -274,6 +274,7 @@ type requestedHost struct {
 type idleRow struct {
 	ID        uuid.UUID  `json:"id"`
 	IdleSince *time.Time `json:"idle_since"`
+	FreeSince *time.Time `json:"free_since"`
 }
 
 // coolRow is an offer a pass cools in every zone of its region, and why.
@@ -368,7 +369,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
-	s.Peaks = ps.carried()
+	s.Peaks = ps.peaks()
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(ownerPlatform, cools, "the host bought for a container could not take it")
 	bought, err := ps.apply(plan, nil)
@@ -558,39 +559,52 @@ func (ps *fleetPass) settleWaits(plan FleetPlan, bought map[int]uuid.UUID) {
 	}
 }
 
-// settleIdle writes when each serving host became idle where it changed.
+// settleIdle writes when each serving host last ran work and last held a
+// slot or ran work, where either changed.
 func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
+	of := func(m map[HostID]time.Time, id HostID) *time.Time {
+		if since, ok := m[id]; ok {
+			return &since
+		}
+		return nil
+	}
 	for _, h := range hosts {
 		if h.State != FleetServing {
 			continue
 		}
-		var want *time.Time
-		if since, ok := plan.IdleSince[h.ID]; ok {
-			want = &since
-		}
-		if !sameTime(want, h.IdleSince) {
-			ps.w.idle = append(ps.w.idle, idleRow{ID: uuid.UUID(h.ID), IdleSince: want})
+		idle, free := of(plan.IdleSince, h.ID), of(plan.FreeSince, h.ID)
+		if !sameTime(idle, h.IdleSince) || !sameTime(free, h.FreeSince) {
+			ps.w.idle = append(ps.w.idle, idleRow{ID: uuid.UUID(h.ID), IdleSince: idle, FreeSince: free})
 		}
 	}
 }
 
-// carried is each market's load peak, which its published plan carries to
-// the next pass. An unreadable plan reads as without a peak.
-func (ps *fleetPass) carried() map[ReserveMarket]LoadPeak {
-	peaks := map[ReserveMarket]LoadPeak{}
+// carried is each market's published plan, which carries its load peak to
+// the next pass. An unreadable plan is left out.
+func (ps *fleetPass) carried() map[ReserveMarket]PublishedMarket {
+	stored := map[ReserveMarket]PublishedMarket{}
 	for _, m := range ps.r.markets {
-		var stored PublishedMarket
-		if json.Unmarshal(m.Plan, &stored) != nil {
+		var plan PublishedMarket
+		if json.Unmarshal(m.Plan, &plan) != nil {
 			continue
 		}
-		peaks[ReserveMarket{Preemptible: stored.Preemptible, GPU: stored.GPUType}] = stored.Peak
+		stored[ReserveMarket{Preemptible: plan.Preemptible, GPU: plan.GPUType}] = plan
+	}
+	return stored
+}
+
+// peaks are each market's load peak from the published plans.
+func (ps *fleetPass) peaks() map[ReserveMarket]LoadPeak {
+	peaks := map[ReserveMarket]LoadPeak{}
+	for m, plan := range ps.carried() {
+		peaks[m] = plan.Peak
 	}
 	return peaks
 }
 
 // publish writes every platform market's plan when the pass acted, a
-// market's load peak moved, or the last plan is planRefresh old, and logs
-// each decision that changed.
+// market's load peak or reason changed, or the last plan is planRefresh
+// old, and logs each decision that changed.
 func (ps *fleetPass) publish(plan FleetPlan) error {
 	var last time.Time
 	for _, m := range ps.r.markets {
@@ -598,10 +612,10 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 			last = m.GeneratedAt
 		}
 	}
-	peaks := ps.carried()
+	stored := ps.carried()
 	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
-		peak := peaks[mp.Market]
-		return peak.Load != mp.Peak.Load || !peak.At.Equal(mp.Peak.At)
+		last := stored[mp.Market]
+		return last.Peak.Load != mp.Peak.Load || !last.Peak.At.Equal(mp.Peak.At) || last.Reason != mp.Reason
 	})
 	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
 		return nil

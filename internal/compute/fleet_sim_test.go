@@ -776,9 +776,12 @@ func (s *sim) apply(plan FleetPlan) {
 		}
 	}
 	for _, h := range s.hosts {
-		h.IdleSince = nil
+		h.IdleSince, h.FreeSince = nil, nil
 		if since, ok := plan.IdleSince[h.ID]; ok {
-			h.IdleSince = ptr(since)
+			h.IdleSince, h.FreeSince = ptr(since), ptr(since)
+		}
+		if since, ok := plan.FreeSince[h.ID]; ok {
+			h.FreeSince = ptr(since)
 		}
 	}
 }

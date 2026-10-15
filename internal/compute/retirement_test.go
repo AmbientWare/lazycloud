@@ -25,7 +25,7 @@ func cloudHost(t *testing.T, o owners, market compute.Market, instance string) c
 // idleFor makes a host idle for ago.
 func idleFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
 	t.Helper()
-	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
+	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2), free_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
 }
 
 // terminated lists the instance ids every TerminateInstances call named.
@@ -38,7 +38,7 @@ func terminated(e *awsEmulator) []string {
 	return out
 }
 
-// Idle hosts leave only once idle past the idle timeout and while the
+// Idle hosts leave only once idle past the keep window and while the
 // market's free room beyond its warm target covers them; a one-time Spot
 // host cannot stop, so it drains, and the actuator terminates it once.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {

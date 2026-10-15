@@ -50,7 +50,7 @@ func stoppedReserve(t *testing.T, o owners, typ, instance string) compute.HostID
 func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 	t.Helper()
 	host := fleetHost(t, o, compute.PhaseReady, typ, instance)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 hour', free_since = now() - interval '1 hour' where id = $1", uuid.UUID(host))
 	return host
 }
 
@@ -545,8 +545,8 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 }
 
 // A connected account keeps no reserves: its idle host leaves after the
-// idle timeout.
-func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
+// keep window.
+func TestAConnectedAccountsIdleHostLeavesAfterTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -554,7 +554,7 @@ func TestAConnectedAccountsIdleHostLeavesAfterTheIdleTimeout(t *testing.T) {
 	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")
 	recent := idleHost(t, o, "m7i.large", "i-0000000000000f902")
 	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = any($2)", conn.ID, []uuid.UUID{uuid.UUID(idle), uuid.UUID(recent)})
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute', free_since = now() - interval '1 minute' where id = $1", uuid.UUID(recent))
 
 	if r := planCapacity(t, o); r.Drained != 1 || r.Returned != 0 {
 		t.Fatalf("plan %+v, want the idle connection host drained", r)
@@ -671,9 +671,6 @@ func TestSurplusReservesRetire(t *testing.T) {
 func settledFleet(t *testing.T, o owners) {
 	t.Helper()
 	plan(t, o)
-	// A floor short since longer than the idle timeout is bought now.
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '1 hour'))
-where plan ? 'floor_short_since'`)
 	plan(t, o)
 	run(t, o.pool, `
 update hosts set phase = case when reserve_mode is null then 'ready' else 'stopped' end,
@@ -780,7 +777,7 @@ func TestASmallBurstResumesTheFloorReserveAndBuysNoLargeOne(t *testing.T) {
 }
 
 // An 8 CPU request resumes the large-shape reserve, and the pass replaces
-// it once the host has served past the idle timeout and the reserve has
+// it once the host has served past the keep window and the reserve has
 // lacked it as long.
 func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 	t.Parallel()
@@ -805,14 +802,14 @@ func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 	}
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
 	if plan(t, o); largeBought(t, o) != 1 {
-		t.Fatalf("%d large hosts bought once the resumed one served past the idle timeout, want 1", largeBought(t, o))
+		t.Fatalf("%d large hosts bought once the resumed one served past the keep window, want 1", largeBought(t, o))
 	}
 }
 
 // Small work that nothing else fits resumes the large-shape reserve. While
-// the host may return, busy within the idle timeout or idle, no replacement
+// the host may return, busy within the keep window or idle, no replacement
 // is bought, and once idle for the timeout it returns to the reserve.
-func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *testing.T) {
+func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
@@ -832,14 +829,14 @@ func TestABurstOnTheLargeShapeReserveBuysNoReplacementWithinTheIdleTimeout(t *te
 	serveFromReserve(t, o, large)
 	placeOn(t, o, burst, large)
 	if plan(t, o); largeBought(t, o) != 0 {
-		t.Fatal("bought a large host while the resumed one serves within the idle timeout")
+		t.Fatal("bought a large host while the resumed one serves within the keep window")
 	}
 	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
 	if plan(t, o); largeBought(t, o) != 0 {
 		t.Fatal("bought a large host while the resumed one idles")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, large).Phase != string(compute.PhasePreparing) || largeBought(t, o) != 0 {
 		t.Fatalf("plan %+v, large host %s, %d large bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, large).Phase, largeBought(t, o))
@@ -854,7 +851,7 @@ where market = 'on_demand' and reserve_mode is not null and phase = 'requested' 
 }
 
 // A burst that resumes the floor reserve buys no replacement: not while the
-// floor has been short for less than the idle timeout, and not while the
+// floor has been short for less than the keep window, and not while the
 // host, done and idle, is due back; once idle for the timeout it returns.
 func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) {
 	t.Parallel()
@@ -879,7 +876,7 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 	if plan(t, o); floorBought(t, o) != 0 {
 		t.Fatal("bought a floor reserve while the idle resumed host is due back")
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
 	if r := plan(t, o); r.Returned != 1 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) || floorBought(t, o) != 0 {
 		t.Fatalf("plan %+v, floor host %s, %d floor reserves bought; want it back in the reserve and none bought",
 			r, hostRowOf(t, o, floor).Phase, floorBought(t, o))
@@ -898,12 +895,12 @@ func TestAfterABurstTheResumedHostReturnsAndTheWarmHostStays(t *testing.T) {
 	warm := compute.HostID(scan[uuid.UUID](t, o.pool, `select id from hosts
 where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	serveFromReserve(t, o, floor)
-	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
-	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '20 minutes', free_since = now() - interval '20 minutes' where id = $1", uuid.UUID(warm))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '1 minute', free_since = now() - interval '1 minute' where id = $1", uuid.UUID(floor))
 	if r := plan(t, o); r.Returned != 0 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
 		t.Fatalf("plan %+v, warm host %s; want the warm host kept and nothing else done yet", r, hostRowOf(t, o, warm).Phase)
 	}
-	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
+	run(t, o.pool, "update hosts set idle_since = now() - interval '6 minutes', free_since = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
 	r := plan(t, o)
 	if r.Returned != 1 || r.Requested != 0 || r.Drained != 0 || hostRowOf(t, o, floor).Phase != string(compute.PhasePreparing) ||
 		hostRowOf(t, o, warm).Phase != string(compute.PhaseReady) {
@@ -912,10 +909,10 @@ where market = 'on_demand' and reserve_mode is null and phase = 'ready'`))
 	}
 }
 
-// A floor reserve resumed for work that runs past the idle timeout is
+// A floor reserve resumed for work that runs past the keep window is
 // replaced: the host, busy since it became ready that long ago, is not due
 // back.
-func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
+func TestAFloorReserveBusyPastTheKeepWindowIsReplaced(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	settledFleet(t, o)
@@ -930,7 +927,7 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 	plan(t, o)
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
 	if plan(t, o); floorBought(t, o) != 1 {
-		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the idle timeout, want 1", floorBought(t, o))
+		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the keep window, want 1", floorBought(t, o))
 	}
 }
 

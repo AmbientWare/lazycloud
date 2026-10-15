@@ -218,10 +218,10 @@ func packedOn(ctx context.Context, q *Queries, hosts []compute.HostCapacity, pen
 	return out, nil
 }
 
-// pack assigns containers: first those the fleet bought a host for, each
-// to that host while it serves with room, so other work never takes the
-// room bought for them; then those that cannot run on Spot, so they take
-// on-demand room before Spot-tolerant work borrows it; each otherwise to
+// pack assigns containers: first those whose bought host serves with room
+// for them, each to that host, so other work never takes the room bought
+// for them; then those that cannot run on Spot, so they take on-demand room
+// before Spot-tolerant work borrows it; each otherwise to
 // the host compute.ChooseHost picks, keeping the platform's on-demand warm
 // floor free for them and preferring the host whose cache still holds a
 // container's disk, then one in the region its volumes are read from. GPU
@@ -237,10 +237,19 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow, packed m
 		}
 		return slices.IndexFunc(free, func(h compute.HostCapacity) bool { return h.Host == compute.HostID(*c.Bought) })
 	}
-	order := slices.Clone(pending)
-	slices.SortStableFunc(order, func(a, b PendingContainersRow) int {
-		return cmp.Or(cmp.Compare(boolRank(bought(a) < 0), boolRank(bought(b) < 0)), cmp.Compare(boolRank(a.Preemptible), boolRank(b.Preemptible)))
+	var rest []PendingContainersRow
+	order := make([]PendingContainersRow, 0, len(pending))
+	for _, c := range pending {
+		if i := bought(c); i >= 0 && free[i].Fits(requirement(c)) {
+			order = append(order, c)
+			continue
+		}
+		rest = append(rest, c)
+	}
+	slices.SortStableFunc(rest, func(a, b PendingContainersRow) int {
+		return cmp.Compare(boolRank(a.Preemptible), boolRank(b.Preemptible))
 	})
+	order = append(order, rest...)
 	floor := compute.DefaultPolicy().OnDemand.Warm.Floor
 	for _, c := range order {
 		need := requirement(c)

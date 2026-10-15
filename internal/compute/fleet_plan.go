@@ -65,10 +65,10 @@ type FleetHost struct {
 	Stoppable bool
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
-	// IdleSince is when the serving host last ran work or held a warm slot,
-	// as last recorded; BusySince when the newest container Containers
-	// counts was placed.
-	IdleSince, BusySince *time.Time
+	// IdleSince is when the serving host last ran work and FreeSince when
+	// it last ran work or held a warm slot, as last recorded; BusySince
+	// when the newest container Containers counts was placed.
+	IdleSince, FreeSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
 	PhaseAt time.Time
@@ -327,9 +327,9 @@ type FleetPlan struct {
 	Markets []MarketPlan
 	Actions []FleetAction
 	Waits   []ContainerWait
-	// IdleSince is when each idle serving host last ran work or held a
-	// warm slot.
-	IdleSince map[HostID]time.Time
+	// IdleSince is when each idle serving host last ran work, and FreeSince
+	// when each of those that holds no warm slot last held one or ran work.
+	IdleSince, FreeSince map[HostID]time.Time
 	// BatchWait is how long the purchases the pass held wait for arrivals
 	// to settle; zero when it held none.
 	BatchWait time.Duration
@@ -348,7 +348,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string]ranking{}, byMarket: map[ReserveMarket]*marketView{},
-		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
+		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}, FreeSince: map[HostID]time.Time{}},
 		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 		classReads: map[string]int64{}, spotOffers: map[spotNeed]bool{},
 	}
@@ -763,6 +763,16 @@ func (ps *pass) cover(items []coverItem) {
 		if it.need.Machine != "" || it.need.Connection != nil {
 			continue
 		}
+		if i := ps.boughtBin(it, ready, readyRooms); i >= 0 {
+			// It lands on the host bought for it, as placement puts it there
+			// first; the wait keeps naming the host until placement does.
+			ready[i].room.Reserve(it.need)
+			readyRooms[i] = forWork(*ready[i].host, ready[i].room)
+			ready[i].host.Load = ready[i].host.Load.Plus(reservedShape(it.need))
+			ps.claimed[ready[i].host.ID] = true
+			ps.plan.Waits[it.wait].Host = it.bought
+			continue
+		}
 		if i := take(ready, readyRooms, it, floor); i >= 0 {
 			h := ready[i].host
 			if it.slot {
@@ -811,6 +821,19 @@ func (ps *pass) cover(items []coverItem) {
 			ps.act(FleetAction{Kind: ActionCancel, Reason: ReasonUnclaimed, Market: h.market(), Host: ptr(h.ID)})
 		}
 	}
+}
+
+// boughtBin is the ready bin of the serving host bought for a pending
+// container while it has room for it, or -1.
+func (ps *pass) boughtBin(it coverItem, ready []bin, rooms []HostCapacity) int {
+	if it.slot || it.bought == nil {
+		return -1
+	}
+	i := slices.IndexFunc(ready, func(b bin) bool { return b.host.ID == *it.bought })
+	if i < 0 || !rooms[i].Fits(it.need) {
+		return -1
+	}
+	return i
 }
 
 // provisioning records that a pending container waits for a host; a slot

@@ -7,43 +7,52 @@ import (
 	"time"
 )
 
-// idle records when each serving host that runs no work, has none pending
-// for it and holds no warm slot last did: a slot that moves between hosts
-// from pass to pass keeps each of them.
+// idle records when each serving host without containers or pending work
+// for it last ran work, and when each of those that holds no warm slot last
+// held one: a slot that moves between hosts from pass to pass keeps each of
+// them.
 func (ps *pass) idle() {
 	for _, h := range ps.s.Hosts {
-		if h.State != FleetServing || h.Containers > 0 || ps.claimed[h.ID] || len(ps.holding[h.ID]) > 0 {
+		if h.State != FleetServing || h.Containers > 0 || ps.claimed[h.ID] {
 			continue
 		}
-		since := ps.s.Now
-		if h.IdleSince != nil {
-			since = *h.IdleSince
+		ps.plan.IdleSince[h.ID] = since(h.IdleSince, ps.s.Now)
+		if len(ps.holding[h.ID]) == 0 {
+			ps.plan.FreeSince[h.ID] = since(h.FreeSince, ps.s.Now)
 		}
-		ps.plan.IdleSince[h.ID] = since
 	}
 }
 
-// idleLong reports a host idle for the keep window.
+// since is the recorded time, or now for none.
+func since(recorded *time.Time, now time.Time) time.Time {
+	if recorded != nil {
+		return *recorded
+	}
+	return now
+}
+
+// idleLong reports a host that has run no work for the keep window.
 func (ps *pass) idleLong(h FleetHost) bool {
 	since, ok := ps.plan.IdleSince[h.ID]
 	return ok && !h.Protected && ps.s.Now.Sub(since) >= ps.p.Keep
 }
 
 // retain releases the idle hosts the market no longer needs once each has
-// been idle for the keep window.
+// run no work and held no warm slot for the keep window.
 func (ps *pass) retain(v *marketView) {
 	for _, h := range ps.leavers(v) {
-		if ps.idleLong(*h) {
+		if ps.s.Now.Sub(ps.plan.FreeSince[h.ID]) >= ps.p.Keep {
 			ps.leave(v, h)
 		}
 	}
 }
 
-// leavers are market v's idle serving hosts, cheapest first.
+// leavers are market v's serving hosts that run no work and hold no warm
+// slot, cheapest first.
 func (ps *pass) leavers(v *marketView) []*FleetHost {
 	out := ps.inMarket(v.m, func(h FleetHost) bool {
-		_, idle := ps.plan.IdleSince[h.ID]
-		return serving(h) && idle && !h.Protected
+		_, free := ps.plan.FreeSince[h.ID]
+		return serving(h) && free && !h.Protected
 	})
 	slices.SortStableFunc(out, ps.retention)
 	return out
@@ -119,10 +128,11 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 // reserve supply beside its reserves, so the market buys no reserve while
 // one is due back: returnable hosts that start, became ready within the
 // keep window, as a reserve resumed for a burst did, idle holding no warm
-// slot, or hold slots a cheaper type will take over; in a market that
-// awaits returns, every returnable host, which returns once its work ends.
+// slot, or hold slots a cheaper type will take over once rightsize may act;
+// in a market that awaits returns, every returnable host, which returns
+// once its work ends.
 func (ps *pass) supply(v *marketView) []*FleetHost {
-	awaits := ps.p.Reserve(v.m).AwaitReturn
+	awaits, rightsizes := ps.p.Reserve(v.m).AwaitReturn, ps.rightsizes(v)
 	return ps.inMarket(v.m, func(h FleetHost) bool {
 		if !serving(h) && !starting(h) || !ps.returnable(v, h) {
 			return false
@@ -130,9 +140,11 @@ func (ps *pass) supply(v *marketView) []*FleetHost {
 		if awaits || starting(h) || ps.s.Now.Sub(h.PhaseAt) < ps.p.Keep {
 			return true
 		}
-		_, idle := ps.plan.IdleSince[h.ID]
+		if _, free := ps.plan.FreeSince[h.ID]; free {
+			return true
+		}
 		replaced, _ := ps.replacement(v, h)
-		return idle || replaced != nil
+		return rightsizes && replaced != nil
 	})
 }
 
@@ -321,23 +333,25 @@ func (ps *pass) retire(v *marketView) {
 // rightsize replaces the idle host whose cheaper type pays back most: the
 // hourly saving over the cost horizon must exceed what the new host costs
 // while it provisions, and the new type must hold the warm slots the host
-// does. It replaces only an idle host a slot needs, and only while the
-// market has not grown within the keep window, nothing else in it starts or
-// leaves and no container arrives, so the warm slots converge on the
-// cheapest type. The same type in another
-// zone never replaces it, so a Spot price move between zones buys nothing.
+// does. It replaces only a host a slot needs that has run no work for the
+// keep window, and only while the market has not grown within the window,
+// nothing else in it starts or leaves and no container arrives, so the warm
+// slots converge on the cheapest type. The same type in another zone never
+// replaces it, so a Spot price move between zones buys nothing.
 func (ps *pass) rightsize(v *marketView) {
 	moving := slices.ContainsFunc(ps.plan.Actions, func(a FleetAction) bool {
 		return a.Market == v.m && a.Kind != ActionRetireReserve
 	})
-	grew := slices.ContainsFunc(ps.inMarket(v.m, serving), func(h *FleetHost) bool { return ps.s.Now.Sub(h.PhaseAt) < ps.p.Keep })
-	if ps.waiting[v.m] || ps.s.BatchWait > 0 || moving || grew || !ps.warmPending(v).Empty() || ps.room(v.m) <= 0 || ps.hostRoom <= 0 {
+	if !ps.rightsizes(v) || moving {
 		return
 	}
 	var best *FleetOffer
 	var replaced *FleetHost
 	var bestPayback int64
 	for _, h := range ps.inMarket(v.m, serving) {
+		if !ps.idleLong(*h) {
+			continue
+		}
 		if o, payback := ps.replacement(v, *h); o != nil && payback > bestPayback {
 			best, replaced, bestPayback = o, h, payback
 		}
@@ -346,6 +360,14 @@ func (ps *pass) rightsize(v *marketView) {
 		holds := ps.held(replaced.ID)
 		ps.buy(v.m, *best, ActionRightsize, ReasonCheaper, holds, nil, ptr(replaced.ID))
 	}
+}
+
+// rightsizes reports whether market v may rightsize this pass: no work
+// waits in it, no batch is open, it has not grown within the keep window,
+// no host of it starts, and it has room to grow.
+func (ps *pass) rightsizes(v *marketView) bool {
+	grew := slices.ContainsFunc(ps.inMarket(v.m, serving), func(h *FleetHost) bool { return ps.s.Now.Sub(h.PhaseAt) < ps.p.Keep })
+	return !ps.waiting[v.m] && ps.s.BatchWait <= 0 && !grew && ps.warmPending(v).Empty() && ps.room(v.m) > 0 && ps.hostRoom > 0
 }
 
 // replacement is the offer of another type that pays back most for
