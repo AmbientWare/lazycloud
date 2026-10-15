@@ -199,10 +199,11 @@ UNIT
 systemctl daemon-reload
 systemctl enable lazycloud-data-volume.service
 
-# The volume peer port (internal/imagefs/layersource.VolumePeerPort) is
-# open to the fleet's security group, which workloads' traffic leaves
-# through too; the host drops it from its container bridge, to itself and
-# forwarded, before Docker's own chains see it.
+# The fleet security group opens the volume peer port
+# (internal/imagefs/layersource.VolumePeerPort) to every host, and
+# workloads' traffic leaves through the same group, so the host drops the
+# port's traffic from its container bridge, to itself and forwarded,
+# before Docker's chains see it.
 cat >/usr/local/sbin/lazycloud-peer-firewall <<'SCRIPT'
 #!/bin/sh
 set -eu
