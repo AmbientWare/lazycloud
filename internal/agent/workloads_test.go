@@ -380,14 +380,14 @@ func TestDockerPodRunsADaemon(t *testing.T) {
 	waitLog(t, e.server, id, "daemon 28.5.1")
 }
 
-// startTargetServer runs a web server container on the default bridge and
-// returns its address.
+// startTargetServer runs a web server container, the mount image's copy in
+// the test registry, on the default bridge and returns its address.
 func startTargetServer(t *testing.T, label string) string {
 	t.Helper()
 	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "--label", "lazycloud.agent="+label,
-		testBuildBase, "httpd", "-f", "-p", "80").Output()
+		copies[platformimages.Mount], "httpd", "-f", "-p", "80").Output()
 	if err != nil {
-		t.Fatalf("start target: %v", err)
+		t.Fatalf("start target: %v", withStderr(err))
 	}
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
