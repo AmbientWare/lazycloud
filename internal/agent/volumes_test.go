@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,8 +29,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/uuid"
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -954,9 +956,43 @@ func (e *env) mountStops(container string) {
 	e.t.Helper()
 	for deadline := time.Now().Add(mounterFlushSeconds * time.Second); len(e.mounters(true, container)) > 0; time.Sleep(time.Second) {
 		if time.Now().After(deadline) {
+			e.dumpMounts()
 			e.t.Fatal("the mount did not stop within its flush window")
 		}
 	}
+}
+
+// dumpMounts logs, for a test that mounts volumes and timed out, what
+// names the cause: each mount container's output and processes, with
+// their states, and the agent's goroutines.
+func (e *env) dumpMounts() {
+	if e.geesefs == "" {
+		return
+	}
+	ctx := context.Background()
+	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
+		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kindMount)})
+	if err != nil {
+		e.t.Log(err)
+		return
+	}
+	for _, c := range list.Items {
+		e.t.Logf("mount container %s: %s", c.Names, c.Status)
+		if top, err := e.docker.ContainerTop(ctx, c.ID, client.ContainerTopOptions{Arguments: []string{"-o", "pid,stat,wchan:32,args"}}); err == nil {
+			for _, process := range top.Processes {
+				e.t.Log(strings.Join(process, " "))
+			}
+		}
+		logs, err := e.docker.ContainerLogs(ctx, c.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "50"})
+		if err != nil {
+			continue
+		}
+		var out bytes.Buffer
+		_, _ = stdcopy.StdCopy(&out, &out, logs)
+		_ = logs.Close()
+		e.t.Log(out.String())
+	}
+	_ = pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
 }
 
 // TestWritesJustBeforeAStopAreStored: a container that writes many small

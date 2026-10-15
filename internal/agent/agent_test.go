@@ -315,6 +315,7 @@ func (e *env) eventually(what string, ok func() bool) {
 	deadline := time.Now().Add(20 * time.Second)
 	for !ok() {
 		if time.Now().After(deadline) {
+			e.dumpMounts()
 			e.t.Fatalf("timed out waiting until %s", what)
 		}
 		time.Sleep(50 * time.Millisecond)
