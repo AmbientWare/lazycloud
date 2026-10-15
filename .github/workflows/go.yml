@@ -2,13 +2,15 @@ name: Go backend and host runtime
 
 on:
   pull_request:
-  # Dependencies and tools are what the build cache saves; a main run after
-  # they change leaves every pull request a warm cache to restore.
+  # Dependencies and tools are what the build cache saves, and a pull
+  # request restores main's entry: a main run after they change, or one
+  # started by hand to seed it, leaves every pull request a warm cache.
   push:
     branches: [main]
     paths:
       - go.mod
       - go.sum
+  workflow_dispatch:
 
 permissions:
   contents: read
