@@ -40,28 +40,12 @@ const (
 // startTestRegistry runs a registry on a loopback port for the test.
 func startTestRegistry(t *testing.T) string {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", testRegistryImage).Output()
-	if err != nil {
-		t.Fatalf("start registry: %v", err)
-	}
-	id := strings.TrimSpace(string(out))
-	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
-	port, err := exec.CommandContext(t.Context(), "docker", "port", id, "5000/tcp").Output()
+	address, stop, err := startRegistry(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
-	for deadline := time.Now().Add(30 * time.Second); ; {
-		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
-		if err == nil {
-			_ = resp.Body.Close()
-			return address
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("registry did not start: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	t.Cleanup(stop)
+	return address
 }
 
 // buildBase copies testBuildBase into registry and names the copy, so test

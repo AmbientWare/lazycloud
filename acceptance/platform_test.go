@@ -27,11 +27,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
@@ -50,6 +52,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
@@ -211,20 +214,24 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
-// startRegistry runs the platform registry on a loopback port and returns
-// its address and how to remove it.
+// startRegistry runs the platform registry, from the image cache, on a
+// loopback port and returns its address and how to remove it.
 func startRegistry() (string, func(), error) {
 	ctx := context.Background()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+	image, err := imagefstest.Load(ctx, registryImage, v1.Platform{OS: "linux", Architecture: goruntime.GOARCH})
 	if err != nil {
-		return "", nil, fmt.Errorf("start registry: %w", err)
+		return "", nil, err
+	}
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", image).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("start registry: %w", withStderr(err))
 	}
 	id := strings.TrimSpace(string(out))
 	stop := func() { _ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run() }
 	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
 	if err != nil {
 		stop()
-		return "", nil, fmt.Errorf("registry port: %w", err)
+		return "", nil, fmt.Errorf("registry port: %w", withStderr(err))
 	}
 	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
@@ -238,6 +245,15 @@ func startRegistry() (string, func(), error) {
 			return "", nil, fmt.Errorf("registry did not start: %w", err)
 		}
 	}
+}
+
+// withStderr adds what a failed command printed to err.
+func withStderr(err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(exit.Stderr))
+	}
+	return err
 }
 
 // pushPythonBase builds the platform's Python base of pythonVersion with

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // The agent's link directory lets a container user other than the agent's
@@ -38,7 +39,7 @@ func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
 	}
 	t.Cleanup(func() { l.close(time.Second) })
 	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--runtime", testRuntime(), "--user", "65534:65534", "--label", "lazycloud.agent="+c.id,
-		"-v", c.linkDir()+":"+containerLinkDir, testImage, "python3", "-c",
+		"-v", c.linkDir()+":"+containerLinkDir, copies[testImage], "python3", "-c",
 		"import socket; s = socket.socket(socket.AF_UNIX); s.bind('"+containerControlSocket+"'); print('bound')").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "bound") {
 		t.Fatalf("a non-root container user could not create its socket: %v: %s", err, out)
@@ -50,7 +51,7 @@ func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
 func (e *env) podCommand(pod *hostproto.PodWorkload) *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId: uuid.NewString(),
-		Image:       testImage,
+		Image:       copies[testImage],
 		Layers:      imageLayers[testImage],
 		Source:      e.source,
 		Resources:   &hostproto.Resources{CpuMillis: 1000, MemoryBytes: 256 << 20},
@@ -702,14 +703,14 @@ func TestPublishFilesystemPushesAnImage(t *testing.T) {
 	}
 }
 
-// readableImage builds a busybox image whose whole filesystem the test's
-// unprivileged pod user can read, as an archive of / needs, with its own
-// working directory to carry over.
+// readableImage builds, on the mount image's copy in the test registry, an
+// image whose whole filesystem the test's unprivileged pod user can read,
+// as an archive of / needs, with its own working directory to carry over.
 func readableImage(t *testing.T, label string) string {
 	t.Helper()
 	tag := "lazycloud-agent-test-fs:" + uuid.NewString()[:8]
 	build := exec.CommandContext(t.Context(), "docker", "build", "-q", "--label", "lazycloud.agent="+label, "-t", tag, "-")
-	build.Stdin = strings.NewReader("FROM " + testBuildBase + "\nRUN chmod a+r /etc/shadow && chmod a+rx /root && mkdir -p /srv\nWORKDIR /srv\n")
+	build.Stdin = strings.NewReader("FROM " + copies[platformimages.Mount] + "\nRUN chmod a+r /etc/shadow && chmod a+rx /root && mkdir -p /srv\nWORKDIR /srv\n")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build test image: %v: %s", err, out)
 	}
