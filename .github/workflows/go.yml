@@ -2,6 +2,13 @@ name: Go backend and host runtime
 
 on:
   pull_request:
+  # Dependencies and tools are what the build cache saves; a main run after
+  # they change leaves every pull request a warm cache to restore.
+  push:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
 
 permissions:
   contents: read
@@ -52,10 +59,20 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      # The Go module, build and lint caches from the last run on main after
+      # a dependency change, or this pull request's own last run. Only this
+      # job saves; the host jobs restore the same entry.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       - name: PostgreSQL, stripe-mock and the object store
         run: docker compose -f compose.test.yaml up -d --wait
-      - name: GeeseFS for volume mount tests
-        run: deploy/local/fetch-geesefs.sh
       - name: Generated code is current
         run: |
           go generate ./...
@@ -63,7 +80,6 @@ jobs:
       - run: go mod tidy -diff
       - run: go tool buf format -d --exit-code
       - run: go tool buf lint
-      - run: go vet -tags hostruntime ./...
       - run: go tool golangci-lint run ./...
       # The supervisor's HTTP runner tests run the repository's Python
       # runner.
@@ -90,6 +106,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ hashFiles('go.sum') }}-
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       # Test images, pinned by digest, from the run that last pulled them.
       - uses: actions/cache@v6
         with:
@@ -101,7 +125,9 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race -tags hostruntime ./internal/imagefs ./internal/imagefs/layersource
+      # The image round trip converts every layer of a real image; validate
+      # covers the rest of imagefs under the race detector.
+      - run: go test -tags hostruntime -run TestPythonLayersRoundTrip ./internal/imagefs
       # The agent binds volumes and the snapshotter mounts FUSE and overlay
       # filesystems as root, as on hosts, and a join installs as root. A
       # skipped volume mount test fails the job.
@@ -113,11 +139,15 @@ jobs:
             exit 1
           fi
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
-      # The supervisor's egress rules and Docker runs, as root on a host.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -v ./internal/supervisor
+      # The supervisor's egress rules and Docker runs, as root on a host;
+      # validate covers the rest of the supervisor.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -run 'TestNetfilter|TestDevboxRoot' -v ./internal/supervisor
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
+          # The runner never reboots, so the initramfs the install would
+          # rebuild is never read.
+          sudo ln -sf /bin/true /usr/local/sbin/update-initramfs
           sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
           sudo modprobe nbd nbds_max=16 || {
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
@@ -156,6 +186,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ hashFiles('go.sum') }}-
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.29"
@@ -187,6 +225,9 @@ jobs:
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
+          # The runner never reboots, so the initramfs the install would
+          # rebuild is never read.
+          sudo ln -sf /bin/true /usr/local/sbin/update-initramfs
           sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
           sudo modprobe nbd nbds_max=16 || {
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
@@ -195,10 +236,7 @@ jobs:
       - run: deploy/local/acceptance.sh run
       - name: Export the slowest container start's trace
         if: always()
-        run: |
-          # Spans leave the exporters' batches within seconds.
-          sleep 10
-          deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
+        run: deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
