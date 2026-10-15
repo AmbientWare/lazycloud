@@ -48,8 +48,6 @@ type FleetHost struct {
 	// Requested is set on a host EC2 has not launched yet, which its
 	// launch's walk through refused pools may still move.
 	Requested bool
-	// Current is set on a reserve prepared on the target agent build.
-	Current bool
 	// UpdateDue is set on a host whose agent must move to the target
 	// release; until it does, placement gives it no work.
 	UpdateDue bool
@@ -975,7 +973,7 @@ func (ps *pass) resumeFor(items []coverItem) []coverItem {
 
 // bestReserve is the ready reserve to resume for the pending containers,
 // and the ones, by index, it takes first fit: one of the first container's
-// market first, then one on the target agent build, then a stopped one,
+// market first, then a stopped one,
 // then the one that takes the most containers, then, while its market's
 // floor shape fits no serving host, one with room for that too, so one
 // resume serves the burst and the start after it, then the one whose
@@ -1016,7 +1014,7 @@ func (ps *pass) bestReserve(items []coverItem) (*FleetHost, []int) {
 		short := ps.partsShort[h.market()]
 		floor := len(short) > 0 && placesAll([]FleetCapacity{roomOf(b.room)}, short)
 		if best == nil || cmp.Or(boolOrder(h.market() != items[taken[0]].market, best.market() != items[bestTaken[0]].market),
-			boolOrder(!h.Current, !best.Current), boolOrder(h.State == FleetStopping, best.State == FleetStopping),
+			boolOrder(h.State == FleetStopping, best.State == FleetStopping),
 			cmp.Compare(len(bestTaken), len(taken)), boolOrder(!floor, !bestFloor), cmp.Compare(read, bestRead),
 			boolOrder(len(taken) < len(items), len(bestTaken) < len(items)), shapeOrder(h.Usable, best.Usable), ps.retention(h, best)) < 0 {
 			best, bestTaken, bestRead, bestFloor = h, taken, read, floor
@@ -1026,38 +1024,28 @@ func (ps *pass) bestReserve(items []coverItem) (*FleetHost, []int) {
 }
 
 // ready reports whether reserve h can resume now: one whose start EC2
-// refused waits out the capacity cooldown; one stopped on the target agent
-// build resumes for anything; for work, one stopped on an older build or
-// stopping resumes when it serves sooner than a purchase. A stopping
-// reserve's quota is counted already.
+// refused waits out the capacity cooldown; a stopped one resumes for
+// anything, whatever agent build it stopped on, since its agent updates
+// itself before it serves; for work, a stopping one resumes when it serves
+// sooner than a purchase. A stopping reserve's quota is counted already.
 func (ps *pass) ready(h FleetHost, work bool) bool {
 	stopping := h.State == FleetStopping && h.StoppedAt != nil && !ps.stalled(h)
-	startable := h.resumable() && ps.startable(h) || stopping
-	if h.Protected || h.StartRefused || !startable {
+	if h.Protected || h.StartRefused {
 		return false
 	}
-	if h.resumable() && h.Current {
-		return true
+	if h.resumable() {
+		return ps.startable(h)
+	}
+	if !stopping {
+		return false
 	}
 	st := ps.p.Starts
 	launch, serves := st.Launch, st.Resume
 	if h.GPU != "" {
 		launch, serves = st.GPULaunch, st.GPUResume
 	}
-	if stopping {
-		serves += max(0, h.StoppedAt.Add(st.SpotDisable).Sub(ps.s.Now))
-	}
-	if !h.Current {
-		serves += st.Update
-	}
+	serves += max(0, h.StoppedAt.Add(st.SpotDisable).Sub(ps.s.Now))
 	return work && serves < launch
-}
-
-// stale reports a reserve stopped on an agent build other than the
-// target's: it updates its agent before it serves, so it holds none of the
-// stopped target and retires once a reserve on the target replaces it.
-func stale(h FleetHost) bool {
-	return (h.resumable() || h.State == FleetStopping) && !h.Current
 }
 
 // stalled reports a resumed Spot reserve whose start still waits for EC2

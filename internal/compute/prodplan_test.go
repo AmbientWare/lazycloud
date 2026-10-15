@@ -75,7 +75,7 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 	fmt.Printf("HOSTS %d (held %d reserves %d) pending groups %d offers spot=%d cooldowns=%d\n", len(hosts), held, reserves, len(pending), len(in.Spot), len(in.Cooldowns))
 	for _, h := range hosts {
 		if h.GPU == "L4" {
-			fmt.Printf("HOST %s %s %s %s state=%s current=%v protected=%v stoppable=%v requested=%v usable=%+v\n", h.ID, h.market(), h.Region, h.InstanceType, h.State, h.Current, h.Protected, h.Stoppable, h.Requested, h.Usable)
+			fmt.Printf("HOST %s %s %s %s state=%s protected=%v stoppable=%v requested=%v usable=%+v\n", h.ID, h.market(), h.Region, h.InstanceType, h.State, h.Protected, h.Stoppable, h.Requested, h.Usable)
 		}
 	}
 	plan, _ := planOwner(p, s, cooldown)

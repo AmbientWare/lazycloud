@@ -546,7 +546,7 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	s.next++
 	h := &simHost{offer: o, FleetHost: FleetHost{
 		ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: o.Type.Name, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID, Market: o.Market,
-		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, Current: true, HourlyMicros: ptr(o.HourlyMicros),
+		GPU: o.Type.GPU, Usable: o.Usable, State: FleetStarting, HourlyMicros: ptr(o.HourlyMicros),
 		HibernationConfigured: reserve && o.Hibernate, Stoppable: reserve || o.Market == MarketOnDemand || o.Type.GPU != "",
 	}}
 	if a.Kind == ActionRightsize {
@@ -729,7 +729,7 @@ func (s *sim) apply(plan FleetPlan) {
 			h.State, h.ReserveMode, h.unbilledFrom = FleetStarting, nil, time.Time{}
 		case ActionReturnToReserve:
 			h := s.host(*a.Host)
-			h.State, h.ReserveMode, h.Slept, h.Current = FleetPreparing, a.Mode, true, true
+			h.State, h.ReserveMode, h.Slept = FleetPreparing, a.Mode, true
 			h.stopAt(s.now.Add(simStop))
 			h.HandsBack = false
 			h.offer.StoppedMicros = rootDiskMicros(h.Region, rootVolumeGiB, baselineMiBps)

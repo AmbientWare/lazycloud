@@ -110,7 +110,7 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 		if t, _ := ps.typeNamed(h.InstanceType); h.HibernationConfigured && hibernates(t) {
 			mode = ReserveHibernate
 		}
-		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
+		h.State, h.ReserveMode = FleetPreparing, ptr(mode)
 		// It runs until it stops, so it keeps its host room.
 		ps.reserveRoom--
 		ps.act(FleetAction{Kind: ActionReturnToReserve, Reason: *short, Market: v.m, Host: ptr(h.ID), Mode: ptr(mode)})
@@ -260,13 +260,14 @@ func (ps *pass) buyHeadroom(v *marketView, need CoverNeed) CoverResult {
 	return CoverResult{Nodes: append(result.Nodes, rest.Nodes...), UnmetItems: rest.UnmetItems, Supplied: result.Supplied.Plus(rest.Supplied)}
 }
 
-// counted reports a reserve that holds market v's stopped target: on the
-// target agent build and not interrupted, wherever it lies. A reserve
-// outside the region the market's starts read from still serves them; it
-// retires first once the market holds more than it needs.
+// counted reports a reserve that holds market v's stopped target: one not
+// interrupted, wherever it lies and whatever agent build it stopped on. A
+// reserve outside the region the market's starts read from still serves
+// them, and retires first once the market holds more than it needs; one on
+// an older build updates its agent when it resumes.
 func (ps *pass) counted(v *marketView) func(FleetHost) bool {
 	return func(h FleetHost) bool {
-		return h.reserve() && !h.Protected && !stale(h) && !v.retired[h.ID]
+		return h.reserve() && !h.Protected && !v.retired[h.ID]
 	}
 }
 
