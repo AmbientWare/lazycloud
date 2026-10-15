@@ -11,7 +11,7 @@ lazycloud example list
 
 The catalog has quickstart, an image studio, LoRA fine-tuning, a video
 highlights pipeline, coding agents, a website change monitor, artifacts and a
-workload tour. These projects ship inside the client package. Downloading
+workload tour. The projects ship inside the client package, so downloading
 needs no repository access, GitHub token, or LazyCloud login.
 
 ## Download a project
@@ -25,8 +25,8 @@ uv run python -m image_studio.configure
 uv run lazycloud deploy image_studio.app:app
 ```
 
-Running this example uses a GPU and incurs compute and storage charges.
-Downloading files and running `uv sync` create no cloud resources.
+Running this example uses a GPU and incurs compute and storage charges;
+downloading and `uv sync` create no cloud resources.
 
 Each project has its source, a README, and a `pyproject.toml` pinned to the
 installed SDK release. `uv sync` creates the lockfile.
@@ -50,14 +50,13 @@ Each example gets its own directory and dependencies.
 
 ## Existing files
 
-The command checks every destination before writing. If any example file
-already exists, it stops and writes nothing. A new directory works for
-comparing a newer release with your work.
+The command checks every destination before writing; if any example file
+exists, it stops and writes nothing. A new directory works for comparing a
+newer release with your work.
 
-`--force` replaces files supplied by the example. It leaves unrelated files,
-including an existing `uv.lock`, in place, and `uv sync` then updates that
-lockfile. The command refuses to write through symlinks inside the
-destination.
+`--force` replaces the example's files and leaves unrelated files, including
+an existing `uv.lock`, in place; `uv sync` then updates that lockfile. The
+command refuses to write through symlinks inside the destination.
 
 `lazycloud --json example list` and `lazycloud --json example download NAME`
 print machine-readable output.

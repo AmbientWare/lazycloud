@@ -3,19 +3,6 @@ title: "Core concepts"
 description: "An app holds workloads, each workload names its resources, and every remote call is a task."
 ---
 
-```mermaid
-flowchart LR
-    app["App"] --> fn["Function"]
-    app --> ep["Endpoint, ASGI, realtime"]
-    app --> pod["Pod, devbox"]
-    app --> sb["Sandbox"]
-    fn & ep & pod & sb -->|declare| res["Image, CPU, GPU, memory<br/>volumes, secrets, scaling"]
-    fn -->|"remote(), map(), cron"| task["Task"]
-    ep -->|request| task
-    task --> ctr["Container"]
-    res --> ctr
-```
-
 A workspace holds [apps](/concepts/apps), and an app holds workloads. A
 workload's decorator is its whole definition: image, CPU, GPU, memory,
 volumes, secrets, schedule, and scaling. A remote call or request to a

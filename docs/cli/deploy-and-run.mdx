@@ -5,9 +5,9 @@ description: "Deploy apps, call a function once, run a live preview, and open re
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-[Core concepts](/concepts) explains when each command fits and
-where calls go. None of these commands override a workload's configuration,
-which comes only from its decorator or constructor.
+[Core concepts](/concepts) explains when each command fits and where calls
+go. None of them overrides a workload's configuration; that comes only from
+its decorator or constructor.
 
 ## lazycloud deploy
 
@@ -26,7 +26,7 @@ uv run lazycloud deploy quickstart:hello     # one workload
 
 The deployment name comes from the workload's `name=`. `--source-root <dir>`
 uploads a different directory. A failure stops the command and leaves what
-already deployed in place. Deploying one pod or devbox prints its role and the
+already deployed. Deploying one pod or devbox prints its role and the
 idle time and capacity it resolved to; an app deploy lists its devboxes.
 
 ```bash
@@ -35,11 +35,11 @@ uv run lazycloud deploy page_stats.api -d -p
 uv run lazycloud deploy page_stats.api -p
 ```
 
-`--diff`, or `-d`, lists each workload as `add`, `redeploy`, `retain`, or, with `--prune`,
-`remove`, without uploading or changing anything. It doesn't compare source or
-configuration, and it still imports your modules. `--prune`, or `-p`,
+`--diff`, or `-d`, lists each workload as `add`, `redeploy`, `retain`, or,
+with `--prune`, `remove`, and changes nothing. It imports your modules but
+compares no source or configuration. `--prune`, or `-p`,
 [removes workloads](/concepts/apps#remove-workloads) the code no longer
-declares. Several references deploy separate complete apps together.
+declares. Several references deploy separate apps together.
 
 ## lazycloud run
 
@@ -48,8 +48,8 @@ uv run lazycloud run HANDLER [ARGS]... [options]
 ```
 
 Calls a function once in the cloud from your working tree, with no deploy, and
-prints the result. JSON arguments become Python values, and anything else stays
-a string:
+prints the result. JSON arguments become Python values; anything else stays a
+string:
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
@@ -68,9 +68,9 @@ uv run lazycloud serve HANDLER [--timeout <seconds>] [--sync-dir <dir>]
 ```
 
 Runs a function, endpoint, or ASGI app as a
-[live preview](/concepts#develop-test-deploy) until Ctrl+C, or until
-`--timeout` seconds pass. Each edit syncs only the changed files. `--sync-dir`
-syncs a directory other than the current one. The Python form:
+[live preview](/concepts#develop-test-deploy) until Ctrl+C or `--timeout`
+seconds. Each edit syncs only changed files. `--sync-dir` syncs a directory
+other than the current one. The Python form:
 
 ```python
 from page_stats import analyze
@@ -87,8 +87,8 @@ uv run lazycloud shell HANDLER [--sync-dir <dir>] [options]
 uv run lazycloud shell --container-id <id>
 ```
 
-Opens an interactive shell in the handler's image, or attaches a shell to a
-running container.
+Opens a shell in the handler's image, or attaches one to a running
+container.
 
 ## lazycloud ssh
 
@@ -97,15 +97,15 @@ uv run lazycloud ssh NAME [--app <app>] [-- <ssh options> <command>]
 uv run lazycloud ssh-config [NAME...] [--app <app>] [--prune]
 ```
 
-`ssh` opens a session on a [devbox](/concepts/dev-machines), or on a pod that
-sets `ssh=True`. Anything after `--` goes to `ssh`, such as
-`-L 8080:localhost:8080` or a command to run. `ssh-config` writes host entries
-named `lazycloud-<workspace>-<app>-<name>` for VS Code, Cursor, and plain
-`ssh`, one per name, or one for every devbox and SSH pod in the workspace when
-none is named. `--prune`, or `-p`, also removes the workspace's entries for ones
-that stopped serving SSH or were deleted. `--app` picks the app when several
-apps deploy the same name. The generated config calls two hidden commands
-that carry the connection and renew the login certificate.
+`ssh` opens a session on a [devbox](/concepts/dev-machines) or a pod with
+`ssh=True`. Anything after `--` goes to `ssh`, such as
+`-L 8080:localhost:8080` or a command. `ssh-config` writes host entries named
+`lazycloud-<workspace>-<app>-<name>` for VS Code, Cursor, and plain `ssh`, one
+per name, or one for every devbox and SSH pod in the workspace when none is
+named. `--prune`, or `-p`, also removes entries for ones that stopped serving
+SSH or were deleted. `--app` picks the app when several deploy the same name.
+The generated config calls two hidden commands that carry the connection and
+renew the login certificate.
 
 ## lazycloud devbox
 
@@ -118,19 +118,21 @@ uv run lazycloud devbox NAME ssh [--app <app>] [-- <ssh options> <command>]
 uv run lazycloud devbox NAME login HARNESS [--app <app>]
 ```
 
-`list` returns a page of deployed devboxes. `status` shows one box's live state
-and resources. Both support global `--json` output and leave sleeping boxes
-asleep. `start` waits until the box runs. `stop` stops it in any state, even
-mid-start or while a failing start retries, and saves its disk. Ctrl-C while
-`start` or `ssh` waits on a box they woke stops it again. `ssh` opens a session.
-Every command accepts `--workspace <workspace>`.
-See [devboxes](/concepts/dev-machines#find-and-inspect-boxes) for listing and selection.
+`list` returns a page of deployed devboxes and `status` shows one box's live
+state and resources; both support `--json` and leave sleeping boxes asleep.
+`start` waits until the box runs. `stop` stops it in any state, even mid-start
+or while a failing start retries, and saves its disk. Ctrl-C while `start` or
+`ssh` waits on a box it woke stops the box again. Every command accepts
+`--workspace <workspace>`. See
+[devboxes](/concepts/dev-machines#find-and-inspect-boxes) for listing and
+selection.
 
-`login` runs the installed agent's native browser login inside the devbox. `HARNESS` is
-`codex`, `claude`, `opencode`, or `pi`. The local CLI opens your browser and
-temporarily forwards the callback over SSH. It requires an interactive terminal
-and does not support `--json`. See [coding agents](/concepts/dev-machines#coding-agents)
-for installation, provider selection, and credential persistence.
+`login` runs the installed agent's own browser login inside the devbox;
+`HARNESS` is `codex`, `claude`, `opencode`, or `pi`. The local CLI opens your
+browser and forwards the callback over SSH. It needs an interactive terminal
+and rejects `--json`. See
+[coding agents](/concepts/dev-machines#coding-agents) for installation,
+provider selection, and credential persistence.
 
 ## lazycloud dev
 
@@ -138,9 +140,9 @@ for installation, provider selection, and credential persistence.
 uv run lazycloud dev [HANDLER] [--sync <dir>] [options]
 ```
 
-Opens a shell in a remote container with your working directory synced in, for
-iterating without a deploy. `--sync` defaults to `./`. Without a handler, `dev`
-uses the managed Python image with default resources. A GPU or custom image
-comes from a workload defined in code and passed as the handler.
+Opens a shell in a remote container with your working directory synced in.
+`--sync` defaults to `./`. Without a handler, `dev` uses the managed Python
+image with default resources; a GPU or custom image comes from a workload
+passed as the handler.
 
 <WorkspaceFlag />

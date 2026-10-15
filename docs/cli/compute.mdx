@@ -46,9 +46,9 @@ uv run lazycloud machine update <name-or-id> --workspaces <a,b>
 uv run lazycloud machine remove MACHINE_ID
 ```
 
-A joined machine has a name that is unique across your account and a list of
-workspaces whose workloads may run on it. A workload with `machine="<name>"` in
-its decorator runs on that machine or fails.
+A joined machine has an account-unique name and a list of workspaces whose
+workloads may run on it. A workload with `machine="<name>"` in its decorator
+runs there or fails.
 
 `machine join` options:
 
@@ -67,7 +67,7 @@ machine needs.
 
 ## lazycloud domain
 
-Custom domains are available on Team and Business plans.
+Custom domains need a Team or Business plan.
 
 ```bash
 uv run lazycloud domain add HOSTNAME       # prints the DNS records to create

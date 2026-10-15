@@ -4,22 +4,20 @@ description: "Point an agent at these docs, let it drive the CLI from your machi
 ---
 
 An agent uses LazyCloud the way you do. On your machine it writes the
-decorated function, then runs `lazycloud run` and `lazycloud deploy` and reads
-the result; every command works without a browser or prompt, and `--json`
-turns the outcome into one document on stdout with a nonzero exit on failure.
-On a [devbox](/concepts/dev-machines) the agent itself runs in the cloud, on a
-container with a disk that keeps its files, and the same CLI is on that
-machine.
+decorated function, runs `lazycloud run` and `lazycloud deploy`, and reads the
+result. No command needs a browser or prompt, and `--json` puts the outcome on
+stdout as one document with a nonzero exit on failure. On a
+[devbox](/concepts/dev-machines) the agent itself runs in the cloud, on a
+container whose disk keeps its files, with the same CLI.
 
 ## Point an agent at the docs
 
 - `https://docs.lazycloud.dev/llms.txt` lists every page with a one-line
-  summary, and `https://docs.lazycloud.dev/llms-full.txt` holds the full text
-  of all of them.
+  summary; `https://docs.lazycloud.dev/llms-full.txt` holds the full text.
 - Any page URL with `.md` appended returns that page as Markdown.
-- `https://docs.lazycloud.dev/mcp` is an MCP server that searches the docs;
-  each page's MCP option gives the command that adds it to an agent, next to
-  Copy page.
+- `https://docs.lazycloud.dev/mcp` is an MCP server that searches the docs.
+  Each page's MCP option, next to Copy page, gives the command that adds it to
+  an agent.
 
 An agent with the full text in context can write a workload definition
 without guessing at option names.
@@ -31,18 +29,17 @@ uv tool install lazycloud-client
 lazycloud login
 ```
 
-`login` prints a link and a code; approving the code in the browser signs the
-CLI in. The sign-in lives under `~/.lazycloud`, so an agent that runs the
-CLI afterwards is signed in too. CI and headless agents use an access token
-instead; see [Authentication](/platform/auth#ci-and-scripts).
+Approving the code `login` prints signs the CLI in. The sign-in lives under
+`~/.lazycloud`, so an agent that runs the CLI afterwards is signed in too. CI
+and headless agents use an access token; see
+[Authentication](/platform/auth#ci-and-scripts).
 
-From there the loop in the [quickstart](/getting-started/quickstart) is the
-agent's loop: edit, `uv run pytest`, `uv run lazycloud run`,
-`uv run lazycloud deploy`.
+The agent's loop is the [quickstart](/getting-started/quickstart) loop: edit,
+`uv run pytest`, `uv run lazycloud run`, `uv run lazycloud deploy`.
 
 ## Run the agent in the cloud
 
 A devbox installs Codex, Claude Code, OpenCode and Pi when its image builds,
-through `agent_harnesses`, and `lazycloud devbox <name> login <agent>` signs
-one in from your laptop's browser. See
+through `agent_harnesses`. `lazycloud devbox <name> login <agent>` signs one in
+from your laptop's browser. See
 [Coding agents](/concepts/dev-machines#coding-agents).

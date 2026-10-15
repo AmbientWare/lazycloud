@@ -13,19 +13,6 @@ finishes.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    bucket[("your S3 bucket")] -->|volume, read-only| coordinator["highlight_video<br/>CPU function"]
-    coordinator -->|remote| audio["extract_audio<br/>CPU function"]
-    audio -->|volume| work[("video-highlights-work")]
-    work -->|volume| transcribe["transcribe<br/>GPU function"]
-    coordinator -->|remote| transcribe
-    coordinator -->|remote| pick["pick_highlights<br/>CPU function"]
-    coordinator -->|map| cut["cut_clip x6<br/>CPU function"]
-    cut -->|artifact| clips[("clips and thumbnails")]
-    coordinator -->|webhook| receiver["highlights-receiver<br/>ASGI app"]
-```
-
 | Workload | Kind | What it does | Why it runs there |
 | --- | --- | --- | --- |
 | `highlight_video` | CPU function | Checks the video, calls each step in turn and writes the manifest | It mostly waits, so a quarter CPU is enough; it is the only workload with a `callback_url` |

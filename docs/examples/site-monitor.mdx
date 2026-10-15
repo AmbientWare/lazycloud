@@ -13,16 +13,6 @@ adds, lists and removes the pages.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    sweep["sweep<br/>schedule"] -->|map| check["check-page x5<br/>CPU function"]
-    api["watches<br/>ASGI app"] -->|map| watches[("site-monitor-watches")]
-    watches -->|map| sweep
-    check -->|map| snapshots[("site-monitor-snapshots")]
-    check -->|HTTPS| openai[OpenAI]
-    check -->|webhook| slack[Slack]
-```
-
 | Workload | Kind | What it does | Why it runs there |
 | --- | --- | --- | --- |
 | `sweep` | schedule | Lists the watches every 15 minutes and fans them out | It only lists pages and waits, so a quarter CPU is enough; each run is a task with its own logs and result |

@@ -76,8 +76,8 @@ containers while they run.
 
 `min_containers` on the [autoscaler](/concepts/scaling#more-containers) keeps
 containers running even with no work, so the first call after a quiet hour
-doesn't wait. One warm container is the usual choice for an API that must
-answer its first request of the day quickly.
+doesn't wait. One warm container is the usual choice for an API whose first
+request of the day can't wait for a start.
 
 ## Keep weights out of the image
 

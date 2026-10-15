@@ -5,12 +5,11 @@ description: "Volumes, disks, files, secrets, and artifacts from a terminal."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Volumes hold files your workloads share, and artifacts hold downloadable task
-output. Both belong to the selected workspace.
-
-Repeatable workflows [declare volumes](/concepts/volumes) and
+Volumes hold files your workloads share; artifacts hold downloadable task
+output. Both belong to the selected workspace. Repeatable workflows
+[declare volumes](/concepts/volumes) and
 [secret dependencies](/concepts/secrets) in Python, and LazyCloud creates a
-mounted volume on first use. These commands suit one-off storage work and
+declared volume on first mount. These commands suit one-off work and
 inspection.
 
 ## lazycloud volume
@@ -33,8 +32,8 @@ A deploy creates the [disks](/concepts/disks) its pods declare, so there is no
 
 ## Files
 
-The example creates a volume before any workload uses it. `volume create` is
-unnecessary if a running workload already created its declared volume.
+The example below creates a volume before any workload uses it; once a
+workload has mounted its declared volume, `volume create` is unnecessary.
 
 Volume paths are `lazycloud://<volume>/<path>`. The scheme is optional except
 on the source of a download, where it marks the path as remote.
@@ -54,9 +53,9 @@ uv run lazycloud cp lazycloud://models/checkpoints/model.safetensors ./model.saf
 uv run lazycloud mv models/checkpoints/model.safetensors models/archive/model.safetensors
 ```
 
-This uploads a local checkpoint, downloads a copy, and archives the remote file.
-`uv run lazycloud rm models/archive/model.safetensors` removes the archived
-file. Deleting a volume removes all its files, so download what you need first.
+This uploads a local checkpoint, downloads a copy, and archives the remote
+file. `uv run lazycloud rm models/archive/model.safetensors` removes the
+archived file. Deleting a volume removes all its files.
 
 ## lazycloud secret
 
