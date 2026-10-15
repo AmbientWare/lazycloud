@@ -385,7 +385,8 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		for i, s := range group {
 			source, err := v.bind(mounters[n], i, dirs[n][i])
 			if err != nil {
-				return "", nil, fmt.Errorf("bind the volume at %s: %w", s.GetMountPath(), err)
+				// What the mount printed names why its filesystem refused.
+				return "", nil, fmt.Errorf("bind the volume at %s: %w; the mount printed: %s", s.GetMountPath(), err, v.a.containerOutput(ctx, mounters[n].name))
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
 		}

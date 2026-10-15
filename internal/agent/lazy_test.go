@@ -68,9 +68,9 @@ func convertLazyImages(ctx context.Context, endpoint, region, bucket, accessKeyI
 	return nil
 }
 
-// withImage points a start at image and carries its grants.
+// withImage points a start at image's copy and carries its grants.
 func withImage(start *hostproto.ServerMessage, image string) *hostproto.ServerMessage {
-	start.GetStart().Image = image
+	start.GetStart().Image = copies[image]
 	start.GetStart().Layers = imageLayers[image]
 	return start
 }

@@ -195,14 +195,17 @@ func (e *env) killGeeseFS(id string) {
 	}
 }
 
-// adoptedExit is how an adopted container exited: in the Hello, or in a
-// later report.
+// adoptedExit is how an adopted container exited: in the Hello, in a report
+// an earlier wait passed over, or in a later one.
 func (s *serverSession) adoptedExit(t *testing.T, container string) *hostproto.ContainerExit {
 	t.Helper()
 	for _, r := range s.hello.GetContainers() {
 		if r.GetContainerId() == container && r.GetPhase() == exited {
 			return r.GetExit()
 		}
+	}
+	if exit, ok := s.exits[container]; ok {
+		return exit
 	}
 	return s.phase(t, container, exited).GetExit()
 }
@@ -409,6 +412,7 @@ func TestPlatformVolumesShareOneMounter(t *testing.T) {
 	if _, err := storagetest.Client().HeadObject(t.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + first + "/a.txt"),
 	}); err != nil {
+		e.dumpMounts()
 		t.Fatalf("the first volume's file is not under its prefix: %v", err)
 	}
 }

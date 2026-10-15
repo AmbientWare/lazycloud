@@ -92,7 +92,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	shared := config.RootFS.DiffIDs[0].String()
 
 	// No snapshot of the base may stay from an earlier test.
-	removeImage(t, ctrd, platformimages.Mount)
+	removeImage(t, ctrd, copies[platformimages.Mount])
 	snapshots := ctrd.SnapshotService(layersource.Snapshotter)
 	if _, err := snapshots.Stat(ctx, shared); !cerrdefs.IsNotFound(err) {
 		t.Fatalf("a snapshot of the shared base stayed: %v", err)
@@ -144,7 +144,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	session.send(t, start)
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
 	holder, err := e.docker.ContainerInspect(ctx, "lazycloud-"+id+"-net", client.ContainerInspectOptions{})
-	if err != nil || !holder.Container.State.Running || holder.Container.Config.Image != platformimages.Mount {
+	if err != nil || !holder.Container.State.Running || holder.Container.Config.Image != copies[platformimages.Mount] {
 		t.Fatalf("network holder %+v: %v", holder.Container, err)
 	}
 
