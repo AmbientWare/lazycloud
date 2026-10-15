@@ -57,9 +57,9 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	layerBucket = store.LayerBucket
-	if err := convertLazyImages(context.Background()); err != nil {
+	if err := convertLazyImages(context.Background(), store.Endpoint, store.Region, store.LayerBucket, store.AccessKeyID, store.SecretAccessKey); err != nil {
 		_ = removeStore(context.Background())
-		panic(fmt.Sprintf("convert the test images: %v", err))
+		panic(err)
 	}
 	code := m.Run()
 	// The images the tests pulled read their layers from the test store,

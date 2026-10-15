@@ -19,16 +19,16 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // removeImage deletes image from Docker's containerd and collects the
@@ -65,11 +65,16 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	top, err := random.Layer(4096, types.DockerLayer)
+	// The tenant adds a layer TestMain converted, so its pairs are copies.
+	alpine, err := imagefstest.Image(ctx, alpineImage, v1.Platform{OS: "linux", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenant, err := mutate.AppendLayers(base, top)
+	alpineLayers, err := alpine.Layers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := mutate.AppendLayers(base, alpineLayers[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,22 +98,17 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 		t.Fatalf("a snapshot of the shared base stayed: %v", err)
 	}
 
-	// The tenant's grants read a copy of its pairs of their own and expire
-	// soon.
-	store, bucket := layerStore()
+	// The tenant's grants read a copy of its pairs of their own.
+	store, bucket := storagetest.Client(), layerBucket
 	prefix := "agent-test/tenant-" + uuid.NewString()[:8] + "/"
 	expires := time.Now().Add(8 * time.Second)
-	layers, err := tenant.Layers()
+	tenantConfig, err := tenant.ConfigFile()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var grants []*imagefsproto.LayerGrant
-	for _, l := range layers {
-		g, err := convertLayer(ctx, store, s3.NewPresignClient(store), bucket, prefix, l, expires)
-		if err != nil {
-			t.Fatal(err)
-		}
-		grants = append(grants, g)
+	for _, diffID := range tenantConfig.RootFS.DiffIDs {
+		grants = append(grants, copyGrant(t, store, bucket, prefix, diffID.String(), expires))
 	}
 	sources, err := layersource.Dial(layersource.Socket)
 	if err != nil {
@@ -157,6 +157,30 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	}
 	session.send(t, stopCommand(id, 0))
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+}
+
+// copyGrant copies the pair of diffID that TestMain converted under prefix
+// in bucket and returns a grant of the copy until expires.
+func copyGrant(t *testing.T, store *s3.Client, bucket, prefix, diffID string, expires time.Time) *imagefsproto.LayerGrant {
+	t.Helper()
+	key := prefix + strings.TrimPrefix(diffID, "sha256:")
+	source := "agent-test/layers/" + strings.TrimPrefix(diffID, "sha256:")
+	presign := s3.NewPresignClient(store)
+	urls := map[string]string{}
+	for _, object := range []string{"index", "data"} {
+		if _, err := store.CopyObject(t.Context(), &s3.CopyObjectInput{
+			Bucket: aws.String(bucket), Key: aws.String(key + "/" + object), CopySource: aws.String(bucket + "/" + source + "/" + object),
+		}); err != nil {
+			t.Fatalf("copy the pair of %s: %v", diffID, err)
+		}
+		signed, err := presign.PresignGetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object)},
+			s3.WithPresignExpires(time.Until(expires)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		urls[object] = signed.URL
+	}
+	return &imagefsproto.LayerGrant{DiffId: diffID, IndexUrl: urls["index"], DataUrl: urls["data"], ExpiresAt: timestamppb.New(expires)}
 }
 
 // withPlatformAnswer makes sessions open with answer's platform images.
