@@ -36,11 +36,11 @@ func TestStartStatementsDoNotGrowWithVolumes(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		queries.settle()
-		stream := open(t, ctx, h.client)
+		opened := time.Now()
+		stream := open(t, sampled(ctx), h.client)
 		for receive(t, stream).GetStart() == nil {
 		}
-		return queries.settle()
+		return queries.sync(t, opened)
 	}
 	one, many := count(1, 1), count(4, 3)
 	t.Logf("a start with one volume and one cloud bucket ran %d statements; with four and three, %d", one, many)

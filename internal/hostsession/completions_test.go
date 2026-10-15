@@ -2,7 +2,7 @@ package hostsession_test
 
 import (
 	"context"
-	"slices"
+	"crypto/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -23,46 +26,70 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// queryCounter counts the statements a pool runs, and the completion
-// transactions among them: each sets its attempts' states in one statement.
+// queryCounter records when a pool runs each statement of the sampled
+// session a test opened, and counts the completion transactions among all
+// of them: each sets its attempts' states in one statement.
 type queryCounter struct {
-	all, writes, running atomic.Int64
-	settled              int64
+	writes atomic.Int64
+	// spans records the session's spans.
+	spans *tracetest.SpanRecorder
+	mu    sync.Mutex
+	// started is when each of the session's statements started.
+	started []time.Time
 }
 
 func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	c.running.Add(1)
-	c.all.Add(1)
+	if trace.SpanContextFromContext(ctx).IsSampled() {
+		c.mu.Lock()
+		c.started = append(c.started, time.Now())
+		c.mu.Unlock()
+	}
 	if strings.Contains(data.SQL, "name: SetAttemptStates") {
 		c.writes.Add(1)
 	}
 	return ctx
 }
 
-func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
-	c.running.Add(-1)
-}
+func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func (c *queryCounter) completions() int64 { return c.writes.Load() }
 
-// settle waits until the pool runs no statement and has started none for
-// a quarter of a second, and returns the statements run since the last
-// settle.
-func (c *queryCounter) settle() int64 {
-	const quiet = 250 * time.Millisecond
-	last, since := c.all.Load(), time.Now()
-	for {
-		time.Sleep(25 * time.Millisecond)
-		if n := c.all.Load(); n != last || c.running.Load() != 0 {
-			last, since = n, time.Now()
-			continue
+// sync waits until the first sync the session began at or after since
+// ended, and returns the statements it ran.
+func (c *queryCounter) sync(t *testing.T, since time.Time) int64 {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		var first sdktrace.ReadOnlySpan
+		for _, s := range c.spans.Ended() {
+			if s.Name() == "hostsession.sync" && !s.StartTime().Before(since) && (first == nil || s.StartTime().Before(first.StartTime())) {
+				first = s
+			}
 		}
-		if time.Since(since) >= quiet {
-			out := last - c.settled
-			c.settled = last
-			return out
+		if first != nil {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			n := int64(0)
+			for _, at := range c.started {
+				if !at.Before(first.StartTime()) && !at.After(first.EndTime()) {
+					n++
+				}
+			}
+			return n
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no sync began within 5s")
 		}
 	}
+}
+
+// sampled marks ctx as part of a sampled trace, so the server records the
+// spans and queries counts the statements of a session opened with it.
+func sampled(ctx context.Context) context.Context {
+	var id trace.TraceID
+	_, _ = rand.Read(id[:])
+	return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: id, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled, Remote: true,
+	}))
 }
 
 // countedHarness serves the host service, configured by configure, over a
@@ -78,7 +105,9 @@ func countedHarness(t *testing.T, configure ...func(*hostsession.Config)) (h *ha
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	return serveWith(t, traced, storagetest.Config(t), configure...), base, queries
+	h = serveWith(t, traced, storagetest.Config(t), configure...)
+	queries.spans = h.spans
+	return h, base, queries
 }
 
 // runningAttempts makes host's container ready with n running attempts.
@@ -151,15 +180,7 @@ func TestABurstOfCompletionsSharesTransactionsAndNotifications(t *testing.T) {
 	errs := make([]error, n+1)
 	var calls sync.WaitGroup
 	calls.Go(func() { _, errs[0] = h.client.CompleteTask(ctx, completeRequest(container, attempts[0])) })
-	for blocked, deadline := 0, time.Now().Add(5*time.Second); blocked == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the first write never waited on the lock")
-		}
-		if err := base.QueryRow(t.Context(), `select count(*) from pg_stat_activity
-where datname = current_database() and wait_event_type = 'Lock' and query like '%LockTasksForAttempts%'`).Scan(&blocked); err != nil {
-			t.Fatal(err)
-		}
-	}
+	waitForLockWait(t, base)
 	for i := 1; i <= n; i++ {
 		attempt := uuid.NewString()
 		if i < n {
@@ -209,41 +230,57 @@ where a.container_id = $1 and a.state = 'succeeded' and t.status = 'succeeded'`,
 	}
 }
 
-// A completion that arrives alone is written at once, in its own
-// transaction, about as fast as writing it directly. It compares
-// latencies, so it runs alone.
-func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
-	h, _, writes := countedHarness(t)
-	host, ctx := h.enroll()
-	const n = 9
-	container, attempts := h.runningAttempts(host, 2*n)
-	var direct, queued []time.Duration
-	for i, attempt := range attempts {
-		before := writes.completions()
-		start := time.Now()
-		if i < n {
-			id := execution.AttemptID(uuid.MustParse(attempt))
-			err := h.execution.CompleteAttempt(t.Context(), host, container, execution.AttemptOutcome{
-				Attempt: id, State: execution.AttemptSucceeded, Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte("1")},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			direct = append(direct, time.Since(start))
-		} else {
-			if _, err := h.client.CompleteTask(ctx, completeRequest(container, attempt)); err != nil {
-				t.Fatal(err)
-			}
-			queued = append(queued, time.Since(start))
+// waitForLockWait waits until a statement in the test's database waits on
+// a lock the test holds.
+func waitForLockWait(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for blocked, deadline := 0, time.Now().Add(5*time.Second); blocked == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no statement waited on the lock within 5s")
 		}
-		if got := writes.completions() - before; got != 1 {
-			t.Fatalf("completion %d took %d transactions, want 1", i, got)
+		if err := pool.QueryRow(t.Context(), `select count(*) from pg_stat_activity
+where datname = current_database() and wait_event_type = 'Lock'`).Scan(&blocked); err != nil {
+			t.Fatal(err)
 		}
 	}
-	slices.Sort(direct)
-	slices.Sort(queued)
-	t.Logf("median write: direct %s, through CompleteTask %s", direct[n/2], queued[n/2])
-	if queued[n/2] > direct[n/2]+25*time.Millisecond {
-		t.Fatalf("a lone completion took %s, want about the %s of a direct write", queued[n/2], direct[n/2])
+}
+
+// A completion that arrives alone is written at once, in its own
+// transaction: its write reaches PostgreSQL without waiting for company,
+// and the call returns once that transaction commits.
+func TestALoneCompletionIsWrittenWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	h, base, writes := countedHarness(t)
+	host, ctx := h.enroll()
+	container, attempts := h.runningAttempts(host, 2)
+	hold, err := base.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(context.WithoutCancel(t.Context())) }()
+	if _, err := hold.Exec(t.Context(), "select 1 from tasks t join attempts a on a.task_id = t.id where a.id = $1 for update of t", attempts[0]); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.client.CompleteTask(ctx, completeRequest(container, attempts[0]))
+		done <- err
+	}()
+	// The lone completion's write is in PostgreSQL, held only by the lock.
+	waitForLockWait(t, base)
+	if err := hold.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := writes.completions(); got != 1 {
+		t.Fatalf("a lone completion took %d transactions, want its own", got)
+	}
+	if _, err := h.client.CompleteTask(ctx, completeRequest(container, attempts[1])); err != nil {
+		t.Fatal(err)
+	}
+	if got := writes.completions(); got != 2 {
+		t.Fatalf("two lone completions took %d transactions, want one each", got)
 	}
 }

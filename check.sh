@@ -22,7 +22,6 @@ fi
 
 echo "== go"
 go mod tidy -diff
-go vet ./...
 go tool golangci-lint run ./...
 go tool buf format -d --exit-code
 go tool buf lint

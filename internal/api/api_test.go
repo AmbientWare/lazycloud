@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -59,6 +61,18 @@ type env struct {
 	outsider  string
 	// distDir holds agent release archives for /install/agent.
 	distDir string
+}
+
+// document is the OpenAPI document the handlers validate against, parsed
+// once for the test binary as a server parses it once.
+var document *openapi3.T
+
+func TestMain(m *testing.M) {
+	var err error
+	if document, err = api.GetSpec(); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
 }
 
 func newEnv(t *testing.T) *env {
@@ -118,16 +132,13 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := api.NewHandler(api.Owners{
+	handler := api.NewHandler(document, api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        im,
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 

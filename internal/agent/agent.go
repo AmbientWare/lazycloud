@@ -149,6 +149,10 @@ type Config struct {
 	TraceSocket string
 	// MetricsInterval paces container metric samples; zero means 5 s.
 	MetricsInterval time.Duration
+	// CommitAfter is how long a session must stay open before a release on
+	// trial counts as working and is committed; DefaultCommitAfter in
+	// production.
+	CommitAfter time.Duration
 	// clock reports sleeps; nil uses the kernel's.
 	clock sleepClock
 }
@@ -265,6 +269,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.IMDSEndpoint != "" && cfg.InterruptionPoll <= 0 {
 		return errors.New("an agent that reads IMDS needs a positive interruption poll")
+	}
+	if cfg.CommitAfter <= 0 {
+		return fmt.Errorf("the update commit delay must be positive, not %s", cfg.CommitAfter)
 	}
 	if _, err := os.Stat(cfg.SupervisorPath); err != nil {
 		return fmt.Errorf("supervisor binary: %w", err)

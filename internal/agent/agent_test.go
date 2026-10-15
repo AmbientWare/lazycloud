@@ -268,7 +268,7 @@ func TestAgentReconnectsAfterServerRestart(t *testing.T) {
 // A start grants its image's layers to the snapshotter, then pulls the
 // image lazily: no layer blob downloads.
 func TestAgentPullsAMissingImage(t *testing.T) {
-	const image = alpineImage
+	image := copies[alpineImage]
 	e := newEnv(t)
 	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestAgentPullsAMissingImage(t *testing.T) {
 	})
 	e.startAgent()
 	s := e.session()
-	start := withImage(e.startCommand("app:handle", 1), image)
+	start := withImage(e.startCommand("app:handle", 1), alpineImage)
 	began := time.Now()
 	s.send(t, start)
 	s.phase(t, start.GetStart().GetContainerId(), starting)
@@ -293,7 +293,7 @@ func TestAgentPullsAMissingImage(t *testing.T) {
 // A start without its image's grants fails: the snapshotter makes no
 // layer present without one, so no start pulls a workload image unread.
 func TestAStartWithoutGrantsFails(t *testing.T) {
-	const image = ungrantedImage
+	image := copies[ungrantedImage]
 	e := newEnv(t)
 	if _, err := e.docker.ImageRemove(t.Context(), image, client.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatal(err)
@@ -315,6 +315,7 @@ func (e *env) eventually(what string, ok func() bool) {
 	deadline := time.Now().Add(20 * time.Second)
 	for !ok() {
 		if time.Now().After(deadline) {
+			e.dumpMounts()
 			e.t.Fatalf("timed out waiting until %s", what)
 		}
 		time.Sleep(50 * time.Millisecond)

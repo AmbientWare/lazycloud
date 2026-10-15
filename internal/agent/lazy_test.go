@@ -3,33 +3,24 @@
 package agent
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"runtime"
-	"strings"
+	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/images"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
-	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // lazyImages are the workload and platform images the tests start from a
@@ -45,77 +36,41 @@ var imageLayers = map[string][]*imagefsproto.LayerGrant{}
 // removed by TestMain.
 var layerBucket string //nolint:gochecknoglobals // Set once in TestMain.
 
-// layerStore is the test store and its bucket for pairs.
-func layerStore() (*s3.Client, string) { return storagetest.Client(), layerBucket }
-
-// convertLazyImages fills imageLayers with grants for twelve hours.
-func convertLazyImages(ctx context.Context) error {
-	store, bucket := layerStore()
-	presign := s3.NewPresignClient(store)
-	expires := time.Now().Add(12 * time.Hour)
+// convertLazyImages fills imageLayers with grants for twelve hours. The
+// conversion runs in imagefstest's command, outside this binary's race
+// instrumentation, which makes it many times slower.
+func convertLazyImages(ctx context.Context, endpoint, region, bucket, accessKeyID, secretAccessKey string) error {
+	convert := exec.CommandContext(ctx, "go", "run", "../imagefs/imagefstest/convert",
+		"-endpoint", endpoint, "-region", region, "-bucket", bucket, "-prefix", "agent-test/layers/", "-expires", "12h")
+	convert.Args = append(convert.Args, lazyImages...)
+	convert.Env = append(os.Environ(), "AWS_ACCESS_KEY_ID="+accessKeyID, "AWS_SECRET_ACCESS_KEY="+secretAccessKey)
+	convert.Stderr = os.Stderr
+	out, err := convert.Output()
+	if err != nil {
+		return fmt.Errorf("convert the test images: %w", err)
+	}
+	var grants map[string][]json.RawMessage
+	if err := json.Unmarshal(out, &grants); err != nil {
+		return fmt.Errorf("read the test images' grants: %w", err)
+	}
 	for _, ref := range lazyImages {
-		img, err := imagefstest.Image(ctx, ref, v1.Platform{OS: "linux", Architecture: runtime.GOARCH})
-		if err != nil {
-			return err
-		}
-		layers, err := img.Layers()
-		if err != nil {
-			return err
-		}
-		for _, l := range layers {
-			grant, err := convertLayer(ctx, store, presign, bucket, "agent-test/layers/", l, expires)
-			if err != nil {
-				return fmt.Errorf("convert a layer of %s: %w", ref, err)
+		for _, encoded := range grants[ref] {
+			grant := &imagefsproto.LayerGrant{}
+			if err := protojson.Unmarshal(encoded, grant); err != nil {
+				return fmt.Errorf("read a grant of %s: %w", ref, err)
 			}
 			imageLayers[ref] = append(imageLayers[ref], grant)
+		}
+		if len(imageLayers[ref]) == 0 {
+			return fmt.Errorf("%s converted to no layers", ref)
 		}
 	}
 	return nil
 }
 
-// convertLayer converts l into a pair under prefix and returns a grant of
-// it until expires.
-func convertLayer(ctx context.Context, store *s3.Client, presign *s3.PresignClient, bucket, prefix string, l v1.Layer, expires time.Time) (*imagefsproto.LayerGrant, error) {
-	tar, err := l.Uncompressed()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tar.Close() }()
-	data, err := os.CreateTemp("", "layer-data")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = data.Close(); _ = os.Remove(data.Name()) }()
-	ix, err := imagefs.Convert(ctx, tar, data)
-	if err != nil {
-		return nil, err
-	}
-	index, err := ix.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	if _, err := data.Seek(0, 0); err != nil {
-		return nil, err
-	}
-	key := prefix + strings.TrimPrefix(string(ix.Layer), "sha256:")
-	urls := map[string]string{}
-	for object, body := range map[string]io.Reader{"index": bytes.NewReader(index), "data": data} {
-		if _, err := store.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object), Body: body}); err != nil {
-			return nil, fmt.Errorf("upload %s: %w", object, err)
-		}
-		signed, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key + "/" + object)},
-			s3.WithPresignExpires(time.Until(expires)))
-		if err != nil {
-			return nil, err
-		}
-		urls[object] = signed.URL
-	}
-	return &imagefsproto.LayerGrant{DiffId: string(ix.Layer), IndexUrl: urls["index"], DataUrl: urls["data"], ExpiresAt: timestamppb.New(expires)}, nil
-}
-
-// withImage points a start at image and carries its grants.
+// withImage points a start at image's copy and carries its grants.
 func withImage(start *hostproto.ServerMessage, image string) *hostproto.ServerMessage {
-	start.GetStart().Image = image
+	start.GetStart().Image = copies[image]
 	start.GetStart().Layers = imageLayers[image]
 	return start
 }
@@ -172,7 +127,24 @@ func TestStartupTracesEndWithTheFirstTask(t *testing.T) {
 	id := start.GetStart().GetContainerId()
 	start.GetStart().RecordTrace = true
 	s.send(t, start)
-	reported := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool { return m.GetStartupTrace() != nil }).GetStartupTrace()
+	// The agent decides at the container's exit whether it reports the
+	// trace, and logs why it drops one.
+	var reported *hostproto.StartupTrace
+	for deadline := time.After(120 * time.Second); reported == nil; {
+		select {
+		case m, ok := <-s.msgs:
+			if !ok {
+				t.Fatal("session closed")
+			}
+			reported = m.GetStartupTrace()
+		case <-time.After(50 * time.Millisecond):
+			if dropped := e.logged("startup trace dropped", id); dropped != "" {
+				t.Fatal(dropped)
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the startup trace")
+		}
+	}
 	if reported.GetContainerId() != id || len(reported.GetTrace().GetReads()) == 0 {
 		t.Fatalf("the host reported %v", reported)
 	}

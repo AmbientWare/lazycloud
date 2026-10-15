@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 
@@ -77,14 +78,13 @@ type Config struct {
 const RecommendedClientHeader = "X-Lazycloud-Recommended-Client-Version"
 
 // NewHandler serves the public API: it limits the body, authenticates the
-// bearer token or session cookie, validates the request against the OpenAPI
-// document and dispatches to the operation. Browser sign-in and provider
-// webhooks are served beside it.
-func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
-	s, ops, err := newServer(owners, cfg, logger, requireScheme)
-	if err != nil {
-		return nil, err
-	}
+// bearer token or session cookie, validates the request against document,
+// the parsed OpenAPI document from GetSpec, and dispatches to the
+// operation. Browser sign-in and provider webhooks are served beside it.
+// Parsing the document costs hundreds of milliseconds, so a process parses
+// it once and shares it between its handlers; they only read it.
+func NewHandler(document *openapi3.T, owners Owners, cfg Config, logger *slog.Logger) http.Handler {
+	s, ops := newServer(document, owners, cfg, logger, requireScheme)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
 	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
@@ -98,27 +98,20 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 	outer := http.NewServeMux()
 	s.workloadRoutes(outer)
 	outer.Handle("/", s.limitBody(mux))
-	return s.recommendClient(outer), nil
+	return s.recommendClient(outer)
 }
 
 // NewContainerHandler serves the same operations to container API requests.
 // Their context carries the container principal from WithContainer; they
 // have no bearer token or session.
-func NewContainerHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
-	s, ops, err := newServer(owners, cfg, logger, requireContainerScheme)
-	if err != nil {
-		return nil, err
-	}
-	return s.limitBody(s.requireContainer(ops)), nil
+func NewContainerHandler(document *openapi3.T, owners Owners, cfg Config, logger *slog.Logger) http.Handler {
+	s, ops := newServer(document, owners, cfg, logger, requireContainerScheme)
+	return s.limitBody(s.requireContainer(ops))
 }
 
 // newServer returns the server and the validated operation handler, whose
 // security requirements authenticated applies.
-func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*Server, http.Handler, error) {
-	spec, err := GetSwagger()
-	if err != nil {
-		return nil, nil, fmt.Errorf("load openapi document: %w", err)
-	}
+func newServer(document *openapi3.T, owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*Server, http.Handler) {
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{owners: owners, cfg: cfg, logger: logger}
 	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery, withRequest}, StrictHTTPServerOptions{
@@ -127,7 +120,7 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 		},
 		ResponseErrorHandlerFunc: s.writeError,
 	})
-	validate := middleware.OapiRequestValidatorWithOptions(spec, &middleware.Options{
+	validate := middleware.OapiRequestValidatorWithOptions(document, &middleware.Options{
 		Options: openapi3filter.Options{
 			// authenticate resolves credentials first; this applies each
 			// operation's security requirement, so an operation is
@@ -158,7 +151,7 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
 	})
-	return s, validate(handler), nil
+	return s, validate(handler)
 }
 
 // nameOperation labels the request's metrics and span with its operation.
