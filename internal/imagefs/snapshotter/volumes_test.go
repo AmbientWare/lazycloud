@@ -664,13 +664,18 @@ func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
 		defer mu.Unlock()
 		return maps.Clone(fetched)
 	}
+	ahead := map[int]int{}
+	for frame := range readAheadFrames + 1 {
+		ahead[frame] = 1
+	}
 	read(0, 99)
-	if got := frames(); !maps.Equal(got, map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1}) {
+	if got := frames(); !maps.Equal(got, ahead) {
 		t.Fatalf("a read starting the object fetched frames %v", got)
 	}
 	read(10*volumeFrame, 10*volumeFrame+99)
-	read(volumeFrame, 5*volumeFrame-1)
-	if got := frames(); !maps.Equal(got, map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 10: 1}) {
+	read(volumeFrame, (readAheadFrames+1)*volumeFrame-1)
+	ahead[10] = 1
+	if got := frames(); !maps.Equal(got, ahead) {
 		t.Fatalf("after a jump and a read of the frames fetched ahead, the store sent frames %v", got)
 	}
 	read(6*volumeFrame+100, 7*volumeFrame+100)

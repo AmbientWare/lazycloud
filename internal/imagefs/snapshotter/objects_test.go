@@ -2,6 +2,7 @@ package snapshotter
 
 import (
 	"bytes"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -90,26 +91,31 @@ func TestCompleteVolumeObjectsAreLinkedForWorkloads(t *testing.T) {
 		c.background.Wait()
 	}
 	waitFor(t, func() bool { _, err := os.Stat(path); return err != nil })
-	waitFor(t, func() bool {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, o := range c.objects {
-			if !o.linked {
-				return false
-			}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		waitFor(t, func() bool { _, err := os.Stat(link(c, v, ts, name)); return err == nil })
+	}
+	waitFor(t, func() bool { return cacheBytes(t, c.dir) <= c.limit })
+}
+
+// cacheBytes is the size of the files under a cache directory.
+func cacheBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
-		return len(c.objects) == 4
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
 	})
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.used > c.limit || len(c.objects) != 4 {
-		t.Fatalf("the cache holds %d bytes in %d objects after the eviction", c.used, len(c.objects))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, o := range c.objects {
-		if !o.complete() || !o.linked {
-			t.Fatalf("object %s is partial or unlinked after the eviction", o.key)
-		}
-	}
+	return total
 }
 
 // A peer serves a frame it holds to a host granted the workspace, which
@@ -139,15 +145,7 @@ func TestPeersServeCachedFramesToGrantedHosts(t *testing.T) {
 		t.Fatalf("the peer's own read: %s", resp.Status)
 	}
 	peer.cache.background.Wait()
-
-	waitFor(t, func() bool {
-		peer.cache.mu.Lock()
-		defer peer.cache.mu.Unlock()
-		for _, o := range peer.cache.objects {
-			return o.complete()
-		}
-		return false
-	})
+	waitFor(t, func() bool { _, err := os.Stat(link(peer.cache, peer, ts, "weights")); return err == nil })
 	// A host granted the workspace with the peer named reads from it.
 	readerUp := &upstream{}
 	reader := newVolumes(linkedCache(t, readerUp), &http.Client{Transport: readerUp}, slog.New(slog.DiscardHandler))
