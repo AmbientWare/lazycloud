@@ -3,22 +3,7 @@ title: "Endpoints, ASGI, and realtime"
 description: "HTTPS and WebSocket services in Python, each with a stable URL and bearer-token auth by default."
 ---
 
-Pick by what you already have:
-
-| You have | Use |
-| --- | --- |
-| A Python function that answers HTTP requests | `@app.endpoint` |
-| A FastAPI or Starlette app with several routes | `app.asgi(...)` |
-| A WebSocket message handler | `@app.realtime` |
-
-Each gets a stable HTTPS URL in the cloud when deployed, and previews with
-[`lazycloud serve`](/concepts/workflow#live-preview).
-
-## Endpoints
-
-Save this as `api_demo.py`:
-
-```python
+```python api_demo.py
 from lazycloud import App
 from pydantic import BaseModel
 
@@ -34,14 +19,6 @@ def count_words(text: str) -> WordCount:
     return WordCount(words=len(text.split()))
 ```
 
-LazyCloud maps the JSON request body to the function's arguments and sends the
-returned model as JSON. The model also becomes the response schema that
-[typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
-use. `route` defaults to `/` and `methods` to `GET` and `POST`.
-
-Deployed, it answers at the printed URL with an
-[access token](/platform/auth#ci-and-scripts):
-
 ```bash
 uv run lazycloud deploy api_demo:count_words
 curl --fail --show-error "<endpoint-url>" \
@@ -50,9 +27,25 @@ curl --fail --show-error "<endpoint-url>" \
   -d '{"text": "Run Python on LazyCloud"}'
 ```
 
-The response is `{"words": 4}`.
+The deploy prints the URL, and the response is `{"words": 4}`. LazyCloud maps
+the JSON request body to the function's arguments and sends the returned
+model as JSON; the model also becomes the response schema that
+[typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
+use. `route` defaults to `/` and `methods` to `GET` and `POST`. The token is an
+[access token](/platform/auth#ci-and-scripts). Before deploying, the same
+file previews with [`lazycloud serve`](/concepts#develop-test-deploy).
 
-In Python, the decorated function is also the client:
+## Choose the kind
+
+| You have | Use |
+| --- | --- |
+| A Python function that answers HTTP requests | `@app.endpoint` |
+| A FastAPI or Starlette app with several routes | `app.asgi(...)` |
+| A WebSocket message handler | `@app.realtime` |
+
+## Call it from Python
+
+The decorated function is also the client:
 
 ```python
 from api_demo import count_words
@@ -62,9 +55,9 @@ print(response.status_code, response.json())
 ```
 
 `request()` uses your `lazycloud login` sign-in and goes to a running preview or
-the deployment. See [Where a call goes](/concepts/workflow#where-a-call-goes).
+the deployment. See [Where a call goes](/concepts#where-a-call-goes).
 
-## ASGI applications
+## Serve an existing FastAPI app
 
 `app.asgi(...)` wraps an existing FastAPI or Starlette app. FastAPI needs to be
 installed locally too, with `uv add fastapi`, because the CLI imports the file:
@@ -111,29 +104,19 @@ gives each route a typed method instead. ASGI apps take the endpoint options,
 with `concurrent_requests` for `concurrency` and `keep_warm_seconds` for
 `keep_warm`.
 
-## Realtime handlers
+## Stream or hold a WebSocket
 
-`@app.realtime` turns a function into a WebSocket handler. Each incoming
-message calls the handler, and LazyCloud sends the return value back. An
-iterable return value sends each item as its own message.
+`@app.realtime` turns a function into a WebSocket handler, and an ASGI app
+can stream a response; see [Streaming](/concepts/streaming).
 
-```python
-@app.realtime(name="echo")
-def echo(message: str) -> str:
-    return message
-```
-
-Realtime handlers take the ASGI options and deploy, preview, and scale the same
-way.
-
-## Authentication
+## Require a token
 
 All three require `Authorization: Bearer <token>` with an
 [access token](/platform/auth#ci-and-scripts) for the workspace, and the Python
 clients send your sign-in. `authorized=False` makes the URL public, leaving
 access control to your code.
 
-## Capacity
+## Handle more requests at once
 
 An endpoint starts as one process handling one request at a time. Three
 settings raise that:
@@ -159,12 +142,12 @@ requests get `429`. [Scaling](/concepts/scaling) covers choosing the numbers.
 `checkpoint_enabled=True` lets new containers restore a warmed worker instead
 of rerunning `on_start`.
 
-## Custom domains
+## Serve from your own domain
 
 On Team and Business plans, `domain="api.example.com"` serves any of the three
 from a hostname you own. See [Custom domains](/platform/domains).
 
-## Stop and clean up
+## Take it offline
 
 ```bash
 uv run lazycloud deployment stop count_words
@@ -174,7 +157,7 @@ uv run lazycloud deployment delete count_words
 `stop` takes it offline and keeps the definition, and `delete` removes it, as
 does [`--prune`](/concepts/apps#remove-workloads) once it's gone from the code.
 
-## Shared settings
+## Set what every workload shares
 
 [Images](/concepts/images), [resources](/concepts/resources), and
 [scaling](/concepts/scaling).

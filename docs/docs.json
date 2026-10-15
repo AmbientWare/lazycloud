@@ -41,14 +41,15 @@
         "pages": [
           "index",
           "getting-started/quickstart",
-          "getting-started/installation"
+          "getting-started/installation",
+          "getting-started/agents"
         ]
       },
       {
         "group": "Core concepts",
         "pages": [
+          "concepts/index",
           "concepts/apps",
-          "concepts/workflow",
           {
             "group": "Workloads",
             "pages": [
@@ -84,6 +85,14 @@
               "concepts/tasks-and-logs",
               "platform/dashboard"
             ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "concepts/cold-starts",
+              "concepts/timeouts-and-retries",
+              "concepts/streaming"
+            ]
           }
         ]
       },
@@ -117,7 +126,8 @@
           "platform/auth",
           "platform/plans",
           "platform/compute",
-          "platform/domains"
+          "platform/domains",
+          "platform/troubleshooting"
         ]
       }
     ]

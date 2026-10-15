@@ -78,25 +78,8 @@ with `lazycloud deployment scale`. See [Pods](/concepts/pods).
 
 ## Warm containers
 
-An idle container stays up for `keep_warm` seconds so the next call skips the
-start, which can take a minute for a model server. Functions default to 10
-seconds, endpoints to 180, and scheduled functions to 0. You pay for warm
-containers while they run.
-
-`min_containers` keeps containers running even with no work, so the first call
-after a quiet hour doesn't wait:
-
-```python
-@app.endpoint(
-    gpu=GpuType.L4,
-    memory="16Gi",
-    concurrency=8,
-    keep_warm=600,
-    autoscaler=Autoscaler(min_containers=1, max_containers=4, tasks_per_container=8),
-)
-def generate(prompt: str) -> dict[str, str]:
-    ...
-```
+`keep_warm` and `min_containers` keep containers up between calls; see
+[Cold starts](/concepts/cold-starts#keep-containers-warm).
 
 ## When the queue is full
 

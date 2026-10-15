@@ -1,0 +1,97 @@
+---
+title: "Cold starts"
+description: "What runs between a call and a ready container, which part each setting shortens, and where to read the stages."
+---
+
+```python
+from lazycloud import App, Autoscaler, GpuType, Volume
+
+app = App("inference")
+weights = Volume("weights", "/weights")
+MODEL = {}
+
+
+def load_model(context: object) -> None:
+    MODEL["embedder"] = load_from("/weights/embedder.safetensors")  # your loading code
+
+
+@app.endpoint(
+    gpu=GpuType.L4,
+    memory="16Gi",
+    volumes=[weights],
+    on_start=load_model,
+    keep_warm=600,
+    autoscaler=Autoscaler(min_containers=1, max_containers=4, tasks_per_container=8),
+)
+def embed(texts: list[str]) -> list[list[float]]:
+    return MODEL["embedder"](texts)
+```
+
+The model loads once per container, the container stays up ten minutes after
+its last request, one container is always up, and the weights come from a
+volume rather than the image.
+
+## Read the stages of a start
+
+A call to a workload with no free container goes through these stages before
+its code runs:
+
+| Stage | What happens |
+| --- | --- |
+| Placement | Waiting for a host with the CPU, memory, or GPU the workload asks for. A host may have to boot. |
+| Conversion | The first start of a new image waits while the image is converted to the format hosts pull from. |
+| Image | The host pulls the image, or finds it already on disk. Layers load lazily, so a container opens files before the whole image has arrived. |
+| Source | The host fetches your code as a source archive. |
+| Disk | Disks and volumes attach. |
+| Create | The container process starts. |
+| Runtime | The runner imports your module and runs `on_start`. |
+
+The dashboard's task view draws them as a timeline: queued, conversion,
+preparation, and execution, with the time each took. From the CLI,
+`uv run lazycloud task show <task-id>` prints when the task was requested,
+started, and finished, and after five seconds pending `lazycloud run` and the
+dashboard name the stage the task waits on, such as compute starting or the
+container starting. [Why a task is pending](/concepts/tasks-and-logs#why-a-task-is-pending)
+lists the reasons.
+
+A warm container skips every stage, so the first question about a slow call
+is whether it started a container at all.
+
+## Load once per container
+
+`on_start` runs once before a container accepts calls, so a model loaded there
+serves every call the container handles. Loading inside the function body
+repeats the work per call. [Lifecycle hooks](/concepts/functions#load-a-model-once-per-container)
+covers the hook's arguments.
+
+On endpoints, `checkpoint_enabled=True` lets a new container restore a worker
+that already ran `on_start` instead of running it again.
+
+## Keep containers warm
+
+An idle container stays up for `keep_warm` seconds so the next call skips the
+start, which can take a minute for a model server. Functions default to 10
+seconds, endpoints to 180, and scheduled functions to 0. You pay for warm
+containers while they run.
+
+`min_containers` on the [autoscaler](/concepts/scaling#more-containers) keeps
+containers running even with no work, so the first call after a quiet hour
+doesn't wait. One warm container is the usual choice for an API that must
+answer its first request of the day quickly.
+
+## Keep weights out of the image
+
+Model weights in a [volume](/concepts/volumes) leave the image small and let
+the weights change without a rebuild. Each host reads volumes through a cache
+and records which files a workload read during its first call, so later
+starts on that host read those files from local disk instead of the bucket.
+
+Images are cached by content, so a workload whose image has not changed never
+waits for a build or conversion, and editing your code changes only the
+source archive.
+
+## Shorten the queue
+
+A call also waits when every container is busy. `concurrency` and the
+autoscaler's `max_containers` decide how many calls run at once; see
+[Scaling and concurrency](/concepts/scaling).

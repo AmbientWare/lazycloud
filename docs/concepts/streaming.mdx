@@ -1,0 +1,96 @@
+---
+title: "Streaming"
+description: "Server-sent events from an ASGI app, WebSocket messages from a realtime handler, and what each costs in slots and timeouts."
+---
+
+```python
+import asyncio
+from collections.abc import AsyncIterator
+
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from lazycloud import App, Image
+
+app = App("progress")
+api = FastAPI()
+
+
+async def steps() -> AsyncIterator[str]:
+    for step in range(5):
+        yield f"data: step {step}\n\n"
+        await asyncio.sleep(1)
+
+
+@api.get("/events")
+async def events() -> StreamingResponse:
+    return StreamingResponse(steps(), media_type="text/event-stream")
+
+
+service = app.asgi(name="service", image=Image().add_python_packages(["fastapi"]))(api)
+```
+
+```bash
+uv run lazycloud deploy progress:service
+curl -N "<service-url>/events" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
+```
+
+The five `data:` lines arrive one second apart, as the app writes them; the
+edge forwards a response body as it is produced rather than waiting for the
+end.
+
+## Stream a response
+
+An [ASGI app](/concepts/endpoints#serve-an-existing-fastapi-app) streams whatever its
+framework streams: server-sent events, as above, chunked JSON lines, or a
+file. `@app.endpoint` is the wrong tool for this. It turns the function's
+return value into one response, so a generator returned from an endpoint
+is serialized as a whole, not sent as it yields.
+
+`timeout_seconds`, 180 by default, bounds the wait until the response starts.
+Once the first bytes arrive the stream may run as long as the app keeps
+writing.
+
+## Send messages over a WebSocket
+
+`@app.realtime` turns a function into a WebSocket handler. Each incoming
+message calls it, and the return value goes back as one message. A generator
+sends each item as its own message, so one request can report progress:
+
+```python
+from collections.abc import Iterator
+
+from lazycloud import App
+
+app = App("chat")
+
+
+@app.realtime(name="talk")
+def talk(message: str) -> Iterator[str]:
+    for word in message.split():
+        yield word
+```
+
+Strings go as text frames, bytes as binary frames, and anything else as JSON.
+An async generator works the same way. The handler may also take a context
+argument before the message. Realtime handlers take the ASGI options and
+deploy, preview, and scale the same way.
+
+A FastAPI or Starlette WebSocket route inside an ASGI app also works; the edge
+upgrades the connection and passes frames through in both directions.
+
+## Count the slots
+
+A stream and a WebSocket connection each hold one of the container's
+`concurrent_requests` slots until they end, and the autoscaler counts them as
+requests in flight. A chat service with a hundred open connections needs
+`concurrent_requests` and `max_containers` sized for a hundred, not for the
+message rate. See [Scaling and concurrency](/concepts/scaling).
+
+## Authenticate
+
+Streams and WebSockets need the same `Authorization: Bearer <token>` header as
+any other request to the app, and `authorized=False` makes the URL public. A
+browser cannot set headers on an `EventSource` or `WebSocket`, so a page
+served by the same app usually mints a short-lived URL or token of its own;
+the [image studio example](/examples/image-studio) signs its progress
+WebSocket URL this way.

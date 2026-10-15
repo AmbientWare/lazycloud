@@ -1,0 +1,105 @@
+---
+title: "Timeouts and retries"
+description: "How long one attempt may run, when a failed call runs again, and what a preemption does to the count."
+---
+
+```python
+from lazycloud import App
+
+app = App("ingest")
+
+
+@app.function(cpu=1, memory="1Gi", timeout_seconds=600, retries=2, retry_delay_seconds=30)
+def fetch_page(url: str) -> int:
+    ...
+```
+
+One attempt may run ten minutes. A failure gets two more attempts, thirty
+seconds apart, so the call runs at most three times before `.remote()` raises
+or `.map()` yields `None` for that input.
+
+## Cap one attempt
+
+`timeout_seconds` is the limit for one attempt. Functions default to 3600 and
+endpoints, ASGI apps, and realtime handlers to 180, per request. An attempt
+past its limit ends as a `timeout` failure and the retry policy decides what
+happens next.
+
+A queued function call also waits up to `timeout_seconds` for a container, and
+an endpoint request waits up to its limit for a free slot before `429`.
+
+## Retry a failed call
+
+`retries` is the number of extra attempts after a failure, 3 by default for
+functions and 0 for endpoints. A call made with the default can therefore run
+four times, so writes should be safe to repeat, for example keyed on the
+input, or the function takes `retries=0`. `retry_delay_seconds` is the wait
+between attempts.
+
+An attempt retries when your code raised, when it timed out, or when its
+container was lost. An import error or a failing `on_start` is a load error,
+which fails the task without retrying, since the next attempt would fail the
+same way.
+
+## Add backoff
+
+`RetryPolicy` sets the same thing with backoff and a choice of which failures
+retry:
+
+```python
+from lazycloud import RetryBackoff, RetryPolicy
+
+
+@app.function(
+    timeout_seconds=120,
+    retry_policy=RetryPolicy(
+        max_attempts=4,
+        delay_seconds=2,
+        backoff=RetryBackoff.Exponential,
+        max_delay_seconds=30,
+        retry_on_statuses=["failed"],
+    ),
+)
+def fetch_text(url: str) -> str:
+    ...
+```
+
+`max_attempts` counts the first attempt, so this is `retries=3`. The delay
+doubles from two seconds and stops growing at thirty. `retry_on_statuses`
+defaults to `["failed", "timeout"]`; this policy leaves a timed-out attempt
+alone, which suits work where a timeout means the input is too large rather
+than the network flaky.
+
+A policy is used as written. `retries` or `retry_delay_seconds` given next to
+one replace its `max_attempts` or `delay_seconds`, and the default of three
+retries applies only when none of the three options is set.
+
+## Do not repeat long work
+
+```python
+@app.function(cpu=4, memory="16Gi", timeout_seconds=6 * 3600, retries=0, preemptible=False)
+def train(config: dict[str, float]) -> str:
+    ...
+```
+
+`retries=0` avoids repeating six hours of work, and `preemptible=False` keeps
+the machine from being reclaimed mid-run. Checkpoints in a
+[volume](/concepts/volumes) let a new run resume.
+
+## What a preemption does
+
+Workloads run on [preemptible capacity](/concepts/resources#preemptible-capacity)
+by default, which the provider can reclaim without notice. A preempted
+attempt goes back to the queue at once, with no delay, and does not spend a
+retry. The task's attempt limit grows by one for each preemption. After five
+preemptions the task fails with a message that names `preemptible=False` as
+the way out.
+
+## Follow the attempts
+
+A task is `queued` again between attempts until its delay passes, and
+`uv run lazycloud task show <task-id>` prints the attempt as `2 of 4` next to
+the status. The `on_retry` [hook](/concepts/functions#load-a-model-once-per-container) runs in
+the container after a failed attempt that will be retried, and the task's
+[callback](/concepts/tasks-and-logs#callbacks) carries `attempt_number` and
+`max_attempts` with every event.
