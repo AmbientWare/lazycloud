@@ -15,7 +15,7 @@ config:
   # Platform and connected-account hosts launch only from these; a region
   # missing here launches nothing. Commit the workflow's output here
   # through a reviewed PR.
-  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-0b82b717250dfe530","us-east-2":"ami-08eeabd79e56bd95c","us-west-1":"ami-0f3093ed59b33f2d7","us-west-2":"ami-06d52b1159729c5a9"},"gpu":{"us-east-1":"ami-0bb2cc671fc69adce","us-east-2":"ami-01a751d3690fd399b","us-west-1":"ami-0c9b037e696d81b30","us-west-2":"ami-09da99817d682df94"}}'
+  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-091f80467e2f8c6cd","us-east-2":"ami-00be7a9f17b71ce38","us-west-1":"ami-0ce01c86a0fb3afec","us-west-2":"ami-0091e399ea72bd50b"},"gpu":{"us-east-1":"ami-084fc19967a6604ac","us-east-2":"ami-0ab4802cc330c3c5e","us-west-1":"ami-02cf6d506852ecb95","us-west-2":"ami-078683424825b795e"}}'
 # Traces go to AWS X-Ray through the collector.
 telemetry:
   enabled: true
