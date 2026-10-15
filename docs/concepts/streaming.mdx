@@ -40,7 +40,7 @@ end.
 
 ## Stream a response
 
-An [ASGI app](/concepts/endpoints#asgi-applications) streams whatever its
+An [ASGI app](/concepts/endpoints#serve-an-existing-fastapi-app) streams whatever its
 framework streams: server-sent events, as above, chunked JSON lines, or a
 file. `@app.endpoint` is the wrong tool for this. It turns the function's
 return value into one response, so a generator returned from an endpoint
