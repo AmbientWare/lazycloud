@@ -320,14 +320,15 @@ type shapeKind string
 const (
 	shapeRecent  shapeKind = "recent"
 	shapeStarted shapeKind = "started"
+	shapeBurst   shapeKind = "burst"
 	shapeArrived shapeKind = "arrived"
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
 // containers reserved and the most disks one attached, and what arrived
 // within the arrival window.
-func shapesByMarket(rows []RecentShapesRow) (recent, started, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
-	recent, started, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+func shapesByMarket(rows []RecentShapesRow) (recent, started, burst, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
+	recent, started, burst, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
 		m, ok := r.market()
@@ -340,11 +341,13 @@ func shapesByMarket(rows []RecentShapesRow) (recent, started, arrived map[Reserv
 			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
 		case shapeStarted:
 			started[m] = started[m].Upper(shape)
+		case shapeBurst:
+			burst[m] = burst[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, started, arrived, disks
+	return recent, started, burst, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

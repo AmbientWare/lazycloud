@@ -419,7 +419,7 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 		for _, c := range calls {
 			pools = append(pools, pool(c))
 		}
-		if len(calls) != 2 || calls[1].Form.Get("ClientToken") != host.String()+"-1" || pools[0] == pools[1] ||
+		if len(calls) != 2 || !strings.HasPrefix(calls[1].Form.Get("ClientToken"), host.String()+"-") || pools[0] == pools[1] ||
 			calls[1].Form.Get("InstanceMarketOptions.MarketType") != "spot" {
 			t.Fatalf("%s: launches %v, want the bought pool and then another Spot pool under a new token", code, pools)
 		}
@@ -461,7 +461,7 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 		t.Fatalf("%d launches, want 2", len(calls))
 	}
 	f := calls[1].Form
-	if f.Get("ClientToken") != host.String()+"-1" || f.Get("HibernationOptions.Configured") != "true" ||
+	if !strings.HasPrefix(f.Get("ClientToken"), host.String()+"-") || f.Get("HibernationOptions.Configured") != "true" ||
 		f.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "persistent" ||
 		f.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior") != "hibernate" {
 		t.Fatalf("next pool launch %v, want a hibernating persistent Spot request", f)
@@ -867,42 +867,6 @@ func TestLaunchesWaitUntilTheTargetReleaseIsTheServedOne(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "--agent-version '1.1.0'") {
 		t.Fatalf("the launch did not install the served release: %v", err)
 	}
-}
-
-// A walk claimed in a pool the size rule no longer keeps, as one an older
-// release moved to a g6.16xlarge, launches in a pool that keeps it: a
-// g6.xlarge for its 2 CPU, 12.75 GiB L4 work. The pool it leaves was never
-// refused, so it does not cool.
-func TestAWalkLeavesAStoredPoolTheSizeRuleNoLongerKeeps(t *testing.T) {
-	t.Parallel()
-	o, emulator, _ := launchFleet(t, compute.Fleet{})
-	spotPrices(t, o)
-	emulator.on("RunInstances", launched(t))
-	large, _ := compute.CatalogTypeNamed("g6.16xlarge")
-	run(t, o.pool, `
-insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
-                   availability_zone_id, instance_type, market, holds_cpu_millis, holds_memory_bytes)
-values ('walking', 'offline', 'platform', 'aws', 'requested', $1, $2, 'L4', 1, 'us-east-2', 'us-east-2a', 'use2-az1', 'g6.16xlarge', 'spot',
-        2000, 13056 << 20)`, int64(large.Usable(0).CPUMillis), large.Usable(0).MemoryBytes)
-	if n := launch(t, o); n != 1 {
-		t.Fatalf("launched %d, want the host", n)
-	}
-	calls := emulator.calls("RunInstances")
-	if len(calls) != 1 || calls[0].Form.Get("InstanceType") != "g6.xlarge" {
-		t.Fatalf("RunInstances %v, want one g6.xlarge", callTypes(calls))
-	}
-	if n := scan[int](t, o.pool, "select count(*)::int from capacity_cooldowns"); n != 0 {
-		t.Fatalf("%d cooldowns, want none for a pool never tried", n)
-	}
-}
-
-// callTypes are the instance types of RunInstances calls.
-func callTypes(calls []awsCall) []string {
-	var out []string
-	for _, c := range calls {
-		out = append(out, c.Form.Get("InstanceType"))
-	}
-	return out
 }
 
 // A purchase whose container stopped before EC2 launched it is removed at

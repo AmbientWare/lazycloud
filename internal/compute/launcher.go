@@ -3,7 +3,9 @@ package compute
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,7 +131,10 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimHostAc
 // the next is picked, so the walk ends, and every pool the walk refuses,
 // in this pass or a later one, cools until the end they share. The walk
 // reads its owner's offer inputs at its first refusal and keeps them
-// current with its own refusals and moves.
+// current with its own refusals and moves. The pool the planner chose is
+// launched as chosen: the planner applies the size rule once, with the
+// cooldowns of its pass, and a step up it took while smaller pools cooled
+// stands.
 func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimHostActionsRow) (bool, error) {
 	var in *OfferInputs
 	read := func() error {
@@ -140,31 +145,15 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 		return err
 	}
 	for tried := 1; ; tried++ {
-		// A walk the size rule tightened under, as a release does, leaves a
-		// pool its GPU host no longer keeps the rule in, uncooled.
-		var cool *poolCooldown
-		message := "the pool is larger than what the host was bought to hold needs"
-		if tried > 1 || h.GpuCount == 0 || h.Market == nil || h.Replaces != nil {
-			message = ""
-		} else if err := read(); err != nil {
-			return false, err
-		} else if sized, err := c.poolSized(ctx, h, *in); err != nil || sized {
-			if err != nil {
-				return false, err
-			}
-			message = ""
+		started, refusal, err := c.launchHost(ctx, logger, h)
+		if refusal == nil {
+			return started, err
 		}
-		if message == "" {
-			started, refusal, err := c.launchHost(ctx, logger, h)
-			if refusal == nil {
-				return started, err
-			}
-			cool, message = ptr(refusal.cooldown()), refusal.message()
-			if h.Replaces != nil {
-				// A rightsize is optional: its refusal keeps the host it would
-				// replace.
-				return false, c.failLaunch(ctx, h, message, cool)
-			}
+		cool, message := ptr(refusal.cooldown()), refusal.message()
+		if h.Replaces != nil {
+			// A rightsize is optional: its refusal keeps the host it would
+			// replace.
+			return false, c.failLaunch(ctx, h, message, cool)
 		}
 		if err := read(); err != nil {
 			return false, err
@@ -195,21 +184,6 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 		h.Region, h.AvailabilityZone, h.InstanceType = next.Region, next.Zone, next.Type.Name
 		h.LaunchPools++
 	}
-}
-
-// poolSized reports whether h's pool keeps the size rule for what h was
-// bought to hold, as the pools its walk moves to do.
-func (c *Compute) poolSized(ctx context.Context, h ClaimHostActionsRow, in OfferInputs) (bool, error) {
-	t, known := CatalogTypeNamed(h.InstanceType)
-	if !known {
-		return true, nil
-	}
-	waiters, err := c.queries.HostWaiters(ctx, &h.ID)
-	if err != nil {
-		return false, fmt.Errorf("read the containers waiting for the host: %w", err)
-	}
-	_, keeps := walkPools(c.policy(), h, waiters, in, c.imaged)
-	return keeps(FleetOffer{Type: t, Market: Market(*h.Market), Usable: t.Usable(in.ReportedMemory[t.Name])}), nil
 }
 
 // poolRefusal is EC2 refusing a launch in one pool for capacity, quota or
@@ -449,7 +423,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 		{Key: aws.String("Name"), Value: aws.String(h.Name)},
 	}
 	input := &ec2.RunInstancesInput{
-		ClientToken:  aws.String(launchToken(h)),
+		ClientToken:  aws.String(launchToken(h, image)),
 		ImageId:      aws.String(image),
 		InstanceType: ec2types.InstanceType(h.InstanceType),
 		MinCount:     aws.Int32(1),
@@ -550,14 +524,18 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 	return true, nil, nil
 }
 
-// launchToken is the client token of h's launch in its current pool: the
-// host id in the pool it was bought from, then numbered by the pools it
-// moved past. EC2 refuses a token reused with other parameters.
-func launchToken(h ClaimHostActionsRow) string {
+// launchToken is the client token of h's launch: the host id in the pool
+// it was bought from, and once its walk has moved it, the host id with a
+// digest of the arguments that make one launch, its type, zone and image.
+// EC2 refuses a token reused with other arguments, so a launch retried as it
+// was is idempotent and one retried in another pool, or with another image,
+// is a new request.
+func launchToken(h ClaimHostActionsRow, image string) string {
 	if h.LaunchPools == 0 {
 		return h.ID.String()
 	}
-	return fmt.Sprintf("%s-%d", h.ID, h.LaunchPools)
+	sum := sha256.Sum256([]byte(h.InstanceType + "/" + h.AvailabilityZone + "/" + image))
+	return h.ID.String() + "-" + hex.EncodeToString(sum[:4])
 }
 
 // poolRefusalFinal answers a launch's pool refusal at once instead of

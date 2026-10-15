@@ -390,16 +390,36 @@ func (s *sim) plan() time.Duration {
 	// batches of its max from the run's first; older containers drop out of
 	// the log.
 	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.WarmWindow })
-	started := map[ReserveMarket]FleetCapacity{}
+	slices.SortStableFunc(s.placedLog, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
+	started, burst := map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+	byMarket := map[ReserveMarket][]*simContainer{}
 	var spot []*simContainer
 	for _, c := range s.placedLog {
 		started[c.market] = started[c.market].Upper(reservedShape(c.need))
+		byMarket[c.market] = append(byMarket[c.market], c)
 		if s.now.Sub(c.arrived) >= s.p.ArrivalWindow {
 			continue
 		}
 		if c.need.Preemptible && c.need.GPUsNeeded() == 0 {
 			spot = append(spot, c)
 		}
+	}
+	// Burst is each market's largest batch within the warm window, batches
+	// formed as RecentShapes forms them.
+	for m, cs := range byMarket {
+		var batch, largest FleetCapacity
+		var run, last time.Time
+		part := -1
+		for _, c := range cs {
+			if c.arrived.Sub(last) >= s.p.Batch.Quiet {
+				run, part = c.arrived, -1
+			}
+			if n := int(c.arrived.Sub(run) / s.p.Batch.Max); n != part {
+				largest, batch, part = largest.Upper(batch), FleetCapacity{}, n
+			}
+			batch, last = batch.Plus(reservedShape(c.need)), c.arrived
+		}
+		burst[m] = largest.Upper(batch)
 	}
 	slices.SortStableFunc(spot, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
 	var sum, largest, batch FleetCapacity
@@ -417,7 +437,7 @@ func (s *sim) plan() time.Duration {
 	}
 	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: sum.Minus(largest.Upper(batch)).Clamp()}
 	s.in.Spot = s.prices(s.now)
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Started: started, Arrived: arrived, Offers: s.offers(), BatchWait: s.batchWait()}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Started: started, Burst: burst, Arrived: arrived, Offers: s.offers(), BatchWait: s.batchWait()}
 	live, reserves := 0, 0
 	for _, h := range s.hosts {
 		snapshot.Hosts = append(snapshot.Hosts, s.fleetHost(h))

@@ -1112,6 +1112,27 @@ func TestTheWarmFloorFollowsTheShapesThatStartedWithinTheWindow(t *testing.T) {
 	}
 }
 
+// A market with a floor keeps room for the largest batch that arrived
+// within the warm window, so a burst that recurs lands on free room: after
+// a batch of eight 1 CPU starts the on-demand market holds 8 CPU of
+// headroom beside its floor and buys hosts for it (two bursts of 31 and 39
+// tasks each waited a launch in the 2026-10-15 replay).
+func TestTheWarmHeadroomHoldsRoomForTheLargestRecentBurst(t *testing.T) {
+	t.Parallel()
+	p := planPolicy(small, FleetCapacity{})
+	warm := idle(planHost(1, planSmall, FleetServing))
+	s := planSnapshot(t, warm)
+	s.Burst = map[ReserveMarket]FleetCapacity{onDemand: small.Times(8)}
+	plan := PlanFleet(p, s)
+	var bought FleetCapacity
+	for _, a := range actionsOf(plan, ActionBuy) {
+		bought = bought.Plus(a.Offer.Usable)
+	}
+	if mp := marketPlan(t, plan, onDemand); !mp.WarmTarget.Covers(small.Times(8)) || !bought.Plus(warm.Usable).Covers(small.Times(8)) {
+		t.Fatalf("warm target %+v, bought %+v; want room for the burst of eight", mp.WarmTarget, bought)
+	}
+}
+
 func TestGPUWarmShareIsWholeCards(t *testing.T) {
 	t.Parallel()
 	typ := mustType(t, "g6.xlarge")

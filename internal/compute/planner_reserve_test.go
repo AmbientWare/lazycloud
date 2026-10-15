@@ -115,11 +115,12 @@ values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1
 }
 
 // The Spot market keeps warm what a steady stream of work placed within
-// the arrival window, less its largest batch: four batches of four
-// one-CPU containers 20 seconds apart keep twelve, while one burst of
-// sixteen, arriving over a second and a half across a clock's five-second
-// boundary, keeps only its share of load.
-func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
+// the arrival window, less its largest batch, and room for the largest
+// batch within the warm window: four batches of four one-CPU containers 20
+// seconds apart keep twelve beside the floor, while one burst of sixteen,
+// arriving over a second and a half across a clock's five-second boundary,
+// keeps room for sixteen.
+func TestSpotHeadroomFollowsASteadyArrivalRateAndTheLargestBurst(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name    string
@@ -127,7 +128,7 @@ func TestSpotHeadroomFollowsASteadyArrivalRateNotABurst(t *testing.T) {
 		want    cpu.Millis
 	}{
 		{"steady", "now() - make_interval(secs => 20 * (n / 4))", 13_000},
-		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 4_000},
+		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 16_000},
 	} {
 		o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
 		host := fleetHost(t, o, compute.PhaseReady, "c6a.8xlarge", "i-0000000000000b001")
@@ -500,9 +501,9 @@ select $1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1,
 		pendingContainer(t, o.pool, dev, release, 4000, 4*gib)
 	}
 	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 12_000 ||
+	if spot := publishedMarket(t, o, true); spot.Load.CPUMillis != 48_000 || spot.WarmTarget.CPUMillis != 16_000 ||
 		spot.StoppedTarget.CPUMillis != 3000+8000 {
-		t.Fatalf("Spot market %+v, want warm 25%% of 16 running and 32 pending CPU and the stopped floors", spot)
+		t.Fatalf("Spot market %+v, want warm room for the 16 CPU batch that ran, above 25%% of 48 CPU, and the stopped floors", spot)
 	}
 	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 || od.StoppedTarget.CPUMillis != 3000+8000 {
 		t.Fatalf("on-demand market %+v, want its floors", od)
