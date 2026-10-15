@@ -321,6 +321,9 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 	case *hostproto.HostMessage_StartupTrace:
 		sess.recordTrace(ctx, body.StartupTrace)
 		return nil
+	case *hostproto.HostMessage_VolumeTrace:
+		sess.recordVolumeTrace(ctx, body.VolumeTrace)
+		return nil
 	case *hostproto.HostMessage_Traces:
 		sess.server.config.Traces.Offer(sess.host.String(), body.Traces.GetOtlp())
 		return nil
@@ -339,11 +342,15 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 // of one image cost one read and one signing, the images of the starts it
 // sent, and the ChannelImageBuild keys of the waits it found.
 type syncCache struct {
-	pulls   map[pullKey]pulled
-	layers  map[string]issuedLayers
-	traces  map[traceKey]startTrace
-	started []string
-	waits   map[string]bool
+	pulls  map[pullKey]pulled
+	layers map[string]issuedLayers
+	traces map[traceKey]startTrace
+	// volumeTraces holds the volume traces read, by workload, and
+	// volumePeers the hosts read, by workspace.
+	volumeTraces map[uuid.UUID]*hostproto.VolumeTrace
+	volumePeers  map[identity.WorkspaceID][]*hostproto.VolumePeer
+	started      []string
+	waits        map[string]bool
 }
 
 // sync derives the host's commands and sends those not yet sent, as one
@@ -358,7 +365,11 @@ func (sess *session) syncCommands(ctx context.Context) error {
 		return sess.server.grpcError(ctx, err)
 	}
 	derived := map[string]bool{}
-	cache := &syncCache{pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{}, waits: map[string]bool{}}
+	cache := &syncCache{
+		pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{},
+		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, volumePeers: map[identity.WorkspaceID][]*hostproto.VolumePeer{},
+		waits: map[string]bool{},
+	}
 	// Builds, volume mounts and network holders run the platform images,
 	// so they go first.
 	if err := sess.syncPlatform(ctx, cache); err != nil {
@@ -657,6 +668,8 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		Layers:         layers,
 		Prefetch:       trace.prefetch,
 		RecordTrace:    trace.record,
+		VolumeTrace:    s.volumeTrace(ctx, cache, start, volumes),
+		VolumePeers:    sess.volumePeers(ctx, cache, start, volumes),
 	}}}, grant, nil
 }
 

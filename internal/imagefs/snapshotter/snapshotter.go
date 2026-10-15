@@ -22,7 +22,9 @@
 // grants of the workspace buckets whose volumes its host mounts, which it
 // signs every request it forwards with. The endpoint answers a process on
 // the host's loopback, as the mount containers are, for a workspace's
-// bucket only when it signs with that workspace's key.
+// bucket only when it signs with the key of a container the agent granted
+// that bucket, and records per container the objects it reads, which the
+// agent reports so later starts of its workload warm them.
 package snapshotter
 
 import (
@@ -77,11 +79,18 @@ type Config struct {
 	// none.
 	FillBytes int64
 	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
-	// on; empty serves none.
+	// on.
 	VolumeAddr string
-	HTTP       *http.Client
-	Logger     *slog.Logger
-	Tracer     oteltrace.Tracer
+	// PeerAddr is the address the volume cache serves other hosts' frame
+	// reads on; empty serves none.
+	PeerAddr string
+	// LinkDir is the volume link tree: complete volume objects linked at
+	// <workspace>/<volume>/<path> for workloads to open in place of the
+	// mount's file. Empty links none.
+	LinkDir string
+	HTTP    *http.Client
+	Logger  *slog.Logger
+	Tracer  oteltrace.Tracer
 }
 
 // snapshotter is a containerd snapshotter with lazy layers: the overlay
@@ -165,6 +174,7 @@ func (s *snapshotter) Close() error {
 	<-s.done
 	s.teardowns.Wait()
 	s.cache.background.Wait()
+	s.cache.writer.Wait()
 	return s.Snapshotter.Close() //nolint:wrapcheck // the metadata store's own error
 }
 

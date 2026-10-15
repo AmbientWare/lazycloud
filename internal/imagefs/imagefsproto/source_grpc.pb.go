@@ -557,27 +557,43 @@ var DiskSources_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VolumeSources_GrantVolumes_FullMethodName = "/lazycloud.imagefs.v1.VolumeSources/GrantVolumes"
+	VolumeSources_GrantVolumes_FullMethodName   = "/lazycloud.imagefs.v1.VolumeSources/GrantVolumes"
+	VolumeSources_VolumeReads_FullMethodName    = "/lazycloud.imagefs.v1.VolumeSources/VolumeReads"
+	VolumeSources_ReleaseVolumes_FullMethodName = "/lazycloud.imagefs.v1.VolumeSources/ReleaseVolumes"
+	VolumeSources_WarmVolumes_FullMethodName    = "/lazycloud.imagefs.v1.VolumeSources/WarmVolumes"
 )
 
 // VolumeSourcesClient is the client API for VolumeSources service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// VolumeSources serves workspaces' platform volumes through the frame cache
-// on a host whose data volume is a large instance store. The snapshotter
-// answers path-style S3 requests on loopback for keys under volumes/ of the
-// granted buckets, signed with a bucket's key as access key, and forwards
-// them to the store signed with the bucket's grant. A plain GET of an object
-// of 1 MiB or more is served from the cache by the ETag a HEAD reported at
-// most a second earlier, every frame fetched with If-Match on it; a write of
-// an object makes its next read ask the store again.
+// VolumeSources serves workspaces' platform volumes through the frame
+// cache. The snapshotter answers path-style S3 requests on loopback for
+// keys under volumes/ of the granted buckets, each signed with the key of
+// the container whose mount sends it as access key, and forwards them to
+// the store signed with the bucket's grant. A plain GET of an object of 1
+// MiB or more is served from the cache by the ETag a HEAD reported at most
+// a second earlier, every frame fetched with If-Match on it; a write of an
+// object makes its next read ask the store again.
 type VolumeSourcesClient interface {
-	// GrantVolumes records a workspace bucket's read-write grant and key,
-	// unless the current grant expires later with the same key. A request
-	// naming no workspace records nothing. The answer names the endpoint,
-	// empty on a host that does not cache volumes.
+	// GrantVolumes records a workspace bucket's read-write grant, unless the
+	// current one expires later, and with a container the key its mount
+	// signs with. A request naming no container refreshes the grant.
 	GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error)
+	// VolumeReads returns the objects of 1 MiB or more the container's mount
+	// read since its key was granted, each once in first-read order,
+	// at most 256, and stops recording them. An unknown container is
+	// NOT_FOUND.
+	VolumeReads(ctx context.Context, in *VolumeReadsRequest, opts ...grpc.CallOption) (*VolumeReadsResponse, error)
+	// ReleaseVolumes forgets the container's key and its reads.
+	ReleaseVolumes(ctx context.Context, in *ReleaseVolumesRequest, opts ...grpc.CallOption) (*ReleaseVolumesResponse, error)
+	// WarmVolumes fills the objects the reads name, of the workspace's
+	// granted bucket, in the background, behind reads, in order and at their
+	// current versions. Each object fits a quarter of the cache, all the
+	// host's warms half of it, and a warm ends after five minutes. A host
+	// whose disk reads slower than the stores keeps volume frames in memory
+	// only and warms nothing.
+	WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error)
 }
 
 type volumeSourcesClient struct {
@@ -598,24 +614,67 @@ func (c *volumeSourcesClient) GrantVolumes(ctx context.Context, in *GrantVolumes
 	return out, nil
 }
 
+func (c *volumeSourcesClient) VolumeReads(ctx context.Context, in *VolumeReadsRequest, opts ...grpc.CallOption) (*VolumeReadsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeReadsResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_VolumeReads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) ReleaseVolumes(ctx context.Context, in *ReleaseVolumesRequest, opts ...grpc.CallOption) (*ReleaseVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_ReleaseVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_WarmVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VolumeSourcesServer is the server API for VolumeSources service.
 // All implementations must embed UnimplementedVolumeSourcesServer
 // for forward compatibility.
 //
-// VolumeSources serves workspaces' platform volumes through the frame cache
-// on a host whose data volume is a large instance store. The snapshotter
-// answers path-style S3 requests on loopback for keys under volumes/ of the
-// granted buckets, signed with a bucket's key as access key, and forwards
-// them to the store signed with the bucket's grant. A plain GET of an object
-// of 1 MiB or more is served from the cache by the ETag a HEAD reported at
-// most a second earlier, every frame fetched with If-Match on it; a write of
-// an object makes its next read ask the store again.
+// VolumeSources serves workspaces' platform volumes through the frame
+// cache. The snapshotter answers path-style S3 requests on loopback for
+// keys under volumes/ of the granted buckets, each signed with the key of
+// the container whose mount sends it as access key, and forwards them to
+// the store signed with the bucket's grant. A plain GET of an object of 1
+// MiB or more is served from the cache by the ETag a HEAD reported at most
+// a second earlier, every frame fetched with If-Match on it; a write of an
+// object makes its next read ask the store again.
 type VolumeSourcesServer interface {
-	// GrantVolumes records a workspace bucket's read-write grant and key,
-	// unless the current grant expires later with the same key. A request
-	// naming no workspace records nothing. The answer names the endpoint,
-	// empty on a host that does not cache volumes.
+	// GrantVolumes records a workspace bucket's read-write grant, unless the
+	// current one expires later, and with a container the key its mount
+	// signs with. A request naming no container refreshes the grant.
 	GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error)
+	// VolumeReads returns the objects of 1 MiB or more the container's mount
+	// read since its key was granted, each once in first-read order,
+	// at most 256, and stops recording them. An unknown container is
+	// NOT_FOUND.
+	VolumeReads(context.Context, *VolumeReadsRequest) (*VolumeReadsResponse, error)
+	// ReleaseVolumes forgets the container's key and its reads.
+	ReleaseVolumes(context.Context, *ReleaseVolumesRequest) (*ReleaseVolumesResponse, error)
+	// WarmVolumes fills the objects the reads name, of the workspace's
+	// granted bucket, in the background, behind reads, in order and at their
+	// current versions. Each object fits a quarter of the cache, all the
+	// host's warms half of it, and a warm ends after five minutes. A host
+	// whose disk reads slower than the stores keeps volume frames in memory
+	// only and warms nothing.
+	WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error)
 	mustEmbedUnimplementedVolumeSourcesServer()
 }
 
@@ -628,6 +687,15 @@ type UnimplementedVolumeSourcesServer struct{}
 
 func (UnimplementedVolumeSourcesServer) GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GrantVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) VolumeReads(context.Context, *VolumeReadsRequest) (*VolumeReadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VolumeReads not implemented")
+}
+func (UnimplementedVolumeSourcesServer) ReleaseVolumes(context.Context, *ReleaseVolumesRequest) (*ReleaseVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmVolumes not implemented")
 }
 func (UnimplementedVolumeSourcesServer) mustEmbedUnimplementedVolumeSourcesServer() {}
 func (UnimplementedVolumeSourcesServer) testEmbeddedByValue()                       {}
@@ -668,6 +736,60 @@ func _VolumeSources_GrantVolumes_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VolumeSources_VolumeReads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumeReadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).VolumeReads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_VolumeReads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).VolumeReads(ctx, req.(*VolumeReadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_ReleaseVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).ReleaseVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_ReleaseVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).ReleaseVolumes(ctx, req.(*ReleaseVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_WarmVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_WarmVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, req.(*WarmVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VolumeSources_ServiceDesc is the grpc.ServiceDesc for VolumeSources service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -678,6 +800,18 @@ var VolumeSources_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GrantVolumes",
 			Handler:    _VolumeSources_GrantVolumes_Handler,
+		},
+		{
+			MethodName: "VolumeReads",
+			Handler:    _VolumeSources_VolumeReads_Handler,
+		},
+		{
+			MethodName: "ReleaseVolumes",
+			Handler:    _VolumeSources_ReleaseVolumes_Handler,
+		},
+		{
+			MethodName: "WarmVolumes",
+			Handler:    _VolumeSources_WarmVolumes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

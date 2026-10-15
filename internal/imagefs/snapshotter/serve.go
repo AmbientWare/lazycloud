@@ -8,24 +8,35 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/v2/contrib/snapshotservice"
+	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
-// stopGrace bounds how long Serve waits for calls in flight at shutdown.
-const stopGrace = 10 * time.Second
+const (
+	// stopGrace bounds how long Serve waits for calls in flight at shutdown.
+	stopGrace = 10 * time.Second
+	// memoryHeadroom is what the heap holds besides frames: the HTTP
+	// buffers, the index and metadata of layers and disks.
+	memoryHeadroom = 64 << 20
+)
 
 // Serve runs the snapshotter on a Unix socket only root reaches, serving
 // containerd's snapshotter API, LayerSources, DiskSources and
-// VolumeSources, and with cfg.VolumeAddr the volumes' S3 endpoint, until
-// ctx ends. ready runs once they accept calls.
+// VolumeSources, and the volumes' S3 endpoint on cfg.VolumeAddr, until ctx
+// ends. ready runs once they accept calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
+	// The heap holds a frame per fetch in flight, per frame queued for the
+	// writer and per kept frame; without the limit collection lets it
+	// grow to twice that.
+	debug.SetMemoryLimit(int64(cfg.Fetches+writeQueue+keptFrames)*volumeFrame + memoryHeadroom)
 	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
 		return err
@@ -53,20 +64,27 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	imagefsproto.RegisterVolumeSourcesServer(server, volumeSources{volumes: s.volumes})
 	// Forwarded writes and reads run as long as they take.
 	volumes := &http.Server{Handler: s.volumes, ReadHeaderTimeout: stopGrace}
-	var endpoint net.Listener
-	if cfg.VolumeAddr != "" {
-		// A host whose port is taken mounts its volumes from their buckets.
-		if endpoint, err = lc.Listen(ctx, "tcp", cfg.VolumeAddr); err != nil {
-			cfg.Logger.Error("the volume endpoint cannot listen; volumes mount from their buckets", "error", err)
-		} else {
-			s.volumes.addr = cfg.VolumeAddr
+	endpoint, err := lc.Listen(ctx, "tcp", cfg.VolumeAddr)
+	if err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("serve the volume endpoint: %w", err)
+	}
+	peers := &http.Server{Handler: peerServer{v: s.volumes}, ReadHeaderTimeout: stopGrace}
+	var peerListener net.Listener
+	if cfg.PeerAddr != "" {
+		if peerListener, err = lc.Listen(ctx, "tcp", cfg.PeerAddr); err != nil {
+			_ = listener.Close()
+			_ = endpoint.Close()
+			return fmt.Errorf("serve volume peers: %w", err)
 		}
+		peerListener = netutil.LimitListener(peerListener, peerConnections)
 	}
 	var serving sync.WaitGroup
-	served := make(chan error, 2)
+	served := make(chan error, 3)
 	serving.Go(func() { served <- server.Serve(listener) })
-	if endpoint != nil {
-		serving.Go(func() { served <- volumes.Serve(endpoint) })
+	serving.Go(func() { served <- volumes.Serve(endpoint) })
+	if peerListener != nil {
+		serving.Go(func() { served <- peers.Serve(peerListener) })
 	}
 	ready()
 	select {
@@ -82,6 +100,9 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	defer cancel()
 	if volumes.Shutdown(shutdown) != nil {
 		_ = volumes.Close()
+	}
+	if peers.Shutdown(shutdown) != nil {
+		_ = peers.Close()
 	}
 	serving.Wait()
 	return err

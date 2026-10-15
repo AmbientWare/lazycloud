@@ -36,6 +36,29 @@ func (q *Queries) ContainerImage(ctx context.Context, arg ContainerImageParams) 
 	return i, err
 }
 
+const containerWorkload = `-- name: ContainerWorkload :one
+select workspace_id, workload_id::uuid as workload_id from containers
+where id = $1 and host_id = $2 and state <> 'stopped' and workload_id is not null
+`
+
+type ContainerWorkloadParams struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+type ContainerWorkloadRow struct {
+	WorkspaceID uuid.UUID
+	WorkloadID  uuid.UUID
+}
+
+// The workspace and workload of a live function container on the host.
+func (q *Queries) ContainerWorkload(ctx context.Context, arg ContainerWorkloadParams) (ContainerWorkloadRow, error) {
+	row := q.db.QueryRow(ctx, containerWorkload, arg.ID, arg.HostID)
+	var i ContainerWorkloadRow
+	err := row.Scan(&i.WorkspaceID, &i.WorkloadID)
+	return i, err
+}
+
 const endedAttemptsOnHost = `-- name: EndedAttemptsOnHost :many
 select a.id, a.container_id, a.state
 from containers c
@@ -224,6 +247,51 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 			&i.Traceparent,
 			&i.AssignedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const volumePeers = `-- name: VolumePeers :many
+select h.id, h.peer_address
+from containers c
+join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
+  and h.region = (select me.region from hosts me where me.id = $1)
+where c.workspace_id = $2 and c.state <> 'stopped' and c.host_id <> $1
+group by h.id
+order by max(c.created_at) desc
+limit $3
+`
+
+type VolumePeersParams struct {
+	HostID      uuid.UUID
+	WorkspaceID uuid.UUID
+	MaxPeers    int32
+}
+
+type VolumePeersRow struct {
+	ID          uuid.UUID
+	PeerAddress string
+}
+
+// The other online hosts of the host's region that run a live container of
+// the workspace and serve a volume cache, those with the newest container
+// first.
+func (q *Queries) VolumePeers(ctx context.Context, arg VolumePeersParams) ([]VolumePeersRow, error) {
+	rows, err := q.db.Query(ctx, volumePeers, arg.HostID, arg.WorkspaceID, arg.MaxPeers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VolumePeersRow
+	for rows.Next() {
+		var i VolumePeersRow
+		if err := rows.Scan(&i.ID, &i.PeerAddress); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

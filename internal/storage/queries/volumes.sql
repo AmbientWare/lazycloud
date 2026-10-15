@@ -20,6 +20,16 @@ values (@workspace_id, @bucket, @region)
 on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
 returning bucket, region;
 
+-- name: ReadWorkspacePeerKey :one
+select volume_peer_key from workspaces where id = @workspace_id;
+
+-- name: WorkspacePeerKey :one
+-- The workspace's volume peer key: this one, or the one another server
+-- made first.
+update workspaces set volume_peer_key = coalesce(volume_peer_key, @key::bytea)
+where id = @workspace_id
+returning volume_peer_key;
+
 -- name: DeleteWorkspaceBucket :exec
 delete from workspace_buckets where workspace_id = @workspace_id;
 
@@ -150,3 +160,27 @@ select id from volumes where id = any(@ids::uuid[]);
 
 -- name: KnownDisks :many
 select id from disks where id = any(@ids::uuid[]);
+
+-- name: VolumeTrace :one
+select volume_ids::uuid[] as volume_ids, paths::text[] as paths, recorded_at
+from volume_traces
+where workload_id = @workload_id and workspace_id = @workspace_id;
+
+-- name: RecordVolumeTrace :exec
+-- Stores the reads of the volumes the container mounts in the workspace, in
+-- their order, unless a trace of the workload younger than max_age_seconds
+-- is stored.
+with reads as (
+    select i.volume_id, p.path, i.n
+    from unnest(@volume_ids::uuid[]) with ordinality as i (volume_id, n)
+    join unnest(@paths::text[]) with ordinality as p (path, n) using (n)
+    join volume_mounts m on m.volume_id = i.volume_id and m.container_id = @container_id
+    join volumes v on v.id = i.volume_id and v.workspace_id = @workspace_id
+)
+insert into volume_traces (workload_id, workspace_id, volume_ids, paths)
+select @workload_id, @workspace_id, array_agg(volume_id order by n), array_agg(path order by n)
+from reads
+having count(*) > 0
+on conflict (workload_id) do update
+set volume_ids = excluded.volume_ids, paths = excluded.paths, recorded_at = now()
+where volume_traces.recorded_at < now() - make_interval(secs => @max_age_seconds::float8);

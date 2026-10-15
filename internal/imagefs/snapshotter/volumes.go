@@ -14,9 +14,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,6 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
@@ -39,6 +43,16 @@ const (
 	volumeFrame   = 8 << 20
 	// minCachedObject is the smallest object reads take from the cache.
 	minCachedObject = 1 << 20
+	// readAheadFrames is how many frames past a sequential read are fetched
+	// for it. readAheadFetches bounds those fetches across the host, with
+	// the parallel fetches of the frames one read spans: a few fetches in
+	// parallel bring a reader to the store's full speed, which a fill paced
+	// by the disk may not.
+	readAheadFrames  = 4
+	readAheadFetches = 16
+	// yieldPoll is how often a warm checks for the reads it yields
+	// to having ended.
+	yieldPoll = 100 * time.Millisecond
 	// observationLife is how long a HEAD's answer names an object's
 	// version, as GeeseFS's --stat-cache-ttl.
 	observationLife = time.Second
@@ -57,16 +71,28 @@ type volumes struct {
 	log    *slog.Logger
 	proxy  *httputil.ReverseProxy
 	signer *v4.Signer
-	// addr is the endpoint's address, empty on a host that does not cache
-	// volumes; set before the first call.
-	addr string
 	// heads makes concurrent reads of one object share one HEAD.
-	heads singleflight.Group
-
+	heads   singleflight.Group
 	mu      sync.Mutex
 	buckets map[string]*bucket
-	// filling names the versions being fetched whole.
+	// mounts are the containers' mounts by container.
+	mounts map[string]*volumeMount
+	// filling names the versions being fetched whole, and warming counts
+	// the bytes of the warms running, which half the cache bounds.
 	filling map[string]bool
+	warming int64
+	// ahead holds a token per read-ahead fetch running.
+	ahead chan struct{}
+	// reading counts the mounts' reads in flight, which warms yield to: on
+	// a small host the disk's writes slow its reads. A fill serves the read
+	// of its own object and runs through.
+	reading atomic.Int64
+	// peers are each workspace's peer addresses, as last granted, and
+	// peerDown when a failed peer is asked again. Guarded by mu.
+	peers    map[string][]string
+	peerDown map[string]time.Time
+	// peerServes holds a token per frame being read for a peer.
+	peerServes chan struct{}
 }
 
 // bucket is one workspace's granted bucket: its grant, the key requests
@@ -77,11 +103,21 @@ type volumes struct {
 // listing and answered after it records nothing. Guarded by volumes.mu.
 type bucket struct {
 	grant   volumeGrant
-	key     string
 	seen    map[string]observation
 	written map[string]time.Time
 	listed  map[string]time.Time
 	cleared time.Time
+}
+
+// volumeMount is a container's mount of its workspace's volumes: the key
+// it signs with, the bucket the key reaches, the objects of minCachedObject
+// or more it read, each once in first-read order, until VolumeReads ends
+// the record, and the last frame it read of each. Guarded by volumes.mu.
+type volumeMount struct {
+	key, bucket string
+	reads       []*imagefsproto.VolumeRead
+	ended       bool
+	last        map[string]int
 }
 
 type volumeGrant struct {
@@ -90,6 +126,7 @@ type volumeGrant struct {
 	region          string
 	pathStyle       bool
 	creds           aws.Credentials
+	peerKey         []byte
 }
 
 // observation is an object's version as a HEAD sent at a time reported
@@ -105,7 +142,9 @@ func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger) *volum
 	v := &volumes{
 		cache: cache, http: client, log: log,
 		signer:  v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }),
-		buckets: map[string]*bucket{}, filling: map[string]bool{},
+		buckets: map[string]*bucket{}, mounts: map[string]*volumeMount{}, filling: map[string]bool{},
+		peers: map[string][]string{}, peerDown: map[string]time.Time{}, peerServes: make(chan struct{}, peerServes),
+		ahead: make(chan struct{}, readAheadFetches),
 	}
 	// Forwarding has no deadline: a server-side copy of gigabytes runs for
 	// minutes.
@@ -119,14 +158,14 @@ func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger) *volum
 }
 
 // grant records a workspace bucket's grant, unless the current one expires
-// later, and the key its requests name, and forgets buckets whose grants
-// expired.
-func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) error {
-	if v.addr == "" {
-		return status.Error(codes.FailedPrecondition, "this host does not cache volumes")
+// later, and with a container the key its mount signs with, and forgets
+// buckets whose grants expired.
+func (v *volumes) grant(workspace string, g *imagefsproto.BucketGrant, container, key string, peers []string) error {
+	if _, err := uuid.Parse(workspace); err != nil {
+		return status.Error(codes.InvalidArgument, "a volume grant needs a workspace id")
 	}
-	if _, err := uuid.Parse(workspace); err != nil || len(key) < 16 {
-		return status.Error(codes.InvalidArgument, "a volume grant needs a workspace id and a key of 16 bytes or more")
+	if (container == "") != (key == "") || container != "" && (uuid.Validate(container) != nil || len(key) < 16) {
+		return status.Error(codes.InvalidArgument, "a volume grant names a container id and a key of 16 bytes or more, or neither")
 	}
 	creds, err := grantCredentials(g)
 	if err != nil {
@@ -138,6 +177,7 @@ func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) erro
 	}
 	vg := volumeGrant{
 		workspace: workspace, name: g.GetBucket(), endpoint: endpoint, region: g.GetRegion(), pathStyle: g.GetForcePathStyle(), creds: creds,
+		peerKey: g.GetPeerKey(),
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -151,8 +191,14 @@ func (v *volumes) grant(workspace, key string, g *imagefsproto.BucketGrant) erro
 		b = &bucket{seen: map[string]observation{}, written: map[string]time.Time{}, listed: map[string]time.Time{}}
 		v.buckets[vg.name] = b
 	}
-	if b.key != key || !b.grant.creds.Expires.After(creds.Expires) {
-		b.grant, b.key = vg, key
+	if !b.grant.creds.Expires.After(creds.Expires) {
+		b.grant = vg
+	}
+	v.peers[workspace] = peers
+	if m := v.mounts[container]; m != nil {
+		m.key, m.bucket = key, vg.name
+	} else if container != "" {
+		v.mounts[container] = &volumeMount{key: key, bucket: vg.name, last: map[string]int{}}
 	}
 	return nil
 }
@@ -173,45 +219,56 @@ func grantCredentials(g *imagefsproto.BucketGrant) (aws.Credentials, error) {
 	}, nil
 }
 
-// granted returns the bucket's live grant if r signs with its key.
-func (v *volumes) granted(name string, r *http.Request) (volumeGrant, bool) {
+// granted returns the bucket's live grant and the mount r signs as, when
+// the mount's key reaches the bucket.
+func (v *volumes) granted(name string, r *http.Request) (volumeGrant, *volumeMount, bool) {
 	_, credential, _ := strings.Cut(r.Header.Get("Authorization"), "Credential=")
 	signed, _, _ := strings.Cut(credential, "/")
-	g, key, ok := v.live(name)
-	return g, ok && subtle.ConstantTimeCompare([]byte(signed), []byte(key)) == 1
+	g, ok := v.live(name)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var signer *volumeMount
+	for _, m := range v.mounts {
+		if subtle.ConstantTimeCompare([]byte(signed), []byte(m.key)) == 1 {
+			signer = m
+		}
+	}
+	return g, signer, ok && signer != nil && signer.bucket == name
 }
 
-// live returns the bucket's grant while it lasts, and its key.
-func (v *volumes) live(name string) (volumeGrant, string, bool) {
+// live returns the bucket's grant while it lasts.
+func (v *volumes) live(name string) (volumeGrant, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	b := v.buckets[name]
 	if b == nil || !time.Now().Before(b.grant.creds.Expires) {
-		return volumeGrant{}, "", false
+		return volumeGrant{}, false
 	}
-	return b.grant, b.key, true
+	return b.grant, true
 }
 
 // forwarded is what a forwarded request carries to rewrite and observe:
 // the object's key, empty for a bucket's request, and its escaped path.
 type forwarded struct {
 	grant     volumeGrant
+	mount     *volumeMount
 	key, path string
 	sent      time.Time
 }
 
 type forwardedKey struct{}
 
-// ServeHTTP answers a path-style request signed with its bucket's key.
+// ServeHTTP answers a path-style request signed with the key of a mount
+// granted its bucket.
 func (v *volumes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name, path, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/")
-	g, ok := v.granted(name, r)
+	g, m, ok := v.granted(name, r)
 	key, err := url.PathUnescape(path)
 	if !ok || err != nil || !inVolumes(r, name, key) {
 		s3Error(w, http.StatusForbidden, "AccessDenied")
 		return
 	}
-	f := forwarded{grant: g, key: key, path: path, sent: time.Now()}
+	f := forwarded{grant: g, mount: m, key: key, path: path, sent: time.Now()}
 	q := r.URL.Query()
 	switch {
 	case r.Method == http.MethodGet && key != "" && r.URL.RawQuery == "" && plainGet(r.Header):
@@ -361,8 +418,12 @@ func (v *volumes) observe(resp *http.Response) error {
 			return nil
 		}
 	}
-	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength}
+	modified, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
+	ver := objectVersion{v: v, workspace: f.grant.workspace, bucket: f.grant.name, name: f.key, path: f.path, etag: etag, size: resp.ContentLength, modified: modified}
 	b.seen[f.key] = observation{version: ver, header: header, at: f.sent}
+	// A workload's open through the link tree reaches the cache only as
+	// this HEAD: it keeps the version from eviction.
+	v.cache.touchObject(ver.key(0).object)
 	return nil
 }
 
@@ -449,17 +510,24 @@ func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
 // forgets the observations it outdates. A mark outlives any HEAD sent
 // before it, which fetchTimeout bounds.
 func (v *volumes) wrote(name, key string) {
+	v.cache.dropLink(v.forget(name, key), "")
+}
+
+// forget drops the observations a write of key, or with "" of any key,
+// outdates, and returns the link path the key's object may hold, "" for
+// none.
+func (v *volumes) forget(name, key string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	b := v.buckets[name]
 	if b == nil {
-		return
+		return ""
 	}
 	now := time.Now()
 	if key == "" {
 		b.cleared = now
 		clear(b.seen)
-		return
+		return ""
 	}
 	b.written[key] = now
 	delete(b.seen, key)
@@ -468,6 +536,7 @@ func (v *volumes) wrote(name, key string) {
 			delete(b.written, k)
 		}
 	}
+	return objectVersion{v: v, workspace: b.grant.workspace, name: key}.object().link
 }
 
 // version returns the object's version, observed within observationLife
@@ -528,9 +597,14 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 	if !ok {
 		return false
 	}
-	if ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
+	v.record(f.mount, ver)
+	v.cache.dropLink(ver.object().link, ver.key(0).object)
+	v.reading.Add(1)
+	defer v.reading.Add(-1)
+	if ver.size <= v.cache.limit/4 && v.cache.canStore(ver.size) && !v.cache.cached(ver.key(int(first/volumeFrame))) {
 		v.fill(ver) //nolint:contextcheck // a fill runs under the cache's life, not the read's
 	}
+	v.readAhead(f.mount, ver, int(first/volumeFrame), int(last/volumeFrame)) //nolint:contextcheck // a fetch runs under the cache's life
 	buf := make([]byte, min(maxRead, last-first+1))
 	for pos, started := first, false; pos <= last; {
 		frame, within := int(pos/volumeFrame), pos%volumeFrame
@@ -591,32 +665,116 @@ func s3Error(w http.ResponseWriter, code int, s3Code string) {
 	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code></Error>`, s3Code)
 }
 
-// fill fetches the frames of a version the cache lacks in the background,
-// behind reads, until the cache's life ends or the store refuses one
-// because the object changed, unless a fill of the version runs.
-func (v *volumes) fill(ver objectVersion) {
-	name := ver.key(0).object
-	v.mu.Lock()
-	running := v.filling[name]
-	v.filling[name] = true
-	v.mu.Unlock()
-	if running {
+// record adds a read of ver to m's record.
+func (v *volumes) record(m *volumeMount, ver objectVersion) {
+	rest, _ := strings.CutPrefix(ver.name, volumesPrefix)
+	volume, path, _ := strings.Cut(rest, "/")
+	if uuid.Validate(volume) != nil {
 		return
 	}
-	v.cache.background.Go(func() {
-		defer func() {
-			v.mu.Lock()
-			delete(v.filling, name)
-			v.mu.Unlock()
-		}()
-		ctx, cancel := context.WithCancel(v.cache.life)
-		defer cancel()
-		ver.changed = cancel
-		began := time.Now()
-		fetched := v.cache.loadEach(ctx, ver.frames())
-		v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
-			"seconds", time.Since(began).Seconds(), "error", ctx.Err())
-	})
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if m.ended || len(m.reads) >= hostproto.MaxVolumeReads ||
+		slices.ContainsFunc(m.reads, func(r *imagefsproto.VolumeRead) bool { return r.GetVolumeId() == volume && r.GetPath() == path }) {
+		return
+	}
+	m.reads = append(m.reads, &imagefsproto.VolumeRead{VolumeId: volume, Path: path})
+}
+
+// fill fetches the frames of a version the cache lacks in the background,
+// behind reads, unless a fill of the version runs.
+func (v *volumes) fill(ver objectVersion) {
+	if started, _ := v.startFill(ver, 0); started {
+		v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver, ver.frames()) })
+	}
+}
+
+// readAhead fetches, in parallel, the frames a read of from to to spans
+// past its first, and when it starts an object or follows the mount's last
+// read of it, as GeeseFS reads a file in order, the readAheadFrames after
+// it. The fetches use the slots reads use.
+func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
+	v.mu.Lock()
+	last, seen := m.last[ver.name]
+	if len(m.last) >= hostproto.MaxVolumeReads {
+		clear(m.last)
+	}
+	m.last[ver.name] = to
+	v.mu.Unlock()
+	end := to
+	if seen && from >= last-1 && from <= last+1 || !seen && from == 0 {
+		end += readAheadFrames
+	}
+	frames := int((ver.size + volumeFrame - 1) / volumeFrame)
+	for frame := from + 1; frame < min(frames, end+1); frame++ {
+		if _, ok := v.cache.fromMemory(ver.key(frame)); ok || v.cache.cached(ver.key(frame)) {
+			continue
+		}
+		select {
+		case v.ahead <- struct{}{}:
+		default:
+			return
+		}
+		v.cache.background.Go(func() {
+			defer func() { <-v.ahead }()
+			if _, err := v.cache.load(ver, frame); err != nil {
+				v.log.Debug("reading a volume frame ahead failed", "bucket", ver.bucket, "key", ver.name, "frame", frame, "error", err)
+			}
+		})
+	}
+}
+
+// startFill marks a fill of ver, which a warm counts as warmed bytes until
+// it ends, and reports whether it may run: no fill of ver runs and the
+// warms stay within half the cache. full reports that the warms are at
+// their bound.
+func (v *volumes) startFill(ver objectVersion, warmed int64) (started, full bool) {
+	name := ver.key(0).object
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if full = v.warming+warmed > v.cache.limit/2; full || v.filling[name] {
+		return false, full
+	}
+	v.filling[name] = true
+	v.warming += warmed
+	return true, false
+}
+
+// fillWhole fetches frames of ver, which startFill marked, until ctx ends
+// or the store refuses one because the object changed.
+func (v *volumes) fillWhole(ctx context.Context, ver objectVersion, frames iter.Seq2[frameSource, int]) {
+	defer func() {
+		v.mu.Lock()
+		delete(v.filling, ver.key(0).object)
+		v.mu.Unlock()
+	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ver.changed = cancel
+	began := time.Now()
+	fetched := v.cache.loadEach(ctx, frames)
+	v.log.Info("volume object filled", "bucket", ver.bucket, "key", ver.name, "bytes", ver.size, "fetched_frames", fetched,
+		"seconds", time.Since(began).Seconds(), "error", ctx.Err())
+}
+
+// yielding yields frames while no mount read is in flight, so a warm never
+// slows a load: it waits out each read, checking every yieldPoll, until
+// ctx ends.
+func (v *volumes) yielding(ctx context.Context, frames iter.Seq2[frameSource, int]) iter.Seq2[frameSource, int] {
+	return func(yield func(frameSource, int) bool) {
+		for src, i := range frames {
+			for v.reading.Load() > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(yieldPoll):
+				}
+			}
+			if !yield(src, i) {
+				return
+			}
+		}
+	}
 }
 
 // objectVersion is one version of a volume object, read by frames of
@@ -625,12 +783,27 @@ type objectVersion struct {
 	v                                   *volumes
 	workspace, bucket, name, path, etag string
 	size                                int64
+	modified                            time.Time
 	// changed, when set, ends the fill fetching the version.
 	changed func()
 }
 
 func (o objectVersion) key(frame int) frameKey {
 	return frameKey{object: "volume:" + o.workspace + "/" + o.bucket + "/" + o.name + "@" + o.etag, frame: frame}
+}
+
+// object returns the version's size, time and link path: the link tree's
+// <workspace>/<volume>/<path> for a key under a volume whose path has no
+// empty, . or .. segment, and none otherwise.
+func (o objectVersion) object() objectInfo {
+	info := objectInfo{size: o.size, modified: o.modified}
+	rest, _ := strings.CutPrefix(o.name, volumesPrefix)
+	volume, path, _ := strings.Cut(rest, "/")
+	if o.v.cache.linkDir == "" || uuid.Validate(volume) != nil || path == "" || filepath.Clean("/"+path) != "/"+path {
+		return info
+	}
+	info.link = filepath.Join(o.v.cache.linkDir, o.workspace, volume, path)
+	return info
 }
 
 func (o objectVersion) frameLen(frame int) int {
@@ -647,12 +820,16 @@ func (o objectVersion) frames() iter.Seq2[frameSource, int] {
 	}
 }
 
-// fetch reads frame while the object is this version: a 412 fails it.
+// fetch reads frame from a peer that holds it, else from the store while
+// the object is this version: a 412 fails it.
 func (o objectVersion) fetch(ctx context.Context, frame int) ([]byte, error) {
+	if data, ok := o.v.fromPeers(ctx, o, frame); ok {
+		return data, nil
+	}
 	p := make([]byte, o.frameLen(frame))
 	off := int64(frame) * volumeFrame
 	err := retry(ctx, func() error {
-		g, _, ok := o.v.live(o.bucket)
+		g, ok := o.v.live(o.bucket)
 		if !ok {
 			return fmt.Errorf("bucket %s: %w", o.bucket, errNoGrant)
 		}
@@ -692,10 +869,101 @@ type volumeSources struct {
 }
 
 func (s volumeSources) GrantVolumes(_ context.Context, req *imagefsproto.GrantVolumesRequest) (*imagefsproto.GrantVolumesResponse, error) {
-	if req.GetWorkspaceId() != "" {
-		if err := s.volumes.grant(req.GetWorkspaceId(), req.GetKey(), req.GetGrant()); err != nil {
-			return nil, err
+	if err := s.volumes.grant(req.GetWorkspaceId(), req.GetGrant(), req.GetContainerId(), req.GetKey(), req.GetPeers()); err != nil {
+		return nil, err
+	}
+	return &imagefsproto.GrantVolumesResponse{}, nil
+}
+
+func (s volumeSources) VolumeReads(_ context.Context, req *imagefsproto.VolumeReadsRequest) (*imagefsproto.VolumeReadsResponse, error) {
+	v := s.volumes
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	m := v.mounts[req.GetContainerId()]
+	if m == nil {
+		return nil, status.Errorf(codes.NotFound, "container %s has no volume mount", req.GetContainerId())
+	}
+	m.ended = true
+	return &imagefsproto.VolumeReadsResponse{Reads: m.reads}, nil
+}
+
+func (s volumeSources) ReleaseVolumes(_ context.Context, req *imagefsproto.ReleaseVolumesRequest) (*imagefsproto.ReleaseVolumesResponse, error) {
+	s.volumes.mu.Lock()
+	defer s.volumes.mu.Unlock()
+	delete(s.volumes.mounts, req.GetContainerId())
+	return &imagefsproto.ReleaseVolumesResponse{}, nil
+}
+
+func (s volumeSources) WarmVolumes(_ context.Context, req *imagefsproto.WarmVolumesRequest) (*imagefsproto.WarmVolumesResponse, error) {
+	v := s.volumes
+	var g volumeGrant
+	v.mu.Lock()
+	for _, b := range v.buckets {
+		if b.grant.workspace == req.GetWorkspaceId() && time.Now().Before(b.grant.creds.Expires) {
+			g = b.grant
 		}
 	}
-	return &imagefsproto.GrantVolumesResponse{Endpoint: s.volumes.addr}, nil
+	v.mu.Unlock()
+	if g.name == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "workspace %s has no live volume grant", req.GetWorkspaceId())
+	}
+	var keys []string
+	for _, r := range req.GetReads() {
+		if uuid.Validate(r.GetVolumeId()) != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%q is not a volume id", r.GetVolumeId())
+		}
+		keys = append(keys, volumesPrefix+r.GetVolumeId()+"/"+r.GetPath())
+	}
+	//nolint:contextcheck // a warm lives with the cache, not the call
+	v.cache.background.Go(func() {
+		ctx, cancel := context.WithTimeout(v.cache.life, prefetchLife)
+		defer cancel()
+		v.warm(ctx, g, keys)
+	})
+	return &imagefsproto.WarmVolumesResponse{}, nil
+}
+
+// warm fills the objects keys name in order at their current versions,
+// each of minCachedObject to a quarter of the cache, while the host's warms
+// hold less than half of it.
+func (v *volumes) warm(ctx context.Context, g volumeGrant, keys []string) {
+	var warmed int64
+	defer func() {
+		v.mu.Lock()
+		v.warming -= warmed
+		v.mu.Unlock()
+	}()
+	for _, key := range keys {
+		o, ok := v.version(ctx, forwarded{grant: g, key: key, path: s3Escape(key)})
+		ver := o.version
+		if ctx.Err() != nil {
+			return
+		}
+		if !ok || ver.size < minCachedObject || ver.size > v.cache.limit/4 {
+			continue
+		}
+		started, full := v.startFill(ver, ver.size)
+		if full {
+			return
+		}
+		if !started {
+			continue
+		}
+		warmed += ver.size
+		v.fillWhole(ctx, ver, v.yielding(ctx, ver.frames()))
+	}
+}
+
+// s3Escape escapes a key as clients sign its path: every byte but
+// unreserved ones and "/".
+func s3Escape(key string) string {
+	var b strings.Builder
+	for _, c := range []byte(key) {
+		if 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || strings.IndexByte("-_.~/", c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }

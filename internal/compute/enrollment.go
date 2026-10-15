@@ -164,6 +164,9 @@ type SessionOpen struct {
 	// SleptSeconds how long it slept since, in this boot.
 	SleepAttempt *uuid.UUID
 	SleptSeconds float64
+	// PeerAddress is where other hosts of the region read the host's cached
+	// volume frames, host:port, empty when it serves none.
+	PeerAddress string
 }
 
 // OpenSession brings host online with the capacity it reported and returns
@@ -178,7 +181,7 @@ func (c *Compute) OpenSession(ctx context.Context, host HostID, open SessionOpen
 		var err error
 		epoch, err = c.queries.WithTx(tx).OpenHostSession(ctx, OpenHostSessionParams{
 			ID: uuid.UUID(host), BootID: open.BootID, AgentVersion: open.AgentVersion,
-			AgentUpdatable: open.AgentUpdatable, AgentRejectedVersion: open.AgentRejected,
+			AgentUpdatable: open.AgentUpdatable, AgentRejectedVersion: open.AgentRejected, PeerAddress: open.PeerAddress,
 			CpuMillis: open.Capacity.CPUMillis, MemoryBytes: open.Capacity.MemoryBytes,
 			GpuType: open.Capacity.GPUType, GpuCount: int32(open.Capacity.GPUCount), //nolint:gosec // GPU counts are small.
 			DiskSlots: int32(open.Capacity.DiskSlots), //nolint:gosec // Bounded by the data volume.

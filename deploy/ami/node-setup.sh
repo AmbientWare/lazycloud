@@ -25,7 +25,7 @@ fetch() {
 work=$(mktemp -d)
 cd "$work"
 
-dnf install -y docker e2fsprogs amazon-ssm-agent
+dnf install -y docker e2fsprogs amazon-ssm-agent iptables-nft
 systemctl enable docker amazon-ssm-agent
 
 # Volume mounters run GeeseFS in containers given /dev/fuse and
@@ -198,6 +198,38 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable lazycloud-data-volume.service
+
+# The fleet security group opens the volume peer port
+# (internal/imagefs/layersource.VolumePeerPort) to every host, and
+# workloads' traffic leaves through the same group, so the host drops the
+# port's traffic from its container bridge, to itself and forwarded,
+# before Docker's chains see it.
+cat >/usr/local/sbin/lazycloud-peer-firewall <<'SCRIPT'
+#!/bin/sh
+set -eu
+for chain in INPUT DOCKER-USER; do
+  iptables -N "$chain" 2>/dev/null || true
+  iptables -C "$chain" -i docker0 -p tcp --dport 12122 -j DROP 2>/dev/null ||
+    iptables -I "$chain" -i docker0 -p tcp --dport 12122 -j DROP
+done
+SCRIPT
+chmod 0755 /usr/local/sbin/lazycloud-peer-firewall
+cat >/etc/systemd/system/lazycloud-peer-firewall.service <<'UNIT'
+[Unit]
+Description=LazyCloud volume peer port firewall
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/lazycloud-peer-firewall
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable lazycloud-peer-firewall.service
 # The bake instance has a data volume of each variant's kind.
 systemctl start lazycloud-data-volume.service
 mountpoint -q /var/lib/lazycloud-data

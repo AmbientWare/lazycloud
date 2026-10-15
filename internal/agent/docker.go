@@ -99,6 +99,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		"WORKSPACE_NAME="+spec.GetWorkspace(),
 		"CONTAINER_ID="+c.id,
 	)
+	cacheMounts, cacheEnv := a.volumes.cacheLibrary(spec)
+	env = append(env, cacheEnv...)
 	runtimeLabel, err := json.Marshal(c.runtime)
 	if err != nil {
 		return fmt.Errorf("encode runtime label: %w", err)
@@ -125,6 +127,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	if runtime != "" {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true})
 	}
+	mounts = append(mounts, cacheMounts...)
 	// Workloads run as the image's user.
 	workingDir, user := containerWorkspace, ""
 	var capAdd, securityOpt []string

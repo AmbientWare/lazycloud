@@ -621,8 +621,10 @@ type BucketGrant struct {
 	SecretAccessKey string                 `protobuf:"bytes,6,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
 	SessionToken    string                 `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The workspace's key peer frame reads are signed with, 32 bytes.
+	PeerKey       []byte `protobuf:"bytes,9,opt,name=peer_key,json=peerKey,proto3" json:"peer_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BucketGrant) Reset() {
@@ -707,6 +709,13 @@ func (x *BucketGrant) GetSessionToken() string {
 func (x *BucketGrant) GetExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *BucketGrant) GetPeerKey() []byte {
+	if x != nil {
+		return x.PeerKey
 	}
 	return nil
 }
@@ -1130,8 +1139,13 @@ type GrantVolumesRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	WorkspaceId string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
 	Grant       *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
-	// The access key requests for the bucket sign with, 16 bytes or more.
-	Key           string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	// The container whose mount signs requests with key, 16 bytes or more;
+	// both empty for a refresh.
+	Key         string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	ContainerId string `protobuf:"bytes,4,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// The peer addresses, host:port, of the workspace's other hosts in the
+	// region; replaces the last list given for the workspace.
+	Peers         []string `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1187,10 +1201,22 @@ func (x *GrantVolumesRequest) GetKey() string {
 	return ""
 }
 
+func (x *GrantVolumesRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *GrantVolumesRequest) GetPeers() []string {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
 type GrantVolumesResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// host:port
-	Endpoint      string `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1225,11 +1251,314 @@ func (*GrantVolumesResponse) Descriptor() ([]byte, []int) {
 	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *GrantVolumesResponse) GetEndpoint() string {
+// VolumeRead is an object under a volume: its key is
+// volumes/<volume_id>/<path>.
+type VolumeRead struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VolumeId      string                 `protobuf:"bytes,1,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeRead) Reset() {
+	*x = VolumeRead{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeRead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeRead) ProtoMessage() {}
+
+func (x *VolumeRead) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[23]
 	if x != nil {
-		return x.Endpoint
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeRead.ProtoReflect.Descriptor instead.
+func (*VolumeRead) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *VolumeRead) GetVolumeId() string {
+	if x != nil {
+		return x.VolumeId
 	}
 	return ""
+}
+
+func (x *VolumeRead) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type VolumeReadsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ContainerId   string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeReadsRequest) Reset() {
+	*x = VolumeReadsRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeReadsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeReadsRequest) ProtoMessage() {}
+
+func (x *VolumeReadsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeReadsRequest.ProtoReflect.Descriptor instead.
+func (*VolumeReadsRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *VolumeReadsRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+type VolumeReadsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reads         []*VolumeRead          `protobuf:"bytes,1,rep,name=reads,proto3" json:"reads,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeReadsResponse) Reset() {
+	*x = VolumeReadsResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeReadsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeReadsResponse) ProtoMessage() {}
+
+func (x *VolumeReadsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeReadsResponse.ProtoReflect.Descriptor instead.
+func (*VolumeReadsResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *VolumeReadsResponse) GetReads() []*VolumeRead {
+	if x != nil {
+		return x.Reads
+	}
+	return nil
+}
+
+type ReleaseVolumesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ContainerId   string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseVolumesRequest) Reset() {
+	*x = ReleaseVolumesRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseVolumesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseVolumesRequest) ProtoMessage() {}
+
+func (x *ReleaseVolumesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseVolumesRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseVolumesRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ReleaseVolumesRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+type ReleaseVolumesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseVolumesResponse) Reset() {
+	*x = ReleaseVolumesResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseVolumesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseVolumesResponse) ProtoMessage() {}
+
+func (x *ReleaseVolumesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseVolumesResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseVolumesResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{27}
+}
+
+type WarmVolumesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId   string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	Reads         []*VolumeRead          `protobuf:"bytes,2,rep,name=reads,proto3" json:"reads,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WarmVolumesRequest) Reset() {
+	*x = WarmVolumesRequest{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WarmVolumesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WarmVolumesRequest) ProtoMessage() {}
+
+func (x *WarmVolumesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WarmVolumesRequest.ProtoReflect.Descriptor instead.
+func (*WarmVolumesRequest) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *WarmVolumesRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *WarmVolumesRequest) GetReads() []*VolumeRead {
+	if x != nil {
+		return x.Reads
+	}
+	return nil
+}
+
+type WarmVolumesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WarmVolumesResponse) Reset() {
+	*x = WarmVolumesResponse{}
+	mi := &file_imagefs_v1_source_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WarmVolumesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WarmVolumesResponse) ProtoMessage() {}
+
+func (x *WarmVolumesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_imagefs_v1_source_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WarmVolumesResponse.ProtoReflect.Descriptor instead.
+func (*WarmVolumesResponse) Descriptor() ([]byte, []int) {
+	return file_imagefs_v1_source_proto_rawDescGZIP(), []int{29}
 }
 
 var File_imagefs_v1_source_proto protoreflect.FileDescriptor
@@ -1267,7 +1596,7 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
 	"\x10EndTraceResponse\x125\n" +
 	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
-	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xb3\x02\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xce\x02\n" +
 	"\vBucketGrant\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
@@ -1277,7 +1606,8 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
 	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
-	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"d\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x19\n" +
+	"\bpeer_key\x18\t \x01(\fR\apeerKey\"d\n" +
 	"\x10GrantDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x127\n" +
 	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\"\x13\n" +
@@ -1303,13 +1633,29 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"[\n" +
 	"\x11DiskReadsResponse\x12!\n" +
 	"\fstart_frames\x18\x01 \x03(\rR\vstartFrames\x12#\n" +
-	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\x83\x01\n" +
+	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\xbc\x01\n" +
 	"\x13GrantVolumesRequest\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x127\n" +
 	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\x12\x10\n" +
-	"\x03key\x18\x03 \x01(\tR\x03key\"2\n" +
-	"\x14GrantVolumesResponse\x12\x1a\n" +
-	"\bendpoint\x18\x01 \x01(\tR\bendpoint2\xde\x03\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12!\n" +
+	"\fcontainer_id\x18\x04 \x01(\tR\vcontainerId\x12\x14\n" +
+	"\x05peers\x18\x05 \x03(\tR\x05peers\"\x16\n" +
+	"\x14GrantVolumesResponse\"=\n" +
+	"\n" +
+	"VolumeRead\x12\x1b\n" +
+	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"7\n" +
+	"\x12VolumeReadsRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\"M\n" +
+	"\x13VolumeReadsResponse\x126\n" +
+	"\x05reads\x18\x01 \x03(\v2 .lazycloud.imagefs.v1.VolumeReadR\x05reads\":\n" +
+	"\x15ReleaseVolumesRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\"\x18\n" +
+	"\x16ReleaseVolumesResponse\"o\n" +
+	"\x12WarmVolumesRequest\x12!\n" +
+	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x126\n" +
+	"\x05reads\x18\x02 \x03(\v2 .lazycloud.imagefs.v1.VolumeReadR\x05reads\"\x15\n" +
+	"\x13WarmVolumesResponse2\xde\x03\n" +
 	"\fLayerSources\x12P\n" +
 	"\x05Grant\x12\".lazycloud.imagefs.v1.GrantRequest\x1a#.lazycloud.imagefs.v1.GrantResponse\x12Y\n" +
 	"\bPrefetch\x12%.lazycloud.imagefs.v1.PrefetchRequest\x1a&.lazycloud.imagefs.v1.PrefetchResponse\x12e\n" +
@@ -1321,9 +1667,12 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\tGrantDisk\x12&.lazycloud.imagefs.v1.GrantDiskRequest\x1a'.lazycloud.imagefs.v1.GrantDiskResponse\x12\\\n" +
 	"\tServeDisk\x12&.lazycloud.imagefs.v1.ServeDiskRequest\x1a'.lazycloud.imagefs.v1.ServeDiskResponse\x12b\n" +
 	"\vReleaseDisk\x12(.lazycloud.imagefs.v1.ReleaseDiskRequest\x1a).lazycloud.imagefs.v1.ReleaseDiskResponse\x12\\\n" +
-	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponse2v\n" +
+	"\tDiskReads\x12&.lazycloud.imagefs.v1.DiskReadsRequest\x1a'.lazycloud.imagefs.v1.DiskReadsResponse2\xab\x03\n" +
 	"\rVolumeSources\x12e\n" +
-	"\fGrantVolumes\x12).lazycloud.imagefs.v1.GrantVolumesRequest\x1a*.lazycloud.imagefs.v1.GrantVolumesResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
+	"\fGrantVolumes\x12).lazycloud.imagefs.v1.GrantVolumesRequest\x1a*.lazycloud.imagefs.v1.GrantVolumesResponse\x12b\n" +
+	"\vVolumeReads\x12(.lazycloud.imagefs.v1.VolumeReadsRequest\x1a).lazycloud.imagefs.v1.VolumeReadsResponse\x12k\n" +
+	"\x0eReleaseVolumes\x12+.lazycloud.imagefs.v1.ReleaseVolumesRequest\x1a,.lazycloud.imagefs.v1.ReleaseVolumesResponse\x12b\n" +
+	"\vWarmVolumes\x12(.lazycloud.imagefs.v1.WarmVolumesRequest\x1a).lazycloud.imagefs.v1.WarmVolumesResponseB@Z>github.com/AmbientWare/lazycloud/internal/imagefs/imagefsprotob\x06proto3"
 
 var (
 	file_imagefs_v1_source_proto_rawDescOnce sync.Once
@@ -1337,66 +1686,81 @@ func file_imagefs_v1_source_proto_rawDescGZIP() []byte {
 	return file_imagefs_v1_source_proto_rawDescData
 }
 
-var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_imagefs_v1_source_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_imagefs_v1_source_proto_goTypes = []any{
-	(*LayerGrant)(nil),            // 0: lazycloud.imagefs.v1.LayerGrant
-	(*GrantRequest)(nil),          // 1: lazycloud.imagefs.v1.GrantRequest
-	(*GrantResponse)(nil),         // 2: lazycloud.imagefs.v1.GrantResponse
-	(*FrameRead)(nil),             // 3: lazycloud.imagefs.v1.FrameRead
-	(*PrefetchRequest)(nil),       // 4: lazycloud.imagefs.v1.PrefetchRequest
-	(*PrefetchResponse)(nil),      // 5: lazycloud.imagefs.v1.PrefetchResponse
-	(*StopPrefetchRequest)(nil),   // 6: lazycloud.imagefs.v1.StopPrefetchRequest
-	(*StopPrefetchResponse)(nil),  // 7: lazycloud.imagefs.v1.StopPrefetchResponse
-	(*StartTraceRequest)(nil),     // 8: lazycloud.imagefs.v1.StartTraceRequest
-	(*StartTraceResponse)(nil),    // 9: lazycloud.imagefs.v1.StartTraceResponse
-	(*EndTraceRequest)(nil),       // 10: lazycloud.imagefs.v1.EndTraceRequest
-	(*EndTraceResponse)(nil),      // 11: lazycloud.imagefs.v1.EndTraceResponse
-	(*BucketGrant)(nil),           // 12: lazycloud.imagefs.v1.BucketGrant
-	(*GrantDiskRequest)(nil),      // 13: lazycloud.imagefs.v1.GrantDiskRequest
-	(*GrantDiskResponse)(nil),     // 14: lazycloud.imagefs.v1.GrantDiskResponse
-	(*ServeDiskRequest)(nil),      // 15: lazycloud.imagefs.v1.ServeDiskRequest
-	(*ServeDiskResponse)(nil),     // 16: lazycloud.imagefs.v1.ServeDiskResponse
-	(*ReleaseDiskRequest)(nil),    // 17: lazycloud.imagefs.v1.ReleaseDiskRequest
-	(*ReleaseDiskResponse)(nil),   // 18: lazycloud.imagefs.v1.ReleaseDiskResponse
-	(*DiskReadsRequest)(nil),      // 19: lazycloud.imagefs.v1.DiskReadsRequest
-	(*DiskReadsResponse)(nil),     // 20: lazycloud.imagefs.v1.DiskReadsResponse
-	(*GrantVolumesRequest)(nil),   // 21: lazycloud.imagefs.v1.GrantVolumesRequest
-	(*GrantVolumesResponse)(nil),  // 22: lazycloud.imagefs.v1.GrantVolumesResponse
-	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
+	(*LayerGrant)(nil),             // 0: lazycloud.imagefs.v1.LayerGrant
+	(*GrantRequest)(nil),           // 1: lazycloud.imagefs.v1.GrantRequest
+	(*GrantResponse)(nil),          // 2: lazycloud.imagefs.v1.GrantResponse
+	(*FrameRead)(nil),              // 3: lazycloud.imagefs.v1.FrameRead
+	(*PrefetchRequest)(nil),        // 4: lazycloud.imagefs.v1.PrefetchRequest
+	(*PrefetchResponse)(nil),       // 5: lazycloud.imagefs.v1.PrefetchResponse
+	(*StopPrefetchRequest)(nil),    // 6: lazycloud.imagefs.v1.StopPrefetchRequest
+	(*StopPrefetchResponse)(nil),   // 7: lazycloud.imagefs.v1.StopPrefetchResponse
+	(*StartTraceRequest)(nil),      // 8: lazycloud.imagefs.v1.StartTraceRequest
+	(*StartTraceResponse)(nil),     // 9: lazycloud.imagefs.v1.StartTraceResponse
+	(*EndTraceRequest)(nil),        // 10: lazycloud.imagefs.v1.EndTraceRequest
+	(*EndTraceResponse)(nil),       // 11: lazycloud.imagefs.v1.EndTraceResponse
+	(*BucketGrant)(nil),            // 12: lazycloud.imagefs.v1.BucketGrant
+	(*GrantDiskRequest)(nil),       // 13: lazycloud.imagefs.v1.GrantDiskRequest
+	(*GrantDiskResponse)(nil),      // 14: lazycloud.imagefs.v1.GrantDiskResponse
+	(*ServeDiskRequest)(nil),       // 15: lazycloud.imagefs.v1.ServeDiskRequest
+	(*ServeDiskResponse)(nil),      // 16: lazycloud.imagefs.v1.ServeDiskResponse
+	(*ReleaseDiskRequest)(nil),     // 17: lazycloud.imagefs.v1.ReleaseDiskRequest
+	(*ReleaseDiskResponse)(nil),    // 18: lazycloud.imagefs.v1.ReleaseDiskResponse
+	(*DiskReadsRequest)(nil),       // 19: lazycloud.imagefs.v1.DiskReadsRequest
+	(*DiskReadsResponse)(nil),      // 20: lazycloud.imagefs.v1.DiskReadsResponse
+	(*GrantVolumesRequest)(nil),    // 21: lazycloud.imagefs.v1.GrantVolumesRequest
+	(*GrantVolumesResponse)(nil),   // 22: lazycloud.imagefs.v1.GrantVolumesResponse
+	(*VolumeRead)(nil),             // 23: lazycloud.imagefs.v1.VolumeRead
+	(*VolumeReadsRequest)(nil),     // 24: lazycloud.imagefs.v1.VolumeReadsRequest
+	(*VolumeReadsResponse)(nil),    // 25: lazycloud.imagefs.v1.VolumeReadsResponse
+	(*ReleaseVolumesRequest)(nil),  // 26: lazycloud.imagefs.v1.ReleaseVolumesRequest
+	(*ReleaseVolumesResponse)(nil), // 27: lazycloud.imagefs.v1.ReleaseVolumesResponse
+	(*WarmVolumesRequest)(nil),     // 28: lazycloud.imagefs.v1.WarmVolumesRequest
+	(*WarmVolumesResponse)(nil),    // 29: lazycloud.imagefs.v1.WarmVolumesResponse
+	(*timestamppb.Timestamp)(nil),  // 30: google.protobuf.Timestamp
 }
 var file_imagefs_v1_source_proto_depIdxs = []int32{
-	23, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
+	30, // 0: lazycloud.imagefs.v1.LayerGrant.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: lazycloud.imagefs.v1.GrantRequest.layers:type_name -> lazycloud.imagefs.v1.LayerGrant
 	3,  // 2: lazycloud.imagefs.v1.PrefetchRequest.reads:type_name -> lazycloud.imagefs.v1.FrameRead
 	3,  // 3: lazycloud.imagefs.v1.EndTraceResponse.reads:type_name -> lazycloud.imagefs.v1.FrameRead
-	23, // 4: lazycloud.imagefs.v1.BucketGrant.expires_at:type_name -> google.protobuf.Timestamp
+	30, // 4: lazycloud.imagefs.v1.BucketGrant.expires_at:type_name -> google.protobuf.Timestamp
 	12, // 5: lazycloud.imagefs.v1.GrantDiskRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
 	12, // 6: lazycloud.imagefs.v1.GrantVolumesRequest.grant:type_name -> lazycloud.imagefs.v1.BucketGrant
-	1,  // 7: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
-	4,  // 8: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
-	6,  // 9: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
-	8,  // 10: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
-	10, // 11: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
-	13, // 12: lazycloud.imagefs.v1.DiskSources.GrantDisk:input_type -> lazycloud.imagefs.v1.GrantDiskRequest
-	15, // 13: lazycloud.imagefs.v1.DiskSources.ServeDisk:input_type -> lazycloud.imagefs.v1.ServeDiskRequest
-	17, // 14: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
-	19, // 15: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
-	21, // 16: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:input_type -> lazycloud.imagefs.v1.GrantVolumesRequest
-	2,  // 17: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
-	5,  // 18: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
-	7,  // 19: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
-	9,  // 20: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
-	11, // 21: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
-	14, // 22: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
-	16, // 23: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
-	18, // 24: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
-	20, // 25: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
-	22, // 26: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:output_type -> lazycloud.imagefs.v1.GrantVolumesResponse
-	17, // [17:27] is the sub-list for method output_type
-	7,  // [7:17] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	23, // 7: lazycloud.imagefs.v1.VolumeReadsResponse.reads:type_name -> lazycloud.imagefs.v1.VolumeRead
+	23, // 8: lazycloud.imagefs.v1.WarmVolumesRequest.reads:type_name -> lazycloud.imagefs.v1.VolumeRead
+	1,  // 9: lazycloud.imagefs.v1.LayerSources.Grant:input_type -> lazycloud.imagefs.v1.GrantRequest
+	4,  // 10: lazycloud.imagefs.v1.LayerSources.Prefetch:input_type -> lazycloud.imagefs.v1.PrefetchRequest
+	6,  // 11: lazycloud.imagefs.v1.LayerSources.StopPrefetch:input_type -> lazycloud.imagefs.v1.StopPrefetchRequest
+	8,  // 12: lazycloud.imagefs.v1.LayerSources.StartTrace:input_type -> lazycloud.imagefs.v1.StartTraceRequest
+	10, // 13: lazycloud.imagefs.v1.LayerSources.EndTrace:input_type -> lazycloud.imagefs.v1.EndTraceRequest
+	13, // 14: lazycloud.imagefs.v1.DiskSources.GrantDisk:input_type -> lazycloud.imagefs.v1.GrantDiskRequest
+	15, // 15: lazycloud.imagefs.v1.DiskSources.ServeDisk:input_type -> lazycloud.imagefs.v1.ServeDiskRequest
+	17, // 16: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:input_type -> lazycloud.imagefs.v1.ReleaseDiskRequest
+	19, // 17: lazycloud.imagefs.v1.DiskSources.DiskReads:input_type -> lazycloud.imagefs.v1.DiskReadsRequest
+	21, // 18: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:input_type -> lazycloud.imagefs.v1.GrantVolumesRequest
+	24, // 19: lazycloud.imagefs.v1.VolumeSources.VolumeReads:input_type -> lazycloud.imagefs.v1.VolumeReadsRequest
+	26, // 20: lazycloud.imagefs.v1.VolumeSources.ReleaseVolumes:input_type -> lazycloud.imagefs.v1.ReleaseVolumesRequest
+	28, // 21: lazycloud.imagefs.v1.VolumeSources.WarmVolumes:input_type -> lazycloud.imagefs.v1.WarmVolumesRequest
+	2,  // 22: lazycloud.imagefs.v1.LayerSources.Grant:output_type -> lazycloud.imagefs.v1.GrantResponse
+	5,  // 23: lazycloud.imagefs.v1.LayerSources.Prefetch:output_type -> lazycloud.imagefs.v1.PrefetchResponse
+	7,  // 24: lazycloud.imagefs.v1.LayerSources.StopPrefetch:output_type -> lazycloud.imagefs.v1.StopPrefetchResponse
+	9,  // 25: lazycloud.imagefs.v1.LayerSources.StartTrace:output_type -> lazycloud.imagefs.v1.StartTraceResponse
+	11, // 26: lazycloud.imagefs.v1.LayerSources.EndTrace:output_type -> lazycloud.imagefs.v1.EndTraceResponse
+	14, // 27: lazycloud.imagefs.v1.DiskSources.GrantDisk:output_type -> lazycloud.imagefs.v1.GrantDiskResponse
+	16, // 28: lazycloud.imagefs.v1.DiskSources.ServeDisk:output_type -> lazycloud.imagefs.v1.ServeDiskResponse
+	18, // 29: lazycloud.imagefs.v1.DiskSources.ReleaseDisk:output_type -> lazycloud.imagefs.v1.ReleaseDiskResponse
+	20, // 30: lazycloud.imagefs.v1.DiskSources.DiskReads:output_type -> lazycloud.imagefs.v1.DiskReadsResponse
+	22, // 31: lazycloud.imagefs.v1.VolumeSources.GrantVolumes:output_type -> lazycloud.imagefs.v1.GrantVolumesResponse
+	25, // 32: lazycloud.imagefs.v1.VolumeSources.VolumeReads:output_type -> lazycloud.imagefs.v1.VolumeReadsResponse
+	27, // 33: lazycloud.imagefs.v1.VolumeSources.ReleaseVolumes:output_type -> lazycloud.imagefs.v1.ReleaseVolumesResponse
+	29, // 34: lazycloud.imagefs.v1.VolumeSources.WarmVolumes:output_type -> lazycloud.imagefs.v1.WarmVolumesResponse
+	22, // [22:35] is the sub-list for method output_type
+	9,  // [9:22] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_imagefs_v1_source_proto_init() }
@@ -1410,7 +1774,7 @@ func file_imagefs_v1_source_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_imagefs_v1_source_proto_rawDesc), len(file_imagefs_v1_source_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

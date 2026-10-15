@@ -116,7 +116,7 @@ func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // testConfig is a snapshotter's configuration for a test under dir.
 func testConfig(dir string, transport http.RoundTripper, logger *slog.Logger) Config {
 	return Config{
-		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4,
+		Root: dir, CacheDir: filepath.Join(dir, "cache"), CacheBytes: 256 << 20, Fetches: 4, VolumeAddr: "127.0.0.1:0",
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: noop.NewTracerProvider().Tracer(""),
 	}
 }
@@ -169,6 +169,8 @@ func newTestCache(t *testing.T, transport http.RoundTripper, bound int64) *frame
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The writer stores its last frame before the directory goes.
+	t.Cleanup(c.writer.Wait)
 	t.Cleanup(c.background.Wait)
 	return c
 }

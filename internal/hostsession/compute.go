@@ -68,7 +68,7 @@ func gpusOf(r apitypes.Resources) int32 {
 func sessionOpenIn(hello *hostproto.Hello) compute.SessionOpen {
 	open := compute.SessionOpen{
 		BootID: hello.GetBootId(), Capacity: capacityIn(hello.GetCapacity()), AgentVersion: hello.GetAgentVersion(),
-		AgentUpdatable: hello.GetUpdatable(), SleptSeconds: hello.GetSleptSeconds(),
+		AgentUpdatable: hello.GetUpdatable(), SleptSeconds: hello.GetSleptSeconds(), PeerAddress: hello.GetPeerAddress(),
 	}
 	if rejected := hello.GetRejectedVersion(); rejected != "" {
 		open.AgentRejected = &rejected

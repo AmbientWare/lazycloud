@@ -47,8 +47,13 @@ const (
 	Binary     = "/usr/local/lib/lazycloud/" + Executable
 	Unit       = "lazycloud-snapshotter.service"
 	// VolumeEndpoint is the loopback address of the snapshotter's S3
-	// endpoint for platform volumes.
+	// endpoint for platform volumes, VolumePeerPort the port its volume
+	// cache serves other hosts of the region on, and VolumeLinkDir the tree
+	// of complete volume objects, <workspace>/<volume>/<path>, that
+	// workloads open in place of their mounts' files.
 	VolumeEndpoint = "127.0.0.1:12121"
+	VolumePeerPort = 12122
+	VolumeLinkDir  = hostproto.DataRoot + "/volume-cache"
 	// LazyLabel marks a layer pulled lazily. The pull sets it on each layer
 	// descriptor; containerd passes it to the snapshotter's Prepare, which
 	// then mounts the layer from its grant and reports it present, so the

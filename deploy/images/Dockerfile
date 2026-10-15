@@ -26,6 +26,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
         -ldflags "-s -w $stamp" -o /out/$binary ./cmd/$binary || exit 1; \
     done && printf '%s\n' "${VERSION}" >/out/VERSION
 
+# The preload library workloads open cached volume objects through, built
+# against glibc 2.17 so every image from CentOS 7 on loads it.
+FROM --platform=$BUILDPLATFORM quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5 AS volume-cache
+COPY deploy/agent/volume-cache/volume_cache.c /src/volume_cache.c
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden -o /out-volume-cache.so /src/volume_cache.c -ldl
+
 # GeeseFS mounts volumes on hosts; the script pins its release and digest.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS geesefs
 WORKDIR /src
@@ -60,10 +66,11 @@ COPY --from=go /out/snapshotter /stage/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /stage/geesefs
 COPY --from=runtimes /out/runtimes /stage/runtime
 COPY --from=go /out/VERSION /stage/VERSION
+COPY --from=volume-cache /out-volume-cache.so /stage/volume-cache.so
 RUN mkdir -p /out/${VERSION} && \
     tar -C /stage --sort=name --mtime=@${SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner \
       --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
-      -cf - VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
+      -cf - VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs volume-cache.so | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
 
 # The server serves the agent archive of its own version at /install/agent;
 # the chart's post-sync Job publishes it as the hosts' target release.

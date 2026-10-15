@@ -1,7 +1,7 @@
-# One regional fleet network: a VPC with a public subnet per zone, an
-# egress-only security group and an S3 gateway endpoint. Hosts accept nothing
-# inbound and reach out for images, object storage and the server, so a NAT
-# gateway per zone would cost more than the hosts it serves.
+# One regional fleet network: a VPC with a public subnet per zone, a
+# security group and an S3 gateway endpoint. Hosts accept only each other's
+# volume peer reads inbound and reach out for images, object storage and the
+# server, so a NAT gateway per zone would cost more than the hosts it serves.
 
 terraform {
   required_providers {
@@ -89,6 +89,16 @@ resource "aws_vpc_security_group_egress_rule" "node" {
   security_group_id = aws_security_group.node.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
+}
+
+# The volume peer port: hosts of the region read cached volume frames from each other.
+resource "aws_vpc_security_group_ingress_rule" "node_volume_peers" {
+  region                       = var.region
+  security_group_id            = aws_security_group.node.id
+  referenced_security_group_id = aws_security_group.node.id
+  ip_protocol                  = "tcp"
+  from_port                    = 12122
+  to_port                      = 12122
 }
 
 resource "aws_vpc_endpoint" "s3" {

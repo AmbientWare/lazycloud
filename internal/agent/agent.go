@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,12 @@ const (
 	containerSupervisor = "/opt/lazycloud/bin/supervisor"
 	containerWorkspace  = "/workspace"
 	containerLinkDir    = "/run/lazycloud"
-	linkSocketName      = "agent.sock"
+	// containerVolumeCache mirrors the volume mount paths with the complete
+	// objects the host caches, and containerVolumeCacheLib is the library
+	// workloads preload to open them in place of the mounts' files.
+	containerVolumeCache    = "/opt/lazycloud/volume-cache"
+	containerVolumeCacheLib = "/opt/lazycloud/lib/volume-cache.so"
+	linkSocketName          = "agent.sock"
 	// httpSocketName is where an HTTP workload's supervisor serves requests,
 	// in the same directory as the link socket.
 	httpSocketName = "http.sock"
@@ -127,6 +133,10 @@ type Config struct {
 	// TrustBundle is the CA bundle GeeseFS verifies object stores against;
 	// required with GeeseFSPath.
 	TrustBundle string
+	// VolumeCacheLib is the preload library workloads with platform volumes
+	// get, which opens cached objects in place of the mount's files; empty
+	// gives none.
+	VolumeCacheLib string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -170,6 +180,9 @@ type Agent struct {
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
+	// peerAddress is where other hosts reach this host's volume cache,
+	// host:port, empty when it mounts no volumes.
+	peerAddress string
 	// platform holds the images the agent runs on its own, as the server
 	// sent them.
 	platform *platformImages
@@ -359,6 +372,7 @@ func Run(ctx context.Context, cfg Config) error {
 	a := &Agent{
 		cfg:             cfg,
 		log:             cfg.Logger,
+		peerAddress:     peerAddress(ctx, cfg),
 		docker:          docker,
 		identity:        id,
 		capacity:        offered.capacity,
@@ -430,9 +444,6 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if err := a.replaceSnapshotter(ctx); err != nil {
 		a.log.Warn("replacing the snapshotter failed", "error", err)
-	}
-	if a.volumes.endpoint, err = a.volumeEndpoint(ctx); err != nil {
-		a.log.Warn("the snapshotter did not answer for volumes; volumes mount from their buckets", "error", err)
 	}
 	a.volumes.adoptGrants()
 	a.recoverDisks(ctx)
@@ -680,3 +691,28 @@ var (
 	// ErrPreflightFailed: an error-severity preflight check failed.
 	ErrPreflightFailed = errors.New("preflight failed")
 )
+
+// peerAddress is the address other hosts of the region reach this host's
+// volume cache on: the address the host reaches the server from, on the
+// peer port. Empty when the host mounts no volumes.
+func peerAddress(ctx context.Context, cfg Config) string {
+	if cfg.GeeseFSPath == "" {
+		return ""
+	}
+	server := cfg.Server
+	if _, _, err := net.SplitHostPort(server); err != nil {
+		server = net.JoinHostPort(server, "443")
+	}
+	// A UDP dial sends nothing; it only picks the route's source address.
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", server)
+	if err != nil {
+		cfg.Logger.Warn("the host's peer address is unknown; it serves no volume peers", "server", cfg.Server, "error", err)
+		return ""
+	}
+	defer func() { _ = conn.Close() }()
+	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(layersource.VolumePeerPort))
+}

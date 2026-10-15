@@ -41,6 +41,11 @@ def handle(action, path, text=None):
         return len(os.listdir(path))
     if action == "sum":
         return digest(path)
+    if action == "opened":
+        # Whether a read-only open reaches the host's cached copy rather
+        # than the mount's file: the two are on different devices.
+        with open(path, "rb") as f:
+            return os.fstat(f.fileno()).st_dev != os.stat(path).st_dev
     if action == "symlink":
         os.symlink(text, path)
         return os.readlink(path)

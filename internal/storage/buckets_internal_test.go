@@ -172,6 +172,17 @@ func TestBucketsReachAnExplicitEndpoint(t *testing.T) {
 	if err := ValidateVolumes([]apitypes.VolumeMountSpec{noRegion}); err == nil {
 		t.Fatal("deployed an AWS bucket without a region")
 	}
+	// The preload library gets the volume paths colon separated.
+	colon := apitypes.VolumeMountSpec{Name: "models", MountPath: aws.String("/mnt/a:b")}
+	if err := ValidateVolumes([]apitypes.VolumeMountSpec{colon}); err == nil {
+		t.Fatal("deployed a platform volume on a path with ':'")
+	}
+	// The cache tree binds each volume's path read-only, so a volume
+	// cannot mount below another.
+	nested := []apitypes.VolumeMountSpec{{Name: "a", MountPath: aws.String("/mnt/a")}, {Name: "b", MountPath: aws.String("/mnt/a/b")}}
+	if err := ValidateVolumes(nested); err == nil {
+		t.Fatal("deployed a platform volume below another")
+	}
 }
 
 // TestCloudBucketPrefixesStayBelowTheRoot: deploy accepts a cloud bucket
