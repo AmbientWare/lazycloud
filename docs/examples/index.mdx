@@ -3,9 +3,9 @@ title: "Examples"
 description: "Five systems built on LazyCloud: an image generation app, LLM fine-tuning, a video pipeline, coding agents and a scheduled monitor."
 ---
 
-Five working systems, each built from several workload types. A guide opens
-with the parts of its system and why each one runs where it does, then walks
-through the real files. What you read is what you download.
+Each guide shows one working system, which workloads it is made of, why each
+one runs where it does, and how to run it. What you read is what you
+download.
 
 <CardGroup cols={2}>
   <Card
@@ -47,30 +47,22 @@ through the real files. What you read is what you download.
 
 ## Set up the examples
 
-Install the CLI with uv, then choose a project:
-
 ```bash
 uv tool install lazycloud-client
 lazycloud example list
 lazycloud example download image-studio
 cd image-studio
 uv sync
-```
-
-The download pins the SDK to the CLI you installed. Run each guide's commands
-from the project directory. Commit the `uv.lock` that `uv sync` writes, since
-remote images install from it. GPU libraries install only in those images, so
-your machine needs no GPU.
-
-```bash
 uv run lazycloud login
 ```
 
-With several workspaces, `uv run lazycloud workspace use <name>` picks one.
-GPU examples need credit and GPU access, both under Settings, then Billing.
-Volumes and artifacts outlast a run, and each guide ends with the commands that
-remove them.
+The download pins the SDK to the CLI you installed, and each guide's commands
+run from the project directory. Commit the `uv.lock` that `uv sync` writes,
+since remote images install from it. GPU libraries install only in those
+images, so your machine needs no GPU. With several workspaces,
+`uv run lazycloud workspace use <name>` picks one. GPU examples need credit
+and GPU access, both under Settings, then Billing. Volumes and artifacts
+outlast a run, and each guide ends with the commands that remove them.
 
 The catalog also has `quickstart`, `artifacts` and `all-workloads`, each with
-its own README. `lazycloud example download all` writes every project to its
-own directory.
+its own README. `lazycloud example download all` writes every project.
