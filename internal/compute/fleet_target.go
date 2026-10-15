@@ -118,12 +118,16 @@ func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 	}
 	r := ps.p.Reserve(m)
 	// A market with a floor keeps room for the largest shape, within the
-	// cap, that started within the warm window, and at least the floor.
+	// cap, that started within the warm window, at least the floor, and
+	// room for the largest batch that arrived within it. A GPU market keeps
+	// no room for bursts: a burst of cards idle for an hour costs more than
+	// the resumes it saves.
 	floor := r.Warm.Floor
+	warm := floor.Upper(t.load.Percent(r.Warm.LoadPercent))
 	if !floor.Empty() {
 		floor = floor.Upper(ps.s.Started[m].Lower(ps.p.LargestShape.Cap))
+		warm = floor.Upper(t.load.Percent(r.Warm.LoadPercent)).Upper(ps.s.Burst[m])
 	}
-	warm := floor.Upper(t.load.Percent(r.Warm.LoadPercent))
 	if m.spotCPU() && r.Warm != (HeadroomTarget{}) {
 		arrivals := floor.Plus(ps.s.Arrived[m])
 		t.arriving = !ps.s.Arrived[m].Empty() && arrivals.Covers(warm)

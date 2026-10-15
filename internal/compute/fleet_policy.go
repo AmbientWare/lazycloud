@@ -218,12 +218,14 @@ type Policy struct {
 	// arriving at a steady rate finds room rather than waiting for a
 	// launch, while a single burst buys no headroom it cannot use.
 	ArrivalWindow time.Duration
-	// WarmWindow is how far back a market's starts size its warm floor: the
-	// floor is at least the largest shape started within it, so a shape
-	// that recurs finds room, and shrinks back to the policy's floor once
-	// none has started for the window. An hour spans the gaps measured
-	// between recurring work on prod and in the recorded runs: bursts ten
-	// minutes apart, idle gaps of 2 min at the median and 5.5 min at p90.
+	// WarmWindow is how far back a market's starts size its warm headroom:
+	// the floor is at least the largest shape started within it, so a shape
+	// that recurs finds room, and the headroom at least the largest batch
+	// that arrived within it, so a burst that recurs lands on free room
+	// instead of waiting a launch; both shrink back once the window passes
+	// without them. An hour spans the gaps measured between recurring work
+	// on prod and in the recorded runs: bursts five to ten minutes apart,
+	// idle gaps of 2 min at the median and 5.5 min at p90.
 	WarmWindow time.Duration
 	Batch      BatchWindow
 	// Keep is how long a market holds its running target once its load

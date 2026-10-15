@@ -106,10 +106,11 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- of platform volumes they read with how many started, among the newest
 -- containers created within the window, up to the sample (recent); the
 -- largest shape among those created within the warm window (started),
--- which sizes the warm floor; and what the placed Spot-tolerant platform
--- CPU containers of the sample created within the arrival window reserve,
--- less their largest batch (arrived): a steady rate of work, which a
--- single burst is not. A batch is
+-- which sizes the warm floor; the largest batch of them within the warm
+-- window (burst), which the market keeps room for; and what the placed
+-- Spot-tolerant platform CPU containers of the sample created within the
+-- arrival window reserve, less their largest batch (arrived): a steady rate
+-- of work, which a single burst is not. A batch is
 -- arrivals less than batch_quiet apart, at most batch_max long, as
 -- BatchWaits forms them. The read follows the primary key, so it reads at
 -- most sample_size containers whatever the history; the subqueries make
@@ -141,6 +142,29 @@ from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
   and id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
 group by 2, 3
+union all
+select 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
+from (
+    select preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
+    from (
+        select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by preemptible, gpu_type, run)) / @batch_max_seconds::float8) as part
+        from (
+            select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
+                   count(*) filter (where opens) over (partition by preemptible, gpu_type order by created_at, id) as run
+            from (
+                select id, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
+                       coalesce(created_at - lag(created_at) over (partition by (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
+                                interval '1 day') >= make_interval(secs => @batch_quiet_seconds::float8) as opens
+                from recent
+                where billing_owner = 'platform_fleet' and assigned_at is not null
+                  and id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
+            ) gaps
+        ) runs
+    ) parts
+    group by preemptible, gpu_type, run, part
+) batches
+group by preemptible, gpu_type
 union all
 select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
