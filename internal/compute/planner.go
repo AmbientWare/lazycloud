@@ -184,7 +184,7 @@ func (c *Compute) policy() Policy {
 }
 
 // connectionPolicy is a connected account's: no headroom and no reserves,
-// so an idle host leaves after the idle timeout.
+// so an idle host leaves after the keep window.
 func connectionPolicy(p Policy) Policy {
 	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
 	return p
