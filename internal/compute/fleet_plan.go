@@ -65,10 +65,9 @@ type FleetHost struct {
 	Stoppable bool
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
-	// IdleSince is when the serving host last ran work, and FreeSince when
-	// it last ran work or held a warm slot, as last recorded; BusySince when
-	// the newest container Containers counts was placed.
-	IdleSince, FreeSince, BusySince *time.Time
+	// IdleSince is when the serving host became idle, as last recorded;
+	// BusySince when the newest container Containers counts was placed.
+	IdleSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
 	PhaseAt time.Time
@@ -337,9 +336,8 @@ type FleetPlan struct {
 	Markets []MarketPlan
 	Actions []FleetAction
 	Waits   []ContainerWait
-	// IdleSince is when each idle serving host became idle, and FreeSince
-	// when each idle one that holds no warm slot last held one or ran work.
-	IdleSince, FreeSince map[HostID]time.Time
+	// IdleSince is when each idle serving host became idle.
+	IdleSince map[HostID]time.Time
 	// BatchWait is how long the purchases the pass held wait for arrivals
 	// to settle; zero when it held none.
 	BatchWait time.Duration
@@ -358,7 +356,7 @@ func PlanFleet(p Policy, s FleetSnapshot) FleetPlan {
 		p: p, s: s, hosts: slices.Clone(s.Hosts),
 		used: map[ReserveMarket]int{}, waiting: map[ReserveMarket]bool{}, limited: map[ReserveMarket]bool{}, batched: map[ReserveMarket]bool{},
 		hostRoom: s.HostRoom, reserveRoom: s.ReserveRoom, offers: map[string]ranking{}, byMarket: map[ReserveMarket]*marketView{},
-		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}, FreeSince: map[HostID]time.Time{}},
+		claimed: map[HostID]bool{}, holding: map[HostID][]warmSlot{}, plan: FleetPlan{IdleSince: map[HostID]time.Time{}},
 		quotaUsed: QuotaUse(s.Hosts, s.Offers.Catalog), spot: freshSpot(p, s.Offers.Spot, s.Now),
 		classReads: map[string]int64{}, spotOffers: map[spotNeed]bool{},
 	}

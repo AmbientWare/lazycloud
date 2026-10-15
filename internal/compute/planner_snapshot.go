@@ -233,7 +233,7 @@ func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 		Current:   h.PreparedCurrent, UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, FreeSince: h.FreeSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
+		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
 		StartRefused: h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
 		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays, StoppedAt: h.StoppedAt,
 		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},

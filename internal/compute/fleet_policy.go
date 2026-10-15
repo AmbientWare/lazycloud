@@ -257,13 +257,11 @@ func DefaultPolicy() Policy {
 	// so reserves sized to load cost more than the starts they speed up.
 	spotMarket := cpuMarket
 	spotMarket.Stopped.LoadPercent = 0
-	// GPU work keeps nothing warm: a share of load rounds up to a whole
-	// card, and an idle GPU host beside each job costs more than the starts
-	// it speeds up over resuming a stopped one.
-	card := MarketReserve{Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
-	// Nor does Spot GPU work buy a reserve while one it resumed serves: the
-	// purchase runs about five minutes of a GPU host for the next
-	// concurrent start alone.
+	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
+	// Spot GPU work keeps nothing warm: an idle Spot GPU host costs more
+	// than the starts it speeds up over resuming a stopped one. Nor does it
+	// buy a reserve while one it resumed serves: the purchase runs about
+	// five minutes of a GPU host for the next concurrent start alone.
 	spotCard := MarketReserve{Stopped: card.Stopped, FitLargest: true, AwaitReturn: true}
 	gpus := map[string]GPUReserve{}
 	for _, model := range []string{"T4", "A10G", "L4"} {

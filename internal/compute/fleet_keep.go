@@ -8,26 +8,18 @@ import (
 )
 
 // idle records when each serving host without containers or pending work
-// for it became idle, and when each of those that holds no warm slot last
-// held one: a slot that moves between hosts from pass to pass keeps both.
+// for it became idle.
 func (ps *pass) idle() {
 	for _, h := range ps.s.Hosts {
 		if h.State != FleetServing || h.Containers > 0 || ps.claimed[h.ID] {
 			continue
 		}
-		ps.plan.IdleSince[h.ID] = since(h.IdleSince, ps.s.Now)
-		if len(ps.holding[h.ID]) == 0 {
-			ps.plan.FreeSince[h.ID] = since(h.FreeSince, ps.s.Now)
+		since := ps.s.Now
+		if h.IdleSince != nil {
+			since = *h.IdleSince
 		}
+		ps.plan.IdleSince[h.ID] = since
 	}
-}
-
-// since is the recorded time, or now for none.
-func since(recorded *time.Time, now time.Time) time.Time {
-	if recorded != nil {
-		return *recorded
-	}
-	return now
 }
 
 // idleLong reports a host idle for the idle timeout.
@@ -37,14 +29,14 @@ func (ps *pass) idleLong(h FleetHost) bool {
 }
 
 // retain releases the idle hosts the market no longer needs once each has
-// held no warm slot and run no work for its market's timeout.
+// been idle for its market's timeout.
 func (ps *pass) retain(v *marketView) {
 	timeout := ps.p.IdleTimeout
 	if v.m.spotCPU() {
 		timeout = ps.p.SpotIdleTimeout
 	}
 	for _, h := range ps.leavers(v) {
-		if ps.s.Now.Sub(ps.plan.FreeSince[h.ID]) >= timeout {
+		if ps.s.Now.Sub(ps.plan.IdleSince[h.ID]) >= timeout {
 			ps.leave(v, h)
 		}
 	}
@@ -62,12 +54,11 @@ func (ps *pass) leavers(v *marketView) []*FleetHost {
 }
 
 // returnable reports whether host h of market v may stop into the reserve:
-// EC2 can stop it, its type is known, it is no interruption's, it lies
-// where the market's starts read, and a GPU host fits the size cap, as GPU
-// purchases do.
+// EC2 can stop it, its type is known, it is no interruption's, and it lies
+// where the market's starts read.
 func (ps *pass) returnable(v *marketView, h FleetHost) bool {
 	_, catalogued := ps.typeNamed(h.InstanceType)
-	return catalogued && h.Stoppable && !h.Protected && (h.GPU == "" || ps.p.LargestShape.Cap.Covers(h.Usable)) && !ps.misplaced(v, h.Region)
+	return catalogued && h.Stoppable && !h.Protected && !ps.misplaced(v, h.Region)
 }
 
 // leave returns a leaving host to the reserve when it is returnable and the

@@ -274,7 +274,6 @@ type requestedHost struct {
 type idleRow struct {
 	ID        uuid.UUID  `json:"id"`
 	IdleSince *time.Time `json:"idle_since"`
-	FreeSince *time.Time `json:"free_since"`
 }
 
 // coolRow is an offer a pass cools in every zone of its region, and why.
@@ -559,22 +558,18 @@ func (ps *fleetPass) settleWaits(plan FleetPlan, bought map[int]uuid.UUID) {
 	}
 }
 
-// settleIdle writes when each serving host became idle and free where
-// either changed.
+// settleIdle writes when each serving host became idle where it changed.
 func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
-	of := func(m map[HostID]time.Time, id HostID) *time.Time {
-		if since, ok := m[id]; ok {
-			return &since
-		}
-		return nil
-	}
 	for _, h := range hosts {
 		if h.State != FleetServing {
 			continue
 		}
-		idle, free := of(plan.IdleSince, h.ID), of(plan.FreeSince, h.ID)
-		if !sameTime(idle, h.IdleSince) || !sameTime(free, h.FreeSince) {
-			ps.w.idle = append(ps.w.idle, idleRow{ID: uuid.UUID(h.ID), IdleSince: idle, FreeSince: free})
+		var want *time.Time
+		if since, ok := plan.IdleSince[h.ID]; ok {
+			want = &since
+		}
+		if !sameTime(want, h.IdleSince) {
+			ps.w.idle = append(ps.w.idle, idleRow{ID: uuid.UUID(h.ID), IdleSince: want})
 		}
 	}
 }

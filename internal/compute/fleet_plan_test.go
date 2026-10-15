@@ -50,7 +50,7 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 
 // idle makes a serving host idle for an hour.
 func idle(h FleetHost) FleetHost {
-	h.IdleSince, h.FreeSince = ptr(offerNow.Add(-time.Hour)), ptr(offerNow.Add(-time.Hour))
+	h.IdleSince = ptr(offerNow.Add(-time.Hour))
 	return h
 }
 
@@ -503,7 +503,7 @@ func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	idleFor := func(id byte, market Market) FleetHost {
 		h := planHost(id, planSmall, FleetServing)
-		h.Market, h.IdleSince, h.FreeSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout)), ptr(offerNow.Add(-p.SpotIdleTimeout))
+		h.Market, h.IdleSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout))
 		return h
 	}
 	plan := PlanFleet(p, planSnapshot(t, idleFor(1, MarketSpot), idleFor(2, MarketOnDemand)))
@@ -518,7 +518,7 @@ func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
 	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
-	fresh.IdleSince, fresh.FreeSince = ptr(offerNow.Add(-p.IdleTimeout+time.Second)), ptr(offerNow.Add(-p.IdleTimeout+time.Second))
+	fresh.IdleSince = ptr(offerNow.Add(-p.IdleTimeout + time.Second))
 	old := idle(planHost(2, planSmall, FleetServing))
 	wanted := idle(planHost(3, planLarge, FleetServing))
 	s := planSnapshot(t, fresh, old, wanted)
@@ -852,7 +852,7 @@ func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 	resumed.PhaseAt = offerNow.Add(-over)
 	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
 		h := resumed
-		h.IdleSince, h.FreeSince = ptr(offerNow.Add(-idleFor)), ptr(offerNow.Add(-idleFor))
+		h.IdleSince = ptr(offerNow.Add(-idleFor))
 		s := planSnapshot(t, append([]FleetHost{h}, hosts...)...)
 		s.Offers.Catalog = FleetCatalog()
 		s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: resumed.PhaseAt}
@@ -1425,25 +1425,6 @@ func TestSpotGPUWorkAtALossBuysSpotFirst(t *testing.T) {
 	}
 }
 
-// An idle work host larger than the size cap drains rather than stop into
-// the reserve its market lacks, which buys a reserve within the cap.
-func TestAWorkHostAboveTheCapDrainsRatherThanJoinTheReserve(t *testing.T) {
-	p := gpuPolicy()
-	h := idle(planHost(1, mustType(t, "g5.8xlarge"), FleetServing))
-	h.GPU = "A10G"
-	s := gpuPlanSnapshot(t, h)
-	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "A10G"}: {CPUMillis: 1000, MemoryBytes: 20 * gib, GPUs: 1}}
-	plan := PlanFleet(p, s)
-	if got := actionsOf(plan, ActionDrain, ActionReturnToReserve); len(got) != 1 || got[0].Kind != ActionDrain {
-		t.Fatalf("actions %+v, want the g5.8xlarge drained", plan.Actions)
-	}
-	for _, a := range actionsOf(plan, ActionBuyReserve) {
-		if !p.LargestShape.Cap.Covers(a.Offer.Usable) {
-			t.Errorf("bought reserve %s above the size cap", a.Offer.Type.Name)
-		}
-	}
-}
-
 // A deploy that marks the host holding the warm floor due an agent update
 // buys nothing: the host holds its warm slots while it updates, and only
 // pending work, which placement gives it no room for, buys past it.
@@ -1452,42 +1433,5 @@ func TestADeployBuysNothingForAHostUpdatingItsAgent(t *testing.T) {
 	h.UpdateDue = true
 	if plan := PlanFleet(planPolicy(small, FleetCapacity{}), planSnapshot(t, h)); len(plan.Actions) > 0 {
 		t.Fatalf("actions %+v after a deploy", plan.Actions)
-	}
-}
-
-// An idle host that held a warm slot within its idle timeout stays, however
-// long it has run no work: a slot that moves between hosts from pass to
-// pass drains no host the market buys back. Once it has held none for the
-// timeout, it leaves.
-func TestAnIdleHostLeavesOnlyOnceItHeldNoSlotForItsTimeout(t *testing.T) {
-	t.Parallel()
-	p := planPolicy(FleetCapacity{}, FleetCapacity{})
-	for _, c := range []struct {
-		free   time.Duration
-		leaves bool
-	}{{p.IdleTimeout - time.Second, false}, {p.IdleTimeout, true}} {
-		h := idle(planHost(1, planSmall, FleetServing))
-		h.FreeSince = ptr(offerNow.Add(-c.free))
-		plan := PlanFleet(p, planSnapshot(t, h))
-		if left := len(actionsOf(plan, ActionDrain, ActionReturnToReserve)) > 0; left != c.leaves {
-			t.Errorf("free for %s: actions %+v, want it to leave %t", c.free, plan.Actions, c.leaves)
-		}
-	}
-}
-
-// An on-demand GPU job holds the one host it runs on: GPU markets keep no
-// running headroom, which would round up to a whole idle card beside it.
-func TestAnOnDemandGPUJobBuysNoHostBesideItsOwn(t *testing.T) {
-	t.Parallel()
-	a10g := ReserveMarket{GPU: "A10G"}
-	h := planHost(1, mustType(t, "g5.2xlarge"), FleetServing)
-	h.GPU, h.Load, h.Containers = "A10G", FleetCapacity{CPUMillis: 1000, MemoryBytes: 20 * gib, GPUs: 1}, 1
-	s := gpuPlanSnapshot(t, h)
-	s.Recent = map[ReserveMarket]FleetCapacity{a10g: {CPUMillis: 1000, MemoryBytes: 20 * gib, GPUs: 1}}
-	plan := PlanFleet(gpuPolicy(), s)
-	for _, a := range actionsOf(plan, ActionBuy, ActionResume) {
-		if a.Market == a10g {
-			t.Errorf("%s for %s beside the busy A10G host", a.Kind, a.Reason)
-		}
 	}
 }
