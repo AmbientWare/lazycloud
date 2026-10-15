@@ -178,10 +178,12 @@ if ! { docker build --target volume-cache -t "$image" -f "$root/deploy/images/Do
   fail "the release build failed: $(tail -5 "$work/build.log")"
 fi
 docker rmi "$image" >/dev/null 2>&1 || true
+glibc231=ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+docker pull -q "$glibc231" >/dev/null 2>&1 || fail "pull the glibc 2.31 image"
 old="$(docker run --rm --platform linux/amd64 -v "$work/release:/lib-under-test:ro" \
   -e LD_PRELOAD=/lib-under-test/volume-cache.so -e LAZYCLOUD_VOLUME_CACHE=/cache -e LAZYCLOUD_VOLUME_PATHS=/models \
-  ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 sh -c 'cat /etc/os-release | head -1' 2>&1)" || fail "glibc 2.31 image: $old"
-[[ "$old" == 'NAME="Ubuntu"' ]] || fail "the release build does not load on glibc 2.31: $old"
+  "$glibc231" sh -c 'cat /etc/os-release | head -1' 2>"$work/old.err")" || fail "glibc 2.31 image: $(cat "$work/old.err")"
+[[ "$old" == 'NAME="Ubuntu"' && ! -s "$work/old.err" ]] || fail "the release build does not load on glibc 2.31: $old $(cat "$work/old.err")"
 
 if [[ "$failures" != 0 ]]; then
   echo "$failures failure(s)" >&2
