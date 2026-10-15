@@ -18,8 +18,9 @@ import (
 // lifecycle timings, placement oldest first and rate-card revenue. A pass
 // runs as the plan loop's do: when the fleet or its work changed, after a
 // pass that acted, and otherwise on the loop's tick. Each purchase launches
-// in its pool on the launch loop's tick, and a stopped Spot reserve's
-// request disables after a measured gap.
+// in its pool on the launch loop's tick, walking on through the pools a
+// replay's EC2 refuses, and a stopped Spot reserve's request disables after
+// a measured gap.
 
 const (
 	simTick = time.Second
@@ -36,6 +37,9 @@ const (
 	// guest powers off within 15 s; EC2 holds a GPU instance in stopping
 	// for the rest, on any image and when forced.
 	simGPUStop = 392 * time.Second
+	// simCooldown is how long a refusal cools its pool, the fleet's
+	// CapacityCooldown.
+	simCooldown = 10 * time.Minute
 )
 
 // fleetTick is the period of the fleet's plan and launch loops, fleetTick
@@ -65,6 +69,8 @@ type simHost struct {
 	// startAt, on a resumed reserve, is when EC2 starts its instance; its
 	// stop's record holds until then.
 	startAt time.Time
+	// served is set once a container ran on the host.
+	served bool
 }
 
 // simWalk is a requested host's launch: what the launcher reads of it and
@@ -108,8 +114,11 @@ type simArrival struct {
 }
 
 type simResult struct {
-	launches   int
-	violations []string
+	launches, refusals int
+	violations         []string
+	// unusedSpotCPU counts the Spot CPU hosts that ended without running a
+	// container.
+	unusedSpotCPU int
 	// fnWaits are each function's start waits.
 	fnWaits map[string][]time.Duration
 	// revenueNanos is what finished containers bill.
@@ -118,6 +127,14 @@ type simResult struct {
 	// fleetCPUSec running hosts' CPU seconds there.
 	windowMicros int64
 	fleetCPUSec  float64
+}
+
+// simCool is a pool's run of refusals.
+type simCool struct {
+	lasted time.Duration
+	until  time.Time
+	// walk is the host whose launch walk refused the pool first.
+	walk *simHost
 }
 
 type sim struct {
@@ -137,8 +154,14 @@ type sim struct {
 	peaks           map[ReserveMarket]LoadPeak
 	// maxHosts is the fleet limit; provision is how long a launch takes to
 	// serve.
-	maxHosts  int
-	provision time.Duration
+	maxHosts int
+	// provision is how long a launch takes to serve, and gpuProvision an
+	// on-demand GPU one's when set, else the policy's GPU launch.
+	provision, gpuProvision time.Duration
+	// refuses names the pools EC2 refuses for capacity, and cools are the
+	// runs of refusals by pool.
+	refuses func(region, zoneID, instanceType string, market Market) bool
+	cools   map[OfferCooldown]*simCool
 	// prices are the Spot quotes in force at a time.
 	prices func(time.Time) []SpotQuote
 	// until ends the window spend and capacity are measured over.
@@ -247,7 +270,13 @@ func (s *sim) advance() {
 		})
 	}
 	// A draining host that runs nothing terminates.
-	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool { return h.State == FleetDraining && len(h.containers) == 0 })
+	s.hosts = slices.DeleteFunc(s.hosts, func(h *simHost) bool {
+		gone := h.State == FleetDraining && len(h.containers) == 0
+		if gone && !h.served && h.market().spotCPU() {
+			s.r.unusedSpotCPU++
+		}
+		return gone
+	})
 }
 
 // place puts pending containers on serving hosts as placement does: the
@@ -282,7 +311,7 @@ func (s *sim) place() {
 		if c.need.GPUsNeeded() > 0 {
 			c.market = ReserveMarket{GPU: best.offer.Type.GPU}
 		}
-		best.containers = append(best.containers, c)
+		best.containers, best.served = append(best.containers, c), true
 		s.placedLog = append(s.placedLog, c)
 		if s.r.fnWaits == nil {
 			s.r.fnWaits = map[string][]time.Duration{}
@@ -488,6 +517,13 @@ func (s *sim) offers() OfferInputs {
 	for i := range in.Spot {
 		in.Spot[i].ObservedAt = s.now
 	}
+	in.Cooldowns = slices.Clone(s.in.Cooldowns)
+	for key, c := range s.cools {
+		if c.until.After(s.now) {
+			key.Until = c.until
+			in.Cooldowns = append(in.Cooldowns, key)
+		}
+	}
 	return in
 }
 
@@ -508,7 +544,7 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 		Market: ptr(string(o.Market)), GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount),
 		CpuMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		HoldsCpuMillis: ptr(a.Holds.CPUMillis), HoldsMemoryBytes: ptr(a.Holds.MemoryBytes),
-		InstanceType: o.Type.Name, Region: o.Region, AvailabilityZone: o.Zone,
+		InstanceType: o.Type.Name, Region: o.Region, AvailabilityZone: o.Zone, MarginWaived: a.Reason == ReasonSpotWait,
 	}
 	if a.Kind == ActionRightsize {
 		row.Replaces = ptr(uuid.UUID(*a.Host))
@@ -534,32 +570,102 @@ func (s *sim) purchase(a FleetAction, waiters []HostWaitersRow) HostID {
 	return h.ID
 }
 
-// launchPass is one launcher pass: each requested host launches in its
-// pool, or first moves to the pool fallbackPool picks when its GPU walk was
-// claimed in a pool the size rule no longer keeps, as launchPools does.
-// The simulation's EC2 refuses nothing.
+// launchPass is one launcher pass: each requested host tries its pool,
+// then the next pools fallbackPool picks while EC2 refuses, up to
+// passPools pools this pass.
 func (s *sim) launchPass() {
 	s.launchedAt, s.wake = s.now, false
-	all := func(string, bool) bool { return true }
 	for _, h := range slices.Clone(s.hosts) {
-		w := h.walk
-		if w == nil {
+		if h.walk == nil {
 			continue
 		}
-		o := h.offer
-		if o.Type.GPU != "" && w.row.Replaces == nil {
-			if _, keeps := walkPools(s.p, w.row, w.waiters, s.offers(), all); !keeps(FleetOffer{Type: o.Type, Market: o.Market, Usable: o.Usable}) {
-				next, ok := fallbackPool(s.p, w.row, w.waiters, s.offers(), all)
-				if !ok {
-					s.hosts = slices.DeleteFunc(s.hosts, func(o *simHost) bool { return o == h })
-					s.unwait(h.ID)
-					continue
-				}
-				h.offer, h.InstanceType, h.Region, h.Zone, h.ZoneID, h.Usable, h.GPU = next, next.Type.Name, next.Region, next.Zone, next.ZoneID, next.Usable, next.Type.GPU
-				h.HourlyMicros = ptr(next.HourlyMicros)
+		for tried := 1; ; tried++ {
+			done, moved := s.tryPool(h, tried == 1)
+			if done || !moved || tried == passPools {
+				break
 			}
 		}
-		s.launched(h)
+	}
+}
+
+// tryPool launches h in its pool, as launchHost does. EC2 refuses it when
+// refuses names its pool, which cools the pool's zone; a refused launch
+// moves to the pool fallbackPool picks, and without one the host fails. A
+// GPU walk claimed in a pool the size rule no longer keeps moves on
+// uncooled, as launchPools does. It reports whether the walk ended and
+// whether it moved.
+func (s *sim) tryPool(h *simHost, first bool) (bool, bool) {
+	w, o := h.walk, h.offer
+	all := func(string, bool) bool { return true }
+	stored := !first || o.Type.GPU == "" || w.row.Replaces != nil
+	if !stored {
+		_, keeps := walkPools(s.p, w.row, w.waiters, s.offers(), all)
+		stored = keeps(FleetOffer{Type: o.Type, Market: o.Market, Usable: o.Usable})
+	}
+	if stored {
+		if s.refuses == nil || !s.refuses(o.Region, o.ZoneID, o.Type.Name, o.Market) {
+			s.launched(h)
+			return true, false
+		}
+		s.r.refusals++
+		s.walkCool(h, OfferCooldown{Region: o.Region, ZoneID: o.ZoneID, InstanceType: o.Type.Name, Market: o.Market})
+	}
+	next, ok := FleetOffer{}, false
+	if w.row.Replaces == nil {
+		next, ok = fallbackPool(s.p, w.row, w.waiters, s.offers(), all)
+	}
+	if !ok {
+		if w.row.Replaces != nil {
+			s.host(HostID(*w.row.Replaces)).RightsizeRefusedAt = ptr(s.now)
+		}
+		s.hosts = slices.DeleteFunc(s.hosts, func(o *simHost) bool { return o == h })
+		s.unwait(h.ID)
+		return true, false
+	}
+	h.offer, h.InstanceType, h.Region, h.Zone, h.ZoneID, h.Usable, h.GPU = next, next.Type.Name, next.Region, next.Zone, next.ZoneID, next.Usable, next.Type.GPU
+	h.HourlyMicros = ptr(next.HourlyMicros)
+	w.row.Region, w.row.AvailabilityZone, w.row.InstanceType, w.row.LaunchPools = next.Region, next.Zone, next.Type.Name, w.row.LaunchPools+1
+	return false, true
+}
+
+// walkCool cools a pool h's walk refused as coolPool does: InsertCooldown
+// records the walk, then AlignWalk cools every pool of the walk until the
+// latest of their ends.
+func (s *sim) walkCool(h *simHost, c OfferCooldown) {
+	s.cool(c, h)
+	var end time.Time
+	for _, c := range s.cools {
+		if c.walk == h && c.until.After(end) {
+			end = c.until
+		}
+	}
+	for _, c := range s.cools {
+		if c.walk == h {
+			c.until = end
+		}
+	}
+}
+
+// cool cools c's pool as InsertCooldown does, refused by by: for
+// simCooldown, keeping its end and the host that refused it first while it
+// cools, and after its cooldown ended twice as long as that one lasted, up
+// to cooldownGrowth cooldowns.
+func (s *sim) cool(c OfferCooldown, by *simHost) {
+	if s.cools == nil {
+		s.cools = map[OfferCooldown]*simCool{}
+	}
+	key := OfferCooldown{Region: c.Region, ZoneID: c.ZoneID, InstanceType: c.InstanceType, Market: c.Market}
+	last, ok := s.cools[key]
+	switch {
+	case !ok:
+		s.cools[key] = &simCool{lasted: simCooldown, until: s.now.Add(simCooldown), walk: by}
+	case last.until.After(s.now):
+		if last.walk == nil {
+			last.walk = by
+		}
+	default:
+		last.lasted = min(max(2*last.lasted, simCooldown), cooldownGrowth*simCooldown)
+		last.until, last.walk = s.now.Add(last.lasted), by
 	}
 }
 
@@ -574,8 +680,14 @@ func (s *sim) launched(h *simHost) {
 		}
 	}
 	provision := s.provision
-	if o.Type.GPU != "" {
+	switch {
+	case o.Type.GPU != "" && o.Market == MarketOnDemand && s.gpuProvision > 0:
+		provision = s.gpuProvision
+	case o.Type.GPU != "":
 		provision = s.p.Starts.GPULaunch
+	}
+	for _, zone := range []string{o.ZoneID, ""} {
+		delete(s.cools, OfferCooldown{Region: o.Region, ZoneID: zone, InstanceType: o.Type.Name, Market: o.Market})
 	}
 	h.until = s.now.Add(provision)
 	if h.State == FleetPreparing {
@@ -649,12 +761,9 @@ func (s *sim) apply(plan FleetPlan) {
 		}
 	}
 	for _, h := range s.hosts {
-		h.IdleSince, h.FreeSince = nil, nil
+		h.IdleSince = nil
 		if since, ok := plan.IdleSince[h.ID]; ok {
 			h.IdleSince = ptr(since)
-		}
-		if since, ok := plan.FreeSince[h.ID]; ok {
-			h.FreeSince = ptr(since)
 		}
 	}
 }
