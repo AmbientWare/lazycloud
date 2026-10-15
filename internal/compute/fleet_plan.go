@@ -65,8 +65,9 @@ type FleetHost struct {
 	Stoppable bool
 	// HourlyMicros is the complete hourly cost; nil when unknown.
 	HourlyMicros *int64
-	// IdleSince is when the serving host became idle, as last recorded;
-	// BusySince when the newest container Containers counts was placed.
+	// IdleSince is when the serving host last ran work or held a warm slot,
+	// as last recorded; BusySince when the newest container Containers
+	// counts was placed.
 	IdleSince, BusySince *time.Time
 	// PhaseAt is when the host entered its phase; a serving host's is when
 	// it became ready.
@@ -160,13 +161,12 @@ type FleetSnapshot struct {
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
 	// within the policy's LargestShape window, and RecentDisks the most
-	// disks one of them attached; Builds is the largest its finished build
-	// containers reserved within its BuildWindow; Arrived is what the CPU
-	// Spot market's placed containers created within the ArrivalWindow
-	// reserve, less their largest batch.
-	Recent, Builds, Arrived map[ReserveMarket]FleetCapacity
-	RecentDisks             map[ReserveMarket]int
-	Offers                  OfferInputs
+	// disks one of them attached; Arrived is what the CPU Spot market's
+	// placed containers created within the ArrivalWindow reserve, less
+	// their largest batch.
+	Recent, Arrived map[ReserveMarket]FleetCapacity
+	RecentDisks     map[ReserveMarket]int
+	Offers          OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int
@@ -174,9 +174,6 @@ type FleetSnapshot struct {
 	// BatchWait is how long the arrival batch stays open; zero once it has
 	// closed.
 	BatchWait time.Duration
-	// FloorShortSince is when each market's stopped target went short, from
-	// the last published plan.
-	FloorShortSince map[ReserveMarket]time.Time
 	// Peaks are each market's peak load, from the published plans.
 	Peaks map[ReserveMarket]LoadPeak
 }
@@ -216,12 +213,10 @@ type ActionReason string
 const (
 	// ReasonWork is a resume or purchase for pending containers.
 	ReasonWork ActionReason = "work"
-	// ReasonFloor, ReasonLoad and ReasonBuild are a resume or purchase for
-	// warm slots alone: the market's floor, its share of load and
-	// arrivals, or a recent build's shape.
+	// ReasonFloor and ReasonLoad are a resume or purchase for warm slots
+	// alone: the market's floor, or its share of load and arrivals.
 	ReasonFloor ActionReason = "floor"
 	ReasonLoad  ActionReason = "load"
-	ReasonBuild ActionReason = "build"
 	// ReasonSpotWait is an on-demand purchase for Spot-tolerant GPU work
 	// that waited the Spot wait while no Spot offer could host it.
 	ReasonSpotWait ActionReason = "spot_wait"
@@ -257,8 +252,6 @@ func (r ActionReason) Message() string {
 		return "the warm floor"
 	case ReasonLoad:
 		return "headroom for load and arrivals"
-	case ReasonBuild:
-		return "a recent build's shape"
 	case ReasonSpotWait:
 		return "Spot refused past the Spot wait"
 	case ReasonReserve:
@@ -322,8 +315,6 @@ type MarketPlan struct {
 	// Shortfall is the warm slots nothing holds room for; StoppedShortfall
 	// what the reserves lack.
 	Shortfall, StoppedShortfall FleetCapacity
-	// FloorShortSince is when the stopped target went short; nil while held.
-	FloorShortSince *time.Time
 	// Peak is the most load the market held within the cost horizon; its
 	// reserves stay while it holds.
 	Peak   LoadPeak
@@ -336,7 +327,8 @@ type FleetPlan struct {
 	Markets []MarketPlan
 	Actions []FleetAction
 	Waits   []ContainerWait
-	// IdleSince is when each idle serving host became idle.
+	// IdleSince is when each idle serving host last ran work or held a
+	// warm slot.
 	IdleSince map[HostID]time.Time
 	// BatchWait is how long the purchases the pass held wait for arrivals
 	// to settle; zero when it held none.
@@ -429,8 +421,6 @@ type marketView struct {
 	// warmReason and stoppedReason why.
 	shortfall, stoppedShort   FleetCapacity
 	warmReason, stoppedReason CapacityWait
-	// floorShortSince is when the stopped target went short; nil while held.
-	floorShortSince *time.Time
 }
 
 func (ps *pass) inMarket(m ReserveMarket, keep func(FleetHost) bool) []*FleetHost {
@@ -449,15 +439,14 @@ func starting(h FleetHost) bool { return h.State == FleetStarting }
 // coverItem is one pending container or warm slot during the cover.
 type coverItem struct {
 	// slot is set on a warm slot, which has no container and no wait, and
-	// kind says why the market keeps it.
-	slot   bool
-	kind   slotKind
-	id     uuid.UUID
-	since  time.Time
-	need   Requirement
-	market ReserveMarket
-	bought *HostID
-	wait   int
+	// floor on one of the market's floor.
+	slot, floor bool
+	id          uuid.UUID
+	since       time.Time
+	need        Requirement
+	market      ReserveMarket
+	bought      *HostID
+	wait        int
 }
 
 // buysWithWork reports a warm slot of the CPU Spot market that follows its
@@ -465,7 +454,7 @@ type coverItem struct {
 // launch for, so it is bought or resumed with the work rather than riding
 // on it.
 func (it coverItem) buysWithWork() bool {
-	return it.slot && it.kind == slotLoad && it.market.spotCPU()
+	return it.slot && !it.floor && it.market.spotCPU()
 }
 
 // pendingItems lists the pending containers, each with a wait slot and the
@@ -709,14 +698,14 @@ func take(bins []bin, rooms []HostCapacity, it coverItem, floor FleetCapacity) i
 	return i
 }
 
-// held is the room host id's warm slots hold, and holds whether it holds
-// a slot of one of kinds.
+// held is the room host id's warm slots hold, and followsLoad whether one
+// of them is beyond the floor, so it leaves with the load.
 func (ps *pass) held(id HostID) FleetCapacity {
 	return totalOf(ps.holding[id], func(s warmSlot) FleetCapacity { return s.shape })
 }
 
-func (ps *pass) holds(id HostID, kinds ...slotKind) bool {
-	return slices.ContainsFunc(ps.holding[id], func(s warmSlot) bool { return slices.Contains(kinds, s.kind) })
+func (ps *pass) followsLoad(id HostID) bool {
+	return slices.ContainsFunc(ps.holding[id], func(s warmSlot) bool { return !s.floor })
 }
 
 // binRooms are the bins' room for pending work.
@@ -777,7 +766,7 @@ func (ps *pass) cover(items []coverItem) {
 		if i := take(ready, readyRooms, it, floor); i >= 0 {
 			h := ready[i].host
 			if it.slot {
-				ps.holding[h.ID] = append(ps.holding[h.ID], warmSlot{shape: reservedShape(it.need), kind: it.kind})
+				ps.holding[h.ID] = append(ps.holding[h.ID], warmSlot{shape: reservedShape(it.need), floor: it.floor})
 				continue
 			}
 			// The room it takes is load, not warm headroom.
@@ -835,17 +824,13 @@ func (ps *pass) provisioning(it coverItem, host *HostID, action *int) {
 }
 
 // reasonFor is why a resume or purchase takes items: pending work, or else
-// the kind of the first warm slot.
+// what the first warm slot is part of.
 func reasonFor(items []coverItem) ActionReason {
-	if slices.ContainsFunc(items, func(it coverItem) bool { return !it.slot }) {
+	switch {
+	case slices.ContainsFunc(items, func(it coverItem) bool { return !it.slot }):
 		return ReasonWork
-	}
-	switch items[0].kind {
-	case slotFloor:
+	case items[0].floor:
 		return ReasonFloor
-	case slotBuild:
-		return ReasonBuild
-	case slotLoad:
 	}
 	return ReasonLoad
 }
@@ -1247,7 +1232,7 @@ func (ps *pass) lendable(h FleetHost) bool {
 	return ps.floor(v, h.ID, FleetHost.resumable).Covers(v.stopped) && ps.leavesLarge(h)
 }
 
-// demandClass is cover items that can share offers, by shape and kind.
+// demandClass is cover items that can share offers, by shape.
 type demandClass struct {
 	need   Requirement
 	key    string
@@ -1255,12 +1240,13 @@ type demandClass struct {
 	groups []itemGroup
 }
 
-// itemGroup is a class's items of one shape, disk count and kind.
+// itemGroup is a class's items of one shape, disk count and kind: work, a
+// floor slot or another warm slot.
 type itemGroup struct {
 	shape FleetCapacity
 	disks int
 	slot  bool
-	kind  slotKind
+	floor bool
 	items []coverItem
 }
 
@@ -1287,12 +1273,13 @@ func (ps *pass) coverNeed(c *demandClass, only func(itemGroup) bool) (CoverNeed,
 }
 
 // displaced reports a floor slot whose room a serving host of its market
-// gave to work placed less than FloorHold ago. The slot waits for that work
-// to end rather than buy a host, and buys once the work outlasts the hold.
+// gave to work placed within the keep window. The floor is the room work
+// finds first, so the slot waits for that work to end rather than buy a
+// host it may never use, and buys once the work outlasts the window.
 func (ps *pass) displaced(it coverItem) bool {
-	return it.slot && it.kind == slotFloor && slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
+	return it.slot && it.floor && slices.ContainsFunc(ps.hosts, func(h FleetHost) bool {
 		return h.market() == it.market && serving(h) && h.Usable.Covers(reservedShape(it.need)) &&
-			h.BusySince != nil && ps.s.Now.Sub(*h.BusySince) < ps.p.FloorHold
+			h.BusySince != nil && ps.s.Now.Sub(*h.BusySince) < ps.p.Keep
 	})
 }
 
@@ -1311,10 +1298,10 @@ func (ps *pass) buyFor(items []coverItem) {
 		c := classes[n]
 		shape := reservedShape(it.need)
 		i := slices.IndexFunc(c.groups, func(g itemGroup) bool {
-			return g.shape == shape && g.disks == it.need.Disks && g.slot == it.slot && g.kind == it.kind
+			return g.shape == shape && g.disks == it.need.Disks && g.slot == it.slot && g.floor == it.floor
 		})
 		if i < 0 {
-			c.groups = append(c.groups, itemGroup{shape: shape, disks: it.need.Disks, slot: it.slot, kind: it.kind})
+			c.groups = append(c.groups, itemGroup{shape: shape, disks: it.need.Disks, slot: it.slot, floor: it.floor})
 			i = len(c.groups) - 1
 		}
 		c.groups[i].items = append(c.groups[i].items, it)
@@ -1533,7 +1520,7 @@ func (ps *pass) report(v *marketView) MarketPlan {
 		Market: v.m, Load: v.load, WarmTarget: totalOf(v.slots, func(s warmSlot) FleetCapacity { return s.shape }),
 		WarmFree: ps.warmFree(v), WarmPending: ps.warmPending(v),
 		StoppedTarget: v.stopped, ReserveReady: ready, ReservePending: reserve.Minus(ready).Clamp(),
-		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, FloorShortSince: v.floorShortSince, Peak: v.peak, States: ps.states(v.m),
+		Shortfall: v.shortfall, StoppedShortfall: v.stoppedShort, Peak: v.peak, States: ps.states(v.m),
 	}
 	switch {
 	case ps.limited[v.m]:

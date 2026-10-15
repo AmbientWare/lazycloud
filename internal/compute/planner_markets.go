@@ -19,9 +19,6 @@ type PublishedMarket struct {
 	StoppedTarget FleetCapacity `json:"stopped_target"`
 	ReserveReady  FleetCapacity `json:"reserve_ready"`
 	Reason        CapacityWait  `json:"reason"`
-	// FloorShortSince is when the stopped target went short; the next pass
-	// reads it back.
-	FloorShortSince *time.Time `json:"floor_short_since,omitempty"`
 	// Peak is the market's load peak; the next pass reads it back.
 	Peak   LoadPeak             `json:"peak"`
 	States []FleetStateCapacity `json:"states"`
@@ -40,7 +37,7 @@ func publishedMarket(mp MarketPlan, actions []FleetAction) PublishedMarket {
 	out := PublishedMarket{
 		Preemptible: mp.Market.Preemptible, GPUType: mp.Market.GPU, Load: mp.Load, WarmTarget: mp.WarmTarget, WarmFree: mp.WarmFree,
 		StoppedTarget: mp.StoppedTarget, ReserveReady: mp.ReserveReady, Reason: mp.Reason, States: mp.States,
-		FloorShortSince: mp.FloorShortSince, Peak: mp.Peak,
+		Peak: mp.Peak,
 	}
 	var names []string
 	for _, a := range actions {

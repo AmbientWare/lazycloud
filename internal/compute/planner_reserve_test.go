@@ -804,7 +804,6 @@ func TestAnEightCPURequestResumesTheLargeShapeReserve(t *testing.T) {
 		t.Fatal("bought a large host while the resumed one may still return")
 	}
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(large))
-	ageFloorShortfall(t, o)
 	if plan(t, o); largeBought(t, o) != 1 {
 		t.Fatalf("%d large hosts bought once the resumed one served past the idle timeout, want 1", largeBought(t, o))
 	}
@@ -854,14 +853,6 @@ func floorBought(t *testing.T, o owners) int {
 where market = 'on_demand' and reserve_mode is not null and phase = 'requested' and cpu_millis < 16000`)
 }
 
-// ageFloorShortfall makes every market's floor shortfall older than the
-// idle timeout.
-func ageFloorShortfall(t *testing.T, o owners) {
-	t.Helper()
-	run(t, o.pool, `update fleet_markets set plan = jsonb_set(plan, '{floor_short_since}', to_jsonb(now() - interval '6 minutes'))
-where plan ? 'floor_short_since'`)
-}
-
 // A burst that resumes the floor reserve buys no replacement: not while the
 // floor has been short for less than the idle timeout, and not while the
 // host, done and idle, is due back; once idle for the timeout it returns.
@@ -885,7 +876,6 @@ func TestABurstOnTheFloorReserveBuysNoReplacementWhileItCanReturn(t *testing.T) 
 	}
 	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", burst)
 	plan(t, o)
-	ageFloorShortfall(t, o)
 	if plan(t, o); floorBought(t, o) != 0 {
 		t.Fatal("bought a floor reserve while the idle resumed host is due back")
 	}
@@ -939,7 +929,6 @@ func TestAFloorReserveBusyPastTheIdleTimeoutIsReplaced(t *testing.T) {
 	placeOn(t, o, work, floor)
 	plan(t, o)
 	run(t, o.pool, "update hosts set phase_at = now() - interval '6 minutes' where id = $1", uuid.UUID(floor))
-	ageFloorShortfall(t, o)
 	if plan(t, o); floorBought(t, o) != 1 {
 		t.Fatalf("%d floor reserves bought while the resumed host stays busy past the idle timeout, want 1", floorBought(t, o))
 	}
@@ -1074,29 +1063,5 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 	}
 	if r := plan(t, o); r.Requested != 0 {
 		t.Fatalf("plan once arrivals settled %+v, want nothing bought", r)
-	}
-}
-
-// A build placed within the hour keeps a warm slot of its shape in its
-// market; an older one does not.
-func TestARecentBuildKeepsAWarmSlotOfItsShape(t *testing.T) {
-	t.Parallel()
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
-	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	buildContainer(t, o, dev, "stopped", 2*time.Hour)
-	plan(t, o)
-	if spot := publishedMarket(t, o, true); spot.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("Spot warm target %+v after a build two hours ago, want the 1 CPU floor alone", spot.WarmTarget)
-	}
-	buildContainer(t, o, dev, "stopped", 10*time.Minute)
-	staleMarkets(t, o)
-	plan(t, o)
-	cpuMillis, memory := buildShape(t)
-	if spot := publishedMarket(t, o, true); int64(spot.WarmTarget.CPUMillis) != 1000+cpuMillis || spot.WarmTarget.MemoryBytes != 4*gib+memory {
-		t.Fatalf("Spot warm target %+v after a build ten minutes ago, want the floor and the build's shape", spot.WarmTarget)
-	}
-	if od := publishedMarket(t, o, false); od.WarmTarget.CPUMillis != 1000 {
-		t.Fatalf("on-demand warm target %+v, want the floor alone: builds run in the Spot market", od.WarmTarget)
 	}
 }

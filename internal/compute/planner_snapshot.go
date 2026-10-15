@@ -299,8 +299,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 
 func recentShapesParams(p Policy) RecentShapesParams {
 	return RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, ArrivalSeconds: p.ArrivalWindow.Seconds(),
 		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
 	}
 }
@@ -336,15 +335,14 @@ type shapeKind string
 
 const (
 	shapeRecent  shapeKind = "recent"
-	shapeBuild   shapeKind = "build"
 	shapeArrived shapeKind = "arrived"
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the most disks one attached, the largest its
-// finished builds reserved, and what arrived within the arrival window.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
-	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+// containers reserved and the most disks one attached, and what arrived
+// within the arrival window.
+func shapesByMarket(rows []RecentShapesRow) (recent, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
+	recent, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
 	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
 		m, ok := r.market()
@@ -355,13 +353,11 @@ func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[Reserve
 		switch shapeKind(r.Kind) {
 		case shapeRecent:
 			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
-		case shapeBuild:
-			builds[m] = builds[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived, disks
+	return recent, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

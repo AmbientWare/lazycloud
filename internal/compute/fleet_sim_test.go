@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -146,12 +147,11 @@ type sim struct {
 	hosts   []*simHost
 	pending []*simContainer
 	r       simResult
-	// recent is the largest recent shape per market the planner reads.
+	// recent is the largest recent shape per market the planner reads, and
+	// peaks carries each market's load peak from one pass to the next, as
+	// the published plan does.
 	recent map[ReserveMarket]FleetCapacity
-	// floorShortSince carries each market's reserve shortfall from one pass
-	// to the next, as the published plan does.
-	floorShortSince map[ReserveMarket]time.Time
-	peaks           map[ReserveMarket]LoadPeak
+	peaks  map[ReserveMarket]LoadPeak
 	// maxHosts is the fleet limit; provision is how long a launch takes to
 	// serve.
 	maxHosts int
@@ -279,11 +279,20 @@ func (s *sim) advance() {
 	})
 }
 
-// place puts pending containers on serving hosts as placement does: the
-// oldest first, as PendingContainers orders them, each on the host
-// ChooseHost picks. Containers that arrived in one tick keep their order.
+// place puts pending containers on serving hosts as placement does: those
+// whose bought host serves first, on it while it has room, then the oldest
+// first, as PendingContainers orders them, each on the host ChooseHost
+// picks. Containers that arrived in one tick keep their order.
 func (s *sim) place() {
-	slices.SortStableFunc(s.pending, func(a, b *simContainer) int { return a.arrived.Compare(b.arrived) })
+	servingHost := func(c *simContainer) int {
+		if c.host == nil {
+			return -1
+		}
+		return slices.IndexFunc(s.hosts, func(h *simHost) bool { return h.ID == *c.host && h.State == FleetServing })
+	}
+	slices.SortStableFunc(s.pending, func(a, b *simContainer) int {
+		return cmp.Or(boolOrder(servingHost(a) < 0, servingHost(b) < 0), a.arrived.Compare(b.arrived))
+	})
 	s.pending = slices.DeleteFunc(s.pending, func(c *simContainer) bool {
 		var serving []*simHost
 		var rooms []HostCapacity
@@ -293,7 +302,16 @@ func (s *sim) place() {
 				serving, rooms = append(serving, h), append(rooms, forWork(fh, fh.capacity()))
 			}
 		}
-		i := ChooseHost(rooms, c.need, s.p.OnDemand.Warm.Floor)
+		i := -1
+		if c.host != nil {
+			i = slices.IndexFunc(serving, func(h *simHost) bool { return h.ID == *c.host })
+			if i >= 0 && !rooms[i].Fits(c.need) {
+				i = -1
+			}
+		}
+		if i < 0 {
+			i = ChooseHost(rooms, c.need, s.p.OnDemand.Warm.Floor)
+		}
 		if i < 0 {
 			return false
 		}
@@ -442,14 +460,11 @@ func (s *sim) plan() time.Duration {
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	snapshot.FloorShortSince, snapshot.Peaks = s.floorShortSince, s.peaks
+	snapshot.Peaks = s.peaks
 	plan := PlanFleet(s.p, snapshot)
-	s.floorShortSince, s.peaks = map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
+	s.peaks = map[ReserveMarket]LoadPeak{}
 	for _, mp := range plan.Markets {
 		s.peaks[mp.Market] = mp.Peak
-		if mp.FloorShortSince != nil {
-			s.floorShortSince[mp.Market] = *mp.FloorShortSince
-		}
 	}
 	s.check(snapshot, plan)
 	s.apply(plan)

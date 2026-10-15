@@ -673,13 +673,6 @@ with recent as (
         limit $2
     ) c
     left join releases r on r.id = c.release_id
-), builds as (
-    select c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class
-    from image_builds b
-    join containers c on c.image_build_id = b.id
-    where b.id > (select uuidv7(- make_interval(secs => $3::float8)))
-      and c.billing_owner = 'platform_fleet' and c.assigned_at is not null and c.state = 'stopped'
-      and c.stopped_at > now() - make_interval(secs => $4::float8)
 )
 select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
@@ -688,27 +681,22 @@ from recent
 where billing_owner = 'platform_fleet' and assigned_at is not null
 group by 2, 3
 union all
-select 'build', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
-       max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, 0
-from builds
-group by 2, 3
-union all
 select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
     select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
         select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $5::float8) as part
+               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $3::float8) as part
         from (
             select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
             from (
                 select id, cpu_millis, memory_bytes, created_at,
                        coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
-                           >= make_interval(secs => $6::float8) as opens
+                           >= make_interval(secs => $4::float8) as opens
                 from recent
                 where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
                   and rate_class in ('auto', 'pinned')
-                  and id > (select uuidv7(- make_interval(secs => $7::float8)))
+                  and id > (select uuidv7(- make_interval(secs => $5::float8)))
             ) gaps
         ) runs
     ) parts
@@ -719,13 +707,11 @@ order by 1, 2, 3
 `
 
 type RecentShapesParams struct {
-	WindowSeconds      float64
-	SampleSize         int32
-	BuildScanSeconds   float64
-	BuildWindowSeconds float64
-	BatchMaxSeconds    float64
-	BatchQuietSeconds  float64
-	ArrivalSeconds     float64
+	WindowSeconds     float64
+	SampleSize        int32
+	BatchMaxSeconds   float64
+	BatchQuietSeconds float64
+	ArrivalSeconds    float64
 }
 
 type RecentShapesRow struct {
@@ -743,23 +729,18 @@ type RecentShapesRow struct {
 // By purchase market and GPU model: the largest CPU, memory and GPUs placed
 // platform containers reserved, the most disks one attached, and the bytes
 // of platform volumes they read with how many started, among the newest
-// containers created within the window, up to the sample (recent); the
-// same among the build containers that stopped within the build window
-// (build), since a running build's host holds its slot once it ends; and
+// containers created within the window, up to the sample (recent); and
 // what the placed Spot-tolerant platform CPU containers of the sample
 // created within the arrival window reserve, less their largest batch
-// (arrived): a steady rate of work, which a single burst is not. A batch is arrivals less than
-// batch_quiet apart, at most batch_max long, as BatchWaits forms them. The
-// builds read are those created within build_scan, the window and the
-// longest a build runs. Both reads follow primary keys, so they read at
-// most sample_size containers and the scan's builds whatever the history;
-// the subqueries make their bounds constants the indexes can use.
+// (arrived): a steady rate of work, which a single burst is not. A batch is
+// arrivals less than batch_quiet apart, at most batch_max long, as
+// BatchWaits forms them. The read follows the primary key, so it reads at
+// most sample_size containers whatever the history; the subqueries make
+// its bounds constants the index can use.
 func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]RecentShapesRow, error) {
 	rows, err := q.db.Query(ctx, recentShapes,
 		arg.WindowSeconds,
 		arg.SampleSize,
-		arg.BuildScanSeconds,
-		arg.BuildWindowSeconds,
 		arg.BatchMaxSeconds,
 		arg.BatchQuietSeconds,
 		arg.ArrivalSeconds,

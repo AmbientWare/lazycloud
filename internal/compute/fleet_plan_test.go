@@ -177,25 +177,6 @@ func TestPendingWorkBuysPastAHostDueAnAgentUpdate(t *testing.T) {
 	}
 }
 
-// Work that fills the host holding the warm floor may end soon: the floor
-// waits FloorHold for its room before it buys a host, and buys once the
-// work outlasts the hold.
-func TestAFloorTakenByNewWorkWaitsBeforeItBuys(t *testing.T) {
-	t.Parallel()
-	p := planPolicy(cpuGiB(1000, 4), FleetCapacity{})
-	plan := func(busyFor time.Duration) FleetPlan {
-		full := planHost(1, planSmall, FleetServing)
-		full.Load, full.Containers, full.BusySince = full.Usable, 1, ptr(offerNow.Add(-busyFor))
-		return PlanFleet(p, planSnapshot(t, full))
-	}
-	if bought := actionsOf(plan(p.FloorHold/2), ActionBuy); len(bought) > 0 {
-		t.Fatalf("within the hold: bought %+v", bought)
-	}
-	if bought := actionsOf(plan(p.FloorHold+time.Second), ActionBuy); len(bought) != 1 {
-		t.Fatalf("past the hold: bought %+v, want the floor's host", bought)
-	}
-}
-
 // A reserve stopped after its reclaim notice never resumes: it retires and
 // holds none of the stopped target, which a reserve bought in its place
 // takes up.
@@ -495,30 +476,13 @@ func TestPlanKeepsHeadroomGrowthOutOfDemand(t *testing.T) {
 	}
 }
 
-// An idle Spot host that holds no warm slot leaves after the Spot idle
-// timeout, a launch away from being replaced, while an on-demand one waits
-// out the idle timeout.
-func TestAnIdleSpotHostLeavesSoonerThanAnOnDemandOne(t *testing.T) {
-	t.Parallel()
-	p := planPolicy(FleetCapacity{}, FleetCapacity{})
-	idleFor := func(id byte, market Market) FleetHost {
-		h := planHost(id, planSmall, FleetServing)
-		h.Market, h.IdleSince = market, ptr(offerNow.Add(-p.SpotIdleTimeout))
-		return h
-	}
-	plan := PlanFleet(p, planSnapshot(t, idleFor(1, MarketSpot), idleFor(2, MarketOnDemand)))
-	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
-		t.Fatalf("left %v, want only the Spot host", got)
-	}
-}
-
-// An idle host leaves once idle for the idle timeout; a host pending work
+// An idle host leaves once idle for the keep window; a host pending work
 // fits is not idle.
-func TestPlanReleasesIdleHostsAfterTheIdleTimeout(t *testing.T) {
+func TestPlanReleasesIdleHostsAfterTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	p := planPolicy(FleetCapacity{}, FleetCapacity{})
 	fresh := planHost(1, planSmall, FleetServing)
-	fresh.IdleSince = ptr(offerNow.Add(-p.IdleTimeout + time.Second))
+	fresh.IdleSince = ptr(offerNow.Add(-p.Keep + time.Second))
 	old := idle(planHost(2, planSmall, FleetServing))
 	wanted := idle(planHost(3, planLarge, FleetServing))
 	s := planSnapshot(t, fresh, old, wanted)
@@ -696,26 +660,6 @@ func TestRecentCardWorkKeepsAStoppedTargetOfOneCard(t *testing.T) {
 	}
 }
 
-// Recent builds keep a warm slot of their shape only in CPU markets: after
-// a GPU build its idle host leaves on the idle timeout like any other.
-func TestAGPUBuildKeepsNoWarmSlot(t *testing.T) {
-	t.Parallel()
-	p := planPolicy(FleetCapacity{}, FleetCapacity{})
-	p.GPU = DefaultPolicy().GPU
-	h := idle(planHost(1, mustType(t, "g4dn.xlarge"), FleetServing))
-	h.GPU = "T4"
-	s := planSnapshot(t, h)
-	s.Offers.Catalog = FleetCatalog()
-	s.Builds = map[ReserveMarket]FleetCapacity{{GPU: "T4"}: {CPUMillis: 2000, MemoryBytes: 8 * gib, GPUs: 1}}
-	plan := PlanFleet(p, s)
-	if got := hostsOf(actionsOf(plan, ActionDrain, ActionReturnToReserve)); !slices.Equal(got, []HostID{{1}}) {
-		t.Fatalf("actions %+v, want the idle T4 host to leave", plan.Actions)
-	}
-	if mp := marketPlan(t, plan, ReserveMarket{GPU: "T4"}); !mp.WarmTarget.Empty() {
-		t.Fatalf("T4 warm target %+v, want none", mp.WarmTarget)
-	}
-}
-
 // While load sets the Spot market's stopped target, a reserve bought for a
 // small shortfall still holds the target up to the default largest shape,
 // the size that hibernates, so a target that grows a little each pass is
@@ -741,7 +685,6 @@ func TestALoadedSpotMarketBuysLargeReserves(t *testing.T) {
 	for _, typ := range s.Offers.Catalog {
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ.Name, HourlyMicros: 10_000 * typ.VCPUs(), ObservedAt: offerNow})
 	}
-	s.FloorShortSince = map[ReserveMarket]time.Time{spot: offerNow.Add(-time.Hour)}
 	plan := PlanFleet(p, s)
 	bought := actionsOf(plan, ActionBuyReserve)
 	if len(bought) == 0 {
@@ -773,8 +716,8 @@ func TestBorrowedOnDemandRoomCountsAsSpotLoad(t *testing.T) {
 }
 
 // A large idle host that holds the warm floor does not stand in for the
-// reserve: the floor never lapses, so once the shortfall outlasts the
-// idle timeout the market buys a reserve that fits the largest shape.
+// reserve: the floor never lapses, so the market buys a reserve that fits
+// the largest shape.
 func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 	t.Parallel()
 	p := DefaultPolicy()
@@ -786,7 +729,6 @@ func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 	s := planSnapshot(t, warm)
 	s.Offers.Catalog = FleetCatalog()
 	s.Recent = map[ReserveMarket]FleetCapacity{onDemand: cpuGiB(12000, 24)}
-	s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: offerNow.Add(-6 * time.Minute)}
 	plan := PlanFleet(p, s)
 	if len(actionsOf(plan, ActionBuyReserve)) == 0 {
 		t.Fatalf("actions %+v, reason %q; want a reserve bought", plan.Actions, marketPlan(t, plan, onDemand).Reason)
@@ -836,41 +778,43 @@ func TestARightsizeReplacementKeepsTheSlotWhenWorkLandsOnTheReplacedHost(t *test
 	}
 }
 
-// A reserve resumed for a build goes back into the reserve: while it idles
-// holding a warm slot a cheaper type will take over, the reserve waits for
-// it rather than buying its like, even once the wait from the resume has
-// run out; rightsize then replaces it, and it returns once the
-// replacement serves.
+// A reserve resumed for a build goes back into the reserve: while it holds
+// a warm slot a cheaper type will take over, the reserve waits for it
+// rather than buying its like. Within the keep window of its resume the
+// market replaces nothing; past it rightsize replaces the host, which
+// returns once it has held no slot for the keep window.
 func TestAResumedReserveReturnsOnceACheaperHostTakesItsSlot(t *testing.T) {
 	t.Parallel()
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	big := mustType(t, "c6a.8xlarge")
 	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(2000, 4)}, Stopped: HeadroomTarget{Floor: big.Usable(0)}}
-	under, over := p.IdleTimeout/2, max(p.IdleTimeout, p.ReturnWait)+time.Minute
-	resumed := planHost(1, big, FleetServing)
-	resumed.PhaseAt = offerNow.Add(-over)
-	snapshot := func(idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
-		h := resumed
-		h.IdleSince = ptr(offerNow.Add(-idleFor))
-		s := planSnapshot(t, append([]FleetHost{h}, hosts...)...)
+	snapshot := func(readyFor, idleFor time.Duration, hosts ...FleetHost) FleetSnapshot {
+		resumed := planHost(1, big, FleetServing)
+		resumed.PhaseAt, resumed.Slept = offerNow.Add(-readyFor), true
+		if idleFor > 0 {
+			resumed.IdleSince = ptr(offerNow.Add(-idleFor))
+		}
+		s := planSnapshot(t, append([]FleetHost{resumed}, hosts...)...)
 		s.Offers.Catalog = FleetCatalog()
-		s.FloorShortSince = map[ReserveMarket]time.Time{onDemand: resumed.PhaseAt}
 		return s
 	}
-	plan := PlanFleet(p, snapshot(under))
+	plan := PlanFleet(p, snapshot(p.Keep/2, 0))
 	if mp := marketPlan(t, plan, onDemand); mp.Reason != WaitReturning || len(plan.Actions) > 0 {
-		t.Fatalf("idle within the timeout: reason %q, actions %+v", mp.Reason, plan.Actions)
+		t.Fatalf("within the keep window: reason %q, actions %+v", mp.Reason, plan.Actions)
 	}
-	plan = PlanFleet(p, snapshot(over))
+	plan = PlanFleet(p, snapshot(p.Keep+time.Minute, 0))
 	moves := actionsOf(plan, ActionRightsize)
-	if len(moves) != 1 || *moves[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
-		t.Fatalf("idle past the timeout: %+v", plan.Actions)
+	if len(moves) != 1 || *moves[0].Host != (HostID{1}) || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("past the keep window: %+v", plan.Actions)
 	}
 	replacement := idle(planHost(2, moves[0].Offer.Type, FleetServing))
-	plan = PlanFleet(p, snapshot(over, replacement))
-	if got := actionsOf(plan, ActionReturnToReserve); len(got) != 1 || *got[0].Host != resumed.ID || len(actionsOf(plan, ActionBuyReserve)) > 0 {
-		t.Fatalf("once the replacement serves: %+v", plan.Actions)
+	if plan := PlanFleet(p, snapshot(p.Keep+time.Minute, 0, replacement)); len(plan.Actions) > 0 {
+		t.Fatalf("once the replacement serves: %+v, want the resumed host kept for the keep window", plan.Actions)
+	}
+	plan = PlanFleet(p, snapshot(2*p.Keep, p.Keep, replacement))
+	if got := actionsOf(plan, ActionReturnToReserve); len(got) != 1 || *got[0].Host != (HostID{1}) || len(actionsOf(plan, ActionBuyReserve)) > 0 {
+		t.Fatalf("once it has held no slot for the keep window: %+v", plan.Actions)
 	}
 }
 
@@ -1059,8 +1003,8 @@ func TestSpotGPUWorkBuysOnDemandOnlyWhenNoModelsSpotCanHostIt(t *testing.T) {
 }
 
 // A Spot GPU market whose reserve serves waits for it to return rather than
-// buy another, however long it has been short; the CPU Spot market buys
-// once the return wait passes.
+// buy another, however long it has served; the CPU Spot market buys once
+// its host has served past the keep window.
 func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
 	t.Parallel()
 	for _, gpu := range []bool{true, false} {
@@ -1073,7 +1017,6 @@ func TestASpotGPUReserveThatServesIsAwaitedNotReplaced(t *testing.T) {
 		h.Market, h.Load, h.Containers, h.PhaseAt = MarketSpot, FleetCapacity{CPUMillis: 1000, MemoryBytes: gib, GPUs: h.Usable.GPUs}, 1, offerNow.Add(-time.Hour)
 		s := gpuPlanSnapshot(t, h)
 		s.Offers.Spot = append(s.Offers.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "c6a.4xlarge", HourlyMicros: 200_000, ObservedAt: offerNow})
-		s.FloorShortSince = map[ReserveMarket]time.Time{m: offerNow.Add(-time.Hour)}
 		p := gpuPolicy()
 		p.Spot = DefaultPolicy().Spot
 		var bought []FleetAction

@@ -60,7 +60,7 @@ type marketTarget struct {
 	m     ReserveMarket
 	load  FleetCapacity
 	slots []warmSlot
-	// warm is the warm target the slots hold, but a build's.
+	// warm is the warm target the slots hold.
 	warm FleetCapacity
 	// stopped is the reserve target purchases keep, a share of the load,
 	// and peakShare the same share of the peak, which reserves woken for a
@@ -80,10 +80,8 @@ type marketTarget struct {
 
 // target sets market m's targets from its current load, what its hosts'
 // containers reserve and what its pending containers ask for: its warm
-// slots, with one of the shape of its builds while they run in a CPU
-// market, since a GPU host held warm for builds costs far more, and its
-// stopped target: its share of load, and at least its floor beside the
-// largest shape one reserve must fit.
+// slots, and its stopped target: its share of load, and at least its floor
+// beside the largest shape one reserve must fit, which a build resumes.
 func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 	t := marketTarget{m: m, load: ps.marketLoad(m)}
 	largest, disks := ps.s.Recent[m], ps.s.RecentDisks[m]
@@ -101,9 +99,6 @@ func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 		t.warm = t.warm.Upper(r.Warm.Floor.Plus(ps.s.Arrived[m]))
 	}
 	t.slots = ps.p.slots(r.Warm, t.warm)
-	if build := ps.s.Builds[m]; !build.Empty() && m.GPU == "" && r.Warm != (HeadroomTarget{}) {
-		t.slots = append(t.slots, warmSlot{shape: build.Lower(ps.p.LargestShape.Cap), kind: slotBuild})
-	}
 	t.peak = ps.s.Peaks[m].after(t.load, ps.s.Now, ps.p.CostHorizon)
 	t.stopped, t.peakShare = r.Stopped.Of(t.load), r.Stopped.Of(t.peak.Load)
 	if r.FitLargest {
@@ -141,7 +136,7 @@ func slotItems(views []*marketView) []coverItem {
 	var out []coverItem
 	for _, v := range views {
 		for _, slot := range v.slots {
-			out = append(out, coverItem{slot: true, kind: slot.kind, need: slotNeed(v.m, slot.shape), market: v.m, wait: -1})
+			out = append(out, coverItem{slot: true, floor: slot.floor, need: slotNeed(v.m, slot.shape), market: v.m, wait: -1})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b coverItem) int { return size(b.need) - size(a.need) })
