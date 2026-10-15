@@ -81,10 +81,6 @@ type Config struct {
 	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
 	// on.
 	VolumeAddr string
-	// VolumeDisk stores volume frames on the cache's disk, fills objects
-	// whole and warms them; unset, frames stay in memory while reads come
-	// back to them.
-	VolumeDisk bool
 	HTTP       *http.Client
 	Logger     *slog.Logger
 	Tracer     oteltrace.Tracer
@@ -147,7 +143,7 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &snapshotter{
-		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, volumes: newVolumes(cache, cfg.HTTP, cfg.Logger, cfg.VolumeDisk), log: cfg.Logger, cancel: cancel,
+		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, volumes: newVolumes(cache, cfg.HTTP, cfg.Logger), log: cfg.Logger, cancel: cancel,
 		requests: make(chan func()),
 		done:     make(chan struct{}),
 		mounted:  make(map[string]*mountedLayer),

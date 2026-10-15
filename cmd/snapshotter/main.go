@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
-	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -38,14 +37,6 @@ const (
 	// queue and the kept frames hold, so the snapshotter stays under 1 GiB
 	// on a host of 8 GiB; collection alone would let it double.
 	memoryLimit = 768 << 20
-	// minVolumeDisk is the smallest instance store that stores volume
-	// frames: EC2's instance stores below a 4xlarge's 600 GB sustain 130-190
-	// MB/s of writes and read back slower than S3 delivers, while a 600 GB
-	// one writes 500 MB/s and reads 1.6 GB/s. gp3 data volumes read back at
-	// their 125 MiB/s baseline.
-	minVolumeDisk = 500e9
-	// instanceStore is the model EC2 gives NVMe instance store volumes.
-	instanceStore = "Amazon EC2 NVMe Instance Storage"
 )
 
 func main() {
@@ -112,9 +103,8 @@ func run(args []string) int {
 		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes, VolumeAddr: layersource.VolumeEndpoint,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
-	cfg.VolumeDisk = volumeDisk(layersource.CacheDir, volume)
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {
-		logger.Info("serving", "socket", layersource.Socket, "stores_volume_frames", cfg.VolumeDisk)
+		logger.Info("serving", "socket", layersource.Socket)
 		if err := notifyReady(); err != nil {
 			logger.Warn("telling systemd the snapshotter is ready failed", "error", err)
 		}
@@ -124,17 +114,6 @@ func run(args []string) int {
 		return 1
 	}
 	return 0
-}
-
-// volumeDisk reports whether the data volume holding dir stores volume
-// frames: an instance store of minVolumeDisk or more.
-func volumeDisk(dir string, volume unix.Statfs_t) bool {
-	var st unix.Stat_t
-	if unix.Stat(dir, &st) != nil || float64(volume.Blocks)*float64(volume.Bsize) < minVolumeDisk {
-		return false
-	}
-	model, err := os.ReadFile(fmt.Sprintf("/sys/dev/block/%d:%d/device/model", unix.Major(st.Dev), unix.Minor(st.Dev)))
-	return err == nil && strings.TrimSpace(string(model)) == instanceStore
 }
 
 // notifyReady tells systemd the socket accepts calls, so containerd and

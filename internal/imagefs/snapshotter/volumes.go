@@ -41,10 +41,10 @@ const (
 	// minCachedObject is the smallest object reads take from the cache.
 	minCachedObject = 1 << 20
 	// readAheadFrames is how far past a sequential read the frames it will
-	// want are fetched into memory where the disk stores no volume frames,
-	// and readAheadFetches bounds those fetches, and the parallel fetches of
-	// the frames one read spans, across the host: a few fetches in parallel
-	// bring a reader to the store's full speed.
+	// want are fetched, and readAheadFetches bounds those fetches, and the
+	// parallel fetches of the frames one read spans, across the host: a few
+	// fetches in parallel bring a reader to the store's full speed, which a
+	// fill paced by the disk may not.
 	readAheadFrames  = 4
 	readAheadFetches = 16
 	// observationLife is how long a HEAD's answer names an object's
@@ -66,11 +66,7 @@ type volumes struct {
 	proxy  *httputil.ReverseProxy
 	signer *v4.Signer
 	// heads makes concurrent reads of one object share one HEAD.
-	heads singleflight.Group
-	// disk is set where the cache's disk reads faster than the stores: only
-	// there are volume frames stored, filled whole and warmed.
-	disk bool
-
+	heads   singleflight.Group
 	mu      sync.Mutex
 	buckets map[string]*bucket
 	// mounts are the containers' mounts by container.
@@ -126,9 +122,9 @@ type observation struct {
 	at      time.Time
 }
 
-func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger, disk bool) *volumes {
+func newVolumes(cache *frameCache, client *http.Client, log *slog.Logger) *volumes {
 	v := &volumes{
-		cache: cache, http: client, log: log, disk: disk,
+		cache: cache, http: client, log: log,
 		signer:  v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true }),
 		buckets: map[string]*bucket{}, mounts: map[string]*volumeMount{}, filling: map[string]bool{},
 		ahead: make(chan struct{}, readAheadFetches),
@@ -556,10 +552,9 @@ func (v *volumes) observed(name, key string) (observation, bool) {
 }
 
 // serveCached answers a GET of a large object from the cache and reports
-// whether it did; a GET it does not answer is forwarded. Where the disk
-// stores volume frames, a read the cache misses of an object within a
-// quarter of the cache fetches the whole object in the background. A frame
-// the store refuses fails the GET as
+// whether it did; a GET it does not answer is forwarded. A read the cache
+// misses of an object within a quarter of the cache fetches the whole
+// object in the background. A frame the store refuses fails the GET as
 // 503, which GeeseFS retries, or once the answer began, cuts it short.
 func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarded) bool {
 	o, ok := v.version(r.Context(), f)
@@ -572,12 +567,10 @@ func (v *volumes) serveCached(w http.ResponseWriter, r *http.Request, f forwarde
 		return false
 	}
 	v.record(f.mount, ver)
-	if v.disk && ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
+	if ver.size <= v.cache.limit/4 && !v.cache.cached(ver.key(int(first/volumeFrame))) {
 		v.fill(ver) //nolint:contextcheck // a fill runs under the cache's life, not the read's
 	}
-	if !v.disk {
-		v.readAhead(f.mount, ver, int(first/volumeFrame), int(last/volumeFrame)) //nolint:contextcheck // a fetch runs under the cache's life
-	}
+	v.readAhead(f.mount, ver, int(first/volumeFrame), int(last/volumeFrame)) //nolint:contextcheck // a fetch runs under the cache's life
 	buf := make([]byte, min(maxRead, last-first+1))
 	for pos, started := first, false; pos <= last; {
 		frame, within := int(pos/volumeFrame), pos%volumeFrame
@@ -663,10 +656,10 @@ func (v *volumes) fill(ver objectVersion) {
 	v.cache.background.Go(func() { v.fillWhole(v.cache.life, ver) })
 }
 
-// readAhead fetches into memory, in parallel, the frames a read of from to
-// to spans past its first, and when it starts an object or follows the
-// mount's last read of it, as GeeseFS reads a file in order, the
-// readAheadFrames after it. The fetches use the slots reads use.
+// readAhead fetches, in parallel, the frames a read of from to to spans
+// past its first, and when it starts an object or follows the mount's last
+// read of it, as GeeseFS reads a file in order, the readAheadFrames after
+// it. The fetches use the slots reads use.
 func (v *volumes) readAhead(m *volumeMount, ver objectVersion, from, to int) {
 	v.mu.Lock()
 	last, seen := m.last[ver.name]
@@ -744,12 +737,7 @@ func (o objectVersion) key(frame int) frameKey {
 	return frameKey{object: "volume:" + o.workspace + "/" + o.bucket + "/" + o.name + "@" + o.etag, frame: frame}
 }
 
-func (o objectVersion) store() frameStore {
-	if o.v.disk {
-		return storeBehind
-	}
-	return storeNone
-}
+func (o objectVersion) store() frameStore { return storeBehind }
 
 func (o objectVersion) frameLen(frame int) int {
 	return int(min(volumeFrame, o.size-int64(frame)*volumeFrame))
@@ -847,9 +835,6 @@ func (s volumeSources) WarmVolumes(_ context.Context, req *imagefsproto.WarmVolu
 	v.mu.Unlock()
 	if g.name == "" {
 		return nil, status.Errorf(codes.FailedPrecondition, "workspace %s has no live volume grant", req.GetWorkspaceId())
-	}
-	if !v.disk {
-		return &imagefsproto.WarmVolumesResponse{}, nil
 	}
 	var keys []string
 	for _, r := range req.GetReads() {

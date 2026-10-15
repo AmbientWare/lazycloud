@@ -99,16 +99,15 @@ func testGrant(t *testing.T, bucket string) *imagefsproto.BucketGrant {
 // cache of 32 MiB, its keys under a volume's prefix.
 func volumeEndpoint(t *testing.T, ts *testStore, up *upstream) (*volumes, string) {
 	t.Helper()
-	return serveVolumes(t, ts, up, newTestCache(t, up, 32<<20), true)
+	return serveVolumes(t, ts, up, newTestCache(t, up, 32<<20))
 }
 
 // serveVolumes serves the test store's bucket through volumes over c, its
-// keys under a volume's prefix, to testContainer's mount, storing volume
-// frames on c's disk when disk is set.
-func serveVolumes(t *testing.T, ts *testStore, up *upstream, c *frameCache, disk bool) (*volumes, string) {
+// keys under a volume's prefix, to testContainer's mount.
+func serveVolumes(t *testing.T, ts *testStore, up *upstream, c *frameCache) (*volumes, string) {
 	t.Helper()
 	ts.prefix = "volumes/" + uuid.NewString() + "/"
-	v := newVolumes(c, &http.Client{Transport: up}, slog.New(slog.DiscardHandler), disk)
+	v := newVolumes(c, &http.Client{Transport: up}, slog.New(slog.DiscardHandler))
 	if err := v.grant(uuid.NewString(), testGrant(t, ts.bucket), testContainer, testKey); err != nil {
 		t.Fatal(err)
 	}
@@ -176,9 +175,13 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 	t.Parallel()
 	ts := newTestStore(t)
 	up := &upstream{}
-	// Objects over a quarter of the cache are read by frame, never whole.
-	_, base := volumeEndpoint(t, ts, up)
-	old, changed := randomBytes(1, 3*volumeFrame), randomBytes(2, 3*volumeFrame)
+	// The object fits the cache and is over a quarter of it, so it is read
+	// by frame, never whole, and its last frame lies past the read-ahead of
+	// a read of its first.
+	c := newTestCache(t, up, 64<<20)
+	_, base := serveVolumes(t, ts, up, c)
+	frames := readAheadFrames + 3
+	old, changed := randomBytes(1, frames*volumeFrame), randomBytes(2, frames*volumeFrame)
 	key := "weights.bin"
 	put := func(body []byte) {
 		if _, err := ts.client.PutObject(context.Background(), &s3.PutObjectInput{
@@ -199,6 +202,7 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 		resp.Header.Get("Content-Range") != fmt.Sprintf("bytes 0-1048575/%d", len(old)) {
 		t.Fatalf("the cached read answers headers %v", resp.Header)
 	}
+	c.background.Wait()
 	gets, _ := up.counts()
 	if resp, body = get(t, base+key, "0-1048575"); resp.StatusCode != http.StatusPartialContent || !bytes.Equal(body, old[:1<<20]) {
 		t.Fatalf("second read: %s", resp.Status)
@@ -215,15 +219,16 @@ func TestVolumeReadsServeOneVersion(t *testing.T) {
 		}
 	}
 	up.mu.Unlock()
-	if resp, _ := get(t, base+key, fmt.Sprintf("%d-%d", volumeFrame, volumeFrame+99)); resp.StatusCode != http.StatusServiceUnavailable {
+	last := int64(frames-1) * volumeFrame
+	if resp, _ := get(t, base+key, fmt.Sprintf("%d-%d", last, last+99)); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("a read of a frame the store refused is %s", resp.Status)
 	}
 	if _, refused := up.counts(); refused == 0 {
 		t.Fatal("the store answered no 412 to a frame of the old version")
 	}
-	resp, body = get(t, base+key, fmt.Sprintf("%d-%d", volumeFrame, volumeFrame+99))
-	if resp.StatusCode != http.StatusPartialContent || !bytes.Equal(body, changed[volumeFrame:volumeFrame+100]) {
-		t.Fatalf("the read after the change: %s, new bytes %v", resp.Status, bytes.Equal(body, changed[volumeFrame:volumeFrame+100]))
+	resp, body = get(t, base+key, fmt.Sprintf("%d-%d", last, last+99))
+	if resp.StatusCode != http.StatusPartialContent || !bytes.Equal(body, changed[last:last+100]) {
+		t.Fatalf("the read after the change: %s, new bytes %v", resp.Status, bytes.Equal(body, changed[last:last+100]))
 	}
 }
 
@@ -659,7 +664,7 @@ func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
 	}
 	t.Cleanup(c.writer.Wait)
 	t.Cleanup(c.background.Wait)
-	_, base := serveVolumes(t, ts, up, c, true)
+	_, base := serveVolumes(t, ts, up, c)
 	body := randomBytes(12, 12*volumeFrame)
 	ts.put(t, "weights", body)
 	freeze()
@@ -683,56 +688,11 @@ func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
 	}
 }
 
-// On a host whose disk reads back slower than the stores deliver, volume
-// frames stay off the disk: a partial read fetches what it reads and its
-// read-ahead, not the whole object, leaving background fetches free for
-// layers, disks and other objects; a whole read comes back intact with
-// nothing stored; and a warm fetches nothing.
-func TestVolumeFramesStayOffASlowDisk(t *testing.T) {
-	ts := newTestStore(t)
-	up := &upstream{}
-	c := newTestCache(t, up, 256<<20)
-	v, base := serveVolumes(t, ts, up, c, false)
-	body := randomBytes(14, 12*volumeFrame)
-	ts.put(t, "weights", body)
-	if resp, got := get(t, base+"weights", "0-0"); resp.StatusCode != http.StatusPartialContent || len(got) != 1 {
-		t.Fatalf("the partial read: %s", resp.Status)
-	}
-	done := make(chan struct{})
-	go func() {
-		c.background.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("background fetches still hold their slots after a partial read")
-	}
-	if gets, _ := up.counts(); gets > 1+readAheadFrames {
-		t.Fatalf("a read of one frame made %d store GETs", gets)
-	}
-	if resp, got := get(t, base+"weights", ""); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
-		t.Fatalf("the whole read: %s, intact %v", resp.Status, bytes.Equal(got, body))
-	}
-	if stored := diskBytes(t, c.dir); stored != 0 {
-		t.Fatalf("the cache stored %d bytes of the object on its disk", stored)
-	}
-	gets, _ := up.counts()
-	if _, err := (volumeSources{volumes: v}).WarmVolumes(t.Context(), &imagefsproto.WarmVolumesRequest{
-		WorkspaceId: v.buckets[ts.bucket].grant.workspace, Reads: []*imagefsproto.VolumeRead{volumeRead(ts, "weights")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	c.background.Wait()
-	if after, _ := up.counts(); after != gets {
-		t.Fatalf("a warm made %d store GETs", after-gets)
-	}
-}
-
-// Where the disk stores no volume frames, a read that starts an object
-// fetches the frames after it into memory, so the reads that follow it
-// reach no store, a read that jumps elsewhere fetches nothing past itself,
-// and the frames one read spans are fetched in parallel.
+// A read that starts an object fetches the frames after it, so the reads
+// that follow it reach no store, a read that jumps elsewhere fetches
+// nothing past itself, and the frames one read spans are fetched in
+// parallel. The object is larger than a quarter of the cache, so no fill
+// fetches it whole.
 func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
 	ts := newTestStore(t)
 	var mu sync.Mutex
@@ -761,7 +721,7 @@ func TestSequentialReadsFetchAheadIntoMemory(t *testing.T) {
 		}
 	}}
 	c := newTestCache(t, up, 256<<20)
-	_, base := serveVolumes(t, ts, up, c, false)
+	_, base := serveVolumes(t, ts, up, c)
 	body := randomBytes(15, 12*volumeFrame)
 	ts.put(t, "weights", body)
 	read := func(from, to int64) {

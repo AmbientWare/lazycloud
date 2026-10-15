@@ -78,9 +78,6 @@ const (
 	// storeBehind hands each frame to the writer, holding it in memory
 	// meanwhile, so a read never waits on the disk.
 	storeBehind
-	// storeNone holds frames in memory only, on a host whose disk reads
-	// slower than the stores deliver.
-	storeNone
 )
 
 // cachedFrame is one stored frame. Every store writes a new file, so an
@@ -425,8 +422,8 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 			if err := c.store(k, data); err != nil {
 				c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
 			}
-		case storeBehind, storeNone:
-			c.holdFrame(k, data, src.store() == storeBehind)
+		case storeBehind:
+			c.holdFrame(k, data)
 		}
 		return data, nil
 	})
@@ -471,23 +468,21 @@ func retryable(err error) bool {
 	return true
 }
 
-// holdFrame keeps a volume frame in memory, queued for the writer when it is to
-// be stored and the queue has room, and otherwise kept for the reads that
-// come back to it, dropping the oldest kept frame past keptFrames.
-func (c *frameCache) holdFrame(k frameKey, data []byte, queue bool) {
+// holdFrame keeps a volume frame in memory, queued for the writer when the
+// queue has room, and otherwise kept for the reads that come back to it,
+// dropping the oldest kept frame past keptFrames. A fill stores what a
+// read's frames the queue had no room for later, at the disk's pace.
+func (c *frameCache) holdFrame(k frameKey, data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	u := &unstored{data: data}
 	c.unstored[k] = u
-	if queue {
-		select {
-		case c.writes <- k:
-			u.queued = true
-			return
-		default:
-		}
+	select {
+	case c.writes <- k:
+		u.queued = true
+	default:
+		c.keepLocked(k)
 	}
-	c.keepLocked(k)
 }
 
 // keepLocked lists k last among the kept frames and drops the oldest past
