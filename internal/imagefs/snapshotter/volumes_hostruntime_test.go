@@ -77,7 +77,7 @@ func TestVolumeReadsNeverWaitForTheDisk(t *testing.T) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.frames) != 0 {
-		t.Fatalf("%d frames stored on a frozen disk", len(c.frames))
+	if len(c.frames) != 0 || len(c.objects) != 0 {
+		t.Fatalf("%d frames and %d objects stored on a frozen disk", len(c.frames), len(c.objects))
 	}
 }
