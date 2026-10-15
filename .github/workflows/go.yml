@@ -2,35 +2,87 @@ name: Go backend and host runtime
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/go.yml"
-      - "go.mod"
-      - "go.sum"
-      - "**/*.go"
-      - "contracts/**"
-      - "migrations/**"
-      - "buf.yaml"
-      - "buf.gen.yaml"
-      - ".golangci.yml"
-      - "**/sqlc.yaml"
-      # The test services.
-      - "compose.test.yaml"
-      - "deploy/local/garage.toml"
-      - "deploy/local/garage-bootstrap.sh"
-      - "deploy/local/install-snapshotter.sh"
-      - "deploy/local/acceptance.sh"
-      # The supervisor's HTTP runner tests run the Python runner.
-      - "python/**"
-      - "pyproject.toml"
-      - "uv.lock"
+  # Dependencies and tools are what the build cache saves, and a pull
+  # request restores main's entry: a main run after they change, or one
+  # started by hand to seed it, leaves every pull request a warm cache.
   push:
     branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # A pull request runs the jobs below only when it changes what they
+  # check; "Go passed" always reports, so it can be required.
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      run: ${{ steps.changed.outputs.changed }}
+      host: ${{ steps.host.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: changed
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github/workflows/go.yml
+            .github/actions/changed
+            go.mod
+            go.sum
+            *.go
+            contracts
+            migrations
+            buf.yaml
+            buf.gen.yaml
+            .golangci.yml
+            *sqlc.yaml
+            compose.test.yaml
+            deploy/local/garage.toml
+            deploy/local/garage-bootstrap.sh
+            deploy/local/install-snapshotter.sh
+            deploy/local/acceptance.sh
+            python
+            pyproject.toml
+            uv.lock
+      # The host side: what runs on hosts and in containers, the protocols
+      # they speak, the server's end of the host session, and the images
+      # and scripts the host jobs install. The host jobs run only for these;
+      # owner tests cover the rest of the platform.
+      - id: host
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github/workflows/go.yml
+            .github/actions/changed
+            go.mod
+            go.sum
+            cmd/agent
+            cmd/supervisor
+            internal/agent
+            internal/imagefs
+            internal/supervisor
+            internal/diskengine
+            internal/hostsession
+            internal/hostproto
+            internal/platformimages
+            internal/rootdisk
+            contracts/host
+            contracts/runner.yaml
+            python/runner
+            migrations
+            acceptance
+            deploy/local
+            deploy/images
+
   validate:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -39,10 +91,20 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      # The Go module, build and lint caches from the last run on main after
+      # a dependency change, or this pull request's own last run. Only this
+      # job saves; the host jobs restore the same entry.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       - name: PostgreSQL, stripe-mock and the object store
         run: docker compose -f compose.test.yaml up -d --wait
-      - name: GeeseFS for volume mount tests
-        run: deploy/local/fetch-geesefs.sh
       - name: Generated code is current
         run: |
           go generate ./...
@@ -50,7 +112,6 @@ jobs:
       - run: go mod tidy -diff
       - run: go tool buf format -d --exit-code
       - run: go tool buf lint
-      - run: go vet -tags hostruntime ./...
       - run: go tool golangci-lint run ./...
       # The supervisor's HTTP runner tests run the repository's Python
       # runner.
@@ -67,6 +128,8 @@ jobs:
   # which needs root and Docker reconfigured, so this job sets the runner up
   # as a host before anything else runs in Docker.
   host-runtime:
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -75,6 +138,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ hashFiles('go.sum') }}-
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       # Test images, pinned by digest, from the run that last pulled them.
       - uses: actions/cache@v6
         with:
@@ -86,7 +157,9 @@ jobs:
         run: docker compose -f compose.test.yaml up -d --wait object-store-bootstrap
       - name: GeeseFS for volume mount tests
         run: deploy/local/fetch-geesefs.sh
-      - run: go test -race -tags hostruntime ./internal/imagefs ./internal/imagefs/layersource
+      # The image round trip converts every layer of a real image; validate
+      # covers the rest of imagefs under the race detector.
+      - run: go test -tags hostruntime -run TestPythonLayersRoundTrip ./internal/imagefs
       # The agent binds volumes and the snapshotter mounts FUSE and overlay
       # filesystems as root, as on hosts, and a join installs as root. A
       # skipped volume mount test fails the job.
@@ -98,11 +171,15 @@ jobs:
             exit 1
           fi
       - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -run TestInstallScriptInstallsAReleaseAndRunsTheAgent -v ./cmd/agent
-      # The supervisor's egress rules and Docker runs, as root on a host.
-      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -v ./internal/supervisor
+      # The supervisor's egress rules and Docker runs, as root on a host;
+      # validate covers the rest of the supervisor.
+      - run: sudo --preserve-env=PATH,HOME,GOPATH,GOCACHE,GOMODCACHE "$(command -v go)" test -race -tags hostruntime -run 'TestNetfilter|TestDevboxRoot' -v ./internal/supervisor
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
+          # The runner never reboots, so the initramfs the install would
+          # rebuild is never read.
+          sudo ln -sf /bin/true /usr/local/sbin/update-initramfs
           sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
           sudo modprobe nbd nbds_max=16 || {
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
@@ -124,6 +201,8 @@ jobs:
   # trust only the HTTPS store's private CA, and an agent of the release
   # this change replaces updates to it. A skipped test fails the job.
   acceptance:
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
     runs-on: ubuntu-26.04
     # The tests and the snapshotter trace into Jaeger; the job keeps the
     # trace of the slowest container start.
@@ -139,6 +218,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ hashFiles('go.sum') }}-
+          restore-keys: go-${{ hashFiles('go.sum') }}-
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.29"
@@ -170,6 +257,9 @@ jobs:
       - name: The disk engine's tools and the nbd module, as on hosts
         run: |
           sudo apt-get update -q
+          # The runner never reboots, so the initramfs the install would
+          # rebuild is never read.
+          sudo ln -sf /bin/true /usr/local/sbin/update-initramfs
           sudo apt-get install -y -q qemu-utils qemu-system-common nbd-client
           sudo modprobe nbd nbds_max=16 || {
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
@@ -178,13 +268,26 @@ jobs:
       - run: deploy/local/acceptance.sh run
       - name: Export the slowest container start's trace
         if: always()
-        run: |
-          # Spans leave the exporters' batches within seconds.
-          sleep 10
-          deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
+        run: deploy/local/export-trace.sh http://127.0.0.1:16686 lazycloud-acceptance "$RUNNER_TEMP/cold-start-trace.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cold-start-trace
           path: ${{ runner.temp }}/cold-start-trace.json
           if-no-files-found: ignore
+
+  passed:
+    name: Go passed
+    needs: [changes, validate, host-runtime, acceptance]
+    if: always()
+    runs-on: ubuntu-26.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) echo "::error::a required job ended $result"; exit 1 ;;
+            esac
+          done

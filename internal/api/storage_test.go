@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
@@ -17,11 +16,7 @@ import (
 // such as repeat counts above 1000, which only fail when a request uses them.
 func TestSchemaPatternsCompile(t *testing.T) {
 	t.Parallel()
-	spec, err := api.GetSwagger()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, schema := range spec.Components.Schemas {
+	for name, schema := range document.Components.Schemas {
 		if p := schema.Value.Pattern; p != "" {
 			if _, err := regexp.Compile(p); err != nil {
 				t.Errorf("schema %s: %v", name, err)

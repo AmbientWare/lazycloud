@@ -346,8 +346,13 @@ type syncCache struct {
 	waits   map[string]bool
 }
 
-// sync derives the host's commands and sends those not yet sent.
+// sync derives the host's commands and sends those not yet sent, as one
+// span of the session's trace.
 func (sess *session) sync(ctx context.Context) error {
+	return telemetry.Step(ctx, "hostsession.sync", sess.syncCommands, telemetry.Host(sess.host.String()))
+}
+
+func (sess *session) syncCommands(ctx context.Context) error {
 	commands, err := sess.server.execution.HostCommands(ctx, sess.host)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)

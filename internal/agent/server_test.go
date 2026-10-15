@@ -62,6 +62,9 @@ type serverSession struct {
 	msgs   chan *hostproto.HostMessage
 	// end ends the session from the server's side.
 	end chan struct{}
+	// exits holds the exit reports until passed over while waiting for
+	// other messages, by container.
+	exits map[string]*hostproto.ContainerExit
 }
 
 func newHostServer() *hostServer {
@@ -143,7 +146,7 @@ func (s *hostServer) Session(stream hostproto.HostService_SessionServer) error {
 	if err != nil {
 		return err
 	}
-	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024), end: make(chan struct{})}
+	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024), end: make(chan struct{}), exits: map[string]*hostproto.ContainerExit{}}
 	// As the server does once it converted them, the session answers the
 	// platform images the Hello names with their grants.
 	s.mu.Lock()
@@ -284,6 +287,9 @@ func (s *serverSession) until(t *testing.T, timeout time.Duration, match func(*h
 			}
 			if match(m) {
 				return m
+			}
+			if r := m.GetContainer(); r.GetPhase() == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
+				s.exits[r.GetContainerId()] = r.GetExit()
 			}
 		case <-deadline:
 			t.Fatal("timed out waiting for a host message")

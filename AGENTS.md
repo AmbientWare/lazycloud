@@ -153,6 +153,10 @@ constraints.
 - Tests wait on the event or state they expect, never a fixed sleep. Timed
   behaviour runs with short intervals through the owner's settings, not a
   test-only clock.
+- No test compares elapsed wall time: it measures the machine, not the code,
+  and fails under load. Prove ordering with locks or events, prove costs by
+  how they scale, and bound a wait only by a deadline far above any real
+  duration.
 - Tests that share no state run in parallel. Tests that need root, a VM,
   Docker images or a cloud account stay out of the default `go test ./...`.
 - Owner tests live beside code; `acceptance/` covers cross-owner workflows

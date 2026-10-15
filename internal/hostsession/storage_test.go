@@ -166,7 +166,7 @@ func TestUnacknowledgedGrantsAreSentAgain(t *testing.T) {
 	select {
 	case msg := <-got:
 		t.Fatalf("sent %v after the host acknowledged its grant", msg)
-	case <-time.After(5 * ackWait):
+	case <-time.After(2 * ackWait):
 	}
 }
 

@@ -308,11 +308,15 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 	t.Parallel()
 	stream := func(from time.Duration) []time.Duration {
 		var ages []time.Duration
-		for age := from; age > 0; age -= 500 * time.Millisecond {
+		for age := from; age >= 0; age -= 500 * time.Millisecond {
 			ages = append(ages, age)
 		}
 		return ages
 	}
+	// The policy's batch closes a second after the newest arrival or five
+	// after the first, so a held batch's newest arrival is at most a second
+	// old by the time the pass reads it: each held case arrives just now and
+	// the pass follows the arrivals' one statement at once.
 	for _, c := range []struct {
 		name string
 		// ages are how long ago each container arrived.
@@ -323,7 +327,7 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 	}{
 		{"one just arrived", []time.Duration{0}, time.Second},
 		{"settled", []time.Duration{2 * time.Second}, 0},
-		{"a stream four and a half seconds long", stream(4600 * time.Millisecond), 500 * time.Millisecond},
+		{"a stream four seconds long", stream(4 * time.Second), time.Second},
 		{"a stream that began before the lookback", stream(6600 * time.Millisecond), 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -332,15 +336,12 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 			alice := newUser(t, o.pool, "alice@example.com")
 			dev := newWorkspace(t, o.pool, "dev", alice)
 			release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
-			var ids []uuid.UUID
-			var ages []float64
-			for _, age := range c.ages {
-				ids, ages = append(ids, pendingContainer(t, o.pool, dev, release, 1000, gib)), append(ages, age.Seconds())
+			ids := make([]uuid.UUID, len(c.ages))
+			for n := range c.ages {
+				ids[n] = pendingContainer(t, o.pool, dev, release, 1000, gib)
 			}
-			// One statement dates every arrival from the same instant, just
-			// before the pass, so setup time does not age the stream.
-			run(t, o.pool, `update containers c set created_at = now() - make_interval(secs => v.age)
-from unnest($1::uuid[], $2::float8[]) as v(id, age) where c.id = v.id`, ids, ages)
+			run(t, o.pool, `update containers c set created_at = now() - a.age
+from unnest($1::uuid[], $2::interval[]) as a(id, age) where c.id = a.id`, ids, c.ages)
 			r, err := o.compute.Plan(t.Context(), discard())
 			if err != nil {
 				t.Fatal(err)

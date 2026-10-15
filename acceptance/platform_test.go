@@ -33,10 +33,10 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
@@ -52,8 +52,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 	"github.com/AmbientWare/lazycloud/internal/images"
-	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
@@ -214,20 +214,24 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
-// startRegistry runs the platform registry on a loopback port and returns
-// its address and how to remove it.
+// startRegistry runs the platform registry, from the image cache, on a
+// loopback port and returns its address and how to remove it.
 func startRegistry() (string, func(), error) {
 	ctx := context.Background()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+	image, err := imagefstest.Load(ctx, registryImage, v1.Platform{OS: "linux", Architecture: goruntime.GOARCH})
 	if err != nil {
-		return "", nil, fmt.Errorf("start registry: %w", err)
+		return "", nil, err
+	}
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", image).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("start registry: %w", withStderr(err))
 	}
 	id := strings.TrimSpace(string(out))
 	stop := func() { _ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run() }
 	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
 	if err != nil {
 		stop()
-		return "", nil, fmt.Errorf("registry port: %w", err)
+		return "", nil, fmt.Errorf("registry port: %w", withStderr(err))
 	}
 	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
@@ -241,6 +245,15 @@ func startRegistry() (string, func(), error) {
 			return "", nil, fmt.Errorf("registry did not start: %w", err)
 		}
 	}
+}
+
+// withStderr adds what a failed command printed to err.
+func withStderr(err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(exit.Stderr))
+	}
+	return err
 }
 
 // pushPythonBase builds the platform's Python base of pythonVersion with
@@ -262,56 +275,40 @@ func pushPythonBase() error {
 	return nil
 }
 
-// newImages is the images owner every test's server runs over pool. Its
+// imagesConfig is the images owner's settings on every test's server. Its
 // managed template names the bases pushPythonBase pushed, and its builds
 // fit the test host.
-func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) (*images.Images, error) {
-	return images.NewImages(pool, exec, vault, store, images.Config{
+func imagesConfig() images.Config {
+	return images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
 		BuildCPU: 500, PlatformTransferBackoff: images.PlatformTransferBackoff,
-	})
+	}
 }
 
 // convertImages converts the platform images and the managed image for
 // this host's architecture into pool, the template every test's database
 // is cloned from, so each test starts with them converted, as a server
-// that converted them at its start would.
+// that converted them at its start would. The conversion runs in
+// ./convert, outside this binary's race instrumentation, which makes it
+// many times slower.
 func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 	started := time.Now()
-	key, err := secrets.NewFileKey(make([]byte, 32))
+	// The spec is ./convert's. The images owner's Auth and ECR are nil:
+	// the test registry needs no login.
+	spec, err := json.Marshal(struct { //nolint:staticcheck // As above.
+		Database string
+		Store    storage.Config
+		Images   images.Config
+		Python   string
+	}{pool.Config().ConnString(), objectStore, imagesConfig(), pythonVersion})
 	if err != nil {
 		return err
 	}
-	exec := execution.NewExecution(pool)
-	im, err := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})))
-	if err != nil {
-		return err
-	}
-	source, err := im.ManagedSource(ctx, pythonVersion)
-	if err != nil {
-		return err
-	}
-	references := append(platformimages.All(), source)
-	g, converting := errgroup.WithContext(ctx)
-	for _, reference := range references {
-		g.Go(func() error {
-			began := time.Now()
-			if err := im.ConvertPlatformImage(converting, reference, goruntime.GOARCH); err != nil {
-				return err
-			}
-			fmt.Printf("converted %s in %s\n", reference, time.Since(began).Round(time.Millisecond))
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	var converted int
-	if err := pool.QueryRow(ctx, "select count(*) from platform_images where mirror is not null").Scan(&converted); err != nil {
-		return err
-	}
-	if converted != len(references) {
-		return fmt.Errorf("%d of %d images converted", converted, len(references))
+	cmd := exec.CommandContext(ctx, "go", "run", "./convert")
+	cmd.Stdin = bytes.NewReader(spec)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("convert the platform and managed images: %w", err)
 	}
 	fmt.Printf("converted the platform and managed images once in %s\n", time.Since(started).Round(time.Millisecond))
 	return nil
@@ -401,7 +398,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	if p.images, err = newImages(pool, p.execution, vault, p.storage); err != nil {
+	if p.images, err = images.NewImages(pool, p.execution, vault, p.storage, imagesConfig()); err != nil {
 		t.Fatal(err)
 	}
 	p.secrets = vault
@@ -410,14 +407,12 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
-	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
+	document, err := api.GetSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	containerAPI, err := api.NewContainerHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	apiHandler := api.NewHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
+	containerAPI := api.NewContainerHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
 	hosts, err := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
 		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
@@ -547,7 +542,7 @@ func (p *platform) runAgent() {
 			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
 			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel,
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel, CommitAfter: agent.DefaultCommitAfter,
 		})
 		if err != nil && p.ctx.Err() == nil {
 			p.t.Errorf("agent: %v", err)

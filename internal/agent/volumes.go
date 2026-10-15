@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -386,7 +385,8 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 		for i, s := range group {
 			source, err := v.bind(mounters[n], i, dirs[n][i])
 			if err != nil {
-				return "", nil, fmt.Errorf("bind the volume at %s: %w", s.GetMountPath(), err)
+				// What the mount printed names why its filesystem refused.
+				return "", nil, fmt.Errorf("bind the volume at %s: %w; the mount printed: %s", s.GetMountPath(), err, v.a.containerOutput(ctx, mounters[n].name))
 			}
 			binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: source, Target: s.GetMountPath(), ReadOnly: s.GetReadOnly()})
 		}
@@ -570,17 +570,52 @@ func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...stri
 const fuseConnections = "/sys/fs/fuse/connections"
 
 // fuseConnection is the control directory of the FUSE connection mounted at
-// path, or empty when path is no FUSE mount.
-func fuseConnection(path string) string {
-	var st unix.Stat_t
-	if !mounted(path) || unix.Stat(path, &st) != nil || unix.Major(st.Dev) != 0 {
-		return ""
+// path, with the mount's root held open, or empty when path is no FUSE
+// mount. The open root keeps the connection, and its number, until the
+// caller closes it: once a lazy unmount released it, the number could be
+// another mount's, one of the snapshotter's included, by the time the
+// caller aborts it. The root is opened before the mount is read, so a
+// mount read is a mount held; nothing mounts at path again.
+func fuseConnection(path string) (string, *os.File) {
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", nil
 	}
-	connection := filepath.Join(fuseConnections, strconv.FormatUint(uint64(unix.Minor(st.Dev)), 10))
-	if _, err := os.Stat(connection); err != nil {
-		return ""
+	root := os.NewFile(uintptr(fd), path)
+	device, ok := mountDevice(path)
+	major, minor, found := strings.Cut(device, ":")
+	connection := filepath.Join(fuseConnections, minor)
+	if _, err := os.Stat(connection); !ok || !found || major != "0" || err != nil {
+		_ = root.Close()
+		return "", nil
 	}
-	return connection
+	return connection, root
+}
+
+// mountPath undoes how mountinfo escapes a mount point's path.
+var mountPath = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`) //nolint:gochecknoglobals // A constant table.
+
+// mountDevice returns the major:minor of the device mounted at path, read
+// from /proc/self/mountinfo so that no filesystem answers the question: a
+// stat of a FUSE root waits for its server, for good once the server
+// stopped serving. Of mounts stacked at path it names the top one.
+func mountDevice(path string) (device string, ok bool) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return "", false
+	}
+	for line := range strings.Lines(string(data)) {
+		if fields := strings.Fields(line); len(fields) > 4 && mountPath.Replace(fields[4]) == path {
+			device, ok = fields[2], true
+		}
+	}
+	return device, ok
+}
+
+// mounted reports whether path is the root of a mount.
+func mounted(path string) bool {
+	_, ok := mountDevice(path)
+	return ok
 }
 
 // abortConnection ends the FUSE connection whose control directory is
@@ -596,16 +631,6 @@ func abortConnection(connection string) error {
 	}
 	_, err = f.WriteString("1")
 	return errors.Join(err, f.Close())
-}
-
-// mounted reports whether path is the root of a mount: its device differs
-// from its parent's.
-func mounted(path string) bool {
-	var self, parent syscall.Stat_t
-	if syscall.Stat(path, &self) != nil || syscall.Stat(filepath.Dir(path), &parent) != nil {
-		return false
-	}
-	return self.Dev != parent.Dev
 }
 
 // start runs m's container and waits for its mount, at most mountWait or
@@ -857,7 +882,10 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
 		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
 	}
-	connection := fuseConnection(m.dir)
+	connection, root := fuseConnection(m.dir)
+	if root != nil {
+		defer func() { _ = root.Close() }()
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- v.a.stopDocker(ctx, m.name, mounterFlushSeconds) }()
 	poll := time.NewTicker(mountPoll)

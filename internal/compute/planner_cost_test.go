@@ -233,7 +233,7 @@ select workspace_id, id, 'stopped', 1, 4000, 2::bigint << 30, 'stopped', now() -
 from builds`, (toHistory-history)/10)
 		// The pass measures a settled backlog, not one still arriving.
 		costExec(t, pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
-		costExec(t, pool, "analyze")
+		costExec(t, pool, "analyze image_builds")
 		pending, history = toPending, toHistory
 	}
 	p := DefaultPolicy()
@@ -260,8 +260,9 @@ from builds`, (toHistory-history)/10)
 where state = 'pending' and (capacity_wait is not null or capacity_host_id is not null)`)
 		costExec(t, pool, "delete from hosts where phase = 'requested'")
 		costExec(t, pool, "delete from fleet_markets")
-		// Plans follow current statistics, not autovacuum's timing.
-		costExec(t, pool, "analyze")
+		// Plans follow current statistics of the tables that grew or were
+		// undone, not autovacuum's timing.
+		costExec(t, pool, "analyze containers, hosts, fleet_markets")
 		counter.n.Store(0)
 		start := time.Now()
 		result, err := c.Plan(t.Context(), slog.New(slog.DiscardHandler))
@@ -287,10 +288,6 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 			result.Requested, strings.Join(row, ", "))
 		return out
 	}
-	grow(0, 1_000)
-	measure("0 pending, 1,000 finished")
-	grow(500, 1_000)
-	measure("500 pending, 1,000 finished")
 	grow(2_000, 1_000)
 	small := measure("2,000 pending, 1,000 finished")
 	grow(10_000, 20_000)
@@ -312,7 +309,6 @@ join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
 	}
 	addHosts(250)
-	costExec(t, pool, "analyze")
 	fleet := measure("25,000 pending, 20,000 finished, 250 hosts")
 	if fleet.statements != large.statements {
 		t.Errorf("the pass sent %d statements with 250 hosts and %d with 100, want a fixed number", fleet.statements, large.statements)

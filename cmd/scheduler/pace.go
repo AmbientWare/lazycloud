@@ -7,14 +7,6 @@ import (
 	"time"
 )
 
-const (
-	// safetyTick bounds how long a quiet loop on the leader waits without a
-	// wake, covering a lost notification.
-	safetyTick = 30 * time.Second
-	// leaderCheck paces the leader's ping of the session that holds its lock.
-	leaderCheck = 10 * time.Second
-)
-
 // pace decides when passes run without a wake. Every replica runs a pass
 // when a NOTIFY wakes it or its lock was held, but only the leader runs
 // passes on a timer, so idle work does not grow with replicas. While the
@@ -22,6 +14,7 @@ const (
 // container), quiet loops wait for a wake or the safety tick instead of their
 // interval.
 type pace struct {
+	ticks   ticks
 	mu      sync.Mutex
 	leading bool
 	live    bool
@@ -29,8 +22,8 @@ type pace struct {
 	changed chan struct{}
 }
 
-func newPace() *pace {
-	return &pace{live: true, changed: make(chan struct{})}
+func newPace(t ticks) *pace {
+	return &pace{ticks: t, live: true, changed: make(chan struct{})}
 }
 
 func (p *pace) state() (leading, live bool, changed <-chan struct{}) {
@@ -50,8 +43,32 @@ func (p *pace) set(update func()) {
 	}
 }
 
-func (p *pace) setLeading(leading bool) { p.set(func() { p.leading = leading }) }
-func (p *pace) setLive(live bool)       { p.set(func() { p.live = live }) }
+func (p *pace) setLive(live bool) { p.set(func() { p.live = live }) }
+
+// lead records whether this replica runs timed passes. A new leader asks
+// probe whether work is live first, so its loops wake once, to the cadence
+// of the work there is.
+func (p *pace) lead(ctx context.Context, leading bool, probe func(context.Context) (bool, error), logger *slog.Logger) {
+	if !leading {
+		p.set(func() { p.leading = false })
+		return
+	}
+	live := probeLive(ctx, probe, logger)
+	p.set(func() { p.leading, p.live = true, live })
+}
+
+// probeLive reports whether probe finds live work. A probe failure counts
+// as live, so errors never quiet the loops.
+func probeLive(ctx context.Context, probe func(context.Context) (bool, error), logger *slog.Logger) bool {
+	live, err := probe(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			logger.ErrorContext(ctx, "live work probe", "error", err)
+		}
+		return true
+	}
+	return live
+}
 
 // isLeading reports whether this replica runs timed passes.
 func (p *pace) isLeading() bool {
@@ -60,24 +77,16 @@ func (p *pace) isLeading() bool {
 }
 
 // watch keeps live current on the leader: after every wake, every tick while
-// live, and every safety tick while idle. A probe failure counts as live, so
-// errors never quiet the loops.
+// live, and every safety tick while idle.
 func (p *pace) watch(ctx context.Context, probe func(context.Context) (bool, error), wake <-chan struct{}, logger *slog.Logger) error {
 	for {
 		if leading, _, _ := p.state(); leading {
-			live, err := probe(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					logger.ErrorContext(ctx, "live work probe", "error", err)
-				}
-				live = true
-			}
-			p.setLive(live)
+			p.setLive(probeLive(ctx, probe, logger))
 		}
 		leading, live, changed := p.state()
-		wait := safetyTick
+		wait := p.ticks.safety
 		if live {
-			wait = tick
+			wait = p.ticks.tick
 		}
 		if !sleep(ctx, wait, leading, wake, changed, nil) {
 			return nil
@@ -141,7 +150,7 @@ func (p *pace) loop(ctx context.Context, c cadence, wake, alsoWake <-chan struct
 // wait is how long the loop sleeps without a wake; false means until one.
 func (p *pace) wait(ctx context.Context, c cadence, again bool) (time.Duration, bool) {
 	if again {
-		return contendedRetry, true
+		return p.ticks.contendedRetry, true
 	}
 	wait, timed := p.cadenceWait(ctx, c)
 	if c.rerun == nil {
@@ -167,8 +176,8 @@ func (p *pace) cadenceWait(ctx context.Context, c cadence) (time.Duration, bool)
 			return c.every, true
 		}
 		if ok {
-			return min(max(time.Until(at), 0), safetyTick), true
+			return min(max(time.Until(at), 0), p.ticks.safety), true
 		}
 	}
-	return safetyTick, true
+	return p.ticks.safety, true
 }

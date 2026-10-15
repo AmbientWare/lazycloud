@@ -62,22 +62,21 @@ func syncStatements(t *testing.T, replicas int) (sending, waiting int64) {
 		values (sha256('unconverted'), 'img_0123456789abcdef01234567', 'FROM scratch', '3.12', 'amd64', $1, now())`, old)
 	h.replicate(waiter, replicas-1)
 
-	counter.settle()
-	in := commands(t, open(t, ctx, h.client))
+	opened := time.Now()
+	in := commands(t, open(t, sampled(ctx), h.client))
 	for range 2 * replicas {
 		next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil })
 	}
-	sending = counter.settle()
+	sending = counter.sync(t, opened)
 	var build uuid.UUID
 	if err := base.QueryRow(t.Context(), "select id from image_builds").Scan(&build); err != nil {
 		t.Fatal(err)
 	}
+	notified := time.Now()
 	if _, err := base.Exec(t.Context(), "select pg_notify($1, $2)", string(database.ChannelImageBuild), build.String()); err != nil {
 		t.Fatal(err)
 	}
-	waiting = counter.settle()
-	if waiting == 0 {
-		t.Fatal("the waiting replicas' build woke no sync")
-	}
+	// The waiting replicas' build wakes a sync.
+	waiting = counter.sync(t, notified)
 	return sending, waiting
 }

@@ -29,7 +29,7 @@ func TestSchedulerReadinessAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- run(ctx, slog.New(slog.DiscardHandler), testTicks()) }()
 
 	base := "http://" + addr
 	waitOK(t, base+"/readyz")
@@ -96,6 +96,38 @@ func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
 	}
 	if starting, stalled := beats.check(time.Now()); len(starting)+len(stalled) != 0 {
 		t.Fatalf("starting %v stalled %v after a cut-off pass", starting, stalled)
+	}
+}
+
+// testTicks shortens the loops a test measures across to a few hundred
+// milliseconds. The safety tick stays production's, so within a test quiet
+// loops run only on wakes.
+func testTicks() ticks {
+	t := productionTicks()
+	t.tick = 100 * time.Millisecond
+	t.leaderCheck = 50 * time.Millisecond
+	t.hostLoss, t.fleet, t.email, t.payments = 500*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond
+	t.deletion = 200 * time.Millisecond
+	return t
+}
+
+// holdLeadership holds the leader lock until the returned release runs, so
+// replicas started meanwhile finish their start-up passes as standbys and
+// leadership is their next wake.
+func holdLeadership(t *testing.T, pool *pgxpool.Pool) (release func()) {
+	t.Helper()
+	conn, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), "select pg_advisory_lock(hashtextextended($1, 0))", leaderLock); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := conn.Exec(t.Context(), "select pg_advisory_unlock(hashtextextended($1, 0))", leaderLock); err != nil {
+			t.Fatal(err)
+		}
+		conn.Release()
 	}
 }
 

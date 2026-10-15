@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -97,6 +99,18 @@ select pg_notify('lc_image_build', 'platform-images')`,
 	}
 }
 
+// document is the OpenAPI document the handlers validate against, parsed
+// once for the test binary as a server parses it once.
+var document *openapi3.T
+
+func TestMain(m *testing.M) {
+	var err error
+	if document, err = api.GetSpec(); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 type harness struct {
 	t         *testing.T
 	pool      *pgxpool.Pool
@@ -141,13 +155,10 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, key)
-	containerAPI, err := api.NewContainerHandler(api.Owners{
+	containerAPI := api.NewContainerHandler(document, api.Owners{
 		Identity: identity.NewIdentity(pool, identity.Config{}), Control: control.NewControl(pool), Storage: store, Execution: e,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, e), Listener: listener,
 	}, api.Config{}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
 	im, err := images.NewImages(pool, e, vault, store, images.Config{
 		Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate, PlatformTransferBackoff: images.PlatformTransferBackoff,
 	})

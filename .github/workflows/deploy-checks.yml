@@ -6,25 +6,39 @@ name: Deployment checks
 # reaches no cloud account or cluster.
 on:
   pull_request:
-    paths:
-      - ".github/**"
-      - "deploy/**"
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "python/**"
-      - "web/**"
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  # A pull request runs the jobs below only when it changes what they
+  # check; "Deployment checks passed" always reports, so it can be required.
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      run: ${{ steps.changed.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: changed
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github
+            deploy
+            cmd
+            internal
+            go.mod
+            go.sum
+            pyproject.toml
+            uv.lock
+            python
+            web
+
   validate:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -34,18 +48,27 @@ jobs:
         run: deploy/check.sh
       - name: Image files changed
         id: images
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE"
-          if git diff --quiet "$BASE" HEAD -- deploy/images; then
-            echo "changed=false" >>"$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >>"$GITHUB_OUTPUT"
-          fi
+        uses: ./.github/actions/changed
+        with:
+          paths: deploy/images
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: steps.images.outputs.changed == 'true'
       - name: Build images
         if: steps.images.outputs.changed == 'true'
         run: docker buildx bake -f deploy/images/docker-bake.hcl
+
+  passed:
+    name: Deployment checks passed
+    needs: [changes, validate]
+    if: always()
+    runs-on: ubuntu-26.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) echo "::error::a required job ended $result"; exit 1 ;;
+            esac
+          done

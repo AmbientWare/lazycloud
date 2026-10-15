@@ -11,7 +11,7 @@ import (
 // without a wake, and only once.
 func TestAPassThatAsksToRunAgainRerunsOnAnyReplica(t *testing.T) {
 	t.Parallel()
-	p := newPace()
+	p := newPace(testTicks())
 	ctx, cancel := context.WithCancel(t.Context())
 	runs := make(chan struct{}, 3)
 	// The loop's goroutine alone reads and writes them.
