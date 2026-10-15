@@ -90,7 +90,8 @@
             "group": "Guides",
             "pages": [
               "concepts/cold-starts",
-              "concepts/timeouts-and-retries"
+              "concepts/timeouts-and-retries",
+              "concepts/streaming"
             ]
           }
         ]

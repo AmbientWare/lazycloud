@@ -113,18 +113,8 @@ with `concurrent_requests` for `concurrency` and `keep_warm_seconds` for
 
 ## Realtime handlers
 
-`@app.realtime` turns a function into a WebSocket handler. Each incoming
-message calls the handler, and LazyCloud sends the return value back. An
-iterable return value sends each item as its own message.
-
-```python
-@app.realtime(name="echo")
-def echo(message: str) -> str:
-    return message
-```
-
-Realtime handlers take the ASGI options and deploy, preview, and scale the same
-way.
+`@app.realtime` turns a function into a WebSocket handler, and an ASGI app
+can stream a response; see [Streaming](/concepts/streaming).
 
 ## Authentication
 
