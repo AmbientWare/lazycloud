@@ -90,7 +90,10 @@ func (c *frameCache) storeObjectFrame(src objectSource, k frameKey, data []byte)
 		if err != nil {
 			return fmt.Errorf("store object: %w", err)
 		}
-		err = file.Truncate(info.size)
+		// Workloads of any user open the file once it is linked.
+		if err = file.Chmod(0o644); err == nil {
+			err = file.Truncate(info.size)
+		}
 		if cerr := file.Close(); err == nil {
 			err = cerr
 		}

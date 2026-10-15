@@ -64,6 +64,8 @@ func TestCompleteVolumeObjectsAreLinkedForWorkloads(t *testing.T) {
 	}
 	if info, _ := os.Stat(path); !info.ModTime().Equal(aws.ToTime(head.LastModified)) {
 		t.Fatalf("the linked file is dated %v, the object %v", info.ModTime(), aws.ToTime(head.LastModified))
+	} else if info.Mode().Perm()&0o044 != 0o044 {
+		t.Fatalf("the linked file is %v; a workload of any user opens it", info.Mode().Perm())
 	}
 
 	changed := randomBytes(22, 2*volumeFrame)
