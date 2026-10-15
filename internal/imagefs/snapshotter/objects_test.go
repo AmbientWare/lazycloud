@@ -263,19 +263,20 @@ func (s storedSource) fetch(context.Context, int) ([]byte, error) {
 }
 func (s storedSource) object() objectInfo { return objectInfo{size: int64(s.n) * volumeFrame} }
 
-// An object being stored is never evicted to make room for its own frame:
-// with the cache at its bound and two objects stored frame about, the
-// older completes instead of both restarting forever.
+// An object being stored is never evicted to make room for its own frame,
+// and is the most recently used: with the cache at its bound, a frame of
+// the object under store evicts the other object, and the last frame of
+// an object past the bound alone completes it instead of restarting it.
 func TestAnObjectUnderStoreIsNotItsOwnVictim(t *testing.T) {
 	t.Parallel()
 	c := linkedCache(t, &upstream{})
 	c.limit = 20 << 20
-	a, b := storedSource{name: "a", n: 2}, storedSource{name: "b", n: 2}
+	a, b := storedSource{name: "a", n: 3}, storedSource{name: "b", n: 1}
 	data := make([]byte, volumeFrame)
 	for _, step := range []struct {
 		src   storedSource
 		frame int
-	}{{a, 0}, {b, 0}, {a, 1}} {
+	}{{a, 0}, {b, 0}, {a, 1}, {a, 2}} {
 		if err := c.storeObjectFrame(step.src, step.src.key(step.frame), data); err != nil {
 			t.Fatal(err)
 		}
@@ -283,9 +284,9 @@ func TestAnObjectUnderStoreIsNotItsOwnVictim(t *testing.T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if o := c.objects["a"]; o == nil || !o.complete() {
-		t.Fatalf("object a after its second frame: %+v", o)
+		t.Fatalf("object a after its last frame: %+v", o)
 	}
-	if c.used > c.limit {
-		t.Fatalf("the cache holds %d bytes over its %d bound", c.used, c.limit)
+	if c.objects["b"] != nil || c.used != 3*volumeFrame {
+		t.Fatalf("the cache holds %d bytes beside a's %d", c.used, 3*volumeFrame)
 	}
 }
