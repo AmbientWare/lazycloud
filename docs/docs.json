@@ -126,7 +126,8 @@
           "platform/auth",
           "platform/plans",
           "platform/compute",
-          "platform/domains"
+          "platform/domains",
+          "platform/troubleshooting"
         ]
       }
     ]

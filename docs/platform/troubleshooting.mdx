@@ -1,0 +1,95 @@
+---
+title: "Troubleshooting"
+description: "The messages the CLI, SDK, and endpoints return most, what each means, and the fix."
+---
+
+Each heading is the message as it appears. The CLI prints an API error as its
+message; with `--json` it is one JSON error document on stdout.
+
+## a valid bearer token or session is required
+
+The request carried no sign-in or an expired one. `lazycloud login` signs the
+CLI in again; CI and scripts set `LAZYCLOUD_TOKEN` to an
+[access token](/platform/auth#ci-and-scripts).
+
+## the token cannot reach this workspace
+
+The token or sign-in is valid but not for the workspace the command targets.
+`lazycloud workspace list` shows the workspaces you belong to, and the
+workspace comes from `lazycloud workspace use`, `--workspace`, or
+`LAZYCLOUD_WORKSPACE`. An access token reaches the workspaces it was created
+for.
+
+## no App found in reports; use reports:handler
+
+The module you named has no `App` at module level, or holds several
+workloads without one. Name the object: `reports:summarize_sales`. See
+[handler references](/cli/overview#handler-references).
+
+## function reports.summarize_sales is not deployed in workspace main; run `lazycloud deploy` first
+
+A call that targets the deployment found none. Calls from inside a LazyCloud
+container target it, since a container has no working tree to upload, and so
+does `target("deployed")`.
+`uv run lazycloud deploy reports` creates it.
+
+## function is not accepting tasks
+
+The function's deployment is stopped or its app is paused.
+`uv run lazycloud deployment start <name>` or `uv run lazycloud app resume <app>`
+reopens it.
+
+## 100 queued and 500 submitted tasks exceed max_pending_tasks 100
+
+`max_pending_tasks`, 100 by default, caps queued and running calls per
+workload, and `.map()` submits every input at once. Raise it to at least the
+batch size. See [When the queue is full](/concepts/scaling#when-the-queue-is-full).
+
+## every container is busy
+
+An endpoint answered `503`: every slot was taken and the request could not
+wait. `429 endpoint request buffer is full` is the same condition with a full
+waiting line, and `504 no container became ready in time` means a container
+was starting but not ready within `timeout_seconds`.
+`workers`, `concurrency`, and the autoscaler's `max_containers` add slots;
+`min_containers` and `keep_warm` avoid the start. See
+[Cold starts](/concepts/cold-starts).
+
+## payload exceeds 16 MiB
+
+Function arguments and results cap at 16 MiB each, and an endpoint rejects a
+larger body with `413 the request body exceeds 16777216 bytes`. Larger inputs
+and outputs go through a [volume](/concepts/volumes) or an
+[artifact](/concepts/artifacts), and the call passes the path or ID.
+
+## Lost to preemption 5 times. Set preemptible=False to run without preemption.
+
+The task's container was reclaimed five times. Preemption requeues an attempt
+without spending a retry, but after five the task fails. `preemptible=False`
+runs it on capacity that is not reclaimed, at a
+[premium](/platform/plans#compute-pricing).
+
+## an upstream task failed or was cancelled
+
+The call received a pending `FunctionCall` as an argument, and that task
+failed or was cancelled, so this one never ran. `lazycloud task show` on the
+upstream task has its error.
+
+## add credit before starting more billed work
+
+The account's prepaid credit is spent. Settings, then Billing in the dashboard
+buys credit, saves a card, and turns on automatic reload. See
+[Plans](/platform/plans).
+
+## local dependency 'libs/shared' is outside the project root
+
+`Image.from_uv()` and the other project factories send the project directory
+to the build, so a path dependency outside it cannot be read. Move it inside
+the project or build the image another way. A build that fails for another
+reason prints the failing step's output under the image step of `deploy`.
+
+## handler file app.py is outside the current directory
+
+`run`, `serve`, and `deploy` upload the current directory, so the handler must
+be inside it. Run the command from the project root. See
+[What gets uploaded](/concepts#what-gets-uploaded).
