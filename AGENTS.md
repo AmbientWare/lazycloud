@@ -199,5 +199,6 @@ constraints.
   work and integrated evidence.
 - Plan work that spans owners, PRs or parallel agents in a PLANNING.md. Keep
   plans and progress with the task, outside the tree.
-- Finish the requested scope, then stop. No commit attribution trailers.
+- Finish the requested scope, then stop. No commit attribution trailers, and
+  no "Generated with" lines or tool credits in commits, PRs or issues.
   Report outcomes, blockers and unverified boundaries briefly.
