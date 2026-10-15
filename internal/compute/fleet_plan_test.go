@@ -1083,16 +1083,15 @@ func cooling(types ...string) []OfferCooldown {
 // An L4 job's purchase keeps the size rule while L4 Spot pools refuse, as
 // every one did on 2026-10-13: it steps up one size while the smallest
 // cools, though a larger one quotes less, and never past the size cap or
-// to a type of more cards, however many smaller sizes cool. The warm card
-// bought beside the job keeps the rule too, and is not bought on-demand or
-// as a larger type while the sized Spot pools cool.
+// to a type of more cards, however many smaller sizes cool. One job keeps
+// no warm card beside it.
 func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		cooled []string
 		want   []string
 	}{
-		{[]string{"g6.xlarge"}, []string{"g6.2xlarge/spot", "g6.2xlarge/spot"}},
+		{[]string{"g6.xlarge"}, []string{"g6.2xlarge/spot"}},
 		{[]string{"g6.xlarge", "g6.2xlarge", "g6.4xlarge"}, []string{"g6.xlarge/on_demand"}},
 	} {
 		s := planSnapshot(t)
@@ -1108,6 +1107,33 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%v cooling: bought %v, want %v", c.cooled, got, c.want)
 		}
+	}
+}
+
+// A GPU market keeps its warm share in whole cards: four running L4 jobs
+// keep one idle card beside them, one job keeps none, so a lone GPU job
+// never holds a second GPU host (prod held one beside every on-demand GPU
+// job on 2026-10-15). The card is bought within the size rule.
+func TestGPUWarmShareIsWholeCards(t *testing.T) {
+	t.Parallel()
+	typ := mustType(t, "g6.xlarge")
+	busy := func(id byte) FleetHost {
+		h := planHost(id, typ, FleetServing)
+		h.Market, h.GPU, h.Containers = MarketSpot, "L4", 1
+		h.Load = FleetCapacity{CPUMillis: 1000, MemoryBytes: 8 * gib, GPUs: 1}
+		return h
+	}
+	snapshot := func(hosts ...FleetHost) FleetSnapshot {
+		s := spotQuoted(planSnapshot(t, hosts...), 300_000, "g6.xlarge", "g6.2xlarge")
+		s.Offers.Catalog = FleetCatalog()
+		return s
+	}
+	if got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1))), ActionBuy); len(got) > 0 {
+		t.Fatalf("one job: bought %+v, want no warm card", got)
+	}
+	got := actionsOf(PlanFleet(gpuPolicy(), snapshot(busy(1), busy(2), busy(3), busy(4))), ActionBuy)
+	if len(got) != 1 || got[0].Offer.Type.Name != "g6.xlarge" || got[0].Offer.Market != MarketSpot {
+		t.Fatalf("four jobs: bought %+v, want one Spot g6.xlarge warm card", got)
 	}
 }
 
