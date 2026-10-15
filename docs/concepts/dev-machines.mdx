@@ -48,28 +48,23 @@ lazycloud devbox box status
 lazycloud devbox box ssh --app dev
 ```
 
-`list` shows deployed devbox names and apps in your current workspace. `status`
-shows a box's live state and resources. Neither command starts a sleeping box.
-Use `--app` when several apps share a name, and `--workspace` to select another
-workspace. Both commands support the global `--json` option.
-
-Listings return up to 100 boxes per page. Use `--limit` for a smaller page and
-`--cursor` with the returned `next` value to continue.
+`list` shows deployed devbox names and apps in the current workspace; `status`
+shows a box's live state and resources. Neither starts a sleeping box. `--app`
+picks the app when several share a name, `--workspace` picks another
+workspace, and both take `--json`. A page holds up to 100 boxes; `--limit`
+shrinks it and `--cursor` with the returned `next` value continues.
 
 ## Coding agents
 
-Devboxes install Codex, Claude Code, OpenCode, Pi, Node.js 22, Git, and process
-utilities required by the selected agents, such as `ps` for Codex, when the image
-builds. The SDK pins the agent and Node.js versions.
-Import `AgentHarness` from `lazycloud` and pass
-`agent_harnesses=[AgentHarness.Codex]` to install only Codex, or
-`agent_harnesses=[]` to skip agent installation.
+When the image builds, a devbox installs Codex, Claude Code, OpenCode, Pi,
+Node.js 22, Git, and the process utilities the selected agents need, such as
+`ps` for Codex. The SDK pins the agent and Node.js versions.
+`agent_harnesses=[AgentHarness.Codex]`, with `AgentHarness` imported from
+`lazycloud`, installs only Codex; `agent_harnesses=[]` installs none, which
+`Image.from_id()` and images that supply their own tools need. Installation
+needs a Debian or Ubuntu image with root build access.
 
-Installation requires a Debian or Ubuntu image with root build access. Pass
-`agent_harnesses=[]` when using `Image.from_id()` or an image that supplies its
-own tools.
-
-After deployment, authenticate from an interactive terminal on your laptop:
+After deploying, sign an agent in from an interactive terminal on your laptop:
 
 ```bash
 lazycloud devbox box login codex
@@ -78,33 +73,30 @@ lazycloud devbox box login opencode
 lazycloud devbox box login pi
 ```
 
-The command checks that the agent and its required system commands are installed
-on the devbox. If any are missing, it stops and prints installation instructions
-to run inside the devbox. It does not install or upgrade packages during login.
+The command checks that the agent and the system commands it needs are on the
+devbox. If any is missing, it stops and prints the install instructions to run
+there; it installs nothing itself. It then starts the agent's login on the
+devbox and opens your laptop's browser, with SSH carrying the localhost
+callback back, so no public `ports` entry or device code is needed. The agent
+saves its credentials on the devbox disk, outside the image.
 
-The command starts the agent's login on the devbox and opens your laptop's
-browser. SSH carries the localhost callback back to the devbox. You don't need
-a public `ports` entry or device-code authentication. The agent saves its
-credentials on the devbox disk, outside the built image.
+For Claude Code, the command verifies the saved login and completes first-run
+configuration before closing the connection. It reuses an existing login;
+`claude auth logout` inside the devbox switches accounts. Project trust and
+permission prompts still appear when Claude starts.
 
-For Claude Code, the command verifies the saved login and completes its first-run
-configuration before closing the connection. An existing login is reused. To
-switch accounts, run `claude auth logout` inside the devbox before logging in
-again. Project trust and permission prompts still appear when you start Claude.
+OpenCode prompts for a provider and login method; pick browser login. In Pi,
+run `/login`, pick the provider's browser login, and exit Pi. Methods depend
+on the provider, and API keys can come through [secrets](/concepts/secrets)
+instead.
 
-OpenCode prompts for a provider and login method. Select browser login. In Pi,
-run `/login`, select the provider's browser login, and exit Pi when finished.
-Available methods depend on the provider. API keys can also be supplied through
-[secrets](/concepts/secrets).
+Browser login needs OpenSSH and a browser on a macOS, Linux, or WSL computer,
+so it runs locally, not in a dashboard terminal. One login at a time per port;
+a port a local service already holds fails the command before the browser
+opens.
 
-Browser login requires OpenSSH and a browser on your macOS, Linux, or WSL
-computer. Run the command locally; a dashboard terminal cannot forward a
-callback from your laptop. Finish one login before starting another that uses the
-same port. If a local service already occupies the port, the command fails
-before opening the browser.
-
-Anyone with access to the devbox can read its saved credentials. Use separate
-devboxes for separate accounts.
+Anyone with access to the devbox can read its saved credentials, so separate
+accounts get separate devboxes.
 
 ## What persists
 

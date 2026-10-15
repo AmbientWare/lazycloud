@@ -13,19 +13,6 @@ parallel sandboxes and posts the pass rate and spend.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    you[You] -->|ssh| devbox["agent-box<br/>devbox with disk"]
-    github[GitHub] -->|webhook| hook["webhook<br/>ASGI app"]
-    hook -->|map| state[("coding-agents")]
-    hook -->|spawn| solve["solve-issue<br/>CPU function"]
-    solve -->|sandbox| issue["issue<br/>sandbox"]
-    issue -->|pull request| github
-    builder["repo-builder<br/>sandbox"] -->|filesystem image| issue
-    nightly["nightly-eval<br/>schedule"] -->|spawn_map| evaltask["eval-task x5<br/>CPU function"]
-    evaltask -->|sandbox| evalbox["eval<br/>sandbox"]
-```
-
 | Workload | Kind | What it does | Why it runs there |
 | --- | --- | --- | --- |
 | `agent-box` | devbox | A container you reach over SSH with Claude Code, Codex, tmux and `gh` installed | Its root filesystem is a 50 GiB disk, so clones and logins survive a restart; it runs while you are connected, plus an hour |

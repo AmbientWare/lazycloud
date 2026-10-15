@@ -14,19 +14,6 @@ OpenAI-compatible URL, and an endpoint that shows their answers side by side.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    prepare["prepare_data<br/>CPU function"] -->|volume| storage[("lora-sql")]
-    storage -->|volume| train["train<br/>GPU function"]
-    train -->|volume| storage
-    evaluate["evaluate<br/>CPU function"] -->|remote| generate["generate_sql<br/>GPU function"]
-    storage -->|volume| generate
-    evaluate -->|map| score["score_batch x10<br/>CPU function"]
-    evaluate -->|artifact| report[("report")]
-    storage -->|volume| server["sql-server<br/>GPU pod"]
-    compare["compare<br/>endpoint"] -->|HTTP| server
-```
-
 | Workload | Kind | What it does | Why it runs there |
 | --- | --- | --- | --- |
 | `prepare_data` | CPU function | Downloads the base weights and filters the dataset into the volume | Network and SQLite work needs no GPU |

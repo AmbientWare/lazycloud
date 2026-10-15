@@ -23,9 +23,8 @@ records needed to prove you own the name. Create them, then check:
 uv run lazycloud domain status app.acme.com
 ```
 
-The status reports DNS and certificate progress. While verification is
-pending, the records at your provider should match the command's output. The
-hostname can serve HTTPS once its certificate is ready.
+The status reports DNS and certificate progress; the hostname serves HTTPS
+once its certificate is ready.
 
 The dashboard has the same flow under Settings, then Domains.
 
@@ -47,11 +46,10 @@ def count_words(text: str) -> dict[str, int]:
 Save this as `custom_domain.py`, replace `app.acme.com` with your verified
 hostname, then run `uv run lazycloud deploy custom_domain:count_words`.
 Send a request as in the
-[quickstart](/getting-started/quickstart#call-it), with your custom
-URL. The endpoint still requires authentication by default.
+[quickstart](/getting-started/quickstart#call-it), with your custom URL. The
+endpoint still requires a token by default.
 
 `@app.endpoint`, `@app.asgi`, and `@app.realtime` accept `domain`.
-The hostname must be a registered domain.
 
 ## Remove it
 
