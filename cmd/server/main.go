@@ -429,14 +429,12 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
 		Observability: obs, Changes: changes, Edge: edges, SSH: sshKeys,
 	}
-	handler, err := api.NewHandler(owners, cfg.api, logger)
+	document, err := api.GetSpec()
 	if err != nil {
-		return err
+		return fmt.Errorf("load openapi document: %w", err)
 	}
-	containerAPI, err := api.NewContainerHandler(owners, cfg.api, logger)
-	if err != nil {
-		return err
-	}
+	handler := api.NewHandler(document, owners, cfg.api, logger)
+	containerAPI := api.NewContainerHandler(document, owners, cfg.api, logger)
 	hostTraces, err := tel.HostTraces(logger)
 	if err != nil {
 		return err

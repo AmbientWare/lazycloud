@@ -410,14 +410,12 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
-	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
+	document, err := api.GetSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	containerAPI, err := api.NewContainerHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	apiHandler := api.NewHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
+	containerAPI := api.NewContainerHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
 	hosts, err := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
 		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
