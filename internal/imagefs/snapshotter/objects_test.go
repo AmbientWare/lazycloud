@@ -183,6 +183,23 @@ func TestPeersServeCachedFramesToGrantedHosts(t *testing.T) {
 		}
 	}
 
+	// A frame past the object's end: not held.
+	past := req
+	past.frame = 1000
+	r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, peerSrv.URL+"/frame?"+past.query(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set(peerHeader, past.sign(key, time.Now()))
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a frame past the object's end is %s", resp.Status)
+	}
+
 	// A peer that is gone: the read comes from the store.
 	goneUp := &upstream{}
 	gone := newVolumes(linkedCache(t, goneUp), &http.Client{Transport: goneUp}, slog.New(slog.DiscardHandler))

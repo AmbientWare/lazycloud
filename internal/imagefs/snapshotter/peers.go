@@ -137,8 +137,14 @@ func (s peerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	k := objectVersion{workspace: req.workspace, bucket: req.bucket, name: req.key, etag: req.etag}.key(frame)
 	data, ok := s.v.cache.fromMemory(k)
 	if !ok {
+		// A frame past the version's end is one the object file holds no
+		// frame for.
 		path, n, stored := s.v.cache.objectFrame(k)
-		if data = make([]byte, n); !stored || readAt(path, data, int64(frame)*volumeFrame) != nil {
+		if !stored {
+			http.Error(w, "not cached", http.StatusNotFound)
+			return
+		}
+		if data = make([]byte, n); readAt(path, data, int64(frame)*volumeFrame) != nil {
 			http.Error(w, "not cached", http.StatusNotFound)
 			return
 		}
