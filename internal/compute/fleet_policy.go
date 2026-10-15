@@ -46,11 +46,18 @@ func (a FleetCapacity) Lower(b FleetCapacity) FleetCapacity {
 func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
 
 // Percent is p percent of a: CPU and memory rounded up, GPUs rounded down,
-// since a fraction of a card is no card. A share of one GPU job holds no
-// warm card; a share of four holds one.
+// since a fraction of a card is no card. GPU load is held in cards, so a
+// share of it that rounds to no card is nothing: the CPU and memory beside
+// a card are not headroom a GPU host should be bought for. A share of one
+// GPU job holds nothing; a share of four holds one card with its share of
+// CPU and memory.
 func (a FleetCapacity) Percent(p int64) FleetCapacity {
 	up := func(v int64) int64 { return (v*p + 99) / 100 }
-	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(int64(a.GPUs) * p / 100)}
+	gpus := int64(a.GPUs) * p / 100
+	if a.GPUs > 0 && gpus == 0 {
+		return FleetCapacity{}
+	}
+	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(gpus)}
 }
 
 // Empty reports whether a has nothing positive in any dimension.
