@@ -146,11 +146,11 @@ type MarketReserve struct {
 
 // LargestShape sizes the reserve that fits a market's largest shape: the
 // largest CPU, memory and GPUs its containers reserved within Window,
-// capped at Cap, and the most disks one attached, capped at CapDisks, a
-// disk slot each. A CPU market without such containers keeps one of
-// Default, a Spot GPU market one of SpotGPU, so the first start after a
-// quiet window resumes, and an on-demand GPU market none. Cap also bounds
-// a part of headroom.
+// bounded by what the largest type within Cap offers, and the most disks
+// one attached, capped at CapDisks, a disk slot each. A CPU market without
+// such containers keeps one of Default, a Spot GPU market one of SpotGPU,
+// so the first start after a quiet window resumes, and an on-demand GPU
+// market none. Cap also bounds a part of headroom.
 type LargestShape struct {
 	Window                time.Duration
 	Default, SpotGPU, Cap FleetCapacity
@@ -158,10 +158,13 @@ type LargestShape struct {
 }
 
 // of is the shape market m's reserve fits and the disks it holds, given
-// the largest shape its containers reserved and the most disks one
-// attached; empty for none. A GPU reserve holds one card; a CPU reserve
-// fits at least the default.
-func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (FleetCapacity, int) {
+// the largest shape its containers reserved, the most disks one attached
+// and the types a reserve may be; empty for none. A GPU reserve holds one
+// card; a CPU reserve fits at least the default. A reserve is a type
+// within the cap, so the shape is bounded by the most such a type of the
+// market's model offers: work larger than that launches a host of its own,
+// and the market still keeps a reserve for the rest.
+func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int, catalog []CatalogType) (FleetCapacity, int) {
 	switch {
 	case m.GPU == "":
 		largest = largest.Upper(s.Default)
@@ -172,7 +175,13 @@ func (s LargestShape) of(m ReserveMarket, largest FleetCapacity, disks int) (Fle
 	default:
 		return FleetCapacity{}, 0
 	}
-	return largest.Lower(s.Cap), min(disks, s.CapDisks)
+	var offered FleetCapacity
+	for _, t := range catalog {
+		if u := t.Usable(0); t.GPU == m.GPU && s.Cap.Covers(u) {
+			offered = offered.Upper(u)
+		}
+	}
+	return largest.Lower(s.Cap).Lower(offered), min(disks, s.CapDisks)
 }
 
 // GPUReserve is the headroom one GPU model keeps for Spot-tolerant work
