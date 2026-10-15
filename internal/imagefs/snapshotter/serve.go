@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -18,14 +19,23 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
-// stopGrace bounds how long Serve waits for calls in flight at shutdown.
-const stopGrace = 10 * time.Second
+const (
+	// stopGrace bounds how long Serve waits for calls in flight at shutdown.
+	stopGrace = 10 * time.Second
+	// memoryHeadroom is what the heap holds besides frames: the HTTP
+	// buffers, the index and metadata of layers and disks.
+	memoryHeadroom = 64 << 20
+)
 
 // Serve runs the snapshotter on a Unix socket only root reaches, serving
 // containerd's snapshotter API, LayerSources, DiskSources and
 // VolumeSources, and the volumes' S3 endpoint on cfg.VolumeAddr, until ctx
 // ends. ready runs once they accept calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
+	// The heap holds a frame per fetch in flight, per frame queued for the
+	// writer and per kept frame; without the limit collection lets it
+	// grow to twice that.
+	debug.SetMemoryLimit(int64(cfg.Fetches+writeQueue+keptFrames)*volumeFrame + memoryHeadroom)
 	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
 		return err

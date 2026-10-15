@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime/debug"
 	"strconv"
 	"syscall"
 
@@ -34,10 +33,6 @@ const (
 	// fillBytes is the largest layer, uncompressed, fetched whole in the
 	// background once mounted.
 	fillBytes = 256 << 20
-	// memoryLimit keeps the heap near the frames the fetches, the write
-	// queue and the kept frames hold, so the snapshotter stays under 1 GiB
-	// on a host of 8 GiB; collection alone would let it double.
-	memoryLimit = 768 << 20
 )
 
 func main() {
@@ -59,7 +54,6 @@ func run(args []string) int {
 		logger.Error("the snapshotter mounts layers and needs root")
 		return 1
 	}
-	debug.SetMemoryLimit(memoryLimit)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	telemetryConfig, err := telemetry.ConfigFromEnv("snapshotter", "")
