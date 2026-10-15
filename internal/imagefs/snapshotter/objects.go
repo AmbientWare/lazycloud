@@ -253,16 +253,11 @@ func clearLinks(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Workloads read the tree.
 		return fmt.Errorf("create volume link tree: %w", err)
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return fmt.Errorf("clear volume link tree: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		return root.Remove(path)
+		return os.Remove(path) //nolint:gosec // the snapshotter alone writes the tree
 	})
 	if err != nil {
 		return fmt.Errorf("clear volume link tree: %w", err)

@@ -510,13 +510,12 @@ func (v *volumes) listed(f forwarded, prefix string, body []byte, whole bool) {
 // forgets the observations it outdates. A mark outlives any HEAD sent
 // before it, which fetchTimeout bounds.
 func (v *volumes) wrote(name, key string) {
-	if link := v.forget(name, key); link != "" {
-		v.cache.dropLink(link, "")
-	}
+	v.cache.dropLink(v.forget(name, key), "")
 }
 
 // forget drops the observations a write of key, or with "" of any key,
-// outdates, and returns the link path the key's object may hold.
+// outdates, and returns the link path the key's object may hold, "" for
+// none.
 func (v *volumes) forget(name, key string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()

@@ -42,23 +42,17 @@ func (s *Storage) HostGrant(ctx context.Context, host compute.HostID, workspace 
 }
 
 // peerKey returns the workspace's peer key, making it the first time: every
-// server proposes a random one, and the row keeps the first written.
+// server proposes a random one, and the row keeps the first written. Later
+// grants only read it.
 func (s *Storage) peerKey(ctx context.Context, workspace identity.WorkspaceID) ([]byte, error) {
 	key, err := s.queries.ReadWorkspacePeerKey(ctx, uuid.UUID(workspace))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+	if err == nil && len(key) == 0 {
+		proposed := make([]byte, 32)
+		if _, err := rand.Read(proposed); err != nil {
+			return nil, fmt.Errorf("make peer key: %w", err)
+		}
+		key, err = s.queries.WorkspacePeerKey(ctx, WorkspacePeerKeyParams{Key: proposed, WorkspaceID: uuid.UUID(workspace)})
 	}
-	if err != nil {
-		return nil, fmt.Errorf("read peer key: %w", err)
-	}
-	if len(key) > 0 {
-		return key, nil
-	}
-	proposed := make([]byte, 32)
-	if _, err := rand.Read(proposed); err != nil {
-		return nil, fmt.Errorf("make peer key: %w", err)
-	}
-	key, err = s.queries.WorkspacePeerKey(ctx, WorkspacePeerKeyParams{Key: proposed, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

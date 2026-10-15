@@ -12,10 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/netutil"
-
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	"github.com/containerd/containerd/v2/contrib/snapshotservice"
+	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
