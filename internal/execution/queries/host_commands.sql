@@ -54,10 +54,9 @@ where id = @id and host_id = @host_id and state <> 'stopped' and workload_id is 
 -- first.
 select h.id, h.peer_address
 from containers c
-join hosts h on h.id = c.host_id
+join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
+  and h.region = (select me.region from hosts me where me.id = @host_id)
 where c.workspace_id = @workspace_id and c.state <> 'stopped' and c.host_id <> @host_id
-  and h.state = 'online' and h.peer_address <> ''
-  and h.region = (select region from hosts where id = @host_id)
 group by h.id
 order by max(c.created_at) desc
 limit @max_peers;

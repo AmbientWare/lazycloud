@@ -213,7 +213,7 @@ type VolumePeer struct {
 // container of workspace and serve a volume cache, at most maxVolumePeers,
 // those with the newest container of the workspace first.
 func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]VolumePeer, error) {
-	rows, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: hostUUID(host), MaxPeers: maxVolumePeers})
+	rows, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
 	if err != nil {
 		return nil, fmt.Errorf("list volume peers: %w", err)
 	}

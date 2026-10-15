@@ -545,9 +545,10 @@ func (s *Storage) AbortVolumeUpload(ctx context.Context, workspace identity.Work
 var reservedMountRoots = [...]string{"/opt/lazycloud", "/run/lazycloud", "/workspace", "/proc", "/sys", "/dev"} //nolint:gochecknoglobals // A constant table.
 
 // ValidateVolumes checks a workload's volume specs: unique names and mount
-// paths, none on a path the runtime owns, and cloud bucket prefixes made of
-// key segments, each ending in /, none empty, . or .., so a prefix stays
-// below the bucket's root.
+// paths, none on a path the runtime owns, no ':' in a platform volume's
+// path, which the preload library's colon-separated path list cannot
+// carry, and cloud bucket prefixes made of key segments, each ending in /,
+// none empty, . or .., so a prefix stays below the bucket's root.
 func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 	names := map[string]bool{}
 	paths := map[string]bool{}
@@ -568,6 +569,9 @@ func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 		names[spec.Name], paths[target] = true, true
 		if target == "/" {
 			return invalid("volume %s cannot mount at /", spec.Name)
+		}
+		if spec.CloudBucket == nil && strings.Contains(target, ":") {
+			return invalid("volume %s cannot mount at %s: no ':' in a volume's mount path", spec.Name, target)
 		}
 		for _, root := range reservedMountRoots {
 			if target == root || strings.HasPrefix(target, root+"/") {

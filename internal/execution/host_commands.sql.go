@@ -260,18 +260,17 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 const volumePeers = `-- name: VolumePeers :many
 select h.id, h.peer_address
 from containers c
-join hosts h on h.id = c.host_id
-where c.workspace_id = $1 and c.state <> 'stopped' and c.host_id <> $2
-  and h.state = 'online' and h.peer_address <> ''
-  and h.region = (select region from hosts where id = $2)
+join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
+  and h.region = (select me.region from hosts me where me.id = $1)
+where c.workspace_id = $2 and c.state <> 'stopped' and c.host_id <> $1
 group by h.id
 order by max(c.created_at) desc
 limit $3
 `
 
 type VolumePeersParams struct {
+	HostID      uuid.UUID
 	WorkspaceID uuid.UUID
-	HostID      *uuid.UUID
 	MaxPeers    int32
 }
 
@@ -284,7 +283,7 @@ type VolumePeersRow struct {
 // the workspace and serve a volume cache, those with the newest container
 // first.
 func (q *Queries) VolumePeers(ctx context.Context, arg VolumePeersParams) ([]VolumePeersRow, error) {
-	rows, err := q.db.Query(ctx, volumePeers, arg.WorkspaceID, arg.HostID, arg.MaxPeers)
+	rows, err := q.db.Query(ctx, volumePeers, arg.HostID, arg.WorkspaceID, arg.MaxPeers)
 	if err != nil {
 		return nil, err
 	}
