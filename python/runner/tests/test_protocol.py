@@ -76,12 +76,8 @@ def fail():
     raise Boom("exploded")
 
 
-async def task_id_later():
+async def lineage():
     await asyncio.sleep(0)
-    return current_task_id()
-
-
-def lineage():
     return [current_task_id(), current_root_task_id()]
 
 
@@ -228,18 +224,9 @@ def test_json_results_must_be_json_representable(workdir: Path, start_runner: St
     assert isinstance(cloudpickle.loads(payload), ValueError)
 
 
-def test_async_handler_sees_its_task_id(workdir: Path, start_runner: StartRunner) -> None:
-    runner = start_runner(workdir)
-    runner.load("handlers:task_id_later")
-
-    first, first_payload = runner.invoke(_json([]), task_id="task-7")
-    second, second_payload = runner.invoke(_json([]), task_id="task-8")
-
-    assert (first["type"], json.loads(first_payload)) == ("succeeded", "task-7")
-    assert (second["type"], json.loads(second_payload)) == ("succeeded", "task-8")
-
-
-def test_handler_sees_its_root_task(workdir: Path, start_runner: StartRunner) -> None:
+def test_async_handler_sees_its_task_and_root_task(
+    workdir: Path, start_runner: StartRunner
+) -> None:
     runner = start_runner(workdir)
     runner.load("handlers:lineage")
 

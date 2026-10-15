@@ -20,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // startingWith inserts a starting container of a release with spec.
@@ -38,8 +39,8 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 	}
 	dbtest.OwnWorkspaces(h.t, h.pool)
 	err = h.pool.QueryRow(h.t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -51,6 +52,7 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, ws, rele
 // the start names the volume's prefix, and the recorded mount blocks
 // deleting the volume.
 func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
@@ -88,9 +90,90 @@ func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
 	}
 }
 
+// TestStorageRefusalsFailOnlyTheirContainer: on a server without workspace
+// buckets, a start that mounts a volume and one that needs the storage
+// grant for a disk each fail with the cause, and the session goes on to
+// start the host's other container.
+func TestStorageRefusalsFailOnlyTheirContainer(t *testing.T) {
+	t.Parallel()
+	cfg := storagetest.Config(t)
+	cfg.Workspaces = storage.WorkspaceBuckets{}
+	h := serveWith(t, dbtest.New(t), cfg)
+	host, ctx := h.enroll()
+	_, volume := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "data", "mount_path": "data"}]}`)
+	_, disk := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"disks": [{"name": "root", "size_bytes": 1073741824, "mount_path": "/data"}]}`)
+	_, plain := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"}}`)
+	stream := open(t, ctx, h.client)
+
+	for {
+		msg := receive(t, stream)
+		if id := msg.GetStart().GetContainerId(); id == volume.String() || id == disk.String() {
+			t.Fatalf("sent the start of %s, whose storage is unavailable", id)
+		}
+		if msg.GetStart().GetContainerId() == plain.String() {
+			break
+		}
+	}
+	for container, want := range map[uuid.UUID]string{
+		volume: "storage grant unavailable: workspace buckets are not configured",
+		disk:   "storage grant unavailable: workspace buckets are not configured",
+	} {
+		var state, reason, message string
+		if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '')
+from containers where id = $1`, container).Scan(&state, &reason, &message); err != nil {
+			t.Fatal(err)
+		}
+		if state != "stopped" || reason != "start_failed" || message != want {
+			t.Errorf("container %s %s/%s %q, want start_failed %q", container, state, reason, message, want)
+		}
+	}
+}
+
+// TestUnacknowledgedGrantsAreSentAgain: a storage grant the host has not
+// acknowledged is sent again at a later sync, and one it acknowledged is
+// not.
+func TestUnacknowledgedGrantsAreSentAgain(t *testing.T) {
+	t.Parallel()
+	const ackWait = 200 * time.Millisecond
+	h := start(t, func(c *hostsession.Config) { c.GrantAckWait = ackWait })
+	host, ctx := h.enroll()
+	h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "data", "mount_path": "data"}]}`)
+	stream := open(t, ctx, h.client)
+	first := receive(t, stream)
+	if first.GetStorageGrant() == nil {
+		t.Fatalf("first command %v, want a storage grant", first)
+	}
+	if receive(t, stream).GetStart() == nil {
+		t.Fatal("the start did not follow the grant")
+	}
+	again := receive(t, stream)
+	if again.GetCommandId() != first.GetCommandId() {
+		t.Fatalf("next command %v, want the unacknowledged grant again", again)
+	}
+	if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: again.GetCommandId()}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan *hostproto.ServerMessage, 1)
+	go func() {
+		if msg, err := stream.Recv(); err == nil {
+			got <- msg
+		}
+	}()
+	// An unacknowledged grant would go again ackWait after it was sent.
+	select {
+	case msg := <-got:
+		t.Fatalf("sent %v after the host acknowledged its grant", msg)
+	case <-time.After(2 * ackWait):
+	}
+}
+
 // TestCloudBucketKeysComeFromWorkspaceSecrets: a cloud bucket's start
-// carries the keys its secrets hold, and a missing secret fails the start.
+// carries the keys its secrets hold.
 func TestCloudBucketKeysComeFromWorkspaceSecrets(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	spec := `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
@@ -111,33 +194,13 @@ func TestCloudBucketKeysComeFromWorkspaceSecrets(t *testing.T) {
 		bucket.GetAccessKeyId() != "AKIAEXAMPLE" || bucket.GetSecretAccessKey() != "secret-value" || !start.GetVolumes()[0].GetReadOnly() {
 		t.Fatalf("start %v", start)
 	}
-	if _, err := h.pool.Exec(t.Context(), `update containers set state = 'stopped', stop_reason = 'stopped' where id = $1`, container); err != nil {
-		t.Fatal(err)
-	}
-
-	// Without its secret the bucket's container fails to start.
-	_, missing := h.startingWith(host, strings.ReplaceAll(spec, "AWS_SECRET", "ABSENT"))
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var state, reason string
-		if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, '') from containers where id = $1`, missing).Scan(&state, &reason); err != nil {
-			t.Fatal(err)
-		}
-		if state == "stopped" {
-			if reason != "start_failed" {
-				t.Fatalf("container without its bucket secret stopped as %s", reason)
-			}
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("a container without its bucket secret was not failed")
 }
 
 // TestContainerStorageCallsActForTheirTask: queues, maps and artifacts work
 // through the container API, and an artifact saved there belongs to the
 // task running on the container, whatever the body names.
 func TestContainerStorageCallsActForTheirTask(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -190,6 +253,7 @@ func TestContainerStorageCallsActForTheirTask(t *testing.T) {
 }
 
 func TestDiskLeaseOverTheHostConnection(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, container := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
@@ -204,13 +268,12 @@ func TestDiskLeaseOverTheHostConnection(t *testing.T) {
 	}
 	record := &hostproto.RecordDiskGenerationRequest{
 		ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: lease.GetLeaseToken(),
-		Generation: 1, ManifestKey: "disks/" + lease.GetDiskId() + "/manifests/000000000001-" + strings.Repeat("a", 64) + ".json",
-		ManifestSha256: strings.Repeat("a", 64),
+		Generation: &hostproto.DiskGeneration{Generation: 1, IndexSha256: strings.Repeat("a", 64)},
 	}
 	if _, err := h.client.RecordDiskGeneration(ctx, record); err != nil {
 		t.Fatal(err)
 	}
-	record.Generation, record.ParentGeneration = 3, 1
+	record.Generation.Generation = 3
 	if _, err := h.client.RecordDiskGeneration(ctx, record); status.Code(err) != codes.Aborted {
 		t.Fatalf("out-of-order generation: %v", err)
 	}
@@ -226,6 +289,7 @@ func TestDiskLeaseOverTheHostConnection(t *testing.T) {
 // allowance: the host gets the refusal and its message, not an internal
 // error, so the start failure names the cap.
 func TestDiskPlanRefusalReachesTheHost(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},

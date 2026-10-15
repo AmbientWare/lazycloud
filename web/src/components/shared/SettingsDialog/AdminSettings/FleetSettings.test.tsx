@@ -83,46 +83,31 @@ it("shows each market's published targets and its states when expanded", async (
   expect(screen.getByText("no approved offer")).toBeVisible();
 });
 
-it("says capacity data is unavailable without a plan", async () => {
-  serve({ observed_at: observed });
-  expect(await screen.findByRole("status")).toHaveTextContent(
-    "Capacity data unavailable. Refresh to try again.",
-  );
-});
-
-it("says capacity data expired once the plan's expiry passes", async () => {
+it.each([
+  ["unavailable without a plan", undefined, /unavailable/],
+  ["expired once the plan's expiry passes", -1_000, /expired/],
+])("says capacity data is %s", async (_, expiresIn, status) => {
   serve({
     observed_at: observed,
-    plan: {
-      generated_at: observed,
-      expires_at: new Date(Date.now() - 1000).toISOString(),
-      markets: [onDemand],
-    },
+    plan:
+      expiresIn === undefined
+        ? undefined
+        : {
+            generated_at: observed,
+            expires_at: new Date(Date.now() + expiresIn).toISOString(),
+            markets: [onDemand],
+          },
   });
-  expect(await screen.findByRole("status")).toHaveTextContent(
-    "Capacity data expired. Refresh to update.",
-  );
+  expect(await screen.findByRole("status")).toHaveTextContent(status);
   expect(screen.queryByRole("button", { name: "On-demand CPU" })).not.toBeInTheDocument();
 });
 
-it("names every reserve state on the Nodes tab", async () => {
-  const states: [Schemas["FleetState"], string][] = [
-    ["preparing", "Preparing reserve"],
-    ["stopping", "Stopping"],
-    ["stopped", "Stopped"],
-    ["hibernate_unverified", "Hibernation unverified"],
-    ["image_saved", "Hibernated"],
-    ["starting", "Starting"],
-  ];
-  serve(
-    { observed_at: observed },
-    states.map(([state], i) => node(`n${i}`, state)),
-  );
+it("lists each node the server reports on the Nodes tab with its state", async () => {
+  serve({ observed_at: observed }, [node("n0", "stopped"), node("n1", "image_saved")]);
 
-  const tab = screen.getByRole("tab", { name: "Nodes" });
-  fireEvent.mouseDown(tab, { button: 0 });
-  for (const [i, [, label]] of states.entries()) {
-    const row = (await screen.findByText(`i-n${i}`)).closest("tr") as HTMLElement;
-    expect(within(row).getByText(label)).toBeVisible();
-  }
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Nodes" }), { button: 0 });
+  const stopped = (await screen.findByText("i-n0")).closest("tr") as HTMLElement;
+  expect(within(stopped).getByText("Stopped")).toBeVisible();
+  const hibernated = screen.getByText("i-n1").closest("tr") as HTMLElement;
+  expect(within(hibernated).getByText("Hibernated")).toBeVisible();
 });

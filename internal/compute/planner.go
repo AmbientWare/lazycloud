@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -39,15 +40,70 @@ const (
 	ownerPlatform = string(KindPlatform)
 )
 
-// CapacityWait says why a pending container waits for compute.
+// CapacityWait says why a pending container waits for compute, or why a
+// market falls short.
 type CapacityWait string
 
 const (
+	// WaitNone means nothing falls short.
+	WaitNone CapacityWait = ""
 	// WaitProvisioning means a host being bought or resumed will take it.
 	WaitProvisioning CapacityWait = "provisioning"
 	// WaitLimit means the fleet limit holds the purchase back.
 	WaitLimit CapacityWait = "limit"
+	// WaitBatch means purchases wait for arrivals to settle.
+	WaitBatch CapacityWait = "batch"
+	// WaitDeferred means the market's growth continues next pass.
+	WaitDeferred CapacityWait = "deferred"
+	// WaitDemand means a market's headroom and reserve purchases wait while
+	// its work waits for a host no purchase could bring.
+	WaitDemand CapacityWait = "demand"
+	// WaitKeep means headroom that work took is replaced once the shortfall
+	// has lasted the keep window.
+	WaitKeep CapacityWait = "keep"
+	// WaitReturning means reserve purchases wait while hosts that may return
+	// to the reserve cover what it lacks.
+	WaitReturning CapacityWait = "returning"
+	// WaitCooldown means the offers that could host it cool after refusals.
+	WaitCooldown CapacityWait = "cooldown"
+	// WaitQuota means the vCPU quotas leave no room for an offer that could.
+	WaitQuota CapacityWait = "quota"
+	// WaitMargin means no offer that could host it keeps the purchase margin.
+	WaitMargin CapacityWait = "margin"
+	// WaitNoOffer means no offer can host it.
+	WaitNoOffer CapacityWait = "no_offer"
 )
+
+// Message is the sentence a start failure or the fleet page names for the
+// wait.
+func (w CapacityWait) Message() string {
+	switch w {
+	case WaitNone:
+		return ""
+	case WaitProvisioning:
+		return "a host is being bought for it"
+	case WaitLimit:
+		return "fleet host limit reached"
+	case WaitBatch:
+		return "purchases wait for arrivals to settle"
+	case WaitDeferred:
+		return "growth continues next pass"
+	case WaitDemand:
+		return "headroom waits for pending work"
+	case WaitKeep:
+		return "headroom taken by work is replaced after the keep window"
+	case WaitReturning:
+		return "reserves wait for hosts to return"
+	case WaitCooldown:
+		return "offers cooling after refusals"
+	case WaitQuota:
+		return "vCPU quota reached"
+	case WaitMargin:
+		return "no offer keeps the purchase margin"
+	case WaitNoOffer:
+	}
+	return "no offer fits"
+}
 
 // PlanResult summarizes one planning pass.
 type PlanResult struct {
@@ -72,8 +128,20 @@ type PlanResult struct {
 // launcher, the reserve actuator and host sessions carry out, the container
 // waits and the published plan. EC2 calls run outside it.
 func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
+	// After the scheduler was down past their age, Spot prices are refreshed
+	// before the pass prices a purchase from them, at most once a refresh
+	// interval while EC2 fails to answer.
+	stale, err := c.queries.SpotPricesStale(ctx, spotPriceFresh.Seconds())
+	if err != nil {
+		return PlanResult{}, fmt.Errorf("read spot price freshness: %w", err)
+	}
+	if last := c.staleRefresh.Load(); stale && time.Since(time.Unix(0, last)) >= SpotPriceInterval && c.staleRefresh.CompareAndSwap(last, time.Now().UnixNano()) {
+		if _, _, failed, err := c.refreshPrices(ctx, logger); err != nil || failed != nil {
+			logger.WarnContext(ctx, "spot prices stale for planning", "error", errors.Join(err, failed))
+		}
+	}
 	var pass *fleetPass
-	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		pass = nil
 		q := c.queries.WithTx(tx)
 		lock, err := q.LockFleet(ctx)
@@ -84,13 +152,11 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 			return nil
 		}
 		p := c.policy()
-		read, err := readFleet(ctx, q, p, lock.Now)
+		read, err := readFleet(ctx, q, p, lock.Now, c.fleet.CapacityCooldown)
 		if err != nil {
 			return err
 		}
-		if pass, err = newFleetPass(c, p, read); err != nil {
-			return err
-		}
+		pass = newFleetPass(c, p, read)
 		if err := pass.decide(); err != nil {
 			return err
 		}
@@ -124,7 +190,7 @@ func (c *Compute) policy() Policy {
 }
 
 // connectionPolicy is a connected account's: no headroom and no reserves,
-// so an idle host leaves after the idle timeout.
+// so an idle host leaves after the keep window.
 func connectionPolicy(p Policy) Policy {
 	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
 	return p
@@ -133,18 +199,17 @@ func connectionPolicy(p Policy) Policy {
 // fleetPass is one planning pass: its snapshot, its decisions and the
 // writes they make.
 type fleetPass struct {
-	c        *Compute
-	p        Policy
-	r        fleetRead
-	rows     map[HostID]PlannerHostsRow
-	catalog  []CatalogType
-	rates    []billing.ComputeRate
-	reported map[string]int64
-	waits    map[uuid.UUID]waitRow
+	c     *Compute
+	p     Policy
+	r     fleetRead
+	rows  map[HostID]PlannerHostsRow
+	waits map[uuid.UUID]waitRow
 	// traces holds the pending containers' traces and earlier waits.
 	traces map[uuid.UUID]pendingTrace
 	w      fleetWrites
-	result PlanResult
+	// reasons are why the pass acts on each host it names or buys.
+	reasons map[uuid.UUID]ActionReason
+	result  PlanResult
 	// notes are what the pass logs once it commits.
 	notes []note
 	// decisions are the hosts the pass newly gave waiting containers, which
@@ -179,10 +244,9 @@ type pendingTrace struct {
 // fleetWrites are a pass's intents, each written by one statement.
 type fleetWrites struct {
 	stuck, drains, retirePreparing, retires, returns, hibernate []uuid.UUID
+	handBacks, lends                                            []uuid.UUID
 	buys                                                        []requestedHost
 	resumes                                                     []uuid.UUID
-	refresh                                                     []bool
-	idle                                                        []idleRow
 	cools                                                       []coolRow
 	markets                                                     []marketRow
 }
@@ -206,43 +270,29 @@ type requestedHost struct {
 	Replaces           *uuid.UUID   `json:"replaces"`
 	HoldsCPUMillis     *cpu.Millis  `json:"holds_cpu_millis"`
 	HoldsMemoryBytes   *int64       `json:"holds_memory_bytes"`
+	HoldsDisks         *int         `json:"holds_disks"`
+	// MarginWaived is set on a purchase made at a loss, which its launch
+	// walk keeps.
+	MarginWaived bool `json:"margin_waived"`
 }
 
-type idleRow struct {
-	ID        uuid.UUID  `json:"id"`
-	IdleSince *time.Time `json:"idle_since"`
-}
-
+// coolRow is an offer a pass cools in every zone of its region, and why.
 type coolRow struct {
-	ConnectionKey string `json:"connection_key"`
-	Region        string `json:"region"`
-	InstanceType  string `json:"instance_type"`
-	Market        Market `json:"market"`
+	connectionKey, region, instanceType, reason string
+	market                                      Market
 }
 
-func newFleetPass(c *Compute, p Policy, r fleetRead) (*fleetPass, error) {
-	rates, err := billing.FleetComputeRates(r.now)
-	if err != nil {
-		return nil, fmt.Errorf("read the fleet's compute rates: %w", err)
-	}
-	ps := &fleetPass{
-		c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, catalog: FleetCatalog(), rates: rates,
-		reported: map[string]int64{}, waits: map[uuid.UUID]waitRow{},
-	}
+func newFleetPass(c *Compute, p Policy, r fleetRead) *fleetPass {
+	ps := &fleetPass{c: c, p: p, r: r, rows: map[HostID]PlannerHostsRow{}, waits: map[uuid.UUID]waitRow{}, reasons: map[uuid.UUID]ActionReason{}}
 	for _, h := range r.hosts {
 		ps.rows[HostID(h.ID)] = h
-		if h.SessionEpoch > 0 && h.InstanceType != "" {
-			if seen, ok := ps.reported[h.InstanceType]; !ok || h.MemoryBytes < seen {
-				ps.reported[h.InstanceType] = h.MemoryBytes
-			}
-		}
 	}
 	for _, g := range r.pending {
 		for _, id := range g.Ids {
 			ps.waits[id] = waitRow{}
 		}
 	}
-	return ps, nil
+	return ps
 }
 
 // decide plans the platform fleet, then each connected account.
@@ -265,19 +315,6 @@ func (ps *fleetPass) decide() error {
 	return ps.connections(groups)
 }
 
-func (ps *fleetPass) offerInputs(networks map[string]Network, owner string, hosts []FleetHost) OfferInputs {
-	zones := map[string]int{}
-	for _, h := range hosts {
-		if h.State != FleetTerminating && h.ZoneID != "" {
-			zones[h.ZoneID]++
-		}
-	}
-	return OfferInputs{
-		Now: ps.r.now, Catalog: ps.catalog, Networks: networks, Spot: ps.r.spot, Cooldowns: offerCooldowns(ps.r.cooldowns, owner),
-		ReportedMemory: ps.reported, ZoneHosts: zones, ZoneTypes: ps.r.zoneTypes,
-	}
-}
-
 // platform plans the platform fleet and publishes its plan.
 func (ps *fleetPass) platform(groups []pendingGroup) error {
 	now := ps.r.now
@@ -285,7 +322,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	// failed are hosts that could not prove a stop into the reserve.
 	var failed []PlannerHostsRow
 	for _, row := range ps.r.hosts {
-		if HostKind(row.Kind) != KindPlatform {
+		if !ownedBy(row, nil) {
 			continue
 		}
 		if stuckPreparing(row, now) {
@@ -296,7 +333,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		if refusedReserve(row) && row.Containers == 0 && now.Sub(row.PhaseAt) < ps.c.fleet.CapacityCooldown {
 			failed = append(failed, row)
 		}
-		hosts = append(hosts, fleetHostOf(row, now, ps.r.release))
+		hosts = append(hosts, fleetHostOf(row, now))
 	}
 	var pending []DemandGroup
 	for _, g := range groups {
@@ -304,8 +341,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			pending = append(pending, g.group)
 		}
 	}
-	in := ps.offerInputs(ps.c.fleet.Networks, ownerPlatform, hosts)
-	in.Rates, in.Quotas = ps.rates, vcpuQuotas(ps.r.quotas)
+	in := ps.r.inputs(ps.c.fleet.StorageRegion, ps.c.fleet.Networks, nil, hosts)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
@@ -315,7 +351,7 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		})
 	}
 	in.Cooldowns = append(in.Cooldowns, unproven...)
-	ps.cool(ownerPlatform, unproven, "offer cooled: its host could not prove a stop into the reserve")
+	ps.cool(ownerPlatform, unproven, "its host could not prove a stop into the reserve")
 	// A reserve being prepared or stopping runs, so it holds host room as
 	// well as reserve room.
 	held, reserves := 0, 0
@@ -327,22 +363,21 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 			held++
 		}
 	}
-	recent, builds, arrived := shapesByMarket(ps.r.recent)
+	recent, started, burst, arrived, disks := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, Builds: builds, Arrived: arrived, Offers: in,
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
 	}
-	s.FloorShortSince, s.Peaks = ps.carried()
+	s.Holds = ps.holds(nil)
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
-	ps.cool(ownerPlatform, cools, "offer cooled: its host could not take the container bought for")
+	ps.cool(ownerPlatform, cools, "the host bought for a container could not take it")
 	bought, err := ps.apply(plan, nil)
 	if err != nil {
 		return err
 	}
 	ps.settleWaits(plan, bought)
-	ps.settleIdle(hosts, plan)
 	ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
-	return ps.publish(plan)
+	return ps.publish(plan, nil)
 }
 
 // connections plans each connected account that takes workloads: its
@@ -354,8 +389,8 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 	for _, conn := range ps.r.connections {
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
-			if row.ConnectionID != nil && *row.ConnectionID == conn.ID {
-				hosts = append(hosts, fleetHostOf(row, ps.r.now, nil))
+			if ownedBy(row, &conn.ID) {
+				hosts = append(hosts, fleetHostOf(row, ps.r.now))
 			}
 		}
 		var pending []DemandGroup
@@ -371,64 +406,49 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
 			return fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
 		}
-		in := ps.offerInputs(networks, conn.ID.String(), hosts)
-		in.OwnerPays = true
+		in := ps.r.inputs(ps.c.fleet.StorageRegion, networks, &conn.ID, hosts)
 		held := 0
 		for _, h := range hosts {
 			if !h.reserve() {
 				held++
 			}
 		}
-		s := FleetSnapshot{Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held), BatchWait: ps.r.connectionWaits[conn.ID]}
+		s := FleetSnapshot{
+			Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held),
+			BatchWait: ps.r.connectionWaits[conn.ID], Holds: ps.holds(&conn.ID),
+		}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
-		ps.cool(conn.ID.String(), cools, "offer cooled: its host could not take the container bought for")
+		ps.cool(conn.ID.String(), cools, "the host bought for a container could not take it")
 		bought, err := ps.apply(plan, &conn.ID)
 		if err != nil {
 			return err
 		}
 		ps.settleWaits(plan, bought)
-		ps.settleIdle(hosts, plan)
+		if err := ps.publish(plan, &conn.ID); err != nil {
+			return err
+		}
 		ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
 	}
 	return nil
 }
 
-// planOwner runs PlanFleet, and once more with the offers cooled whose
-// bought host joined and still could not take its container: the offer did
+// planOwner runs PlanFleet with the offers cooled whose bought host serves
+// and is too small ever to take the container bought for it: the offer did
 // not hold what it predicted, so buying it again would not help.
 func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []OfferCooldown) {
-	plan := PlanFleet(p, s)
-	bought := map[uuid.UUID]HostID{}
+	var cools []OfferCooldown
 	for _, g := range s.Pending {
 		for _, c := range g.Containers {
-			if c.Host != nil {
-				bought[c.ID] = *c.Host
+			i := slices.IndexFunc(s.Hosts, func(h FleetHost) bool { return c.Host != nil && h.ID == *c.Host && h.State == FleetServing })
+			if i < 0 {
+				continue
+			}
+			h := s.Hosts[i]
+			missed := OfferCooldown{Region: h.Region, InstanceType: h.InstanceType, Market: h.Market, Until: s.Now.Add(cooldown)}
+			if !h.Usable.Covers(reservedShape(g.Need)) && !slices.ContainsFunc(cools, func(o OfferCooldown) bool { return o == missed }) {
+				cools = append(cools, missed)
 			}
 		}
-	}
-	var cools []OfferCooldown
-	for _, w := range plan.Waits {
-		if w.Action == nil && (w.Wait == nil || *w.Wait != WaitLimit) {
-			continue
-		}
-		id, ok := bought[w.Container]
-		if !ok {
-			continue
-		}
-		i := slices.IndexFunc(s.Hosts, func(h FleetHost) bool { return h.ID == id && h.State == FleetServing })
-		if i < 0 {
-			continue
-		}
-		h := s.Hosts[i]
-		c := OfferCooldown{Region: h.Region, InstanceType: h.InstanceType, Market: h.Market, Until: s.Now.Add(cooldown)}
-		if !slices.ContainsFunc(cools, func(o OfferCooldown) bool {
-			return o.Region == c.Region && o.InstanceType == c.InstanceType && o.Market == c.Market
-		}) {
-			cools = append(cools, c)
-		}
-	}
-	if len(cools) == 0 {
-		return plan, nil
 	}
 	s.Offers.Cooldowns = append(slices.Clone(s.Offers.Cooldowns), cools...)
 	return PlanFleet(p, s), cools
@@ -437,8 +457,8 @@ func planOwner(p Policy, s FleetSnapshot, cooldown time.Duration) (FleetPlan, []
 // cool writes the pass's own cooldowns.
 func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 	for _, c := range cools {
-		ps.w.cools = append(ps.w.cools, coolRow{ConnectionKey: owner, Region: c.Region, InstanceType: c.InstanceType, Market: c.Market})
-		ps.note(why, "owner", owner, "region", c.Region, "instance_type", c.InstanceType, "market", c.Market)
+		ps.w.cools = append(ps.w.cools, coolRow{connectionKey: owner, region: c.Region, instanceType: c.InstanceType, market: c.Market, reason: why})
+		ps.note("offer cooled", "reason", why, "owner", owner, "region", c.Region, "instance_type", c.InstanceType, "market", c.Market)
 	}
 }
 
@@ -447,6 +467,9 @@ func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.UUID, error) {
 	hosts := map[int]uuid.UUID{}
 	for i, a := range plan.Actions {
+		if a.Host != nil {
+			ps.reasons[uuid.UUID(*a.Host)] = a.Reason
+		}
 		switch a.Kind {
 		case ActionBuy, ActionBuyReserve, ActionRightsize:
 			id, err := uuid.NewV7()
@@ -454,10 +477,10 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 				return nil, fmt.Errorf("name a host: %w", err)
 			}
 			ps.w.buys = append(ps.w.buys, requested(id, connection, *a.Offer, a))
+			ps.reasons[id] = a.Reason
 			hosts[i] = id
-		case ActionResume, ActionRefresh:
+		case ActionResume:
 			ps.w.resumes = append(ps.w.resumes, uuid.UUID(*a.Host))
-			ps.w.refresh = append(ps.w.refresh, a.Kind == ActionRefresh)
 			hosts[i] = uuid.UUID(*a.Host)
 		case ActionReturnToReserve:
 			ps.w.returns = append(ps.w.returns, uuid.UUID(*a.Host))
@@ -466,6 +489,12 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			}
 		case ActionDrain:
 			ps.w.drains = append(ps.w.drains, uuid.UUID(*a.Host))
+		case ActionHandBack:
+			ps.w.handBacks = append(ps.w.handBacks, uuid.UUID(*a.Host))
+		case ActionLend:
+			ps.w.lends = append(ps.w.lends, uuid.UUID(*a.Host))
+		case ActionCancel:
+			ps.w.retires = append(ps.w.retires, uuid.UUID(*a.Host))
 		case ActionRetireReserve:
 			switch Phase(ps.rows[*a.Host].Phase) {
 			case PhaseStopped, PhaseRequested:
@@ -487,7 +516,7 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 	h := requestedHost{
 		ID: id, Kind: KindPlatform, ConnectionID: connection, CPUMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		GPUType: o.Type.GPU, GPUCount: o.Type.GPUCount, Region: o.Region, AvailabilityZone: o.Zone, AvailabilityZoneID: o.ZoneID,
-		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros,
+		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros, MarginWaived: a.Reason == ReasonSpotWait,
 	}
 	if !a.Holds.Empty() {
 		h.HoldsCPUMillis, h.HoldsMemoryBytes = &a.Holds.CPUMillis, &a.Holds.MemoryBytes
@@ -497,10 +526,10 @@ func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction)
 	}
 	switch a.Kind {
 	case ActionBuyReserve:
-		h.ReserveMode = a.Mode
+		h.ReserveMode, h.HoldsDisks = a.Mode, ptr(o.Type.DiskSlots())
 	case ActionRightsize:
 		h.Replaces = ptr(uuid.UUID(*a.Host))
-	case ActionBuy, ActionResume, ActionRefresh, ActionReturnToReserve, ActionDrain, ActionRetireReserve:
+	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionHandBack, ActionLend:
 	}
 	return h
 }
@@ -533,65 +562,68 @@ func (ps *fleetPass) settleWaits(plan FleetPlan, bought map[int]uuid.UUID) {
 	}
 }
 
-// settleIdle writes when each serving host became idle where it changed.
-func (ps *fleetPass) settleIdle(hosts []FleetHost, plan FleetPlan) {
-	for _, h := range hosts {
-		if h.State != FleetServing {
-			continue
-		}
-		var want *time.Time
-		if since, ok := plan.IdleSince[h.ID]; ok {
-			want = &since
-		}
-		if !sameTime(want, h.IdleSince) {
-			ps.w.idle = append(ps.w.idle, idleRow{ID: uuid.UUID(h.ID), IdleSince: want})
-		}
-	}
-}
-
-// carried is what each market's published plan carries to the next pass:
-// when its stopped target went short, and its load peak. An unreadable
-// plan reads as never short and without a peak.
-func (ps *fleetPass) carried() (map[ReserveMarket]time.Time, map[ReserveMarket]LoadPeak) {
-	since, peaks := map[ReserveMarket]time.Time{}, map[ReserveMarket]LoadPeak{}
+// carried is each market's published plan, which carries its held targets
+// to the next pass. An unreadable plan is left out.
+// carried are the published plans of the platform's markets, or of
+// connection's, from the last passes.
+func (ps *fleetPass) carried(connection *uuid.UUID) map[ReserveMarket]PublishedMarket {
+	stored := map[ReserveMarket]PublishedMarket{}
 	for _, m := range ps.r.markets {
-		var stored PublishedMarket
-		if json.Unmarshal(m.Plan, &stored) != nil {
+		var plan PublishedMarket
+		if json.Unmarshal(m.Plan, &plan) != nil || !sameOwner(plan.ConnectionID, connection) {
 			continue
 		}
-		market := ReserveMarket{Preemptible: stored.Preemptible, GPU: stored.GPUType}
-		if stored.FloorShortSince != nil {
-			since[market] = *stored.FloorShortSince
-		}
-		peaks[market] = stored.Peak
+		stored[ReserveMarket{Preemptible: plan.Preemptible, GPU: plan.GPUType}] = plan
 	}
-	return since, peaks
+	return stored
 }
 
-// publish writes every platform market's plan when the pass acted, a
-// market's reserve shortfall began or ended, its load peak moved, or the
-// last plan is planRefresh old, and logs each decision that changed.
-func (ps *fleetPass) publish(plan FleetPlan) error {
+// sameOwner reports two owners alike: the platform, or one connection.
+func sameOwner(a, b *uuid.UUID) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+// marketKey is the fleet_markets key of an owner's market.
+func marketKey(connection *uuid.UUID, m ReserveMarket) string {
+	if connection == nil {
+		return m.String()
+	}
+	return connection.String() + "/" + m.String()
+}
+
+// holds are each market's held targets from the owner's published plans.
+func (ps *fleetPass) holds(connection *uuid.UUID) map[ReserveMarket]MarketHolds {
+	holds := map[ReserveMarket]MarketHolds{}
+	for m, plan := range ps.carried(connection) {
+		holds[m] = plan.Holds
+	}
+	return holds
+}
+
+// publish writes every market plan of the platform, or of connection, when
+// the pass acted or a market's held targets or reason changed, the
+// platform's also once the last plan is planRefresh old, and logs each
+// platform decision that changed.
+func (ps *fleetPass) publish(plan FleetPlan, connection *uuid.UUID) error {
 	var last time.Time
-	for _, m := range ps.r.markets {
-		if m.GeneratedAt.After(last) {
+	for key, m := range ps.r.markets {
+		if !strings.Contains(key, "/") && m.GeneratedAt.After(last) {
 			last = m.GeneratedAt
 		}
 	}
-	stored, peaks := ps.carried()
+	stored := ps.carried(connection)
 	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
-		since, ok := stored[mp.Market]
-		peak := peaks[mp.Market]
-		return ok != (mp.FloorShortSince != nil) || ok && !since.Equal(*mp.FloorShortSince) ||
-			peak.Load != mp.Peak.Load || !peak.At.Equal(mp.Peak.At)
+		last := stored[mp.Market]
+		return !holdsEqual(last.Holds, mp.Holds) || last.Reason != mp.Reason
 	})
-	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
+	if len(plan.Actions) == 0 && !moved && (connection != nil || ps.r.now.Sub(last) < planRefresh) {
 		return nil
 	}
 	for _, mp := range plan.Markets {
-		key := mp.Market.String()
+		key := marketKey(connection, mp.Market)
 		actions := slices.DeleteFunc(slices.Clone(plan.Actions), func(a FleetAction) bool { return a.Market != mp.Market })
 		published := publishedMarket(mp, actions)
+		published.ConnectionID = connection
 		raw, err := json.Marshal(published)
 		if err != nil {
 			return fmt.Errorf("encode the plan of market %s: %w", key, err)
@@ -602,7 +634,7 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 		if stored, ok := ps.r.markets[key]; ok {
 			_ = json.Unmarshal(stored.Plan, &before) //nolint:errcheck // An unreadable old plan logs the new decision.
 		}
-		if before.Decision != published.Decision {
+		if connection == nil && before.Decision != published.Decision {
 			ps.note("fleet market plan", "market", key, "decision", published.Decision)
 		}
 		ps.w.markets = append(ps.w.markets, marketRow{Market: key, Plan: raw, GeneratedAt: ps.r.now, ExpiresAt: ps.r.now.Add(planExpiry)})
@@ -610,8 +642,9 @@ func (ps *fleetPass) publish(plan FleetPlan) error {
 	return nil
 }
 
-func sameTime(a, b *time.Time) bool {
-	return (a == nil) == (b == nil) && (a == nil || a.Equal(*b))
+func holdsEqual(a, b MarketHolds) bool {
+	return a.Running.Load == b.Running.Load && a.Running.At.Equal(b.Running.At) && a.Stopped.Load == b.Stopped.Load && a.Stopped.At.Equal(b.Stopped.At) &&
+		a.ShortSince.Equal(b.ShortSince)
 }
 
 func (ps *fleetPass) note(msg string, attrs ...any) {
@@ -623,8 +656,9 @@ func (ps *fleetPass) note(msg string, attrs ...any) {
 // commits. Each move is guarded by the phase the snapshot saw.
 func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 	for _, t := range [][2]Phase{
-		{PhasePreparing, PhaseFailed}, {PhaseStopped, PhaseResuming}, {PhaseReady, PhasePreparing}, {PhaseReady, PhaseDraining},
-		{PhasePreparing, PhaseReady}, {PhasePreparing, PhaseDraining}, {PhaseStopped, PhaseTerminating}, {PhaseRequested, PhaseDeleted},
+		{PhasePreparing, PhaseTerminating}, {PhaseStopped, PhaseResuming}, {PhaseStopping, PhaseResuming}, {PhaseReady, PhasePreparing},
+		{PhaseReady, PhaseDraining}, {PhasePreparing, PhaseReady}, {PhasePreparing, PhaseDraining}, {PhaseStopped, PhaseTerminating},
+		{PhaseRequested, PhaseDeleted},
 	} {
 		if err := transition(t[0], t[1]); err != nil {
 			return err
@@ -658,18 +692,18 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, h := range ps.w.buys {
 			ps.note("host requested", "host_id", h.ID, "instance_type", h.InstanceType, "market", h.Market, "region", h.Region,
-				"reserve_mode", h.ReserveMode)
+				"zone_id", h.AvailabilityZoneID, "reserve_mode", h.ReserveMode, "reason", ps.reasons[h.ID].Message())
 		}
 		ps.result.Requested, moved = len(ps.w.buys), true
 	}
 	if len(ps.w.resumes) > 0 {
-		resumed, err := q.ResumeReserves(ctx, ResumeReservesParams{Ids: ps.w.resumes, Refresh: ps.w.refresh})
+		resumed, err := q.ResumeReserves(ctx, ps.w.resumes)
 		if err != nil {
 			return fmt.Errorf("resume reserves: %w", err)
 		}
 		ps.result.Resumed, moved = len(resumed), moved || len(resumed) > 0
 		for _, id := range resumed {
-			ps.note("reserve resuming", "host_id", id)
+			ps.note("reserve resuming", "host_id", id, "reason", ps.reasons[id].Message())
 		}
 	}
 	if len(ps.w.returns) > 0 {
@@ -679,14 +713,17 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		}
 		for _, id := range returned {
 			wake = append(wake, id.String())
-			ps.note("host returning to the reserve", "host_id", id)
+			ps.note("host returning to the reserve", "host_id", id, "reason", ps.reasons[id].Message())
+		}
+		if err := ps.evictPacked(ctx, tx, returned); err != nil {
+			return err
 		}
 		ps.result.Returned, moved = len(returned), moved || len(returned) > 0
 	}
 	for _, d := range []struct {
 		ids    []uuid.UUID
 		reason string
-	}{{ps.w.drains, "idle"}, {ps.w.retirePreparing, "the reserve no longer needs it"}} {
+	}{{ps.w.drains, ReasonIdle.Message()}, {ps.w.retirePreparing, ReasonSurplus.Message()}} {
 		if len(d.ids) == 0 {
 			continue
 		}
@@ -697,8 +734,28 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		for _, id := range drained {
 			ps.note("host draining", "host_id", id, "reason", d.reason)
 		}
+		if err := ps.evictPacked(ctx, tx, drained); err != nil {
+			return err
+		}
 		ps.result.Drained += len(drained)
 		moved = moved || len(drained) > 0
+	}
+	if len(ps.w.handBacks)+len(ps.w.lends) > 0 {
+		changed, err := q.SetHandsBack(ctx, SetHandsBackParams{BackIds: ps.w.handBacks, LendIds: ps.w.lends})
+		if err != nil {
+			return fmt.Errorf("set hosts handing work back: %w", err)
+		}
+		for _, id := range changed {
+			msg := "host lending to Spot-tolerant work"
+			if slices.Contains(ps.w.handBacks, id) {
+				msg = "host handing Spot-tolerant work back"
+			}
+			ps.note(msg, "host_id", id, "reason", ps.reasons[id].Message())
+		}
+		if err := ps.c.containers.WakeReleasesOnHosts(ctx, tx, changed); err != nil {
+			return err
+		}
+		moved = moved || len(changed) > 0
 	}
 	if len(ps.w.retires) > 0 {
 		retired, err := q.RetireReserves(ctx, ps.w.retires)
@@ -706,29 +763,19 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			return fmt.Errorf("retire reserves: %w", err)
 		}
 		for _, id := range retired {
-			ps.note("reserve retiring", "host_id", id)
+			ps.note("reserve retiring", "host_id", id, "reason", ps.reasons[id].Message())
 		}
 		ps.result.Retired, moved = len(retired), moved || len(retired) > 0
-	}
-	if len(ps.w.idle) > 0 {
-		raw, err := json.Marshal(ps.w.idle)
-		if err != nil {
-			return fmt.Errorf("encode idle hosts: %w", err)
-		}
-		if err := q.SetIdleSince(ctx, raw); err != nil {
-			return fmt.Errorf("record idle hosts: %w", err)
-		}
 	}
 	if err := ps.writeWaits(ctx, q); err != nil {
 		return err
 	}
-	if len(ps.w.cools) > 0 {
-		raw, err := json.Marshal(ps.w.cools)
-		if err != nil {
-			return fmt.Errorf("encode cooldowns: %w", err)
-		}
-		if err := q.CoolOffers(ctx, CoolOffersParams{Offers: raw, Seconds: ps.c.fleet.CapacityCooldown.Seconds()}); err != nil {
-			return fmt.Errorf("cool offers: %w", err)
+	for _, c := range ps.w.cools {
+		if err := q.InsertCooldown(ctx, InsertCooldownParams{
+			ConnectionKey: c.connectionKey, Region: c.region, InstanceType: c.instanceType, Market: string(c.market),
+			Seconds: ps.c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * ps.c.fleet.CapacityCooldown).Seconds(), Reason: c.reason,
+		}); err != nil {
+			return fmt.Errorf("cool offer: %w", err)
 		}
 	}
 	if len(ps.w.markets) > 0 {
@@ -749,6 +796,19 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		return database.Notify(ctx, tx, ChannelCompute, string(KindPlatform))
 	}
 	return nil
+}
+
+// evictPacked evicts the CPU work packed on GPU hosts that leave, which
+// never keeps one up.
+func (ps *fleetPass) evictPacked(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
+	var ids []uuid.UUID
+	for _, id := range hosts {
+		ids = append(ids, ps.rows[HostID(id)].PackedIds...)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ps.c.containers.EvictContainers(ctx, tx, ids)
 }
 
 // writeWaits records every batch container's wait in one statement, in id

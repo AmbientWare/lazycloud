@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -6,38 +8,94 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/platformimages"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-const testImage = "python:3.12-slim"
+// The images tests start, pinned so that the image cache serves them.
+// Hosts pull their copies in the test registry, which copies names, so no
+// run reads Docker Hub.
+const (
+	testImage   = "docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+	alpineImage = "docker.io/library/python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4"
+	// ungrantedImage is pulled by no test, so no grant of it exists.
+	ungrantedImage = "docker.io/library/python:3.11-alpine@sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929"
+)
 
-// supervisorBinary is built once per test binary by TestMain.
-var supervisorBinary string //nolint:gochecknoglobals // built once in TestMain
+// supervisorBinary is built once per test binary by TestMain, which also
+// fills copies.
+var (
+	supervisorBinary string //nolint:gochecknoglobals // Set once in TestMain.
+	copies           = map[string]string{}
+)
+
+// testPlatform is the platform the test images are pulled for.
+var testPlatform = v1.Platform{OS: "linux", Architecture: runtime.GOARCH}
+
+// startRegistry runs a registry from the image cache on a loopback port
+// and returns its address and how to remove it.
+func startRegistry(ctx context.Context) (string, func(), error) {
+	image, err := imagefstest.Load(ctx, testRegistryImage, testPlatform)
+	if err != nil {
+		return "", nil, err
+	}
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", image).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("start registry: %w", withStderr(err))
+	}
+	id := strings.TrimSpace(string(out))
+	stop := func() { _ = exec.CommandContext(context.WithoutCancel(ctx), "docker", "rm", "-f", id).Run() }
+	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
+	if err != nil {
+		stop()
+		return "", nil, fmt.Errorf("registry port: %w", withStderr(err))
+	}
+	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
+		if err == nil {
+			_ = resp.Body.Close()
+			return address, stop, nil
+		}
+		if time.Now().After(deadline) {
+			stop()
+			return "", nil, fmt.Errorf("registry did not start: %w", err)
+		}
+	}
+}
+
+// withStderr adds what a failed command printed to err.
+func withStderr(err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(exit.Stderr))
+	}
+	return err
+}
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcsupbin")
@@ -51,261 +109,51 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(fmt.Sprintf("build supervisor: %v", err))
 	}
-	store, removeStore, err := storagetest.Open(context.Background())
+	registry, stopRegistry, err := startRegistry(context.Background())
 	if err != nil {
 		panic(err)
 	}
+	for _, image := range append(slices.Clone(lazyImages), ungrantedImage) {
+		if copies[image], err = imagefstest.Push(context.Background(), registry, image, testPlatform); err != nil {
+			stopRegistry()
+			panic(err)
+		}
+	}
+	store, removeStore, err := storagetest.Open(context.Background())
+	if err != nil {
+		stopRegistry()
+		panic(err)
+	}
 	layerBucket = store.LayerBucket
-	if err := convertLazyImages(context.Background()); err != nil {
+	if err := convertLazyImages(context.Background(), store.Endpoint, store.Region, store.LayerBucket, store.AccessKeyID, store.SecretAccessKey); err != nil {
 		_ = removeStore(context.Background())
-		panic(fmt.Sprintf("convert the test images: %v", err))
+		stopRegistry()
+		panic(err)
 	}
 	code := m.Run()
+	// The images the tests pulled read their layers from the test store,
+	// whose buckets go next; left behind, they would serve later runs of
+	// other tests unreadable files.
+	for _, image := range copies {
+		out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", image).CombinedOutput()
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", image).Run() == nil {
+			fmt.Fprintf(os.Stderr, "remove %s: %v: %s\n", image, err, out)
+			code = max(code, 1)
+		}
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)
 	}
+	stopRegistry()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
-// hostServer is the server's side of HostService for focused agent tests.
-// Integration with the real server happens in the integrated slice.
-type hostServer struct {
-	hostproto.UnimplementedHostServiceServer
-	joinToken, hostID, hostToken string
-
-	sessions    chan *serverSession
-	enrolls     chan *hostproto.EnrollRequest
-	completions chan *hostproto.CompleteTaskRequest
-	builds      chan *hostproto.CompleteImageBuildRequest
-	snapshots   chan *hostproto.CompleteSnapshotRequest
-	filesystems chan *hostproto.CompleteFilesystemImageRequest
-	data        *dataServer
-
-	mu      sync.Mutex
-	queued  map[string][]*hostproto.ClaimedTask
-	changed chan struct{}
-	logs    []*hostproto.LogLine
-	// containerLogs holds each container's logged lines.
-	containerLogs map[string][]string
-	// buildLogs holds image build output in arrival order.
-	buildLogs []string
-	// appendDelay makes AppendLogs a slow consumer.
-	appendDelay time.Duration
-	// releases answers ReleaseDisk in disk tests.
-	releases *releases
-	// completeOutage fails CompleteTask as unavailable until it passes.
-	completeOutage time.Time
-	// answerBuild answers CompleteImageBuild when set.
-	answerBuild func(*hostproto.CompleteImageBuildRequest) *hostproto.CompleteImageBuildResponse
-	// answerPlatform, when set, gives the platform images a session sends
-	// at open, none when it returns none.
-	answerPlatform func(named []string) []*hostproto.PlatformImage
-}
-
-type serverSession struct {
-	hello  *hostproto.Hello
-	stream hostproto.HostService_SessionServer
-	msgs   chan *hostproto.HostMessage
-	// end ends the session from the server's side.
-	end chan struct{}
-}
-
 // platformImage is how the server answers a platform image the tests
-// converted: hosts here pull it as named.
+// converted: hosts here pull its copy in the test registry.
 func platformImage(reference string) *hostproto.PlatformImage {
-	return &hostproto.PlatformImage{Reference: reference, Image: reference, Platform: "linux/" + runtime.GOARCH, Layers: imageLayers[reference]}
-}
-
-func newHostServer() *hostServer {
-	return &hostServer{
-		joinToken: "lc_join", hostID: uuid.NewString(), hostToken: "lc_host_" + uuid.NewString(),
-		sessions:      make(chan *serverSession, 8),
-		enrolls:       make(chan *hostproto.EnrollRequest, 8),
-		completions:   make(chan *hostproto.CompleteTaskRequest, 64),
-		builds:        make(chan *hostproto.CompleteImageBuildRequest, 8),
-		snapshots:     make(chan *hostproto.CompleteSnapshotRequest, 8),
-		filesystems:   make(chan *hostproto.CompleteFilesystemImageRequest, 8),
-		data:          &dataServer{calls: make(chan *forwardCall, 64)},
-		queued:        map[string][]*hostproto.ClaimedTask{},
-		containerLogs: map[string][]string{},
-		changed:       make(chan struct{}),
-	}
-}
-
-func (s *hostServer) authorize(ctx context.Context, method string) error {
-	if method == hostproto.HostService_Enroll_FullMethodName {
-		return nil
-	}
-	md, _ := metadata.FromIncomingContext(ctx)
-	s.mu.Lock()
-	token := s.hostToken
-	s.mu.Unlock()
-	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+token {
-		return status.Error(codes.Unauthenticated, "bad host token")
-	}
-	return nil
-}
-
-func (s *hostServer) serve(t *testing.T, address string) (*grpc.Server, string) {
-	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes),
-		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			if err := s.authorize(ctx, info.FullMethod); err != nil {
-				return nil, err
-			}
-			return handler(ctx, req)
-		}),
-		grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-			if err := s.authorize(ss.Context(), info.FullMethod); err != nil {
-				return err
-			}
-			return handler(srv, ss)
-		}),
-	)
-	hostproto.RegisterHostServiceServer(server, s)
-	hostproto.RegisterHostDataServer(server, s.data)
-	go func() { _ = server.Serve(listener) }()
-	return server, listener.Addr().String()
-}
-
-func (s *hostServer) Enroll(_ context.Context, r *hostproto.EnrollRequest) (*hostproto.EnrollResponse, error) {
-	s.enrolls <- r
-	if r.GetJoinToken() != s.joinToken && r.GetCloudIdentity() == nil {
-		return nil, status.Error(codes.PermissionDenied, "bad join token")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return &hostproto.EnrollResponse{HostId: s.hostID, HostToken: s.hostToken}, nil
-}
-
-// revoke replaces the host token, as removing the machine does.
-func (s *hostServer) revoke() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hostToken = "lc_host_" + uuid.NewString()
-}
-
-func (s *hostServer) Session(stream hostproto.HostService_SessionServer) error {
-	first, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	session := &serverSession{hello: first.GetHello(), stream: stream, msgs: make(chan *hostproto.HostMessage, 1024), end: make(chan struct{})}
-	// As the server does once it converted them, the session answers the
-	// platform images the Hello names with their grants.
-	s.mu.Lock()
-	answer := s.answerPlatform
-	s.mu.Unlock()
-	var platform []*hostproto.PlatformImage
-	if answer != nil {
-		platform = answer(session.hello.GetPlatformImages())
-	} else {
-		for _, ref := range session.hello.GetPlatformImages() {
-			platform = append(platform, platformImage(ref))
-		}
-	}
-	if len(platform) > 0 {
-		if err := stream.Send(&hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_PlatformImages{
-			PlatformImages: &hostproto.PlatformImages{Images: platform},
-		}}); err != nil {
-			return err
-		}
-	}
-	s.sessions <- session
-	received := make(chan error, 1)
-	go func() {
-		for {
-			m, err := stream.Recv()
-			if err != nil {
-				close(session.msgs)
-				received <- err
-				return
-			}
-			session.msgs <- m
-		}
-	}()
-	select {
-	case err := <-received:
-		return err
-	case <-session.end:
-		return status.Error(codes.Unavailable, "the test ended the session")
-	}
-}
-
-func (s *hostServer) enqueue(container string, task *hostproto.ClaimedTask) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.queued[container] = append(s.queued[container], task)
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-func (s *hostServer) ClaimTasks(ctx context.Context, r *hostproto.ClaimTasksRequest) (*hostproto.ClaimTasksResponse, error) {
-	deadline := time.After(time.Duration(r.GetWaitSeconds()) * time.Second)
-	for {
-		s.mu.Lock()
-		queue := s.queued[r.GetContainerId()]
-		n := min(len(queue), int(r.GetMaxTasks()))
-		if n > 0 {
-			s.queued[r.GetContainerId()] = queue[n:]
-			s.mu.Unlock()
-			return &hostproto.ClaimTasksResponse{Tasks: queue[:n]}, nil
-		}
-		changed := s.changed
-		s.mu.Unlock()
-		select {
-		case <-changed:
-		case <-deadline:
-			return &hostproto.ClaimTasksResponse{}, nil
-		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
-		}
-	}
-}
-
-func (s *hostServer) CompleteTask(_ context.Context, r *hostproto.CompleteTaskRequest) (*hostproto.CompleteTaskResponse, error) {
-	s.mu.Lock()
-	outage := time.Now().Before(s.completeOutage)
-	s.mu.Unlock()
-	if outage {
-		return nil, status.Error(codes.Unavailable, "server is restarting")
-	}
-	s.completions <- r
-	return &hostproto.CompleteTaskResponse{}, nil
-}
-
-func (s *hostServer) AppendLogs(_ context.Context, r *hostproto.AppendLogsRequest) (*hostproto.AppendLogsResponse, error) {
-	s.mu.Lock()
-	delay := s.appendDelay
-	s.mu.Unlock()
-	time.Sleep(delay)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.logs = append(s.logs, r.GetLines()...)
-	for _, line := range r.GetLines() {
-		s.containerLogs[r.GetContainerId()] = append(s.containerLogs[r.GetContainerId()], line.GetData())
-	}
-	return &hostproto.AppendLogsResponse{}, nil
-}
-
-// output joins the logged lines of one attempt.
-func (s *hostServer) output(attempt string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var b strings.Builder
-	for _, line := range s.logs {
-		if line.GetAttemptId() == attempt {
-			b.WriteString(line.GetData() + "\n")
-		}
-	}
-	return b.String()
+	return &hostproto.PlatformImage{Reference: reference, Image: copies[reference], Platform: "linux/" + runtime.GOARCH, Layers: imageLayers[reference]}
 }
 
 // env is one test's server, source store, state directory and agents.
@@ -321,6 +169,35 @@ type env struct {
 	// metricsInterval overrides the agent's sampling interval.
 	metricsInterval time.Duration
 	geesefs         string
+	// running is the agent startAgent last started.
+	running *runningAgent
+	// logs holds what the test's agents logged.
+	logs *lockedLog
+}
+
+// lockedLog collects log lines from the agents' goroutines.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// logged returns the first line the test's agents logged holding every
+// one of words, or empty.
+func (e *env) logged(words ...string) string {
+	e.logs.mu.Lock()
+	defer e.logs.mu.Unlock()
+	for line := range strings.Lines(e.logs.buf.String()) {
+		if !slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(line, w) }) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func newEnv(t *testing.T) *env {
@@ -332,43 +209,25 @@ func newEnv(t *testing.T) *env {
 	if _, err := docker.Ping(t.Context(), client.PingOptions{}); err != nil {
 		t.Fatalf("docker is required for agent tests: %v", err)
 	}
-	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker}
+	e := &env{t: t, id: "agent-test-" + uuid.NewString()[:8], server: newHostServer(), docker: docker, logs: &lockedLog{}}
+	// As the server does once it converted them, sessions answer the
+	// platform images the Hello names with their grants.
+	e.server.answerPlatform = func(named []string) []*hostproto.PlatformImage {
+		var platform []*hostproto.PlatformImage
+		for _, ref := range named {
+			platform = append(platform, platformImage(ref))
+		}
+		return platform
+	}
 	e.grpc, e.address = e.server.serve(t, "127.0.0.1:0")
 	e.stateDir = shortDir(t)
 	e.source = serveSource(t, "../supervisor/testdata/workspace")
 	t.Cleanup(func() {
 		e.grpc.Stop()
 		e.removeContainers()
-		e.removeBuildCaches()
 		_ = docker.Close()
 	})
 	return e
-}
-
-// removeBuildCaches deletes the build caches as root: builders write them
-// as their own users, which the test may not be.
-func (e *env) removeBuildCaches() {
-	dir := filepath.Join(e.stateDir, "build-cache")
-	if _, err := os.Stat(dir); err != nil {
-		return
-	}
-	out, err := exec.CommandContext(context.Background(), "docker", "run", "--rm", "-v", dir+":/cache", platformimages.Mount,
-		"sh", "-c", "rm -rf /cache/*").CombinedOutput()
-	if err != nil {
-		e.t.Errorf("remove the build caches: %v\n%s", err, out)
-	}
-}
-
-// shortDir is a directory removed when the test ends, short enough to hold
-// Unix sockets, which a test's own directory may not be.
-func shortDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "lca")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
 }
 
 // removeContainers deletes every container this test created.
@@ -428,18 +287,21 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		SupervisorPath:  supervisorBinary,
 		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
+		TrustBundle:     HostTrustBundle(),
 		BuildNetwork:    "host",
 		Limits:          Limits{CPUMillis: 2000, MemoryBytes: 8 << 30},
 		Labels:          map[string]string{"lazycloud.agent": e.id},
 		Version:         "test",
 		MetricsInterval: e.metricsInterval,
-		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		CommitAfter:     time.Second,
+		Logger:          slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, e.logs), &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	for _, fn := range configure {
 		fn(&cfg)
 	}
 	go func() { a.done <- Run(ctx, cfg) }()
 	e.t.Cleanup(a.stop)
+	e.running = a
 	return a
 }
 
@@ -466,11 +328,28 @@ func (a *runningAgent) exited(t *testing.T) error {
 	}
 }
 
+// agentExit yields Run's result if the running agent returns; failExited
+// puts it back for stop and fails the test with it.
+func (e *env) agentExit() <-chan error {
+	if e.running == nil {
+		return nil
+	}
+	return e.running.done
+}
+
+func (e *env) failExited(err error, waiting string) {
+	e.running.done <- err
+	e.t.Fatalf("agent exited before %s: %v", waiting, err)
+}
+
 func (e *env) enrollment() *hostproto.EnrollRequest {
 	e.t.Helper()
 	select {
 	case r := <-e.server.enrolls:
 		return r
+	case err := <-e.agentExit():
+		e.failExited(err, "enrolling")
+		return nil
 	case <-time.After(30 * time.Second):
 		e.t.Fatal("agent did not enroll")
 		return nil
@@ -482,45 +361,27 @@ func (e *env) session() *serverSession {
 	select {
 	case s := <-e.server.sessions:
 		return s
+	case err := <-e.agentExit():
+		e.failExited(err, "opening a session")
+		return nil
 	case <-time.After(30 * time.Second):
 		e.t.Fatal("agent did not open a session")
 		return nil
 	}
 }
 
-func (s *serverSession) send(t *testing.T, m *hostproto.ServerMessage) {
-	t.Helper()
-	if err := s.stream.Send(m); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// until reads host messages until match accepts one.
-func (s *serverSession) until(t *testing.T, timeout time.Duration, match func(*hostproto.HostMessage) bool) *hostproto.HostMessage {
-	t.Helper()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case m, ok := <-s.msgs:
-			if !ok {
-				t.Fatal("session closed")
-			}
-			if match(m) {
-				return m
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for a host message")
-			return nil
-		}
-	}
-}
-
+// phase waits for container's report of phase; a container that exits
+// first fails the test with its exit.
 func (s *serverSession) phase(t *testing.T, container string, phase hostproto.ContainerPhase) *hostproto.ContainerReport {
 	t.Helper()
-	return s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
+	report := s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
 		r := m.GetContainer()
-		return r.GetContainerId() == container && r.GetPhase() == phase
+		return r.GetContainerId() == container && (r.GetPhase() == phase || r.GetPhase() == exited)
 	}).GetContainer()
+	if report.GetPhase() != phase {
+		t.Fatalf("container %s exited before %v: %v", container, phase, report.GetExit())
+	}
+	return report
 }
 
 // adoptedReady waits until an adopted container is ready: in the Hello when
@@ -539,15 +400,12 @@ func (s *serverSession) adoptedReady(t *testing.T, container string) {
 func (e *env) startCommand(handler string, slots int32) *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   uuid.NewString(),
-		Image:         testImage,
+		Image:         copies[testImage],
 		Layers:        imageLayers[testImage],
 		PythonVersion: "3.12",
 		Source:        e.source,
 		Resources:     &hostproto.Resources{CpuMillis: 1000, MemoryBytes: 256 << 20},
 		Function:      &hostproto.FunctionWorkload{Handler: handler, Slots: slots},
-		// The agent runs unprivileged in tests; root-owned bytecode in the
-		// workspace would block its cleanup.
-		Environment: map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
 	}}}
 }
 

@@ -28,6 +28,7 @@ const testModeWebhookSecret = "whsec_lazycloud_test_mode"
 // other key. It deletes the customer it creates; the plan prices and the
 // portal configuration stay, as the platform reuses them.
 func TestStripeTestMode(t *testing.T) {
+	t.Parallel()
 	key := os.Getenv("LAZYCLOUD_TEST_STRIPE_API_KEY")
 	if key == "" {
 		t.Skip("real Stripe test mode: set LAZYCLOUD_TEST_STRIPE_API_KEY to a test-mode secret key")

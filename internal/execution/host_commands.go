@@ -13,6 +13,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -32,6 +33,9 @@ type StartCommand struct {
 	Slots         int
 	CPUMillis     cpu.Millis
 	MemoryBytes   int64
+	// MountReserveBytes is the part of MemoryBytes the container's volume
+	// mounters take.
+	MountReserveBytes int64
 	// CPULimitMillis and MemoryLimitBytes are the ceilings above the
 	// reservations.
 	CPULimitMillis   cpu.Millis
@@ -96,7 +100,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		out.Start = append(out.Start, StartCommand{
 			Container: ContainerID(row.ID), Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName,
 			Source: source, Spec: spec, Slots: int(row.Slots),
-			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
+			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, MountReserveBytes: mountReserve(row.Mounters),
 			CPULimitMillis:   cpuLimitMillis(spec.Resources),
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
 			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
@@ -139,6 +143,12 @@ const (
 	memoryBurstCapMi   = 8192
 )
 
+// mountReserve is the memory a container reserves on top of its spec's for
+// its volume mounters.
+func mountReserve(mounters int32) int64 {
+	return int64(mounters) * hostproto.MounterMemoryBytes
+}
+
 func cpuLimitMillis(r apitypes.Resources) cpu.Millis {
 	if r.CpuLimitMillis != nil {
 		return cpu.Millis(*r.CpuLimitMillis)
@@ -173,6 +183,45 @@ func (e *Execution) RecordImageReference(ctx context.Context, host compute.HostI
 		return false, fmt.Errorf("record image reference: %w", err)
 	}
 	return n == 1, nil
+}
+
+// ContainerWorkload returns the workspace and workload of a container of a
+// release the host runs; false when the host runs no such container.
+func (e *Execution) ContainerWorkload(ctx context.Context, host compute.HostID, container ContainerID) (identity.WorkspaceID, uuid.UUID, bool, error) {
+	row, err := e.queries.ContainerWorkload(ctx, ContainerWorkloadParams{ID: uuid.UUID(container), HostID: hostUUID(host)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity.WorkspaceID{}, uuid.UUID{}, false, nil
+	}
+	if err != nil {
+		return identity.WorkspaceID{}, uuid.UUID{}, false, fmt.Errorf("read container workload: %w", err)
+	}
+	return identity.WorkspaceID(row.WorkspaceID), row.WorkloadID, true, nil
+}
+
+// maxVolumePeers bounds the peers a start names: a frame none holds costs
+// the host a miss round per peer before the store.
+const maxVolumePeers = 8
+
+// VolumePeer is a host whose volume cache serves a workspace's frames at
+// Address.
+type VolumePeer struct {
+	Host    compute.HostID
+	Address string
+}
+
+// VolumePeers lists the other online hosts of host's region that run a live
+// container of workspace and serve a volume cache, at most maxVolumePeers,
+// those with the newest container of the workspace first.
+func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]VolumePeer, error) {
+	rows, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
+	if err != nil {
+		return nil, fmt.Errorf("list volume peers: %w", err)
+	}
+	peers := make([]VolumePeer, len(rows))
+	for n, r := range rows {
+		peers[n] = VolumePeer{Host: compute.HostID(r.ID), Address: r.PeerAddress}
+	}
+	return peers, nil
 }
 
 // ContainerImage returns the workspace of a live container on host and the

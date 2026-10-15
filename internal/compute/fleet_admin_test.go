@@ -13,6 +13,7 @@ import (
 // deleted platform hosts as with 1,000: they read live hosts, not host
 // history.
 func TestFleetAdminReadsStayFlatAsEndedHostsGrow(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	insert := func(n int, phase string) {
 		costExec(t, pool, `
@@ -25,7 +26,7 @@ from generate_series(1, $2)`, phase, n)
 		costExec(t, pool, "analyze hosts")
 		out := map[string]int{}
 		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
-			out["rollout"] = max(out["rollout"], planBuffers(explainPlan(t, pool, mode, fleetRollout, time.Now(), "1.0.0")))
+			out["rollout"] = max(out["rollout"], planBuffers(explainPlan(t, pool, mode, fleetRollout, time.Now())))
 			out["nodes"] = max(out["nodes"], planBuffers(explainPlan(t, pool, mode, platformHosts, uuid.Nil, 51)))
 		}
 		return out

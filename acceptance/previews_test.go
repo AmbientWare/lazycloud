@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -8,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
@@ -54,21 +55,22 @@ func syncArchive(t *testing.T, files map[string]string, removed ...string) []byt
 	return buf.Bytes()
 }
 
+// A served preview answers, takes a source sync and runs the edited
+// handler, shows its container's output, and stops with its container.
 func TestServePreviewSyncsSourceAndStops(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": previewApp})
 	route := "/"
 	endpoint := spec("greet", "app:greet", source, &apitypes.HttpSpec{Kind: apitypes.HttpKindEndpoint, Route: &route})
 
 	var preview apitypes.Preview
-	started := time.Now()
 	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/demo/previews", apitypes.PreviewRequest{Spec: endpoint}, &preview); status != http.StatusCreated {
 		t.Fatalf("create preview: %d", status)
 	}
 	if status := p.apiCall(http.MethodGet, "/v1/workspaces/ws/previews/"+preview.Id.String()+"?wait_seconds=60", nil, &preview); status != http.StatusOK || preview.State != apitypes.PreviewStateReady {
 		t.Fatalf("preview after waiting: %d %+v", status, preview)
 	}
-	t.Logf("preview created to ready: %s", time.Since(started))
 	if status, _, body := p.call(http.MethodPost, preview.Url, `{"name": "ada"}`); status != http.StatusOK || body != "hello ada v1" {
 		t.Fatalf("preview request: %d %s", status, body)
 	}
@@ -81,7 +83,6 @@ func TestServePreviewSyncsSourceAndStops(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	req.Header.Set("Content-Type", "application/octet-stream")
-	synced := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -91,18 +92,10 @@ func TestServePreviewSyncsSourceAndStops(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "{\"removed\":1,\"written\":2}\n" {
 		t.Fatalf("sync: %d %s", resp.StatusCode, body)
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
+	waitFor(t, "the edited handler to answer", func() bool {
 		status, _, body := p.call(http.MethodPost, preview.Url, `{"name": "ada"}`)
-		if status == http.StatusOK && body == "hello ada v2" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after the sync: %d %s", status, body)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Logf("sync to the edited handler answering: %s", time.Since(synced))
+		return status == http.StatusOK && body == "hello ada v2"
+	})
 
 	// The container's output is the preview's output.
 	outReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, p.api+"/v1/workspaces/ws/previews/"+preview.Id.String()+"/output", nil)
@@ -110,22 +103,15 @@ func TestServePreviewSyncsSourceAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	outReq.Header.Set("Authorization", "Bearer "+p.token)
-	deadline = time.Now().Add(10 * time.Second)
-	for {
+	waitFor(t, "the preview's output", func() bool {
 		resp, err := http.DefaultClient.Do(outReq)
 		if err != nil {
 			t.Fatal(err)
 		}
 		output, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if strings.Contains(string(output), "greeting ada") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("preview output %s", output)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+		return strings.Contains(string(output), "greeting ada")
+	})
 
 	if status := p.apiCall(http.MethodDelete, "/v1/workspaces/ws/previews/"+preview.Id.String(), nil, &preview); status != http.StatusOK || preview.State != apitypes.PreviewStateStopped {
 		t.Fatalf("stop preview: %d %+v", status, preview)
@@ -133,16 +119,13 @@ func TestServePreviewSyncsSourceAndStops(t *testing.T) {
 	if status, _, _ := p.call(http.MethodPost, preview.Url, `{}`); status != http.StatusNotFound {
 		t.Fatalf("request to a stopped preview: %d", status)
 	}
-	deadline = time.Now().Add(30 * time.Second)
-	for liveContainers(t, p.pool, preview.Id) > 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the stopped preview kept its container")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitFor(t, "the stopped preview to stop its container", func() bool { return liveContainers(t, p.pool, preview.Id) == 0 })
 }
 
+// A function preview takes the function's tasks submitted to it and HTTP
+// invocations, and stops once no follower renews its lease.
 func TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": previewApp})
 	var preview apitypes.Preview
@@ -173,11 +156,5 @@ func TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower(t *testing.T) {
 	if _, err := p.pool.Exec(t.Context(), `update previews set lease_expires_at = now() - interval '1 second' where release_id = $1`, preview.Id); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for liveContainers(t, p.pool, preview.Id) > 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the lapsed preview kept its container")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitFor(t, "the lapsed preview to stop its container", func() bool { return liveContainers(t, p.pool, preview.Id) == 0 })
 }

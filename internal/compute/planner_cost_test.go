@@ -29,8 +29,10 @@ func (*statementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQuer
 
 var errRollback = errors.New("rollback") //nolint:gochecknoglobals // Test sentinel.
 
-// explainPlan runs EXPLAIN ANALYZE on query in a transaction it rolls back,
-// under plan_cache_mode mode.
+// explainPlan runs EXPLAIN ANALYZE on query as a prepared statement under
+// plan_cache_mode mode, in a transaction it rolls back. The arguments go into
+// the EXECUTE as literals of the statement's parameter types, since an
+// EXPLAIN given parameters plans with their values in either mode.
 func explainPlan(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...any) string {
 	t.Helper()
 	var plan string
@@ -38,7 +40,25 @@ func explainPlan(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...a
 		if _, err := tx.Exec(t.Context(), "select set_config('plan_cache_mode', $1, true)", mode); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+query, args...)
+		if _, err := tx.Exec(t.Context(), "prepare explained as "+query); err != nil {
+			return err
+		}
+		var types []string
+		if err := tx.QueryRow(t.Context(), "select parameter_types::text[] from pg_prepared_statements where name = 'explained'").Scan(&types); err != nil {
+			return err
+		}
+		literals := make([]string, len(args))
+		for n, arg := range args {
+			if err := tx.QueryRow(t.Context(), "select quote_nullable($1::"+types[n]+")", arg).Scan(&literals[n]); err != nil {
+				return err
+			}
+			literals[n] += "::" + types[n]
+		}
+		execute := "execute explained"
+		if len(literals) > 0 {
+			execute += "(" + strings.Join(literals, ", ") + ")"
+		}
+		rows, err := tx.Query(t.Context(), "explain (analyze, buffers, costs off) "+execute)
 		if err != nil {
 			return err
 		}
@@ -47,6 +67,9 @@ func explainPlan(t *testing.T, pool *pgxpool.Pool, mode, query string, args ...a
 			return err
 		}
 		plan = strings.Join(lines, "\n")
+		if _, err := tx.Exec(t.Context(), "deallocate explained"); err != nil {
+			return err
+		}
 		return errRollback
 	})
 	if !errors.Is(err, errRollback) {
@@ -129,6 +152,7 @@ func costExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 // containers per host, never the backlog or history. Run with -v for the
 // cost table.
 func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	counter := &statementCounter{}
 	cfg := pool.Config().Copy()
@@ -141,7 +165,7 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	network := func(zone, id string) Network {
 		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
-	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: map[string]Network{
+	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, StorageRegion: "us-east-1", Networks: map[string]Network{
 		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
 	}}})
 	costExec(t, pool, `insert into images (digest, id, dockerfile, python_version, architecture)
@@ -166,8 +190,8 @@ select 'h', sha256(n::text::bytea), 'online', now(), 'platform', 'aws', 'ready',
        'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.4xlarge', 'i-' || lpad(to_hex(n), 17, '0'), now() - interval '1 hour', 1
 from generate_series($1::int, $2::int) n`, hosts+1, to)
 		costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-select a.workspace_id, w.active_release_id, 'ready', h.id, 1, 1000, 2::bigint << 30, now(), now()
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'ready', h.id, 1, 1000, 2::bigint << 30, now(), now()
 from hosts h cross join generate_series(1, 4) n
 join lateral (select w.id, w.active_release_id, w.app_id from workloads w order by w.id offset n limit 1) w on true
 join apps a on a.id = w.app_id
@@ -179,15 +203,15 @@ where h.name = 'h' and not exists (select 1 from containers c where c.host_id = 
 	history := 0
 	grow := func(toPending, toHistory int) {
 		costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
 join apps a on a.id = w.app_id`, toPending-pending)
 		costExec(t, pool, `
-insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, stop_reason,
+insert into containers (id, workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, stop_reason,
                         assigned_at, ready_at, stopped_at)
-select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, 'stopped', null, 1, 1000, 2::bigint << 30, 'stopped',
+select uuidv7(- interval '2 days'), a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'stopped', null, 1, 1000, 2::bigint << 30, 'stopped',
        now() - interval '2 days', now() - interval '2 days', now() - interval '2 days'
 from generate_series(1, $1) n
 join lateral (select w.active_release_id, w.app_id from workloads w order by w.id offset n % 20 limit 1) w on true
@@ -209,7 +233,7 @@ select workspace_id, id, 'stopped', 1, 4000, 2::bigint << 30, 'stopped', now() -
 from builds`, (toHistory-history)/10)
 		// The pass measures a settled backlog, not one still arriving.
 		costExec(t, pool, "update containers set created_at = created_at - interval '1 minute' where created_at > now() - interval '1 minute'")
-		costExec(t, pool, "analyze")
+		costExec(t, pool, "analyze image_builds")
 		pending, history = toPending, toHistory
 	}
 	p := DefaultPolicy()
@@ -218,9 +242,9 @@ from builds`, (toHistory-history)/10)
 		query string
 		args  []any
 	}{
-		{"hosts", plannerHosts, nil},
+		{"hosts", plannerHosts, []any{600.0}},
 		{"pending demand", pendingDemand, []any{int32(demandBatch)}},
-		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), (p.BuildWindow + p.LongestBuild).Seconds(), p.BuildWindow.Seconds(), p.Batch.Max.Seconds(), p.Batch.Quiet.Seconds(), p.ArrivalWindow.Seconds()}},
+		{"recent shapes", recentShapes, []any{p.LargestShape.Window.Seconds(), int32(demandBatch), p.WarmWindow.Seconds(), p.Batch.Max.Seconds(), p.Batch.Quiet.Seconds(), p.ArrivalWindow.Seconds()}},
 		{"arrival batches", batchWaits, []any{p.Batch.Quiet.Seconds(), p.Batch.Max.Seconds(), int32(demandBatch), (p.Batch.Max + p.Batch.Quiet).Seconds()}},
 		{"cooldowns", plannerCooldowns, nil},
 		{"markets", fleetMarkets, nil},
@@ -236,8 +260,9 @@ from builds`, (toHistory-history)/10)
 where state = 'pending' and (capacity_wait is not null or capacity_host_id is not null)`)
 		costExec(t, pool, "delete from hosts where phase = 'requested'")
 		costExec(t, pool, "delete from fleet_markets")
-		// Plans follow current statistics, not autovacuum's timing.
-		costExec(t, pool, "analyze")
+		// Plans follow current statistics of the tables that grew or were
+		// undone, not autovacuum's timing.
+		costExec(t, pool, "analyze containers, hosts, fleet_markets")
 		counter.n.Store(0)
 		start := time.Now()
 		result, err := c.Plan(t.Context(), slog.New(slog.DiscardHandler))
@@ -263,24 +288,20 @@ where state = 'pending' and (capacity_wait is not null or capacity_host_id is no
 			result.Requested, strings.Join(row, ", "))
 		return out
 	}
-	grow(0, 1_000)
-	measure("0 pending, 1,000 finished")
-	grow(500, 1_000)
-	measure("500 pending, 1,000 finished")
 	grow(2_000, 1_000)
 	small := measure("2,000 pending, 1,000 finished")
 	grow(10_000, 20_000)
 	// A deep backlog on one function too.
 	costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30
 from (select active_release_id, app_id from workloads order by id limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 10000)`)
 	// And the oldest backlog created in one statement, so thousands of
 	// pending containers share one created_at.
 	costExec(t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, created_at)
-select a.workspace_id, w.active_release_id, 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
+select a.workspace_id, w.active_release_id, (select workload_id from releases where id = w.active_release_id), 'pending', 1, 1000, 2::bigint << 30, now() - interval '1 hour'
 from (select active_release_id, app_id from workloads order by id offset 1 limit 1) w
 join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 	large := measure("25,000 pending, 20,000 finished")
@@ -288,7 +309,6 @@ join apps a on a.id = w.app_id, generate_series(1, 5000)`)
 		t.Errorf("the pass sent %d statements at 10,000 pending and %d at 2,000, want a fixed number", large.statements, small.statements)
 	}
 	addHosts(250)
-	costExec(t, pool, "analyze")
 	fleet := measure("25,000 pending, 20,000 finished, 250 hosts")
 	if fleet.statements != large.statements {
 		t.Errorf("the pass sent %d statements with 250 hosts and %d with 100, want a fixed number", fleet.statements, large.statements)

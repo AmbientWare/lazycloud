@@ -15,8 +15,8 @@ import (
 func (h *harness) replicate(container uuid.UUID, n int) {
 	h.t.Helper()
 	h.exec(`
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select workspace_id, release_id, 'starting', host_id, slots, cpu_millis, memory_bytes, now()
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+select workspace_id, release_id, (select workload_id from releases where id = release_id), 'starting', host_id, slots, cpu_millis, memory_bytes, now()
 from containers, generate_series(1, $2) where id = $1`, container, n)
 }
 
@@ -25,6 +25,7 @@ from containers, generate_series(1, $2) where id = $1`, container, n)
 // image as for one, their secrets among them, and sending the starts
 // adds only a fixed cost per container.
 func TestImageQueriesPerSyncDoNotGrowWithReplicas(t *testing.T) {
+	t.Parallel()
 	sending1, waiting1 := syncStatements(t, 1)
 	sending2, _ := syncStatements(t, 2)
 	sending4, waiting4 := syncStatements(t, 4)
@@ -61,22 +62,21 @@ func syncStatements(t *testing.T, replicas int) (sending, waiting int64) {
 		values (sha256('unconverted'), 'img_0123456789abcdef01234567', 'FROM scratch', '3.12', 'amd64', $1, now())`, old)
 	h.replicate(waiter, replicas-1)
 
-	counter.settle()
-	in := commands(t, open(t, ctx, h.client))
+	opened := time.Now()
+	in := commands(t, open(t, sampled(ctx), h.client))
 	for range 2 * replicas {
 		next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil })
 	}
-	sending = counter.settle()
+	sending = counter.sync(t, opened)
 	var build uuid.UUID
 	if err := base.QueryRow(t.Context(), "select id from image_builds").Scan(&build); err != nil {
 		t.Fatal(err)
 	}
+	notified := time.Now()
 	if _, err := base.Exec(t.Context(), "select pg_notify($1, $2)", string(database.ChannelImageBuild), build.String()); err != nil {
 		t.Fatal(err)
 	}
-	waiting = counter.settle()
-	if waiting == 0 {
-		t.Fatal("the waiting replicas' build woke no sync")
-	}
+	// The waiting replicas' build wakes a sync.
+	waiting = counter.sync(t, notified)
 	return sending, waiting
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -316,6 +317,10 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 			return apitypes.Release{}, err
 		}
 		if bytes.Equal(active.SpecDigest, f.digest) {
+			// Deploying it again retries it if it stopped starting.
+			if _, err := execution.RetryStarts(ctx, tx, []uuid.UUID{active.ID}); err != nil {
+				return apitypes.Release{}, err
+			}
 			return apitypes.Release{
 				Id: active.ID, Name: f.spec.Name, Version: versionOf(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
 			}, nil

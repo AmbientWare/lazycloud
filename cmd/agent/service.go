@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
 // serviceWrapper starts the current release and rolls back an update that
@@ -43,9 +44,6 @@ func installService(args []string) error {
 	}
 	if !serviceName.MatchString(*name) {
 		return fmt.Errorf("service name %q is not a unit name", *name)
-	}
-	if os.Geteuid() != 0 {
-		return errors.New("install-service requires root")
 	}
 	if info, err := os.Stat("/run/systemd/system"); err != nil || !info.IsDir() {
 		return errors.New("install-service requires systemd")
@@ -149,8 +147,8 @@ func renderUnit(root, state, wrapper string, args []string) string {
 	return strings.Join([]string{
 		"[Unit]",
 		"Description=LazyCloud agent",
-		"Wants=docker.service network-online.target " + snapshotterUnitName,
-		"After=docker.service network-online.target " + snapshotterUnitName,
+		"Wants=docker.service network-online.target " + layersource.Unit,
+		"After=docker.service network-online.target " + layersource.Unit,
 		"",
 		"[Service]",
 		"Type=simple",

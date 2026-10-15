@@ -7,6 +7,7 @@ import (
 )
 
 func TestHostLifecycleAllowsTheReservePathAndNothingThatSkipsAProof(t *testing.T) {
+	t.Parallel()
 	allowed := [][2]compute.Phase{
 		{compute.PhaseReady, compute.PhasePreparing},
 		{compute.PhasePreparing, compute.PhaseStopping},

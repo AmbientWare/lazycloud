@@ -8,192 +8,201 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/errgroup"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
-// Attach restores the disk if its local copy is not current, starts its
-// daemon, connects an NBD device and mounts it. Attaching a disk already
-// healthy at the same mountpoint and size succeeds without change. A disk
-// grows to SizeBytes but never shrinks.
-func (e *Engine) Attach(ctx context.Context, req AttachRequest) (AttachResult, error) {
-	p, err := e.paths(req.DiskID)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	if req.SizeBytes <= 0 || req.SizeBytes%filesystemBlockBytes != 0 {
-		return AttachResult{}, fmt.Errorf("%w: size must be a positive multiple of %d, got %d", ErrInvalid, filesystemBlockBytes, req.SizeBytes)
-	}
-	if req.MinFreeBytes < 0 {
-		return AttachResult{}, fmt.Errorf("%w: minimum free bytes must not be negative, got %d", ErrInvalid, req.MinFreeBytes)
+// Attach has the snapshotter serve the disk's base generation, prefetching
+// the frames the disk read at its last start and before its last stop,
+// starts its daemon over the local stack, connects an NBD device and mounts
+// it. Nothing is downloaded first. The local stack is kept when it is on the
+// same base, with any writes the last holder here left in it, and is
+// otherwise replaced by an empty head. Attaching a disk already healthy at
+// the same mountpoint and size succeeds without change. A disk grows to
+// SizeBytes but never shrinks. The host must pass Check.
+func (e *Engine) Attach(ctx context.Context, req AttachRequest) error {
+	if req.SizeBytes <= 0 || req.SizeBytes%hostproto.DiskBlockBytes != 0 {
+		return fmt.Errorf("%w: size must be a positive multiple of %d, got %d", ErrInvalid, hostproto.DiskBlockBytes, req.SizeBytes)
 	}
 	if !filepath.IsAbs(req.Mountpoint) {
-		return AttachResult{}, fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
+		return fmt.Errorf("%w: mountpoint must be absolute, got %q", ErrInvalid, req.Mountpoint)
 	}
-	if err := validateChain(req.Chain); err != nil {
-		return AttachResult{}, err
-	}
-	if err := p.checkSocketPaths(); err != nil {
-		return AttachResult{}, err
-	}
-	store, err := openStore(req.Store)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	if err := e.Check(); err != nil {
-		return AttachResult{}, err
+	if b := req.Base; b != nil && (b.Generation <= 0 || !sha256Hex.MatchString(b.IndexSHA256)) {
+		return fmt.Errorf("%w: generation %d needs a positive number and a sha256 index digest", ErrInvalid, b.Generation)
 	}
 	target := filepath.Clean(req.Mountpoint)
+	return e.withDisk(ctx, req.DiskID, loadState, func(p diskPaths, state *diskState) error {
+		if state != nil && state.Attachment != nil {
+			if attachmentLost(p, state) == nil {
+				if state.Attachment.Mountpoint != target {
+					return fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
+				}
+				if state.SizeBytes != req.SizeBytes {
+					return fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
+						ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
+				}
+				return nil
+			}
+			// An agent that died left this attachment; its daemon or device is gone.
+			if err := teardown(ctx, p, state); err != nil {
+				return fmt.Errorf("release the previous attachment: %w", err)
+			}
+		}
+		if err := stopUnrecordedDaemon(ctx, p); err != nil {
+			return err
+		}
 
-	lock, err := lockDisk(ctx, p)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	defer lock.release()
-
-	state, err := loadState(p)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	if state != nil && state.Attachment != nil {
-		healthy, err := attachmentHealthy(p, state)
+		state, err := e.start(ctx, p, state, req, target)
 		if err != nil {
-			return AttachResult{}, err
+			return err
 		}
-		if healthy {
-			if state.Attachment.Mountpoint != target {
-				return AttachResult{}, fmt.Errorf("%w: disk %s is already attached at %s", ErrInvalid, p.id, state.Attachment.Mountpoint)
-			}
-			if state.SizeBytes != req.SizeBytes {
-				return AttachResult{}, fmt.Errorf("%w: disk %s is attached at %d bytes; detach it before attaching at %d",
-					ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
-			}
-			return AttachResult{Generation: state.PublishedGeneration, Reused: true}, nil
+		formats := state.Unformatted
+		err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
+			attribute.Bool("lazycloud.format", formats))
+		if err != nil {
+			return errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
 		}
-		// An agent that died left this attachment; its daemon or device is gone.
-		if err := teardown(ctx, p, state); err != nil {
-			return AttachResult{}, fmt.Errorf("release the previous attachment: %w", err)
-		}
-	}
-
-	prepareCtx, span := telemetry.Start(ctx, "diskengine.restore", trace.WithAttributes(attribute.Int("lazycloud.generations", len(req.Chain))))
-	state, result, err := e.prepare(prepareCtx, p, state, req, store)
-	span.SetAttributes(attribute.Bool("lazycloud.reused", result.Reused))
-	telemetry.Fail(span, err)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	err = telemetry.Step(ctx, "diskengine.start_daemon", func(ctx context.Context) error { return startAttachment(ctx, p, state, target) })
-	if err != nil {
-		return AttachResult{}, err
-	}
-	result.Formatted = state.Unformatted
-	err = telemetry.Step(ctx, "diskengine.connect_and_mount", func(ctx context.Context) error { return connectAndMount(ctx, p, state) },
-		attribute.Bool("lazycloud.format", state.Unformatted))
-	if err != nil {
-		return AttachResult{}, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
-	}
-	e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", result.Generation,
-		"reused", result.Reused, "formatted", result.Formatted, "device", state.Attachment.Device)
-	return result, nil
+		e.log.InfoContext(ctx, "disk attached", "disk_id", p.id, "generation", generationOf(state.Base),
+			"formatted", formats, "device", state.Attachment.Device)
+		return nil
+	})
 }
 
-// prepare makes the local chain hold the newest generation in req.Chain,
-// reusing the local copy when it already does, and leaves a fresh head on top.
-func (e *Engine) prepare(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, store *objectStore) (*diskState, AttachResult, error) {
-	newest := Generation{}
-	if len(req.Chain) > 0 {
-		newest = req.Chain[len(req.Chain)-1]
-	}
-	if state != nil && state.Pending != nil && state.Pending.Result.Generation == newest.Generation &&
-		state.Pending.Result.ManifestSHA256 == newest.ManifestSHA256 {
+// start makes the local stack sit on req.Base, has the snapshotter serve
+// req.Base, prefetching, and starts the daemon serving both. A stack
+// already on req.Base is kept; any other is replaced by an empty head.
+func (e *Engine) start(ctx context.Context, p diskPaths, state *diskState, req AttachRequest, target string) (*diskState, error) {
+	if state != nil && state.Pending != nil && req.Base != nil && state.Pending.generation() == *req.Base {
 		// The control plane recorded the upload; the confirmation never arrived.
-		if err := state.commitPending(); err != nil {
-			return nil, AttachResult{}, err
+		held, err := state.commitPending(p)
+		if err != nil {
+			return nil, err
 		}
 		if err := saveState(p, state); err != nil {
-			return nil, AttachResult{}, err
+			return nil, err
 		}
-	}
-
-	result := AttachResult{Generation: newest.Generation}
-	reuse, err := reusable(p, state, newest)
-	if err != nil {
-		return nil, AttachResult{}, err
-	}
-	if reuse {
-		if state.SizeBytes > req.SizeBytes {
-			return nil, AttachResult{}, fmt.Errorf("%w: disk %s is %d bytes and cannot shrink to %d", ErrInvalid, p.id, state.SizeBytes, req.SizeBytes)
-		}
-		result.Reused = true
-		if state.SizeBytes < req.SizeBytes {
-			if err := growHead(ctx, p, state, req.SizeBytes); err != nil {
-				return nil, AttachResult{}, err
+		for _, l := range held {
+			if err := removeIfExists(p.layerPath(l)); err != nil {
+				return nil, err
 			}
 		}
-		return state, result, nil
 	}
-
-	manifests, err := fetchChain(ctx, store, p.id, req.Chain, req.SizeBytes)
+	reuse, err := reusable(p, state, req.Base)
 	if err != nil {
-		return nil, AttachResult{}, err
+		return nil, err
 	}
-	// Reusing the local copy downloads nothing, so it needs no reserve. A
-	// restore is planned before the stale local copy is removed and counts
-	// that copy as free.
-	have, err := freeBytes(p)
-	if err != nil {
-		return nil, AttachResult{}, err
-	}
-	plan, err := planRestore(p, have, req.MinFreeBytes, manifests)
-	if err != nil {
-		return nil, AttachResult{}, err
-	}
-	if err := os.RemoveAll(p.dir()); err != nil {
-		return nil, AttachResult{}, fmt.Errorf("remove stale local copy: %w", err)
-	}
-	if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
-		return nil, AttachResult{}, fmt.Errorf("create layer directory: %w", err)
-	}
-	state = &diskState{DiskID: p.id, SizeBytes: req.SizeBytes, Published: []publishedRecord{}}
-	if len(req.Chain) == 0 {
-		base := state.newLayer()
-		if err := createBase(ctx, p.layerPath(base), req.SizeBytes); err != nil {
-			return nil, AttachResult{}, err
+	if !reuse {
+		// Writes a stale local copy holds were fenced off: the disk moved on
+		// without them.
+		if err := os.RemoveAll(p.dir()); err != nil {
+			return nil, fmt.Errorf("remove stale local copy: %w", err)
 		}
-		state.Layers = []layer{base}
-		state.Unformatted = true
-	} else {
-		started := time.Now()
-		restored, err := restoreChain(ctx, p, state, store, req.Chain, manifests, plan)
+		if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
+			return nil, fmt.Errorf("create layer directory: %w", err)
+		}
+	}
+	basePath, baseSize := "", int64(0)
+	if req.Base != nil {
+		err := telemetry.Step(ctx, "diskengine.serve_base", func(ctx context.Context) error {
+			served, err := e.bases.ServeDisk(ctx, &imagefsproto.ServeDiskRequest{
+				DiskId: p.id, Generation: req.Base.Generation, IndexSha256: req.Base.IndexSHA256, IndexPath: p.baseIndex(), Prefetch: true,
+			})
+			if err != nil {
+				return fmt.Errorf("serve the base generation: %w", err)
+			}
+			info, err := os.Stat(served.GetPath())
+			if err != nil {
+				return fmt.Errorf("stat the base generation: %w", err)
+			}
+			basePath, baseSize = served.GetPath(), info.Size()
+			return nil
+		}, attribute.Int64("lazycloud.generation", req.Base.Generation))
 		if err != nil {
-			return nil, AttachResult{}, err
+			return nil, err
 		}
-		state.GrowFilesystem = manifests[len(manifests)-1].VirtualSizeBytes < req.SizeBytes
-		e.log.InfoContext(ctx, "disk restored", "disk_id", p.id, "generation", newest.Generation,
-			"layers", len(req.Chain), "bytes", restored, "duration", time.Since(started))
 	}
-	state.HeadFresh = true
-	if err := saveState(p, state); err != nil {
-		return nil, AttachResult{}, err
+	if reuse {
+		err = growKept(ctx, p, state, req.SizeBytes)
+	} else {
+		state, err = newStack(ctx, p, req, baseSize)
 	}
-	return state, result, nil
+	if err != nil {
+		return nil, err
+	}
+	return state, telemetry.Step(ctx, "diskengine.start_daemon", func(ctx context.Context) error { return startAttachment(ctx, p, state, target, basePath) })
 }
 
-// startAttachment starts the daemon and records the attachment.
-func startAttachment(ctx context.Context, p diskPaths, state *diskState, mountpoint string) error {
-	pid, err := startDaemon(ctx, p, state)
+// growKept grows a kept stack to size bytes.
+func growKept(ctx context.Context, p diskPaths, state *diskState, size int64) error {
+	if state.SizeBytes > size {
+		return fmt.Errorf("%w: disk %s is %d bytes and cannot shrink to %d", ErrInvalid, p.id, state.SizeBytes, size)
+	}
+	if state.SizeBytes < size {
+		return growHead(ctx, p, state, size)
+	}
+	return nil
+}
+
+// newStack records a stack of one empty head on req.Base. A base of
+// baseSize bytes under a larger disk leaves the filesystem to grow once
+// mounted.
+func newStack(ctx context.Context, p diskPaths, req AttachRequest, baseSize int64) (*diskState, error) {
+	if baseSize > req.SizeBytes {
+		return nil, fmt.Errorf("%w: generation %d of disk %s is %d bytes and cannot shrink to %d", ErrInvalid, generationOf(req.Base), p.id, baseSize, req.SizeBytes)
+	}
+	state := &diskState{DiskID: p.id, SizeBytes: req.SizeBytes, Base: req.Base, HeadFresh: true,
+		Unformatted: req.Base == nil, GrowFilesystem: req.Base != nil && baseSize < req.SizeBytes}
+	head := state.newLayer()
+	if err := createLayer(ctx, p.layerPath(head), req.SizeBytes); err != nil {
+		return nil, err
+	}
+	state.Layers = []layer{head}
+	return state, saveState(p, state)
+}
+
+// generationOf is g's number, or 0 for no generation.
+func generationOf(g *Generation) int64 {
+	if g == nil {
+		return 0
+	}
+	return g.Generation
+}
+
+// reusable reports whether the local stack sits on base, so attaching keeps
+// it. Anything it holds beyond base was written by the last holder here.
+func reusable(p diskPaths, state *diskState, base *Generation) (bool, error) {
+	if state == nil || (state.Base == nil) != (base == nil) || state.Base != nil && *state.Base != *base {
+		return false, nil
+	}
+	for _, l := range state.Layers {
+		present, err := pathExists(p.layerPath(l))
+		if err != nil || !present {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// startAttachment starts the daemon over the stack and the base file at
+// basePath, and records the attachment.
+func startAttachment(ctx context.Context, p diskPaths, state *diskState, mountpoint, basePath string) error {
+	a := &attachment{Mountpoint: mountpoint}
+	if basePath != "" {
+		var err error
+		if a.BasePath, a.BaseDevice, err = served(basePath); err != nil {
+			return err
+		}
+	}
+	pid, err := startDaemon(ctx, p, state, basePath)
 	if err != nil {
 		return err
 	}
-	state.Attachment = &attachment{Mountpoint: mountpoint, DaemonPID: pid}
-	state.LastUsedAt = time.Now().UTC()
+	a.DaemonPID = pid
+	state.Attachment = a
 	if err := saveState(p, state); err != nil {
 		return errors.Join(err, stopDaemon(context.WithoutCancel(ctx), p, pid))
 	}
@@ -235,13 +244,12 @@ func connectAndMount(ctx context.Context, p diskPaths, state *diskState) error {
 }
 
 // growHead raises the disk's size to size before the daemon opens it. Only
-// the head changes. The sealed layers below keep their size, and reads past
-// the end of a smaller backing layer return zeroes. connectAndMount grows the
-// filesystem once it is mounted. The flag asking for that is saved first, so
-// an attach that stops between the two still grows it next time.
+// the head changes. The layers and base below keep their size, and reads
+// past the end of a smaller one return zeroes. connectAndMount grows the
+// filesystem once it is mounted. The flag asking for that is saved first,
+// so an attach that stops between the two still grows it next time.
 func growHead(ctx context.Context, p diskPaths, state *diskState, size int64) error {
-	if _, err := runTool(ctx, toolImage, "resize", "-q", "-f", string(formatQcow2),
-		p.layerPath(state.head()), strconv.FormatInt(size, 10)); err != nil {
+	if _, err := runTool(ctx, toolImage, "resize", "-q", "-f", "qcow2", p.layerPath(state.head()), strconv.FormatInt(size, 10)); err != nil {
 		return err
 	}
 	state.SizeBytes = size
@@ -249,264 +257,8 @@ func growHead(ctx context.Context, p diskPaths, state *diskState, size int64) er
 	return saveState(p, state)
 }
 
-// reusable reports whether the local chain already holds the newest published
-// generation, so attaching needs no download. Anything the local chain holds
-// beyond it was written by the last holder and is kept.
-func reusable(p diskPaths, state *diskState, newest Generation) (bool, error) {
-	if state == nil || state.PublishedGeneration != newest.Generation ||
-		state.PublishedManifestSHA256 != newest.ManifestSHA256 {
-		return false, nil
-	}
-	for _, l := range state.Layers {
-		present, err := pathExists(p.layerPath(l))
-		if err != nil || !present {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-// fetchChain reads and checks every manifest in the chain before anything
-// local is removed or written. A disk only grows, so each generation is at
-// least as large as the one it builds on and no larger than size.
-func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []Generation, size int64) ([]layerManifest, error) {
-	manifests := make([]layerManifest, len(chain))
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(transferConcurrency)
-	for i, entry := range chain {
-		group.Go(func() error {
-			manifest, err := fetchManifest(groupCtx, store, entry)
-			if err != nil {
-				return err
-			}
-			manifests[i] = manifest
-			return nil
-		})
-	}
-	if err := group.Wait(); err != nil {
-		return nil, fmt.Errorf("fetch chain manifests: %w", err)
-	}
-	for i, entry := range chain {
-		manifest := manifests[i]
-		wantParent := int64(0)
-		if i > 0 {
-			wantParent = chain[i-1].Generation
-		}
-		switch {
-		case manifest.DiskID != diskID:
-			return nil, fmt.Errorf("%s belongs to disk %s", entry.ManifestKey, manifest.DiskID)
-		case manifest.Generation != entry.Generation:
-			return nil, fmt.Errorf("%s holds generation %d, the chain says %d", entry.ManifestKey, manifest.Generation, entry.Generation)
-		case manifest.ParentGeneration != wantParent:
-			return nil, fmt.Errorf("generation %d builds on %d, the chain puts it on %d", entry.Generation, manifest.ParentGeneration, wantParent)
-		case manifest.VirtualSizeBytes > size:
-			return nil, fmt.Errorf("%w: generation %d is %d bytes and cannot shrink to %d", ErrInvalid, entry.Generation, manifest.VirtualSizeBytes, size)
-		case i > 0 && manifest.VirtualSizeBytes < manifests[i-1].VirtualSizeBytes:
-			return nil, fmt.Errorf("generation %d is %d bytes, smaller than the %d bytes of the generation it builds on",
-				entry.Generation, manifest.VirtualSizeBytes, manifests[i-1].VirtualSizeBytes)
-		case manifest.Filesystem != diskFilesystem:
-			return nil, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
-		}
-	}
-	return manifests, nil
-}
-
-func blockRounded(n int64) int64 {
-	return (n + filesystemBlockBytes - 1) / filesystemBlockBytes * filesystemBlockBytes
-}
-
-// storedBytes is the space restoring a layer takes: its chunks, not its
-// holes, each rounded up to the filesystem blocks it fills.
-func storedBytes(manifest layerManifest) int64 {
-	var total int64
-	for _, chunk := range manifest.Chunks {
-		total += blockRounded(chunk.Length)
-	}
-	return total
-}
-
-// qcow2MetadataBytes bounds the tables a qcow2 image of virtual size virt
-// needs on top of its data. 8-byte L2 entries and 2-byte refcounts per 64 KiB
-// cluster come to under 1/4096 of the size, plus fixed headers.
-func qcow2MetadataBytes(virt int64) int64 { return virt/4096 + 1<<20 }
-
-// planRestore decides, before anything local is removed, whether a restore
-// fits and when it must commit the layers it holds into the base to make room
-// for the next. Each download must leave reserve free. A commit copies a held
-// layer into the base before deleting it, so the base grows by at most that
-// layer, and never past its virtual size and metadata; the peak during a
-// commit must fit, though it may dip into the reserve. The restore follows the
-// plan, so a chain that passes here does not fail for space halfway.
-func planRestore(p diskPaths, have, reserve int64, manifests []layerManifest) ([]bool, error) {
-	commitBefore := make([]bool, len(manifests))
-	if len(manifests) == 0 {
-		if have < reserve {
-			return nil, &InsufficientSpaceError{Root: p.root, Need: 0, Have: have, Reserve: reserve}
-		}
-		return commitBefore, nil
-	}
-	type held struct{ bytes, virt int64 }
-	used := storedBytes(manifests[0])
-	if have-used < reserve {
-		return nil, &InsufficientSpaceError{Root: p.root, Need: used, Have: have, Reserve: reserve}
-	}
-	baseBytes, baseVirt := used, manifests[0].VirtualSizeBytes
-	var holding []held
-	for i := 1; i < len(manifests); i++ {
-		need := storedBytes(manifests[i])
-		if have-used-need < reserve && len(holding) > 0 {
-			for _, layer := range holding {
-				baseVirt = max(baseVirt, layer.virt)
-				growth := max(min(layer.bytes, baseVirt+qcow2MetadataBytes(baseVirt)-baseBytes), 0)
-				if used+growth > have {
-					return nil, &InsufficientSpaceError{Root: p.root, Need: used + growth, Have: have}
-				}
-				baseBytes += growth
-				used += growth - layer.bytes
-			}
-			holding = nil
-			commitBefore[i] = true
-		}
-		if have-used-need < reserve {
-			return nil, &InsufficientSpaceError{Root: p.root, Need: used + need, Have: have, Reserve: reserve}
-		}
-		used += need
-		holding = append(holding, held{bytes: need, virt: manifests[i].VirtualSizeBytes})
-	}
-	return commitBefore, nil
-}
-
-// restoreChain downloads the chain, base first, committing the layers it
-// holds into the base where the plan says the next would not fit. When the
-// whole chain fits, every layer downloads at once and only the rebases, which
-// name the layer below, run in order.
-func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []Generation, manifests []layerManifest, commitBefore []bool) (int64, error) {
-	layers := make([]layer, len(chain))
-	sizes := make([]int64, len(chain))
-	prefetched := !slices.Contains(commitBefore, true)
-	if prefetched {
-		for i := range chain {
-			layers[i] = state.newLayer()
-			layers[i].Raw = manifests[i].Format == formatRaw
-		}
-		group, groupCtx := errgroup.WithContext(ctx)
-		group.SetLimit(layerDownloadConcurrency)
-		for i, entry := range chain {
-			group.Go(func() error {
-				bytes, err := downloadLayer(groupCtx, store, manifests[i], p.layerPath(layers[i]))
-				if err != nil {
-					return fmt.Errorf("restore generation %d: %w", entry.Generation, err)
-				}
-				sizes[i] = bytes
-				return nil
-			})
-		}
-		if err := group.Wait(); err != nil {
-			return 0, fmt.Errorf("restore disk %s: %w", p.id, err)
-		}
-	}
-	var restored int64
-	for i, entry := range chain {
-		manifest := manifests[i]
-		next := layers[i]
-		if !prefetched {
-			if commitBefore[i] {
-				if err := commitHeld(ctx, p, state); err != nil {
-					return 0, err
-				}
-			}
-			next = state.newLayer()
-			next.Raw = manifest.Format == formatRaw
-			bytes, err := downloadLayer(ctx, store, manifest, p.layerPath(next))
-			if err != nil {
-				return 0, fmt.Errorf("restore generation %d: %w", entry.Generation, err)
-			}
-			sizes[i] = bytes
-		}
-		restored += sizes[i]
-		if err := stackRestored(ctx, p, state, next, entry, manifest); err != nil {
-			return 0, err
-		}
-	}
-	return restored, addRestoredHead(ctx, p, state, chain[len(chain)-1])
-}
-
-// stackRestored puts a restored layer on top of the chain as generation
-// entry. Backing names are relative, so the chain survives the root moving.
-func stackRestored(ctx context.Context, p diskPaths, state *diskState, l layer, entry Generation, manifest layerManifest) error {
-	if len(state.Layers) > 0 {
-		if err := rebaseOnto(ctx, p, l, state.head()); err != nil {
-			return err
-		}
-	}
-	l.Generation = entry.Generation
-	state.Layers = append(state.Layers, l)
-	state.Published = append(state.Published, publishedRecord{
-		Generation:       entry.Generation,
-		ParentGeneration: manifest.ParentGeneration,
-		ManifestKey:      entry.ManifestKey,
-		ManifestSHA256:   entry.ManifestSHA256,
-	})
-	return nil
-}
-
-func addRestoredHead(ctx context.Context, p diskPaths, state *diskState, newest Generation) error {
-	head := state.newLayer()
-	if err := createOverlay(ctx, p.layerPath(head), state.head(), state.SizeBytes); err != nil {
-		return err
-	}
-	state.Layers = append(state.Layers, head)
-	state.PublishedGeneration = newest.Generation
-	state.PublishedManifestSHA256 = newest.ManifestSHA256
-	return nil
-}
-
-func rebaseOnto(ctx context.Context, p diskPaths, l, below layer) error {
-	_, err := runTool(ctx, toolImage, "rebase", "-u", "-F", string(below.format()), "-b", below.file(), p.layerPath(l))
-	return err
-}
-
-// commitIntoBelow commits a restored layer into the layer below it. The layer
-// below is opened the way the daemon opens the base, detecting zeroes and
-// unmapping them, so ranges a later generation zeroed free their space there
-// rather than being written out as zeroes. -d leaves the committed layer
-// as it was instead of emptying it; the caller deletes it.
-func commitIntoBelow(ctx context.Context, path string, below layer, belowPath string) error {
-	escape := func(value string) string { return strings.ReplaceAll(value, ",", ",,") }
-	opts := strings.Join([]string{
-		"driver=" + string(formatQcow2),
-		"file.driver=file",
-		"file.filename=" + escape(path),
-		"backing.driver=" + string(below.format()),
-		"backing.file.driver=file",
-		"backing.file.filename=" + escape(belowPath),
-		"backing.discard=unmap",
-		"backing.detect-zeroes=unmap",
-	}, ",")
-	_, err := runTool(ctx, toolImage, "commit", "-q", "-d", "--image-opts", opts)
-	return err
-}
-
-// commitHeld commits the restored layers above the base into it, oldest
-// first, deleting each once it is in.
-func commitHeld(ctx context.Context, p diskPaths, state *diskState) error {
-	base := state.Layers[0]
-	for _, held := range state.Layers[1:] {
-		if err := rebaseOnto(ctx, p, held, base); err != nil {
-			return err
-		}
-		if err := commitIntoBelow(ctx, p.layerPath(held), base, p.layerPath(base)); err != nil {
-			return err
-		}
-		if err := os.Remove(p.layerPath(held)); err != nil {
-			return fmt.Errorf("remove committed layer: %w", err)
-		}
-		base.Generation = held.Generation
-	}
-	state.Layers = []layer{base}
-	return nil
-}
-
+// attachmentHealthy reports whether the daemon, device and mount of the
+// attachment run.
 func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
 	a := state.Attachment
 	if !a.Mounted || a.Device == "" || !daemonAlive(p, a.DaemonPID) || !nbdConnected(a.Device) {
@@ -517,6 +269,22 @@ func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
 		return false, err
 	}
 	return slices.Contains(points, a.Mountpoint), nil
+}
+
+// baseLost says why the attachment's base file is no longer the one its
+// daemon opened, if it is not: the snapshotter that served it stopped.
+func baseLost(a *attachment) error {
+	if a.BasePath == "" {
+		return nil
+	}
+	_, device, err := served(a.BasePath)
+	if err != nil {
+		return fmt.Errorf("the snapshotter stopped serving the disk's base: %w", err)
+	}
+	if device != a.BaseDevice {
+		return errors.New("the snapshotter serving the disk's base restarted")
+	}
+	return nil
 }
 
 // teardown unmounts, disconnects and stops whatever the attachment still
@@ -565,7 +333,6 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 	} else {
 		state.HeadFresh = false
 	}
-	state.Attachment = nil
-	state.LastUsedAt = time.Now().UTC()
+	state.Attachment, state.Stalled = nil, false
 	return saveState(p, state)
 }

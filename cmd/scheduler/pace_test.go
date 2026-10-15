@@ -10,7 +10,8 @@ import (
 // A pass that asks to run again runs then on a replica that does not lead,
 // without a wake, and only once.
 func TestAPassThatAsksToRunAgainRerunsOnAnyReplica(t *testing.T) {
-	p := newPace()
+	t.Parallel()
+	p := newPace(testTicks())
 	ctx, cancel := context.WithCancel(t.Context())
 	runs := make(chan struct{}, 3)
 	// The loop's goroutine alone reads and writes them.

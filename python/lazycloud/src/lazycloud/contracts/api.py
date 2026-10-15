@@ -81,9 +81,7 @@ class TokenStatus(str, Enum):
 class Token(APIModel):
     id: UUID
     name: str
-    prefix: Annotated[
-        str, Field(description="The token's first characters; empty for older tokens.")
-    ]
+    prefix: Annotated[str, Field(description="The token's first characters.")]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")
@@ -469,19 +467,19 @@ class CloudBucketSpec(APIModel):
     ] = None
     force_path_style: bool = False
     access_key_secret: Annotated[
-        str | None,
+        str,
         Field(
             description="The workspace secret holding the access key id.",
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
-    ] = None
+    ]
     secret_key_secret: Annotated[
-        str | None,
+        str,
         Field(
             description="The workspace secret holding the secret access key.",
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
-    ] = None
+    ]
 
 
 class CreateVolumeRequest(APIModel):
@@ -624,6 +622,17 @@ class DiskStatus(str, Enum):
     detached = "detached"
     attached = "attached"
     saving = "saving"
+
+
+class DiskOperation(str, Enum):
+    publish = "publish"
+    release = "release"
+
+
+class DiskFailure(APIModel):
+    operation: DiskOperation
+    message: str
+    failed_at: AwareDatetime
 
 
 class State(str, Enum):
@@ -1170,6 +1179,7 @@ class ChangeTopic(str, Enum):
     containers = "containers"
     storage_secrets = "storage.secrets"
     storage_volumes = "storage.volumes"
+    storage_disks = "storage.disks"
     usage = "usage"
 
 
@@ -1380,26 +1390,11 @@ class ContainerCounts(APIModel):
     running: Annotated[int, Field(description="Ready or draining.")]
 
 
-class ConcurrencyLimits(APIModel):
-    max_cpu_containers: int
-    max_gpus: int
-
-
-class Concurrency(APIModel):
-    cpu_containers: int
-    gpus: int
-    limits: Annotated[
-        ConcurrencyLimits | None,
-        Field(description="Absent while the account's plan limits are unknown."),
-    ] = None
-
-
 class AccountMetrics(APIModel):
     containers: Annotated[
         ContainerCounts,
         Field(description="Live containers in every workspace the caller is a member of."),
     ]
-    concurrency: Concurrency
 
 
 class ActivityMeasure(str, Enum):
@@ -2407,6 +2402,7 @@ class DevboxDisk(APIModel):
     stored_bytes: int
     generation: int
     status: DiskStatus
+    failure: DiskFailure | None = None
 
 
 class CreateInstanceRequest(APIModel):
@@ -2862,6 +2858,7 @@ class Disk(APIModel):
     holder: Annotated[
         WorkloadRef | None, Field(description="The workload whose container holds the disk.")
     ] = None
+    failure: DiskFailure | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 

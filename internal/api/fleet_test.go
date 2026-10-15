@@ -67,6 +67,7 @@ func (e *env) fleet(token string) apitypes.FleetSummary {
 }
 
 func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	admin := e.administrator()
@@ -80,9 +81,9 @@ with ws as (insert into workspaces (name) values ('fleet-pending') returning id)
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id, workspace_id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); err != nil {
+             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select app.workspace_id, rel.id, rel.workload_id, 'pending', 1, 8000, 1 << 30 from app, rel`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,7 +125,7 @@ select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); er
 		}
 		if got.WarmFree != capacity(want.WarmFree) || got.WarmTarget != capacity(want.WarmTarget) ||
 			got.ReserveReady != capacity(want.ReserveReady) || got.ReserveTarget != capacity(want.StoppedTarget) ||
-			got.Allocated != capacity(allocated) || got.Reason != string(want.Reason) || len(got.States) != len(want.States) {
+			got.Allocated != capacity(allocated) || got.Reason != want.Reason.Message() || len(got.States) != len(want.States) {
 			t.Errorf("market %s/%s: %+v, want the published %+v", map[bool]string{true: "spot", false: "on_demand"}[want.Preemptible], want.GPUType, got, want)
 		}
 		if want.Preemptible && want.GPUType == "" && (want.Load.CPUMillis != 8000 || got.Allocated != (apitypes.FleetCapacity{})) {
@@ -154,9 +155,11 @@ select app.workspace_id, rel.id, 'pending', 1, 8000, 1 << 30 from app, rel`); er
 	}
 }
 
-// Nodes lists live hosts in their fleet state; a failed host and a launch
-// the provider refused are left out.
+// The fleet is for administrators. Nodes lists live platform hosts in their
+// fleet state; a failed host, a launch the provider refused and a
+// customer's machine are left out.
 func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	e := newEnv(t)
 	admin := e.administrator()
@@ -193,6 +196,19 @@ func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 	failed := e.fleetHost(fleetHost{instance: "i-0failed", phase: "failed"})
 	refused := e.fleetHost(fleetHost{phase: "failed"})
 	requested := e.fleetHost(fleetHost{phase: "requested"})
+	var machine uuid.UUID
+	if err := e.pool.QueryRow(ctx, `
+insert into hosts (name, token_hash, state, last_seen_at, cpu_millis, memory_bytes, kind, account_id)
+values ('gpu-1', sha256(random()::text::bytea), 'online', now(), 4000, 8 << 30, 'machine', (select id from users where email = 'owner@example.com'))
+returning id`).Scan(&machine); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/fleet", "/v1/fleet/nodes"} {
+		var apiErr apitypes.Error
+		if status := e.do("GET", path, e.owner, nil, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
+			t.Errorf("GET %s as a user: %d %+v, want 403", path, status, apiErr)
+		}
+	}
 
 	got := map[uuid.UUID]apitypes.FleetNode{}
 	cursor := ""
@@ -219,9 +235,9 @@ func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 		}
 		cursor = *page.NextCursor
 	}
-	for _, absent := range []uuid.UUID{failed, refused, requested} {
+	for _, absent := range []uuid.UUID{failed, refused, requested, machine} {
 		if n, ok := got[absent]; ok {
-			t.Errorf("failed host or one without an instance listed: %+v", n)
+			t.Errorf("a failed host, one without an instance or a customer's machine listed: %+v", n)
 		}
 	}
 	if r := e.fleet(admin).Release; r == nil || r.Complete || r.Phases["current"] != 1 || r.Phases["updating"] != 1 || r.Phases["reserve"] != 6 {

@@ -28,15 +28,16 @@ import (
 // Deleting a workspace cancels its work, waits for its containers to stop,
 // deletes its objects and removes its rows, leaving other workspaces alone.
 func TestWorkspaceDeletion(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}), storage: store, logger: logger,
+		execution: exec, images: testImages(t, pool, exec, store), storage: store, logger: logger,
 	}
 
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -122,7 +123,7 @@ func TestWorkspaceDeletion(t *testing.T) {
 	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err == nil {
 		t.Fatal("workspace remains")
 	}
-	if empty, err := store.DeleteWorkspaceObjects(ctx, doomed.ID); err != nil || !empty {
+	if empty, err := store.DeleteWorkspaceStorage(ctx, slog.New(slog.DiscardHandler), doomed.ID); err != nil || !empty {
 		t.Fatalf("objects left: empty %v err %v", empty, err)
 	}
 	var rows int
@@ -146,15 +147,16 @@ func TestWorkspaceDeletion(t *testing.T) {
 // Deleting a workspace fails the builds it is running and waits for their
 // containers, and keeps finished builds another workspace shares.
 func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
 	ident := identity.NewIdentity(pool, identity.Config{})
 	exec := execution.NewExecution(pool)
-	store := storage.NewStorage(pool, storagetest.Config(t))
+	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
 	loops := &accountLoops{
 		identity: ident, notifications: notifications.NewNotifications(pool, nil, logger),
-		execution: exec, images: images.NewImages(pool, exec, testVault(t, pool), store, images.Config{}),
+		execution: exec, images: testImages(t, pool, exec, store),
 		storage: store, logger: logger,
 	}
 	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
@@ -302,8 +304,8 @@ func readyContainer(t *testing.T, pool *pgxpool.Pool, ws identity.WorkspaceID, r
 	err := pool.QueryRow(t.Context(), `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
               values ('h', sha256(gen_random_uuid()::text::bytea), 'online', 4000, 1 << 32, now()) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             select $1, $2, 'ready', host.id, 1, 1000, 1 << 28, now(), now() from host returning id)
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             select $1, $2, (select workload_id from releases where id = $2), 'ready', host.id, 1, 1000, 1 << 28, now(), now() from host returning id)
 select host.id, ctr.id from host, ctr`, uuid.UUID(ws), release).Scan(&host, &container)
 	if err != nil {
 		t.Fatal(err)
@@ -312,6 +314,16 @@ select host.id, ctr.id from host, ctr`, uuid.UUID(ws), release).Scan(&host, &con
 }
 
 // testVault returns a secrets owner with a fixed development master key.
+// testImages is the images owner the account loops run with.
+func testImages(t *testing.T, pool *pgxpool.Pool, exec *execution.Execution, store *storage.Storage) *images.Images {
+	t.Helper()
+	im, err := images.NewImages(pool, exec, testVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
 func testVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
 	t.Helper()
 	key, err := secrets.NewFileKey(make([]byte, 32))

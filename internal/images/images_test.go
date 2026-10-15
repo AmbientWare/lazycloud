@@ -4,15 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
+	"log"
 	"log/slog"
-	"net/http"
-	"os/exec"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	memregistry "github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
@@ -32,35 +34,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-const registryImage = "registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8"
-
-// startRegistry runs a Distribution registry on a free loopback port for the
+// startRegistry serves an in-memory OCI registry on a loopback port for the
 // test and returns its host:port.
 func startRegistry(t *testing.T) string {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
-	if err != nil {
-		t.Fatalf("start registry: %v", err)
-	}
-	id := strings.TrimSpace(string(out))
-	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
-	port, err := exec.CommandContext(t.Context(), "docker", "port", id, "5000/tcp").Output()
-	if err != nil {
-		t.Fatalf("registry port: %v", err)
-	}
-	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
-		if err == nil {
-			_ = resp.Body.Close()
-			return address
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("registry did not start: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	server := httptest.NewServer(memregistry.New(memregistry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "http://")
 }
 
 // pushRandom writes a random image to ref and returns its digest.
@@ -94,6 +74,16 @@ type fixture struct {
 	listener  *database.Listener
 }
 
+// newImages is the images owner with cfg.
+func newImages(t *testing.T, pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, cfg images.Config) *images.Images {
+	t.Helper()
+	im, err := images.NewImages(pool, exec, vault, store, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
 // newVault returns a secrets owner with a random master key.
 func newVault(t *testing.T, pool *pgxpool.Pool) *secrets.Secrets {
 	t.Helper()
@@ -114,9 +104,10 @@ func newFixture(t *testing.T) fixture {
 	pool := dbtest.New(t)
 	exec := execution.NewExecution(pool)
 	vault := newVault(t, pool)
-	store := storage.NewStorage(pool, storagetest.Config(t))
-	im := images.NewImages(pool, exec, vault, store, images.Config{
-		Registry: registry, Repository: "lazycloud", Insecure: true,
+	store := storage.NewStorage(pool, storagetest.Config(t), compute.NewCompute(pool, nil, compute.Config{}))
+	im := newImages(t, pool, exec, vault, store, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",
 	})
 	pushRandom(t, registry+"/library/python:3.12-slim")
@@ -170,11 +161,21 @@ func (f fixture) workspaceImageRepository(t *testing.T, workspace identity.Works
 	return f.registry + "/lazycloud/workspace-images/" + uuid.UUID(workspace).String() + "/" + shared[strings.LastIndex(shared, "/")+1:]
 }
 
+// waitForLockWait returns once a statement on f's database waits for a
+// lock another transaction holds.
+func waitForLockWait(t *testing.T, f fixture) {
+	t.Helper()
+	waitFor(t, "a statement waits for a lock", func() bool {
+		return f.count(t, "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'") > 0
+	})
+}
+
 func numpy() apitypes.ImageDefinition {
 	return apitypes.ImageDefinition{PythonVersion: "3.12", PythonPackages: &[]string{"numpy"}}
 }
 
 func TestEqualDefinitionsShareOneImageAuthorizedPerWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b, c := f.workspace(t, "a"), f.workspace(t, "b"), f.workspace(t, "c")
 
@@ -216,6 +217,7 @@ func TestEqualDefinitionsShareOneImageAuthorizedPerWorkspace(t *testing.T) {
 // Every release tags the managed base again; an unchanged base keeps the
 // identity of the images built on it and the source containers run.
 func TestAReleaseRetaggingTheManagedBaseKeepsImageIdentities(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	img, err := random.Image(256, 1)
@@ -227,8 +229,9 @@ func TestAReleaseRetaggingTheManagedBaseKeepsImageIdentities(t *testing.T) {
 		if err := remote.Write(mustRef(t, f.registry+"/release/python:3.12-"+release), img, remote.WithContext(t.Context())); err != nil {
 			t.Fatal(err)
 		}
-		im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
-			Registry: f.registry, Repository: "lazycloud", Insecure: true,
+		im := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+			PlatformTransferBackoff: images.PlatformTransferBackoff,
+			Registry:                f.registry, Repository: "lazycloud", Insecure: true,
 			ManagedBase: f.registry + "/release/python:{version}-" + release,
 		})
 		resolved, err := im.Resolve(t.Context(), ws, numpy())
@@ -250,6 +253,7 @@ func TestAReleaseRetaggingTheManagedBaseKeepsImageIdentities(t *testing.T) {
 }
 
 func TestConcurrentBuildRequestsJoinOneBuild(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	const requests = 8
@@ -284,7 +288,7 @@ func TestConcurrentBuildRequestsJoinOneBuild(t *testing.T) {
 // placement and reports it ready.
 func placeAndStart(t *testing.T, f fixture, host compute.HostID) execution.ContainerID {
 	t.Helper()
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(t.Context(), host)
@@ -300,6 +304,7 @@ func placeAndStart(t *testing.T, f fixture, host compute.HostID) execution.Conta
 }
 
 func TestCompletedBuildPublishesOnlyAPushedDigest(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -360,6 +365,7 @@ func TestCompletedBuildPublishesOnlyAPushedDigest(t *testing.T) {
 }
 
 func TestLostBuildContainerRetriesOnceThenFails(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -402,6 +408,7 @@ func TestLostBuildContainerRetriesOnceThenFails(t *testing.T) {
 }
 
 func TestBuildPastItsDeadlineFailsAndStopsItsContainer(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -427,6 +434,7 @@ func TestBuildPastItsDeadlineFailsAndStopsItsContainer(t *testing.T) {
 }
 
 func TestDeployableNeedsAReadyImageForTheRuntime(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	plain, err := f.images.Build(t.Context(), ws, apitypes.ImageDefinition{PythonVersion: "3.12"}, false)
@@ -454,6 +462,7 @@ func TestDeployableNeedsAReadyImageForTheRuntime(t *testing.T) {
 }
 
 func TestDefinitionsNeedReadableInputs(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	var invalid *images.InvalidError
@@ -493,6 +502,7 @@ func withSecret() apitypes.ImageDefinition {
 // version, reaches the build only as a secret mount the build step names,
 // and a build whose secret was deleted before it started fails.
 func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
@@ -550,7 +560,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 	}
 
 	host := f.host(t)
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(ctx, host)
@@ -579,6 +589,7 @@ func TestBuildSecretsAreMountedAndKeyTheImage(t *testing.T) {
 // A GPU build is admitted like a GPU workload: an account without a card
 // may build only on the models its plan allows and holds at most its GPUs.
 func TestGPUBuildsAreAdmittedByTheirModelAndGPUs(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
@@ -619,6 +630,7 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 // A build reserves all the memory it may use, so it never takes memory a
 // neighbour holds, and still lands on a 4-core c6a.2xlarge.
 func TestABuildReservesTheMemoryItMayUseAndFitsAFourCoreHost(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	_, memory, limit := f.images.BuildResources()
@@ -638,7 +650,7 @@ values ('c6a', sha256(gen_random_uuid()::text::bytea), 'online', $1, $2, now()) 
 	if _, err := f.images.Build(ctx, f.workspace(t, "a"), numpy(), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+	if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 		t.Fatal(err)
 	}
 	starts, err := f.execution.BuildStarts(ctx, host)
@@ -655,6 +667,7 @@ values ('c6a', sha256(gen_random_uuid()::text::bytea), 'online', $1, $2, now()) 
 }
 
 func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
@@ -676,7 +689,7 @@ func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
 	}
 	place := func() {
 		t.Helper()
-		if _, err := scheduling.NewScheduling(f.pool, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
+		if _, err := scheduling.NewScheduling(f.pool, f.execution, slog.New(slog.DiscardHandler)).Place(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -724,5 +737,16 @@ values ('g', sha256(gen_random_uuid()::text::bytea), 'online', 8000, 1::bigint <
 	place()
 	if starts, err := f.execution.BuildStarts(ctx, l4); err != nil || len(starts) != 1 {
 		t.Fatalf("the host's one GPU holds one build: %v %v", starts, err)
+	}
+}
+
+// A config without a positive transfer backoff is refused when the owner is
+// built, not discovered as retries with no wait.
+func TestImagesNeedAPositiveTransferBackoff(t *testing.T) {
+	t.Parallel()
+	for _, backoff := range []time.Duration{0, -time.Second} {
+		if _, err := images.NewImages(nil, nil, nil, nil, images.Config{PlatformTransferBackoff: backoff}); err == nil {
+			t.Errorf("a transfer backoff of %s was accepted", backoff)
+		}
 	}
 }

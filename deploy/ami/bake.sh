@@ -25,8 +25,17 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
+# The bake mounts a disk data volume as hosts of its variant do: CPU types
+# get an EBS volume at /dev/sdf, which the image leaves out, and GPU types
+# use their instance store.
+data_volume=()
+image_mappings=()
 case "$variant" in
-  cpu) instance_type=c7i.large volume_gib=16 ;;
+  cpu)
+    instance_type=c7i.large volume_gib=16
+    data_volume=("DeviceName=/dev/sdf,Ebs={VolumeSize=1,VolumeType=gp3,DeleteOnTermination=true}")
+    image_mappings=(--block-device-mappings '[{"DeviceName": "/dev/sdf", "NoDevice": ""}]')
+    ;;
   # A GPU bake must see a GPU to prove its driver.
   gpu) instance_type=g4dn.xlarge volume_gib=40 ;;
   *) echo "--variant is cpu or gpu" >&2; exit 2 ;;
@@ -80,7 +89,7 @@ if [[ "$ami" == None || -z "$ami" ]]; then
   instance="$(aws ec2 run-instances --region "$bake_region" --image-id "$base" --instance-type "$instance_type" \
     --subnet-id "$subnet" --security-group-ids "$group" --associate-public-ip-address \
     --metadata-options HttpTokens=required,HttpEndpoint=enabled \
-    --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$volume_gib,VolumeType=gp3,DeleteOnTermination=true}" \
+    --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$volume_gib,VolumeType=gp3,DeleteOnTermination=true}" "${data_volume[@]}" \
     --tag-specifications "$tags" "ResourceType=volume,Tags=[{Key=lazycloud:node-image-bake,Value=true}]" \
     --user-data "file://$user_data" --query 'Instances[0].InstanceId' --output text)"
   trap 'aws ec2 terminate-instances --region "$bake_region" --instance-ids "$instance" >/dev/null; rm -f "$user_data"' EXIT
@@ -103,7 +112,7 @@ if [[ "$ami" == None || -z "$ami" ]]; then
   aws ec2 stop-instances --region "$bake_region" --instance-ids "$instance" >/dev/null
   aws ec2 wait instance-stopped --region "$bake_region" --instance-ids "$instance"
   ami="$(aws ec2 create-image --region "$bake_region" --instance-id "$instance" --name "$name" \
-    --description "LazyCloud $variant fleet node, recipe $recipe" \
+    --description "LazyCloud $variant fleet node, recipe $recipe" "${image_mappings[@]}" \
     --tag-specifications "ResourceType=image,Tags=[{Key=lazycloud:node-image,Value=$variant},{Key=lazycloud:recipe,Value=$recipe}]" \
     "ResourceType=snapshot,Tags=[{Key=lazycloud:node-image,Value=$variant}]" \
     --query ImageId --output text)"

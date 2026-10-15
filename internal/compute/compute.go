@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -60,6 +62,12 @@ type Containers interface {
 	DrainHostContainers(ctx context.Context, tx pgx.Tx, host HostID) error
 	// DrainHostWorkspaces drains the host's containers of workspaces.
 	DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host HostID, workspaces []uuid.UUID) error
+	// WakeReleasesOnHosts wakes planning for the releases whose containers
+	// on hosts could move to Spot.
+	WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error
+	// EvictContainers stops CPU containers packed on a fleet GPU host; their
+	// running attempts are preempted and retried.
+	EvictContainers(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error
 }
 
 // Config is what compute needs to tell hosts how to reach the platform.
@@ -91,14 +99,21 @@ type Compute struct {
 	fleet      Fleet
 	// http sends identity proofs to STS.
 	http *http.Client
+	// sts assumes roles with the platform's own credentials.
+	sts *sts.Client
+	// staleRefresh is when planning last refreshed stale Spot prices, in
+	// Unix nanoseconds.
+	staleRefresh atomic.Int64
 }
 
 // NewCompute returns the compute owner over pool. sqlc's generated New
 // constructs the package's Queries.
 func NewCompute(pool *pgxpool.Pool, containers Containers, config Config) *Compute {
+	fleet := config.Fleet.withDefaults()
 	return &Compute{
-		pool: pool, queries: New(pool), containers: containers, config: config, fleet: config.Fleet.withDefaults(),
+		pool: pool, queries: New(pool), containers: containers, config: config, fleet: fleet,
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		sts:  awsClients{base: fleet.AWS, endpoints: fleet.Endpoints}.sts(awsScope{}, ""),
 	}
 }
 
@@ -110,7 +125,8 @@ func isUniqueViolation(err error) bool {
 // CheckFleet refuses a configuration that would launch instances unable to
 // reach the platform: with fleet networks or connections enabled, instances
 // download the agent from InstallURL over HTTPS and dial ServerAddress with
-// TLS, so neither may be empty or on loopback.
+// TLS, so neither may be empty or on loopback. With fleet networks it needs
+// the storage region, which prices the fleet's transfer.
 func (c Config) CheckFleet() error {
 	if len(c.Fleet.Networks) == 0 && c.Fleet.PrincipalARN == "" {
 		return nil
@@ -121,6 +137,9 @@ func (c Config) CheckFleet() error {
 	}
 	if c.ServerAddress == "" || PlaintextAgents(c.ServerAddress, false) || c.ServerPlaintext {
 		return errors.New("LAZYCLOUD_AGENT_SERVER_ADDR must be the public host:port cloud instances dial with TLS")
+	}
+	if len(c.Fleet.Networks) > 0 && c.Fleet.StorageRegion == "" {
+		return errors.New("LAZYCLOUD_OBJECT_STORE_REGION must name the region of the object store, which prices the fleet's transfer")
 	}
 	return nil
 }

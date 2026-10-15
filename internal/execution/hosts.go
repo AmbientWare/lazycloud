@@ -1,8 +1,10 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -70,6 +72,34 @@ func (e *Execution) drainHost(ctx context.Context, tx pgx.Tx, host compute.HostI
 		}
 		if err := database.Notify(ctx, tx, channel, id); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// WakeReleasesOnHosts wakes planning for the releases whose containers on
+// hosts could move to Spot, as when a host starts or stops handing
+// Spot-tolerant work back.
+func (e *Execution) WakeReleasesOnHosts(ctx context.Context, tx pgx.Tx, hosts []uuid.UUID) error {
+	if len(hosts) == 0 {
+		return nil
+	}
+	releases, err := e.queries.WithTx(tx).MovableReleasesOnHosts(ctx, hosts)
+	if err != nil {
+		return fmt.Errorf("read releases on hosts: %w", err)
+	}
+	return database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases))
+}
+
+// EvictContainers stops CPU containers packed on a fleet GPU host in tx, so
+// GPU work takes their room at once. Their running attempts are preempted
+// and retried. It stops them in id order.
+func (e *Execution) EvictContainers(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) error {
+	for _, id := range slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }) {
+		if err := e.containerExited(ctx, tx, ContainerID(id), ContainerExit{
+			Reason: StopRequested, Message: "evicted for GPU work", Preempted: true,
+		}); err != nil {
+			return fmt.Errorf("evict container %s: %w", id, err)
 		}
 	}
 	return nil

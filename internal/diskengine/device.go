@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs"
 )
 
 const (
@@ -80,7 +83,7 @@ func claimedDevices(root string) (map[string]bool, error) {
 		return nil, fmt.Errorf("list %s: %w", root, err)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !diskIDPattern.MatchString(entry.Name()) {
+		if !entry.IsDir() || !imagefs.DiskID(entry.Name()) {
 			continue
 		}
 		state, err := loadState(diskPaths{root: root, id: entry.Name()})
@@ -132,7 +135,7 @@ func connectNBD(ctx context.Context, p diskPaths, sizeBytes int64, record func(d
 			return "", err
 		}
 		if _, err := runTool(ctx, toolNBDClient, "-unix", p.nbdSocket(), device,
-			"-name", exportName, "-block-size", strconv.Itoa(filesystemBlockBytes)); err != nil {
+			"-name", exportName, "-block-size", strconv.Itoa(hostproto.DiskBlockBytes)); err != nil {
 			return "", err
 		}
 		size, err := nbdSizeBytes(device)
@@ -217,7 +220,7 @@ func formatExt4(ctx context.Context, device string) error {
 	// Inode tables and the journal are written now rather than by the kernel's
 	// lazy init thread, which would keep the head changing for hours after the
 	// disk is first used and seal a layer every cycle.
-	_, err := runTool(ctx, toolMkfs, "-q", "-F", "-b", strconv.Itoa(filesystemBlockBytes),
+	_, err := runTool(ctx, toolMkfs, "-q", "-F", "-b", strconv.Itoa(hostproto.DiskBlockBytes),
 		"-E", "nodiscard,lazy_itable_init=0,lazy_journal_init=0", device)
 	return err
 }
@@ -267,6 +270,20 @@ func filesystemIoctl(mountpoint string, request uint) error {
 	defer func() { _ = unix.Close(fd) }() // A directory opened for an ioctl.
 	if err := unix.IoctlSetInt(fd, request, 0); err != nil {
 		return fmt.Errorf("ioctl %s: %w", mountpoint, err)
+	}
+	return nil
+}
+
+// syncFilesystem writes the mounted filesystem's dirty pages and metadata to
+// its device without stopping writers.
+func syncFilesystem(mountpoint string) error {
+	fd, err := unix.Open(mountpoint, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", mountpoint, err)
+	}
+	defer func() { _ = unix.Close(fd) }() // A directory opened for syncfs.
+	if err := unix.Syncfs(fd); err != nil {
+		return fmt.Errorf("sync %s: %w", mountpoint, err)
 	}
 	return nil
 }

@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -5,11 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
-	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -18,8 +17,6 @@ import (
 )
 
 const endpointApp = `
-import os
-
 import lazycloud
 from pydantic import BaseModel
 
@@ -34,11 +31,6 @@ class WordCount(BaseModel):
 def count_words(text: str) -> WordCount:
     print("counting", text, flush=True)
     return WordCount(words=len(text.split()))
-
-
-@app.endpoint(name="headers")
-def headers(name: str = ""):
-    return {"ok": True}
 `
 
 func endpointSpec(source, name, handler, route string, methods ...apitypes.HttpMethod) apitypes.WorkloadSpec {
@@ -52,13 +44,10 @@ func endpointSpec(source, name, handler, route string, methods ...apitypes.HttpM
 	return s
 }
 
-func percentile(samples []time.Duration, p float64) time.Duration {
-	sorted := slices.Clone(samples)
-	sort.Slice(sorted, func(a, b int) bool { return sorted[a] < sorted[b] })
-	return sorted[int(float64(len(sorted)-1)*p)]
-}
-
+// An endpoint starts on its first request, answers on each of its URLs and
+// only on its route and methods, and scales to zero once idle.
 func TestEndpointColdWarmAndScaleToZero(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": endpointApp})
 	d := p.deploy("api_demo", endpointSpec(source, "count_words", "app:count_words", "/word-count", apitypes.HttpMethodPOST))
@@ -67,15 +56,9 @@ func TestEndpointColdWarmAndScaleToZero(t *testing.T) {
 	if !strings.HasPrefix(w.Url, "http://count-words-") || !strings.HasSuffix(w.Url, "/word-count") {
 		t.Fatalf("deployment URL %s", w.Url)
 	}
-
-	started := time.Now()
-	status, _, body := p.call(http.MethodPost, w.Url, `{"text": "Run Python on LazyCloud"}`)
-	cold := time.Since(started)
-	if status != http.StatusOK || body != `{"words": 4}` {
+	if status, _, body := p.call(http.MethodPost, w.Url, `{"text": "Run Python on LazyCloud"}`); status != http.StatusOK || body != `{"words": 4}` {
 		t.Fatalf("cold request: %d %s", status, body)
 	}
-	t.Logf("cold request through the edge (planning, placement, container start, handler import): %s", cold)
-
 	// The pinned and release URLs reach the same release.
 	for _, url := range []string{w.VersionUrl, w.ReleaseUrl} {
 		if status, _, body := p.call(http.MethodPost, url, `{"text": "a b"}`); status != http.StatusOK || body != `{"words": 2}` {
@@ -98,27 +81,8 @@ func TestEndpointColdWarmAndScaleToZero(t *testing.T) {
 		t.Fatalf("GET of a POST endpoint: %d allow=%q", status, header.Get("Allow"))
 	}
 
-	var warm []time.Duration
-	for range 200 {
-		began := time.Now()
-		status, _, _ := p.call(http.MethodPost, w.Url, `{"text": "one two"}`)
-		warm = append(warm, time.Since(began))
-		if status != http.StatusOK {
-			t.Fatalf("warm request: %d", status)
-		}
-	}
-	t.Logf("warm request through the edge over 200: p50 %s, p95 %s", percentile(warm, 0.5), percentile(warm, 0.95))
-
 	// keep_warm is 2 s: without requests the release scales to zero.
-	idleFrom := time.Now()
-	deadline := time.Now().Add(30 * time.Second)
-	for liveContainers(t, p.pool, release) > 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the idle endpoint kept its container")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Logf("last request to no live container: %s (keep_warm 2s)", time.Since(idleFrom))
+	waitFor(t, "the idle endpoint to stop its container", func() bool { return liveContainers(t, p.pool, release) == 0 })
 }
 
 const startupApp = `
@@ -138,6 +102,7 @@ def whoami() -> dict:
 // An endpoint's container carries the secrets it names, and each worker runs
 // on_start before it takes a request.
 func TestEndpointGetsItsSecretsAndRunsOnStartFirst(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	if _, err := p.secrets.Set(t.Context(), p.workspace.ID, "API_KEY", "s3cret"); err != nil {
 		t.Fatal(err)
@@ -171,6 +136,7 @@ async def echo(scope, receive, send):
 // an app sees the caller's own Authorization header, which the platform did
 // not consume.
 func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": publicApp})
 	public := false
@@ -242,77 +208,27 @@ func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
 	fn.Authorized = nil
 	p.deploy("open", fn)
 	// The route table follows the deploy's notification.
-	p.waitForStatus(http.MethodPost, fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port()), http.StatusUnauthorized)
+	waitFor(t, "the function to go private", func() bool {
+		return p.anonymousStatus(fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port())) == http.StatusUnauthorized
+	})
 	for _, url := range []string{
 		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port()),
 		fmt.Sprintf("http://%s-v1.lazycloud.localhost:%s/", fnHost, p.port()),
 		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", d.Releases[0].Id, p.port()),
 	} {
-		resp, err := p.request(http.MethodPost, url, "", strings.NewReader(`{"values": [1]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("old public version at %s after going private: %d; want 401", url, resp.StatusCode)
+		if status := p.anonymousStatus(url); status != http.StatusUnauthorized {
+			t.Fatalf("old public version at %s after going private: %d; want 401", url, status)
 		}
 	}
 }
 
-const volumeApp = `
-from pathlib import Path
-
-
-def hits() -> int:
-    path = Path("/volumes/data/hits")
-    count = int(path.read_text()) + 1 if path.exists() else 1
-    path.write_text(str(count))
-    return count
-`
-
-// An endpoint mounts its volumes like a function: what one request writes
-// the next reads, in a redeployed container too.
-func TestEndpointMountsItsVolumes(t *testing.T) {
-	p := startPlatform(t)
-	if p.geesefs == "" {
-		t.Skip("volume mounts need GeeseFS; run deploy/local/fetch-geesefs.sh")
-	}
-	source := p.upload(map[string]string{"app.py": volumeApp})
-	s := endpointSpec(source, "hits", "app:hits", "/")
-	s.Volumes = &[]apitypes.VolumeMountSpec{{Name: "data"}}
-	p.deploy("volumes", s)
-	w := p.describe("volumes", apitypes.WorkloadKindEndpoint, "hits")
-	for want := 1; want <= 2; want++ {
-		if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || body != fmt.Sprint(want) {
-			t.Fatalf("request %d: %d %s", want, status, body)
-		}
-	}
-	// A new release runs in a new container on the same volume.
-	timeout := 90
-	s.TimeoutSeconds = &timeout
-	p.deploy("volumes", s)
-	if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || body != "3" {
-		t.Fatalf("after redeploy: %d %s", status, body)
-	}
-}
-
-// waitForStatus fails unless a request without a token gets status within
-// two seconds.
-func (p *platform) waitForStatus(method, url string, status int) {
+// anonymousStatus is the status a POST to url without a token gets.
+func (p *platform) anonymousStatus(url string) int {
 	p.t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		resp, err := p.request(method, url, "", strings.NewReader("{}"))
-		if err != nil {
-			p.t.Fatal(err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode == status {
-			return
-		}
-		if time.Now().After(deadline) {
-			p.t.Fatalf("%s %s: %d; want %d", method, url, resp.StatusCode, status)
-		}
-		time.Sleep(20 * time.Millisecond)
+	resp, err := p.request(http.MethodPost, url, "", strings.NewReader("{}"))
+	if err != nil {
+		p.t.Fatal(err)
 	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }

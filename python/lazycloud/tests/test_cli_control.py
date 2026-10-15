@@ -16,6 +16,8 @@ from typer.testing import CliRunner, Result
 import lazycloud
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
 
+cli = build_public_cli()
+
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 NOW = "2026-09-30T12:00:00Z"
@@ -44,7 +46,7 @@ def forecast(months: int) -> int:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _app(state: str = "active") -> dict[str, object]:
@@ -328,7 +330,7 @@ def test_task_commands_list_show_stop_and_report_failures(fake_api: FakeApi) -> 
 
 def test_logs_needs_one_source_and_follows_as_ndjson(fake_api: FakeApi) -> None:
     fake_api.route("GET", f"{TEAM}/tasks/{TASK_ID}/logs")(
-        lambda _: (200, {}, _entry(1, "first") + b"\n" + _entry(2, "second", "stderr"))
+        lambda _: (200, {}, _entry(1, "[red]first[/red]") + b"\n" + _entry(2, "second", "stderr"))
     )
 
     followed = _cli("--json", "logs", "--task-id", TASK_ID, "--follow", "-n", "10")
@@ -338,11 +340,12 @@ def test_logs_needs_one_source_and_follows_as_ndjson(fake_api: FakeApi) -> None:
 
     assert followed.exit_code == 0, followed.output
     lines = [json.loads(line) for line in followed.stdout.splitlines()]
-    assert [line["data"] for line in lines] == ["first", "second"]
+    assert [line["data"] for line in lines] == ["[red]first[/red]", "second"]
     first_read = fake_api.calls("GET", f"{TEAM}/tasks/{TASK_ID}/logs")[0]
     assert (first_read.query["tail"], first_read.query["follow"]) == (["10"], ["true"])
-    assert stamped.stdout.splitlines()[0] == "[2026-09-30T12:00:00+00:00] first"
-    assert limited.stdout == "first\n"
+    assert stamped.stdout.splitlines()[0] == "[2026-09-30T12:00:00+00:00] [red]first[/red]"
+    # Output that looks like terminal markup prints as written.
+    assert limited.stdout == "[red]first[/red]\n"
     assert both.exit_code != 0
 
 
@@ -431,3 +434,20 @@ def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> N
     assert deployment.invoke_url(url_type="stub") == f"https://{RELEASE_ID}.lazycloud.test"
     with pytest.raises(ValueError, match="only a pod"):
         deployment.invoke_url(port=8080)
+
+
+def test_an_html_error_page_shows_as_its_status_and_origin(
+    fake_api: FakeApi, capsys: pytest.CaptureFixture[str]
+) -> None:
+    page = b"<!DOCTYPE html><html><body>" + b"bad gateway " * 100 + b"</body></html>"
+    fake_api.route("GET", f"{TEAM}/apps")(lambda _: (502, {"Content-Type": "text/html"}, page))
+
+    code, lines = run_cli(capsys, "app", "list")
+    with pytest.raises(SystemExit):
+        start(["--json", "app", "list"])
+    error = json.loads(capsys.readouterr().err)["error"]
+
+    assert code == 1
+    assert f"HTTP 502 from {fake_api.url}" in lines
+    assert not any("html" in line for line in lines)
+    assert error["message"] == f"HTTP 502 from {fake_api.url}"

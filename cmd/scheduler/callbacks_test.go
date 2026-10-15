@@ -20,6 +20,8 @@ import (
 func TestQueuedCallbacksWakeAnIdleScheduler(t *testing.T) {
 	pool := dbtest.New(t)
 	schedulerEnv(t, pool)
+	rollupCurrent(t, pool)
+	release := holdLeadership(t, pool)
 	t.Setenv("LAZYCLOUD_CALLBACK_ALLOW_PRIVATE", "1")
 	delivered := make(chan time.Time, 1)
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -30,15 +32,17 @@ func TestQueuedCallbacksWakeAnIdleScheduler(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(receiver.Close)
-	health := freeAddr(t)
+	health, scrape := freeAddr(t), freeAddr(t)
 	t.Setenv("LAZYCLOUD_HEALTH_ADDR", health)
+	t.Setenv("LAZYCLOUD_METRICS_ADDR", scrape)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- run(ctx, slog.New(slog.DiscardHandler), testTicks()) }()
 	waitOK(t, "http://"+health+"/readyz")
-	// Past the start-up passes, the delivery loop waits for a wake.
-	time.Sleep(2 * time.Second)
+	release()
+	// Past its lead passes, the delivery loop waits for a wake.
+	led(t, []string{"http://" + scrape + "/metrics"})
 
 	queued := time.Now()
 	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {

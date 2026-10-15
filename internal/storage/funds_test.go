@@ -11,6 +11,7 @@ import (
 // An account with no credit takes on no new stored bytes, but its data can
 // still be read and taken out.
 func TestUnfundedWorkspacesStoreNothingNewButReadWhatTheyHave(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
 	s := f.storage

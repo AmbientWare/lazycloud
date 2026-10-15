@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -11,6 +13,7 @@ import (
 // and sent over the session; its report carries how long each start stage
 // took; an exited container is no longer sampled.
 func TestAgentReportsContainerMetricsAndStartStages(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.metricsInterval = 200 * time.Millisecond
 	e.startAgent()

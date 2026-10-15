@@ -101,3 +101,159 @@ message EndTraceResponse {
   // none of its bytes and every read reached the trace.
   bool complete = 2;
 }
+
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+service DiskSources {
+  // GrantDisk records the credential the disk's frames are read with,
+  // replacing the disk's current one unless that expires later.
+  rpc GrantDisk(GrantDiskRequest) returns (GrantDiskResponse);
+  // ServeDisk serves a generation and returns its file. Serving a served
+  // generation again returns the same file.
+  rpc ServeDisk(ServeDiskRequest) returns (ServeDiskResponse);
+  // ReleaseDisk stops serving every generation of the disk but keep, 0 for
+  // none. A file still open keeps reading.
+  rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
+  // DiskReads returns the frames the disk read: its start trace and those
+  // the cache holds now.
+  rpc DiskReads(DiskReadsRequest) returns (DiskReadsResponse);
+}
+
+// BucketGrant is a short-lived credential for objects of one bucket: a
+// disk's, read-only under disks/<disk id>/, or a workspace's volumes.
+message BucketGrant {
+  string endpoint = 1;
+  string region = 2;
+  string bucket = 3;
+  bool force_path_style = 4;
+  string access_key_id = 5;
+  string secret_access_key = 6;
+  string session_token = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  // The workspace's key peer frame reads are signed with, 32 bytes.
+  bytes peer_key = 9;
+}
+
+message GrantDiskRequest {
+  string disk_id = 1;
+  BucketGrant grant = 2;
+}
+
+message GrantDiskResponse {}
+
+message ServeDiskRequest {
+  string disk_id = 1;
+  int64 generation = 2;
+  // The sha256 of the generation's stored DiskIndex.
+  string index_sha256 = 3;
+  // The disk engine's copy of the index. A generation not yet served reads
+  // it there, or when it is missing reads the stored index through the
+  // disk's grant and writes it there.
+  string index_path = 4;
+  // Starts the disk's start trace and fetches the index's start_frames,
+  // then its recent_frames, in the background, bounded by the cache's size
+  // and a time limit. An attach sets it.
+  bool prefetch = 5;
+  // A directory of frames, each named by the hex sha256 of its bytes, on
+  // the cache's volume, which the snapshotter moves into its cache before
+  // the call returns, as a publish leaves the frames it stored.
+  string frames_dir = 6;
+}
+
+message ServeDiskResponse {
+  // The read-only file holding the generation's bytes.
+  string path = 1;
+}
+
+message ReleaseDiskRequest {
+  string disk_id = 1;
+  int64 keep = 2;
+}
+
+message ReleaseDiskResponse {}
+
+message DiskReadsRequest {
+  string disk_id = 1;
+}
+
+message DiskReadsResponse {
+  // The frames read in the first minute after the latest serve that
+  // prefetched, in order of first read; empty until that minute has passed.
+  repeated uint32 start_frames = 1;
+  // The newest served generation's frames the cache holds, most recently
+  // used first, at most as many as a prefetch fetches.
+  repeated uint32 recent_frames = 2;
+}
+
+// VolumeSources serves workspaces' platform volumes through the frame
+// cache. The snapshotter answers path-style S3 requests on loopback for
+// keys under volumes/ of the granted buckets, each signed with the key of
+// the container whose mount sends it as access key, and forwards them to
+// the store signed with the bucket's grant. A plain GET of an object of 1
+// MiB or more is served from the cache by the ETag a HEAD reported at most
+// a second earlier, every frame fetched with If-Match on it; a write of an
+// object makes its next read ask the store again.
+service VolumeSources {
+  // GrantVolumes records a workspace bucket's read-write grant, unless the
+  // current one expires later, and with a container the key its mount
+  // signs with. A request naming no container refreshes the grant.
+  rpc GrantVolumes(GrantVolumesRequest) returns (GrantVolumesResponse);
+  // VolumeReads returns the objects of 1 MiB or more the container's mount
+  // read since its key was granted, each once in first-read order,
+  // at most 256, and stops recording them. An unknown container is
+  // NOT_FOUND.
+  rpc VolumeReads(VolumeReadsRequest) returns (VolumeReadsResponse);
+  // ReleaseVolumes forgets the container's key and its reads.
+  rpc ReleaseVolumes(ReleaseVolumesRequest) returns (ReleaseVolumesResponse);
+  // WarmVolumes fills the objects the reads name, of the workspace's
+  // granted bucket, in the background, behind reads, in order and at their
+  // current versions. Each object fits a quarter of the cache, all the
+  // host's warms half of it, and a warm ends after five minutes. A host
+  // whose disk reads slower than the stores keeps volume frames in memory
+  // only and warms nothing.
+  rpc WarmVolumes(WarmVolumesRequest) returns (WarmVolumesResponse);
+}
+
+message GrantVolumesRequest {
+  string workspace_id = 1;
+  BucketGrant grant = 2;
+  // The container whose mount signs requests with key, 16 bytes or more;
+  // both empty for a refresh.
+  string key = 3;
+  string container_id = 4;
+  // The peer addresses, host:port, of the workspace's other hosts in the
+  // region; replaces the last list given for the workspace.
+  repeated string peers = 5;
+}
+
+message GrantVolumesResponse {}
+
+// VolumeRead is an object under a volume: its key is
+// volumes/<volume_id>/<path>.
+message VolumeRead {
+  string volume_id = 1;
+  string path = 2;
+}
+
+message VolumeReadsRequest {
+  string container_id = 1;
+}
+
+message VolumeReadsResponse {
+  repeated VolumeRead reads = 1;
+}
+
+message ReleaseVolumesRequest {
+  string container_id = 1;
+}
+
+message ReleaseVolumesResponse {}
+
+message WarmVolumesRequest {
+  string workspace_id = 1;
+  repeated VolumeRead reads = 2;
+}
+
+message WarmVolumesResponse {}

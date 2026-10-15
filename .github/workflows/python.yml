@@ -1,29 +1,36 @@
 name: Python clients and runner
 
 on:
-  # Ship runs it before publishing images.
-  workflow_call:
   pull_request:
-    paths:
-      - ".github/workflows/python.yml"
-      - "python/**"
-      - "contracts/**"
-      - "pyproject.toml"
-      - "uv.lock"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/python.yml"
-      - "python/**"
-      - "contracts/**"
-      - "pyproject.toml"
-      - "uv.lock"
 
 permissions:
   contents: read
 
 jobs:
+  # A pull request runs the jobs below only when it changes what they
+  # check; "Python passed" always reports, so it can be required.
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      run: ${{ steps.changed.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: changed
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github/workflows/python.yml
+            .github/actions/changed
+            python
+            contracts
+            pyproject.toml
+            uv.lock
+
   validate:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -38,3 +45,19 @@ jobs:
       - run: uv run --frozen --group dev ruff format --check python
       - run: uv run --frozen --group dev basedpyright python
       - run: uv run --frozen --group dev pytest -x
+
+  passed:
+    name: Python passed
+    needs: [changes, validate]
+    if: always()
+    runs-on: ubuntu-26.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) echo "::error::a required job ended $result"; exit 1 ;;
+            esac
+          done

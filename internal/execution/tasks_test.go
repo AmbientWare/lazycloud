@@ -12,6 +12,7 @@ import (
 )
 
 func TestCancelQueuedAndRunningTasks(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -60,6 +61,7 @@ func TestCancelQueuedAndRunningTasks(t *testing.T) {
 }
 
 func TestGetTaskWaitWakesOnCompletion(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -74,20 +76,30 @@ func TestGetTaskWaitWakesOnCompletion(t *testing.T) {
 	if _, err := e.TaskResult(t.Context(), f.workspace, tasks[0].ID); !errors.Is(err, ErrTaskNotFinished) {
 		t.Fatalf("result while running: got %v, want ErrTaskNotFinished", err)
 	}
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		_ = e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
-			Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-		})
-	}()
-	start := time.Now()
-	task, err := e.GetTask(t.Context(), l, f.workspace, tasks[0].ID, 30*time.Second)
-	if err != nil || task.Status != TaskSucceeded || time.Since(start) > 5*time.Second {
-		t.Fatalf("wait returned %s after %v, err %v", task.Status, time.Since(start), err)
+	type got struct {
+		task Task
+		err  error
+	}
+	wait := waiting(t, pool, func(e *Execution) {
+		if _, err := e.GetTask(t.Context(), l, f.workspace, tasks[0].ID, 0); err != nil {
+			t.Fatal(err)
+		}
+	}, func(e *Execution) got {
+		task, err := e.GetTask(t.Context(), l, f.workspace, tasks[0].ID, 10*time.Second)
+		return got{task, err}
+	})
+	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+		Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-wait; r.err != nil || r.task.Status != TaskSucceeded {
+		t.Fatalf("wait returned %s, %v; want the completion to wake it", r.task.Status, r.err)
 	}
 }
 
 func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -121,13 +133,15 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 	if err := e.AppendLogs(t.Context(), host, container, []LogLine{line("three\n")}); err != nil {
 		t.Fatal(err)
 	}
-	if second := <-got; len(second) != 1 || second[0].Data != "three\n" || second[0].ID <= first[1].ID {
-		t.Fatalf("second batch %+v", second)
-	}
 	select {
+	case second := <-got:
+		if len(second) != 1 || second[0].Data != "three\n" || second[0].ID <= first[1].ID {
+			t.Fatalf("second batch %+v", second)
+		}
 	case err := <-done:
 		t.Fatalf("stream ended while the task runs: %v", err)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(10 * time.Second):
+		t.Fatal("a line written while following never arrived")
 	}
 	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
 		Attempt: attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
@@ -158,6 +172,7 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 }
 
 func TestFollowLogsHeartbeatsWhileIdle(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)

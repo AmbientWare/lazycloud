@@ -26,6 +26,7 @@ import (
 // is converted every start pulls the copy from the platform registry, and
 // it stays live with no release pinning it.
 func TestManagedImageIsConvertedByTheServer(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	host := f.host(t)
 
@@ -89,6 +90,7 @@ func TestManagedImageIsConvertedByTheServer(t *testing.T) {
 // A server that pins the managed image while another server's pin of it
 // commits gets the other's source.
 func TestConcurrentPinsOfTheManagedImageAgree(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	tx, err := f.pool.Begin(ctx)
@@ -110,7 +112,7 @@ func TestConcurrentPinsOfTheManagedImageAgree(t *testing.T) {
 		source, err := f.images.ManagedSource(ctx, "3.12")
 		done <- pinned{source, err}
 	}()
-	time.Sleep(500 * time.Millisecond)
+	waitForLockWait(t, f)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +141,7 @@ func pullImage(t *testing.T, ref string) v1.Image {
 }
 
 func TestDeployConvertsAStoredReferenceWithoutLayers(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	r, err := f.images.Resolve(t.Context(), ws, numpy())
@@ -230,6 +233,7 @@ func (f fixture) recover(t *testing.T) {
 // A mirror build whose failure says nothing of the image is built again by
 // the next request, while a failure of its content holds requests off.
 func TestTransientMirrorFailuresBuildAgain(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -251,6 +255,7 @@ func TestTransientMirrorFailuresBuildAgain(t *testing.T) {
 // A connected account's workspace converts a mirror on a platform host,
 // into pairs every workspace may use.
 func TestMirrorBuildsRunOnPlatformHosts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	if _, err := f.pool.Exec(t.Context(), `
@@ -290,6 +295,7 @@ func mirrorOf(t *testing.T, f fixture) string {
 // A filesystem image a host pushed is ready only once the build that
 // converts it publishes.
 func TestFilesystemImagesPublishConverted(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	repo := f.registry + "/lazycloud/filesystems/" + uuid.UUID(ws).String()
@@ -324,6 +330,7 @@ func TestFilesystemImagesPublishConverted(t *testing.T) {
 // the same transaction, so a sweep that marked them before cannot retire
 // them after. A failed conversion ends the wait with a typed error.
 func TestPinnedReferencesConvertOnceOrFailTyped(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -400,6 +407,7 @@ returning id`, uuid.UUID(ws)).Scan(&host); err != nil {
 // A connected workspace's own reference converts on its own hosts, into
 // its own repository, in pairs only it may use.
 func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	r, err := f.images.Resolve(t.Context(), ws, numpy())
@@ -449,6 +457,7 @@ func TestAWorkspacesOwnReferenceConvertsOnItsOwnHosts(t *testing.T) {
 // An image whose layers were swept while it kept its reference converts
 // again by mirroring that reference, never by running its steps again.
 func TestASweptImageReconvertsByMirroringItsReference(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -485,6 +494,7 @@ func TestASweptImageReconvertsByMirroringItsReference(t *testing.T) {
 // A mirror build that lost its containers every attempt fails for the
 // image, not as a transient failure.
 func TestAMirrorThatExhaustsItsAttemptsFailsTheImage(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	host := f.host(t)
@@ -508,6 +518,7 @@ func TestAMirrorThatExhaustsItsAttemptsFailsTheImage(t *testing.T) {
 // Preparing an image waits only on a build that publishes for the
 // workspace: another workspace's connected-account build does not.
 func TestPrepareWaitsOnlyOnBuildsForTheWorkspace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")
 	f.connect(t, b)
@@ -530,6 +541,7 @@ func TestPrepareWaitsOnlyOnBuildsForTheWorkspace(t *testing.T) {
 // the next request builds it again. One that ran and timed out failed for
 // the image.
 func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	id, reference := f.pinned(t, ws, "d")
@@ -557,6 +569,7 @@ func TestADeadlineFailsTheImageOnlyIfTheBuildRan(t *testing.T) {
 // lost runs whatever that account's standing, and the container is neither
 // counted nor charged to the workspace that asked.
 func TestSharedMirrorsAreThePlatformsWork(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	a, b := f.workspace(t, "a"), f.workspace(t, "b")

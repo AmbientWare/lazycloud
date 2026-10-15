@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,6 +63,7 @@ func requestedHost(t *testing.T, o owners, workspace uuid.UUID, spec string) com
 }
 
 func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
+	t.Parallel()
 	o, emulator, release := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", launched(t))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -107,6 +110,12 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 		if call.AccessKey != platformAccessKey {
 			t.Errorf("platform launch signed by %q", call.AccessKey)
 		}
+		// Disk copies live on an encrypted data volume of their own.
+		typ, _ := compute.CatalogTypeNamed(form.Get("InstanceType"))
+		if form.Get("BlockDeviceMapping.2.DeviceName") != "/dev/sdf" || form.Get("BlockDeviceMapping.2.Ebs.Encrypted") != "true" ||
+			form.Get("BlockDeviceMapping.2.Ebs.VolumeSize") != strconv.FormatInt(typ.DataVolumeGiB(), 10) || typ.DataVolumeGiB() == 0 {
+			t.Errorf("%s launched with block devices %v, want a %d GiB encrypted data volume", typ.Name, form, typ.DataVolumeGiB())
+		}
 	}
 	if m := calls[spot.String()].Form.Get("InstanceMarketOptions.MarketType"); m != "spot" {
 		t.Errorf("preemptible host market %q, want spot", m)
@@ -124,35 +133,251 @@ func TestLaunchRunsATaggedIdempotentInstanceThatEnrollsAsItsHost(t *testing.T) {
 	}
 }
 
-// A host every pool refuses fails after three pools, each cooled, and the
-// next pass buys from none of them.
-func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
+// launchAll runs launch passes until no host waits for one.
+func launchAll(t *testing.T, o owners) {
+	t.Helper()
+	for range 20 {
+		if scan[int64](t, o.pool, "select count(*) from hosts where phase = 'requested'") == 0 {
+			return
+		}
+		launch(t, o)
+	}
+	t.Fatal("hosts still requested after 20 launch passes")
+}
+
+// refuseCapacity refuses every launch for capacity.
+func refuseCapacity(awsCall) awsReply {
+	return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
+}
+
+// A host every pool refuses stays requested while it walks its pools a few
+// a pass, so no pass buys it a replacement; once it has tried each pool
+// that holds what it was bought for, cooling each, it fails, and the next
+// pass buys none while they cool.
+func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
-	emulator.on("RunInstances", func(call awsCall) awsReply {
-		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity",
-			"We currently do not have sufficient "+call.Form.Get("InstanceType")+" capacity in the Availability Zone you requested.")
-	})
+	emulator.on("RunInstances", refuseCapacity)
 	alice := newUser(t, o.pool, "alice@example.com")
-	dev := newWorkspace(t, o.pool, "dev", alice)
-	refused := requestedHost(t, o, dev, `{}`)
+	refused := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 	offer := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type || '/' || market from hosts where id = $1", uuid.UUID(refused))
 
 	if n := launch(t, o); n != 0 {
 		t.Fatalf("launched %d with no capacity", n)
 	}
+	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseRequested) {
+		t.Fatalf("host is %s after one pass, want its walk to go on", phase)
+	}
+	if result := planCapacity(t, o); result.Requested != 0 {
+		t.Fatalf("pass during the walk %+v, want no replacement", result)
+	}
+	launchAll(t, o)
 	if phase, _ := hostPhase(t, o.pool, refused); phase != string(compute.PhaseFailed) {
 		t.Fatalf("refused host is %s, want failed", phase)
 	}
 	cooled := scan[[]string](t, o.pool, "select array_agg(region || '/' || availability_zone_id || '/' || instance_type || '/' || market) from capacity_cooldowns where until > now()")
-	if tried := len(emulator.calls("RunInstances")); tried != 3 || len(cooled) != tried || !slices.Contains(cooled, offer) {
-		t.Fatalf("%d pools tried, cooldowns on %v, want three including the bought offer %s", tried, cooled, offer)
+	if tried := len(emulator.calls("RunInstances")); tried < 2 || len(cooled) != tried || !slices.Contains(cooled, offer) {
+		t.Fatalf("%d pools tried, cooldowns on %v, want one on each including the bought offer %s", tried, cooled, offer)
 	}
-	if result := planCapacity(t, o); result.Requested != 1 {
-		t.Fatalf("next pass %+v, want another host for the container", result)
+	if result := planCapacity(t, o); result.Requested != 0 {
+		t.Fatalf("next pass %+v, want no host while every pool cools", result)
 	}
-	next := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type || '/' || market from hosts where phase = 'requested'")
-	if slices.Contains(cooled, next) {
-		t.Fatalf("next pass bought the cooling offer %s again", next)
+}
+
+// The pools one launch walk refuses, over as many passes as it takes, come
+// out of cooldown together, so the planner buys for them once when they
+// end rather than as each one's ends. That holds when each refusal
+// doubles a cooldown that ended, as when the walk after a refused one
+// meets the same pools again.
+func TestThePoolsOneWalkRefusesCoolUntilOneEnd(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	alice := newUser(t, o.pool, "alice@example.com")
+	ws := newWorkspace(t, o.pool, "dev", alice)
+	for walk := range 2 {
+		requestedHost(t, o, ws, `{}`)
+		launchAll(t, o)
+		ends := scan[int](t, o.pool, "select count(distinct until)::int from capacity_cooldowns where until > now()")
+		if tried := len(emulator.calls("RunInstances")); tried <= 8*(walk+1) || ends != 1 {
+			t.Fatalf("walk %d: %d pools refused, whose cooldowns end at %d times; want more than a pass's 8, ending at one", walk+1, tried, ends)
+		}
+		run(t, o.pool, "update capacity_cooldowns set until = now()")
+	}
+}
+
+// requestedSmall inserts a requested on-demand m7i.large host.
+func requestedSmall(t *testing.T, o owners) compute.HostID {
+	t.Helper()
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	return compute.HostID(scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')
+returning id`, int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes))
+}
+
+// callPool names the pool a RunInstances call tries.
+func callPool(call awsCall) string {
+	return call.Form.Get("InstanceType") + " " + call.Form.Get("SubnetId") + " " + call.Form.Get("InstanceMarketOptions.MarketType")
+}
+
+// A walk's pools keep their one end when another walk is refused in one of
+// them while it cools.
+func TestAWalkKeepsItsEndWhenAnotherWalkIsRefusedInItsPools(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	first := requestedSmall(t, o)
+	launchAll(t, o)
+	pools := scan[[]string](t, o.pool, "select array_agg(region || '/' || availability_zone_id || '/' || instance_type || '/' || market) from capacity_cooldowns where walk = $1", uuid.UUID(first))
+	requestedSmall(t, o)
+	launchAll(t, o)
+	ends := scan[int](t, o.pool, `select count(distinct until)::int from capacity_cooldowns
+where region || '/' || availability_zone_id || '/' || instance_type || '/' || market = any($1)`, pools)
+	if len(pools) < 2 || ends != 1 {
+		t.Fatalf("the first walk's %d pools cool until %d ends after a second walk was refused in them, want one", len(pools), ends)
+	}
+}
+
+// Walks that run at once skip the pools each other refused: a walk that
+// read its offers before another walk refused four pools tries none of
+// them after.
+func TestConcurrentWalksSkipEachOthersRefusedPools(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	first, second := requestedSmall(t, o), requestedSmall(t, o)
+	var mu sync.Mutex
+	tried := map[string][]string{}
+	emulator.on("RunInstances", func(call awsCall) awsReply {
+		host := call.Form.Get("ClientToken")[:36]
+		mu.Lock()
+		tried[host] = append(tried[host], callPool(call))
+		n := len(tried[host])
+		mu.Unlock()
+		// The first walk starts once the second has read its offers and
+		// moved on, and the second goes on once the first refused four
+		// pools.
+		wait := func(done func() bool) {
+			for deadline := time.Now().Add(10 * time.Second); !done() && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			}
+		}
+		switch {
+		case host == uuid.UUID(first).String() && n == 1:
+			wait(func() bool { mu.Lock(); defer mu.Unlock(); return len(tried[uuid.UUID(second).String()]) >= 2 })
+		case host == uuid.UUID(second).String() && n == 2:
+			wait(func() bool {
+				return scan[int](t, o.pool, "select launch_pools from hosts where id = $1", uuid.UUID(first)) >= 4
+			})
+		}
+		return refuseCapacity(call)
+	})
+	launch(t, o)
+	mu.Lock()
+	defer mu.Unlock()
+	refused := map[string]bool{}
+	for _, pool := range tried[uuid.UUID(first).String()][:4] {
+		refused[pool] = true
+	}
+	for _, pool := range tried[uuid.UUID(second).String()][2:] {
+		if refused[pool] {
+			t.Fatalf("the second walk tried %s after the first walk refused it; tried %v and %v", pool, tried[uuid.UUID(first).String()], tried[uuid.UUID(second).String()])
+		}
+	}
+}
+
+// Refusals of a pool while it cools keep its cooldown: two hosts refused in
+// one pass leave each pool they tried cooling ten minutes.
+func TestRefusalsWhileAPoolCoolsDoNotLengthenIt(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	for range 2 {
+		run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
+			int64(small.Usable(0).CPUMillis), small.Usable(0).MemoryBytes)
+	}
+	launch(t, o)
+	if longest := scan[float64](t, o.pool, "select max(extract(epoch from until - now()))::float8 from capacity_cooldowns"); longest > 600 {
+		t.Fatalf("a pool cools %.0fs after refusals in one pass, want ten minutes", longest)
+	}
+}
+
+// A pool EC2 refuses again on the retry after its cooldown ends cools twice
+// as long, and a launch there ends the run.
+func TestARepeatedRefusalCoolsThePoolLongerUntilALaunchThere(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseCapacity)
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	pool := scan[string](t, o.pool, "select region || '/' || availability_zone_id || '/' || instance_type from hosts where id = $1", uuid.UUID(host))
+	cooling := func() float64 {
+		return scan[float64](t, o.pool, `select coalesce(max(extract(epoch from until - now())), 0)::float8 from capacity_cooldowns
+where region || '/' || availability_zone_id || '/' || instance_type = $1`, pool)
+	}
+	retry := func() {
+		t.Helper()
+		run(t, o.pool, "update capacity_cooldowns set until = now()")
+		if result := planCapacity(t, o); result.Requested != 1 {
+			t.Fatalf("pass after the cooldowns %+v, want a host", result)
+		}
+		launchAll(t, o)
+	}
+	launchAll(t, o)
+	if first := cooling(); first < 590 || first > 600 {
+		t.Fatalf("first refusal cools %.0fs, want ten minutes", first)
+	}
+	retry()
+	if second := cooling(); second < 1190 || second > 1200 {
+		t.Fatalf("second refusal cools %.0fs, want twenty minutes", second)
+	}
+	emulator.on("RunInstances", launched(t))
+	retry()
+	if left := cooling(); left != 0 {
+		t.Fatalf("pool still cools %.0fs after a launch there", left)
+	}
+}
+
+// A host claimed beside a reserve that EC2 refuses everywhere launches
+// without waiting for the reserve's walk through its pools.
+func TestALaunchDoesNotWaitForAnotherHostsRefusedPools(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	spotPrices(t, o)
+	succeed := launched(t)
+	served := make(chan struct{})
+	var once sync.Once
+	var waited atomic.Bool
+	emulator.on("RunInstances", func(call awsCall) awsReply {
+		if call.Form.Get("InstanceType") == "m7i.large" {
+			once.Do(func() { close(served) })
+			return succeed(call)
+		}
+		select {
+		case <-served:
+		case <-time.After(5 * time.Second):
+			waited.Store(true)
+		}
+		return ec2Error(http.StatusInternalServerError, "InsufficientInstanceCapacity", "There is no Spot capacity available that matches your request.")
+	})
+	gpu, _ := compute.CatalogTypeNamed("g4dn.xlarge")
+	cpu, _ := compute.CatalogTypeNamed("m7i.large")
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market, reserve_mode, gpu_type, gpu_count)
+values ('reserve', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'g4dn.xlarge', 'spot', 'stop', 'T4', 1)`,
+		int64(gpu.Usable(0).CPUMillis), gpu.Usable(0).MemoryBytes)
+	run(t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
+values ('serving', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`,
+		int64(cpu.Usable(0).CPUMillis), cpu.Usable(0).MemoryBytes)
+
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the m7i.large host", n)
+	}
+	if waited.Load() {
+		t.Fatal("the m7i.large host launched only after the reserve's refused pools")
 	}
 }
 
@@ -178,6 +403,7 @@ func pool(call awsCall) string {
 // pass to the next ranked pool that holds what the host was bought for,
 // and only the pool it tried cools.
 func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
+	t.Parallel()
 	for _, code := range []string{"InsufficientInstanceCapacity", "MaxSpotInstanceCountExceeded", "SpotMaxPriceTooLow"} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
 		emulator.on("RunInstances", refuseFirstPool(t, code))
@@ -193,7 +419,7 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 		for _, c := range calls {
 			pools = append(pools, pool(c))
 		}
-		if len(calls) != 2 || calls[1].Form.Get("ClientToken") != host.String()+"-1" || pools[0] == pools[1] ||
+		if len(calls) != 2 || !strings.HasPrefix(calls[1].Form.Get("ClientToken"), host.String()+"-") || pools[0] == pools[1] ||
 			calls[1].Form.Get("InstanceMarketOptions.MarketType") != "spot" {
 			t.Fatalf("%s: launches %v, want the bought pool and then another Spot pool under a new token", code, pools)
 		}
@@ -217,6 +443,7 @@ func TestARefusedPoolLaunchesTheNextPoolInTheSamePass(t *testing.T) {
 // A hibernating Spot reserve keeps its persistent request and hibernation
 // in the pool it moves to.
 func TestARefusedSpotReserveMovesOnHibernatingOnAPersistentRequest(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
 	spotPrices(t, o)
@@ -234,7 +461,7 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 		t.Fatalf("%d launches, want 2", len(calls))
 	}
 	f := calls[1].Form
-	if f.Get("ClientToken") != host.String()+"-1" || f.Get("HibernationOptions.Configured") != "true" ||
+	if !strings.HasPrefix(f.Get("ClientToken"), host.String()+"-") || f.Get("HibernationOptions.Configured") != "true" ||
 		f.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "persistent" ||
 		f.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior") != "hibernate" {
 		t.Fatalf("next pool launch %v, want a hibernating persistent Spot request", f)
@@ -246,6 +473,7 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 // less in us-west-1, but its hibernating root costs more there each hour
 // it stays stopped.
 func TestARefusedReserveMovesToTheCheapestPoolToKeepStopped(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
 	run(t, o.pool, `
@@ -273,6 +501,7 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 // for a 4 CPU slot moves to a c6a.2xlarge, not to another type with its
 // memory.
 func TestARefusedLaunchMovesToAPoolThatHoldsWhatItWasBoughtFor(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
 	run(t, o.pool, `
@@ -303,55 +532,74 @@ returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 8*gib)
 	}
 }
 
-// A refused rightsize moves only to a pool that costs less than the host
-// it replaces; with none left the launch fails and rightsize leaves the
-// host for a while.
-func TestARefusedRightsizeMovesOnlyToACheaperPool(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		next      int64
-		launched  bool
-		backedOff bool
-	}{{"cheaper pool", 90000, true, false}, {"no cheaper pool", 300000, false, true}} {
-		o, emulator, _ := launchFleet(t, compute.Fleet{})
-		emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
-		run(t, o.pool, `
+// A refused launch moves only to a pool with a disk slot for each disk the
+// containers waiting for it attach, however much cheaper a smaller type is.
+func TestARefusedLaunchMovesToAPoolWithSlotsForItsWaitersDisks(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	run(t, o.pool, `
 insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
-values ('us-east-2', 'use2-az1', 'c6a.2xlarge', 80000, now(), now()), ('us-east-2', 'use2-az2', 'c6a.2xlarge', $1, now(), now())`, c.next)
-		small, _ := compute.CatalogTypeNamed("c6a.2xlarge")
-		usable := small.Usable(0)
-		replaced := scan[uuid.UUID](t, o.pool, `
+values ('us-east-2', 'use2-az1', 'c6a.4xlarge', 100000, now(), now()), ('us-east-2', 'use2-az2', 'c6a.2xlarge', 120000, now(), now()),
+       ('us-east-2', 'use2-az2', 'c6a.4xlarge', 200000, now(), now())`)
+	large, _ := compute.CatalogTypeNamed("c6a.4xlarge")
+	usable := large.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
+    instance_type, market, holds_cpu_millis, holds_memory_bytes)
+values ('w', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'c6a.4xlarge', 'spot', 2000, $3)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes, 4*gib)
+	ws := newWorkspace(t, o.pool, "dev", newUser(t, o.pool, "alice@example.com"))
+	release := newRelease(t, o.pool, ws, `{"disks": [{}, {}, {}, {}, {}, {}]}`)
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, rate_class, capacity_host_id)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 2000, 4 << 30, 'auto', $3)`, ws, release, host)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 2 || calls[1].Form.Get("InstanceType") != "c6a.4xlarge" {
+		var pools []string
+		for _, c := range calls {
+			pools = append(pools, pool(c))
+		}
+		t.Fatalf("launches %v, want c6a.4xlarge, with six disk slots, after the refusal", pools)
+	}
+}
+
+// A refused rightsize tries no other pool: the launch fails, the host it
+// would replace stays, and rightsize leaves that host for a while.
+func TestARefusedRightsizeKeepsTheHostItWouldReplace(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	spotPrices(t, o)
+	small, _ := compute.CatalogTypeNamed("c6a.2xlarge")
+	usable := small.Usable(0)
+	replaced := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
     instance_type, market, hourly_micros)
 values ('old', 'online', 'platform', 'aws', 'ready', 16000, $1, 'us-west-1', 'us-west-1b', 'usw1-az1', 'c6i.8xlarge', 'spot', 200000)
 returning id`, 64*gib)
-		run(t, o.pool, `
+	run(t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
     instance_type, market, replaces, holds_cpu_millis, holds_memory_bytes)
 values ('new', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'c6a.2xlarge', 'spot', $3, 4000, $4)`,
-			int64(usable.CPUMillis), usable.MemoryBytes, replaced, 8*gib)
-		if n := launch(t, o); (n == 1) != c.launched {
-			t.Fatalf("%s: launched %d", c.name, n)
-		}
-		calls := emulator.calls("RunInstances")
-		if c.launched && (len(calls) != 2 || calls[1].Form.Get("SubnetId") != "subnet-east-b") || !c.launched && len(calls) != 1 {
-			var pools []string
-			for _, call := range calls {
-				pools = append(pools, pool(call))
-			}
-			t.Fatalf("%s: launches %v", c.name, pools)
-		}
-		if backedOff := scan[bool](t, o.pool, "select rightsize_refused_at is not null from hosts where id = $1", replaced); backedOff != c.backedOff {
-			t.Fatalf("%s: rightsize refused recorded %v, want %v", c.name, backedOff, c.backedOff)
-		}
+		int64(usable.CPUMillis), usable.MemoryBytes, replaced, 8*gib)
+	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 1 {
+		t.Fatalf("launched %d after %d calls, want one refused call", n, len(emulator.calls("RunInstances")))
+	}
+	if phase, _ := hostPhase(t, o.pool, compute.HostID(replaced)); phase != "ready" {
+		t.Fatalf("replaced host is %s, want it kept", phase)
+	}
+	if !scan[bool](t, o.pool, "select rightsize_refused_at is not null from hosts where id = $1", replaced) {
+		t.Fatal("rightsize refusal not recorded")
 	}
 }
 
-// A refused pool answers at once: the next pool is the retry, not the
-// SDK's.
 // A capacity refusal cools only the zone it tried: the launch moves to the
 // same type in the region's next zone.
 func TestACapacityRefusalMovesToTheSameTypeInTheNextZone(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -376,6 +624,7 @@ func TestACapacityRefusalMovesToTheSameTypeInTheNextZone(t *testing.T) {
 // 64 us-east-2 Spot vCPUs held elsewhere, an 8-vCPU host refused in one
 // zone does not try another us-east-2 pool EC2 would refuse for quota.
 func TestAMoveSkipsPoolsWhoseQuotaIsFull(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
 	spotPrices(t, o)
@@ -398,16 +647,18 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
-// A launcher whose host another launcher moved on in the meantime neither
-// records its instance nor moves the host again; the instance ends.
-func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing.T) {
+// A launch whose claim passed to another actuator in the meantime neither
+// records its instance, moves the host nor ends the instance: reconcile
+// ends it once the host records another.
+func TestALaunchWhoseClaimPassedLeavesTheHostToTheNewHolder(t *testing.T) {
+	t.Parallel()
 	for _, refuse := range []bool{false, true} {
 		o, emulator, _ := launchFleet(t, compute.Fleet{})
 		alice := newUser(t, o.pool, "alice@example.com")
 		host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
 		succeed := launched(t)
 		emulator.on("RunInstances", func(call awsCall) awsReply {
-			if _, err := o.pool.Exec(t.Context(), "update hosts set launch_pools = 1 where id = $1", uuid.UUID(host)); err != nil {
+			if _, err := o.pool.Exec(t.Context(), "update hosts set action_token = gen_random_uuid() where id = $1", uuid.UUID(host)); err != nil {
 				t.Error(err)
 			}
 			if refuse {
@@ -415,9 +666,8 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 			}
 			return succeed(call)
 		})
-		emulator.on("TerminateInstances", terminateInstancesReply)
 		if n := launch(t, o); n != 0 {
-			t.Fatalf("refuse %v: launched %d for a host another launcher moved", refuse, n)
+			t.Fatalf("refuse %v: launched %d for a host another claim holds", refuse, n)
 		}
 		if n := len(emulator.calls("RunInstances")); n != 1 {
 			t.Fatalf("refuse %v: %d launches, want the fenced one alone", refuse, n)
@@ -428,15 +678,18 @@ func TestALaunchFencedByAnotherLauncherLeavesTheHostWhereThatOnePutIt(t *testing
 			t.Fatal(err)
 		}
 		if phase != string(compute.PhaseRequested) || instanceType != emulator.calls("RunInstances")[0].Form.Get("InstanceType") {
-			t.Fatalf("refuse %v: host %s as %s, want it requested where the other launcher left it", refuse, phase, instanceType)
+			t.Fatalf("refuse %v: host %s as %s, want it requested where it was", refuse, phase, instanceType)
 		}
-		if terminated := len(emulator.calls("TerminateInstances")); terminated != map[bool]int{false: 1, true: 0}[refuse] {
-			t.Fatalf("refuse %v: %d terminations, want the fenced instance ended", refuse, terminated)
+		if terminated := len(emulator.calls("TerminateInstances")); terminated != 0 {
+			t.Fatalf("refuse %v: the launcher made %d terminations, want the fenced instance left to reconcile", refuse, terminated)
 		}
 	}
 }
 
+// A refused pool answers at once: the next pool is the retry, not the
+// SDK's.
 func TestAPoolRefusalIsNotRetriedBeforeTheNextPool(t *testing.T) {
+	t.Parallel()
 	emulator := newAWS(t)
 	f := emulator.fleet(compute.Fleet{})
 	f.AWS.Retryer = func() aws.Retryer {
@@ -458,6 +711,7 @@ func TestAPoolRefusalIsNotRetriedBeforeTheNextPool(t *testing.T) {
 func noDelay(int, error) (time.Duration, error) { return 0, nil }
 
 func TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}}})
 	emulator.on("RunInstances", launched(t))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -474,6 +728,7 @@ func TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion(t *testing.T) {
 // A region the bake did not reach launches nothing rather than a stock
 // image without gVisor.
 func TestPlatformHostsWithoutANodeImageForTheirRegionFail(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-west-2": "ami-0west"}}})
 	emulator.on("RunInstances", launched(t))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -492,6 +747,7 @@ func TestPlatformHostsWithoutANodeImageForTheirRegionFail(t *testing.T) {
 // A connected account launches the platform's baked image, which the
 // platform shares with that account first.
 func TestConnectionHostsLaunchTheBakedImageSharedWithTheirAccount(t *testing.T) {
+	t.Parallel()
 	emulator := newAWS(t)
 	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{
 		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
@@ -521,6 +777,7 @@ func TestConnectionHostsLaunchTheBakedImageSharedWithTheirAccount(t *testing.T) 
 }
 
 func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	var failing atomic.Bool
 	failing.Store(true)
@@ -581,6 +838,7 @@ func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 // last release, whose archive the new server no longer serves; a host
 // launched then fails its bootstrap. Launches wait for the served release.
 func TestLaunchesWaitUntilTheTargetReleaseIsTheServedOne(t *testing.T) {
+	t.Parallel()
 	emulator := newAWS(t)
 	config := fleetConfig(emulator.fleet(compute.Fleet{}))
 	config.ServedRelease = "1.1.0"
@@ -608,5 +866,50 @@ func TestLaunchesWaitUntilTheTargetReleaseIsTheServedOne(t *testing.T) {
 	data, err := base64.StdEncoding.DecodeString(emulator.calls("RunInstances")[0].Form.Get("UserData"))
 	if err != nil || !strings.Contains(string(data), "--agent-version '1.1.0'") {
 		t.Fatalf("the launch did not install the served release: %v", err)
+	}
+}
+
+// A purchase whose container stopped before EC2 launched it is removed at
+// the next pass and never launched: an L4 host no headroom holds either.
+func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{"resources": {"gpu": ["L4"]}}`)
+	run(t, o.pool, "update containers set state = 'stopped', stopped_at = now(), capacity_host_id = null where capacity_host_id = $1", uuid.UUID(host))
+	plan(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseDeleted) {
+		t.Fatalf("purchase whose container stopped is %s, want deleted", phase)
+	}
+	launch(t, o)
+	for _, c := range emulator.calls("RunInstances") {
+		if c.Form.Get("ClientToken") == uuid.UUID(host).String() {
+			t.Fatal("launched a purchase nothing waits for")
+		}
+	}
+}
+
+// An on-demand GPU host bought at a loss for Spot-tolerant work keeps the
+// margin set aside when EC2 refuses its pool, and moves to the next one.
+func TestARefusedPurchaseAtALossMovesToTheNextPool(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	typ, _ := compute.CatalogTypeNamed("g4dn.xlarge")
+	usable := typ.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
+                   availability_zone_id, instance_type, market, margin_waived)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'T4', 1, 'us-east-2', 'us-east-2a', 'use2-az1', 'g4dn.xlarge', 'on_demand', true)
+returning id`, int64(usable.CPUMillis), usable.MemoryBytes)
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	waiting := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["T4"]}}`), 1000, 4*gib)
+	run(t, o.pool, "update containers set capacity_host_id = $2, capacity_wait = 'provisioning' where id = $1", waiting, host)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the host in its next pool", n)
+	}
+	if calls := emulator.calls("RunInstances"); len(calls) != 2 || pool(calls[0]) == pool(calls[1]) {
+		t.Fatalf("%d launches, want the refused pool and then another", len(calls))
 	}
 }

@@ -9,6 +9,7 @@ import (
 )
 
 func TestSubmitEnforcesMaxPendingUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -46,6 +47,7 @@ func TestSubmitEnforcesMaxPendingUnderConcurrency(t *testing.T) {
 }
 
 func TestSubmitBatchIsOneTransactionInInputOrder(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 1000, "retry_policy": {"max_attempts": 3}}`)
@@ -91,6 +93,7 @@ select count(distinct xmin::text), count(distinct created_at), max(max_attempts)
 }
 
 func TestSubmitToStoppedFunctionIsRejected(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)

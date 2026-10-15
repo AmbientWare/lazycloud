@@ -4,8 +4,8 @@
 config:
   LAZYCLOUD_LOG_FORMAT: json
   # Fleet limits (internal/compute/fleet_config.go). Code default: 20
-  # running hosts per owner and as many platform reserves. Headroom and
-  # idle timeouts are the fleet policy's (fleet_policy.go). The planner
+  # running hosts per owner and as many platform reserves. Headroom, the
+  # keep window and reserves are the fleet policy's (fleet_policy.go). The planner
   # also buys only within each region's EC2 vCPU quotas, which bind before
   # 250 hosts do.
   LAZYCLOUD_FLEET_MAX_HOSTS: "250"
@@ -15,7 +15,7 @@ config:
   # Platform and connected-account hosts launch only from these; a region
   # missing here launches nothing. Commit the workflow's output here
   # through a reviewed PR.
-  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-0f2514d7d58af712c","us-east-2":"ami-02261a8bd696ac326","us-west-1":"ami-031d3b0b95e35a622","us-west-2":"ami-017e56aac0ff04a24"},"gpu":{"us-east-1":"ami-01e4b2f81adc419e6","us-east-2":"ami-04426d37cdd63108c","us-west-1":"ami-0cb572c7003aef9a6","us-west-2":"ami-0caf7d2239bfe72d3"}}'
+  LAZYCLOUD_FLEET_IMAGES: '{"cpu":{"us-east-1":"ami-091f80467e2f8c6cd","us-east-2":"ami-00be7a9f17b71ce38","us-west-1":"ami-0ce01c86a0fb3afec","us-west-2":"ami-0091e399ea72bd50b"},"gpu":{"us-east-1":"ami-084fc19967a6604ac","us-east-2":"ami-0ab4802cc330c3c5e","us-west-1":"ami-02cf6d506852ecb95","us-west-2":"ami-078683424825b795e"}}'
 # Traces go to AWS X-Ray through the collector.
 telemetry:
   enabled: true

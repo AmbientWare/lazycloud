@@ -1,6 +1,7 @@
 package compute_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -27,8 +28,11 @@ import (
 // ends exactly what carries it.
 const acceptanceFleet = "acceptance"
 
-// acceptanceRegion is where the lifecycle runs launch.
-const acceptanceRegion = "us-east-2"
+// acceptanceRegion is where the lifecycle runs launch:
+// LAZYCLOUD_EC2_ACCEPTANCE_REGION, or us-east-2.
+func acceptanceRegion() string {
+	return cmp.Or(os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_REGION"), "us-east-2")
+}
 
 // TestRealEC2Fleet checks against real EC2 what only EC2 can show: that
 // the catalog, Spot price and quota reads match what EC2 answers, and that
@@ -40,15 +44,17 @@ const acceptanceRegion = "us-east-2"
 // LAZYCLOUD_EC2_ACCEPTANCE_RUNS cycles (default 1), the GPU one
 // LAZYCLOUD_EC2_ACCEPTANCE_GPU_RUNS, one instance per kind at a time; every
 // instance and Spot request tagged for the acceptance fleet is ended when
-// it finishes. With
+// it finishes. LAZYCLOUD_FLEET_IMAGES launches the lifecycle from baked
+// node images, as the server reads it. With
 // LAZYCLOUD_FLEET_SPOT_SNAPSHOT naming a file it writes the Spot prices it
 // read there.
 func TestRealEC2Fleet(t *testing.T) {
+	t.Parallel()
 	profile := os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_PROFILE")
 	if profile == "" {
 		t.Skip("set LAZYCLOUD_EC2_ACCEPTANCE_PROFILE to the platform account's AWS profile")
 	}
-	cfg, err := config.LoadDefaultConfig(t.Context(), config.WithSharedConfigProfile(profile), config.WithRegion(acceptanceRegion))
+	cfg, err := config.LoadDefaultConfig(t.Context(), config.WithSharedConfigProfile(profile), config.WithRegion(acceptanceRegion()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,16 +79,29 @@ func TestRealEC2Fleet(t *testing.T) {
 	runs := envCount(t, "LAZYCLOUD_EC2_ACCEPTANCE_RUNS", 1)
 	gpuRuns := envCount(t, "LAZYCLOUD_EC2_ACCEPTANCE_GPU_RUNS", runs)
 	timings := &lifecycleTimings{byPath: map[string][]time.Duration{}}
+	var images *compute.NodeImages
+	if raw := os.Getenv("LAZYCLOUD_FLEET_IMAGES"); raw != "" {
+		images = &compute.NodeImages{}
+		if err := json.Unmarshal([]byte(raw), images); err != nil {
+			t.Fatalf("LAZYCLOUD_FLEET_IMAGES: %v", err)
+		}
+	}
 	t.Run("lifecycle", func(t *testing.T) {
 		o := newOwners(t, compute.Config{
 			InstallURL: "https://lazycloud.invalid", ServerAddress: "lazycloud.invalid:443",
-			Fleet: compute.Fleet{Name: acceptanceFleet, AWS: cfg, MaxHosts: 3, Networks: map[string]compute.Network{acceptanceRegion: networks[acceptanceRegion]}},
+			Fleet: compute.Fleet{
+				Name: acceptanceFleet, AWS: cfg, MaxHosts: 4, Images: images,
+				Networks: map[string]compute.Network{acceptanceRegion(): networks[acceptanceRegion()]},
+			},
 		})
 		publish(t, o.compute)
 		for _, c := range []reserveCase{
 			{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate},
 			{instanceType: "m7i.large", market: compute.MarketSpot, mode: compute.ReserveHibernate},
 			{instanceType: "g4dn.xlarge", market: compute.MarketOnDemand, mode: compute.ReserveStop, gpus: 1},
+			{instanceType: "g4dn.xlarge", market: compute.MarketSpot, mode: compute.ReserveStop, gpus: 1},
+			// A Spot GPU host bought for work, which returns to the reserve.
+			{instanceType: "g4dn.xlarge", market: compute.MarketSpot, gpus: 1},
 		} {
 			cycles := runs
 			if c.gpus > 0 {
@@ -91,7 +110,7 @@ func TestRealEC2Fleet(t *testing.T) {
 			t.Run(strings.ReplaceAll(c.name(), " ", "_"), func(t *testing.T) {
 				t.Parallel()
 				for range cycles {
-					r, launched := launchReserve(t, o, client, networks[acceptanceRegion], c, timings)
+					r, launched := launchReserve(t, o, client, networks[acceptanceRegion()], c, timings)
 					r.cycle(launched)
 				}
 			})
@@ -128,8 +147,10 @@ func (l *lifecycleTimings) add(path string, d time.Duration) {
 	l.byPath[path] = append(l.byPath[path], d.Round(time.Second))
 }
 
-// reserveCase is one reserve the lifecycle launches. Each case runs its
-// cycles one after another, so at most one instance per case lives.
+// reserveCase is one reserve the lifecycle launches, or without a mode a
+// host bought for work that returns to the reserve in stop mode. Each case
+// runs its cycles one after another, so at most one instance per case
+// lives.
 type reserveCase struct {
 	instanceType string
 	market       compute.Market
@@ -138,12 +159,15 @@ type reserveCase struct {
 }
 
 func (c reserveCase) name() string {
+	if c.mode == "" {
+		return c.instanceType + " " + string(c.market) + " work"
+	}
 	return c.instanceType + " " + string(c.market) + " " + string(c.mode)
 }
 
 // launchReserve asks for a reserve of the case and launches it through the
-// launcher, in the next zone when one refuses the type for capacity (on
-// 2026-10-02 us-east-2a and us-east-2c each refused m7i.large).
+// launcher, in the next zone when one refuses the type for capacity or does
+// not sell it.
 func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.Network, c reserveCase, timings *lifecycleTimings) (liveReserve, time.Time) {
 	typ, ok := compute.CatalogTypeNamed(c.instanceType)
 	if !ok {
@@ -153,8 +177,8 @@ func launchReserve(t *testing.T, o owners, client *ec2.Client, network compute.N
 		host := scan[uuid.UUID](t, o.pool, `
 insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count, region, availability_zone,
                    instance_type, market, reserve_mode)
-values ('acceptance', 'offline', 'platform', 'aws', 'requested', $1, $2, $3, $4, $5, $6, $7, $8, $9)
-returning id`, typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion, subnet.Zone,
+values ('acceptance', 'offline', 'platform', 'aws', 'requested', $1, $2, $3, $4, $5, $6, $7, $8, nullif($9, ''))
+returning id`, typ.CPUMillis(), typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion(), subnet.Zone,
 			c.instanceType, string(c.market), string(c.mode))
 		launched := time.Now()
 		for {
@@ -170,7 +194,7 @@ returning id`, typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion
 				return liveReserve{t: t, o: o, client: client, host: host, c: c, timings: timings}, launched
 			}
 			if phase == string(compute.PhaseFailed) {
-				if !strings.Contains(message, "InsufficientInstanceCapacity") {
+				if !strings.Contains(message, "InsufficientInstanceCapacity") && !strings.Contains(message, "Unsupported") {
 					t.Fatalf("%s launch failed: %s", c.name(), message)
 				}
 				t.Logf("%s in %s: %s", c.name(), subnet.Zone, message)
@@ -182,7 +206,7 @@ returning id`, typ.CPUMillis, typ.MemoryBytes, typ.GPU, c.gpus, acceptanceRegion
 			time.Sleep(time.Second)
 		}
 	}
-	t.Fatalf("no zone of %s launched %s", acceptanceRegion, c.name())
+	t.Fatalf("no zone of %s launched %s", acceptanceRegion(), c.name())
 	return liveReserve{}, time.Time{}
 }
 
@@ -262,8 +286,12 @@ func (r liveReserve) cycle(launched time.Time) {
 		r.reconcile()
 	}
 
-	// The session moves a proven host to stopping. The actuator waits out
-	// EC2's hibernation delay after the start.
+	// The session moves a proven host to stopping, a work host returning to
+	// the reserve in stop mode. The actuator waits out EC2's hibernation
+	// delay after the start.
+	if r.c.mode == "" {
+		run(t, r.o.pool, "update hosts set reserve_mode = 'stop' where id = $1", r.host)
+	}
 	r.move(compute.PhaseStopping)
 	deadline := time.Now().Add(6 * time.Minute)
 	for !scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
@@ -280,8 +308,10 @@ func (r liveReserve) cycle(launched time.Time) {
 		kind = "hibernate"
 	}
 	r.timings.add(r.c.name()+": "+kind+" to stopped", stopped.Sub(accepted))
+	// A Spot reserve enters the reserve once EC2 disables its persistent
+	// request, 38-90 s after its instance stops.
 	for r.phase() != string(compute.PhaseStopped) {
-		if time.Since(stopped) > time.Minute {
+		if time.Since(stopped) > 3*time.Minute {
 			t.Fatalf("actuator left a stopped instance's host %s", r.phase())
 		}
 		time.Sleep(2 * time.Second)
@@ -301,15 +331,13 @@ func (r liveReserve) cycle(launched time.Time) {
 	r.move(compute.PhaseResuming)
 	asked := time.Now()
 	r.act()
-	// Another reserve's actuator pass may hold this host's claim. EC2
-	// answers IncorrectSpotRequestState for about 40 s after a Spot
-	// reserve stops, which the actuator retries, and may then refuse the
-	// start for Spot capacity, which retires the reserve.
+	// Another reserve's actuator pass may hold this host's claim. EC2 may
+	// refuse the start for Spot capacity, which returns it to the reserve.
 	refused := false
 	for scan[bool](t, r.o.pool, "select stop_requested_at is not null from hosts where id = $1", r.host) {
-		if r.phase() == string(compute.PhaseTerminating) {
+		if r.phase() == string(compute.PhaseStopped) {
 			refused = true
-			t.Logf("%s: start refused, retired: %s", r.c.name(), scan[string](t, r.o.pool, "select phase_message from hosts where id = $1", r.host))
+			t.Logf("%s: start refused, back in the reserve: %s", r.c.name(), scan[string](t, r.o.pool, "select phase_message from hosts where id = $1", r.host))
 			break
 		}
 		if time.Since(asked) > 3*time.Minute {
@@ -322,9 +350,7 @@ func (r liveReserve) cycle(launched time.Time) {
 	if !refused {
 		started = r.until(ec2types.InstanceStateNameRunning, 10*time.Minute, func() {})
 		r.timings.add(r.c.name()+": start to running", started.Sub(asked))
-		if r.c.mode == compute.ReserveHibernate {
-			r.logResume()
-		}
+		r.logResume()
 	}
 
 	// The planner retires it.
@@ -415,10 +441,14 @@ func (r liveReserve) checkLaunch() {
 	for _, tag := range sr.Tags {
 		rtags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
 	}
-	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != ec2types.InstanceInterruptionBehaviorStop ||
+	interruption := ec2types.InstanceInterruptionBehaviorStop
+	if hibernates {
+		interruption = ec2types.InstanceInterruptionBehaviorHibernate
+	}
+	if sr.Type != ec2types.SpotInstanceTypePersistent || sr.InstanceInterruptionBehavior != interruption ||
 		rtags["lazycloud:fleet"] != acceptanceFleet || rtags["lazycloud:host-id"] != r.host.String() {
-		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that stops", *request, sr.Type,
-			sr.InstanceInterruptionBehavior, rtags)
+		t.Errorf("spot request %s %s interruption %s tags %v, want a tagged persistent request that does what the reserve does, %s",
+			*request, sr.Type, sr.InstanceInterruptionBehavior, rtags, interruption)
 	}
 }
 
@@ -441,24 +471,41 @@ func (r liveReserve) checkRequestEnded() {
 	}
 }
 
-// logResume logs the kernel's hibernation lines from the console.
+// logResume logs the console's lines on how the reserve resumed: the
+// kernel's hibernation lines, and the data volume's mount, which an
+// instance store, empty after every stop, reaches only once formatted. The
+// kernel stamps each line with seconds since boot.
 func (r liveReserve) logResume() {
-	time.Sleep(20 * time.Second)
-	console, err := r.client.GetConsoleOutput(r.t.Context(), &ec2.GetConsoleOutputInput{InstanceId: r.instance().InstanceId, Latest: aws.Bool(true)})
-	if err != nil {
-		r.t.Logf("console: %v", err)
-		return
-	}
-	text, err := base64.StdEncoding.DecodeString(aws.ToString(console.Output))
-	if err != nil {
-		r.t.Logf("console: %v", err)
-		return
-	}
-	for line := range strings.SplitSeq(string(text), "\n") {
-		if strings.Contains(line, "PM: ") && (strings.Contains(line, "hibernat") || strings.Contains(line, "restor") || strings.Contains(line, "Image")) {
-			r.t.Logf("console: %s", strings.TrimSpace(line))
+	for start := time.Now(); time.Since(start) < 3*time.Minute; time.Sleep(15 * time.Second) {
+		console, err := r.client.GetConsoleOutput(r.t.Context(), &ec2.GetConsoleOutputInput{InstanceId: r.instance().InstanceId, Latest: aws.Bool(true)})
+		if err != nil {
+			r.t.Logf("console: %v", err)
+			return
+		}
+		text, err := base64.StdEncoding.DecodeString(aws.ToString(console.Output))
+		if err != nil {
+			r.t.Logf("console: %v", err)
+			return
+		}
+		var lines []string
+		mounted := false
+		for line := range strings.SplitSeq(string(text), "\n") {
+			hibernation := strings.Contains(line, "PM: ") &&
+				(strings.Contains(line, "hibernat") || strings.Contains(line, "restor") || strings.Contains(line, "Image"))
+			mount := strings.Contains(line, "EXT4-fs (nvme") && strings.Contains(line, "mounted filesystem")
+			if hibernation || mount {
+				lines = append(lines, strings.TrimSpace(line))
+			}
+			mounted = mounted || mount
+		}
+		if mounted || r.c.mode == compute.ReserveHibernate && len(lines) > 0 {
+			for _, line := range lines {
+				r.t.Logf("%s console: %s", r.c.name(), line)
+			}
+			return
 		}
 	}
+	r.t.Logf("%s console: no data volume mount within 3 minutes", r.c.name())
 }
 
 // defaultNetwork is the region's default subnets as a fleet network.

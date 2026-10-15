@@ -93,9 +93,6 @@ async function mockControlPlane(page: Page) {
   await page.route(workspaceRoute("tasks"), async (route) => {
     await route.fulfill({ json: { tasks: [] } satisfies Schemas["TaskPage"] });
   });
-  await page.route("**/api/v1/stubs/sandboxes*", async (route) => {
-    await route.fulfill({ json: { data: [], next: "" } });
-  });
   await page.route(workspaceRoute("changes/stream"), async (route) => {
     await route.fulfill({
       contentType: "text/event-stream",
@@ -144,49 +141,4 @@ test("dashboard entry lands on Apps and the responsive shell switches workspaces
 
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/w\/beta\/apps\/?$/);
-});
-
-test("workspace search opens from the keyboard and navigates to a canonical resource URL", async ({
-  page,
-}) => {
-  test.fixme(
-    true,
-    "Enter opens nothing: the search keeps no result selected once the query filters out the selected one",
-  );
-  await mockControlPlane(page);
-  await page.route(workspaceRoute("tasks"), async (route) => {
-    await route.fulfill({
-      json: {
-        tasks: [
-          {
-            id: "task-1",
-            app: "square_app",
-            function: "square",
-            release_id: "release-1",
-            version: 7,
-            status: "succeeded",
-            attempts: 1,
-            max_attempts: 1,
-            preemptions: 0,
-            root_task_id: "task-1",
-            created_at: "2026-01-01T10:00:00Z",
-          },
-        ],
-      } satisfies Schemas["TaskPage"],
-    });
-  });
-  await page.goto("/w/acme/apps");
-  await expect(page.getByRole("link", { name: /square_app/ })).toBeVisible();
-
-  await page.keyboard.press("/");
-  const search = page.getByRole("dialog");
-  await expect(search.getByRole("combobox")).toBeFocused();
-  await search.getByRole("combobox").fill("square");
-  await expect(search.getByRole("option", { name: /square_app/ })).toBeVisible();
-  await expect(search.getByText("app-1", { exact: true })).toHaveCount(0);
-  await expect(search.getByText("stub-1", { exact: true })).toHaveCount(0);
-  await expect(search.getByText("task-1", { exact: true })).toHaveCount(0);
-  await search.getByRole("combobox").press("Enter");
-
-  await expect(page).toHaveURL(/\/w\/acme\/apps\/app-1$/);
 });

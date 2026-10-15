@@ -1,7 +1,11 @@
 package compute_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +18,7 @@ import (
 // The platform generates every external ID, and a role backs one
 // connection, so one account cannot aim the platform at another's role.
 func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -37,6 +42,7 @@ func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
 // preflight failed, is failed and its instance terminated rather than
 // counted as capacity on the way forever.
 func TestCloudHostsThatNeverServeAreReplaced(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	stuck := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseJoining, Region: "us-east-2", InstanceID: "i-0000000000000d001"})
 	run(t, o.pool, "update hosts set phase_at = now() - interval '1 hour', launched_at = now() - interval '1 hour' where id = $1", uuid.UUID(stuck))
@@ -51,19 +57,21 @@ func TestCloudHostsThatNeverServeAreReplaced(t *testing.T) {
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
-	if phase, failure := hostPhase(t, o.pool, stuck); phase != string(compute.PhaseFailed) || failure == nil || *failure != string(compute.FailureEnrollment) {
-		t.Fatalf("joining host past the boot timeout is %s (%v), want failed agent_enrollment_failed", phase, failure)
+	if phase, failure := hostPhase(t, o.pool, stuck); phase != string(compute.PhaseTerminating) || failure == nil || *failure != string(compute.FailureEnrollment) {
+		t.Fatalf("joining host past the boot timeout is %s (%v), want terminating with agent_enrollment_failed", phase, failure)
 	}
+	actuate(t, o)
 	if got := terminated(emulator); !slices.Equal(got, []string{"i-0000000000000d001"}) {
 		t.Fatalf("terminated %v, want the stuck instance", got)
 	}
 }
 
 // A terminating host stays terminating until EC2 reports the instance
-// terminated, so a termination that did not take is retried; a new
-// instance EC2 does not list yet is not taken for gone; and a configured
-// region without hosts is still swept for orphans.
+// gone, and reconcile leaves its terminate to the actuator; a new instance
+// EC2 does not list yet is not taken for gone; and a configured region
+// without hosts is still swept for orphans.
 func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
+	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	terminating := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseTerminating, Region: "us-east-2", InstanceID: "i-0000000000000e001"})
 	fresh := cloudHost(t, o, compute.MarketSpot, "i-0000000000000e002")
@@ -88,8 +96,8 @@ func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
 	}
 	got := terminated(emulator)
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"i-0000000000000e001", "i-0000000000000e003"}) {
-		t.Fatalf("terminated %v, want the instance still running and the orphan in us-west-1", got)
+	if !slices.Equal(got, []string{"i-0000000000000e003"}) {
+		t.Fatalf("terminated %v, want the orphan in us-west-1 alone", got)
 	}
 }
 
@@ -97,6 +105,7 @@ func TestReconcileWaitsForEC2AndSweepsEveryRegion(t *testing.T) {
 // that offer cools down and the next pass buys another instead of the same
 // one again.
 func TestABoughtHostThatCannotTakeItsContainerCoolsItsOffer(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -124,6 +133,7 @@ func TestABoughtHostThatCannotTakeItsContainerCoolsItsOffer(t *testing.T) {
 // Agent releases reach a share of hosts, and an updating host is not lost
 // while it restarts.
 func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	release := compute.AgentRelease{Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("c", 64)}, RolloutPercent: 50}
@@ -134,7 +144,8 @@ func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
 	var updating compute.HostID
 	for range 40 {
 		host := newHost(t, o.pool, hostSpec{})
-		update, err := o.compute.UpdateFor(ctx, host, "1.0.0", "", true)
+		openAgent(t, o, host, "1.0.0", "")
+		update, err := o.compute.UpdateFor(ctx, host)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,16 +174,73 @@ func TestAgentReleasesRollOutInStagesAndUpdatingHostsStayUnlost(t *testing.T) {
 	if err := o.compute.PublishAgentRelease(ctx, release); err != nil {
 		t.Fatalf("narrow the rollout: %v", err)
 	}
-	if update, err := o.compute.UpdateFor(ctx, updating, "1.0.0", "", true); err != nil || update != nil {
+	if update, err := o.compute.UpdateFor(ctx, updating); err != nil || update != nil {
 		t.Fatalf("a 0%% rollout offered %+v %v", update, err)
 	}
 }
 
+// A host whose agent must move to the target release takes no work until
+// it runs it; one that cannot update itself, or rolled back from the
+// target, keeps serving on the release it runs.
+func TestOnlyHostsOnTheTargetAgentReleaseTakeWork(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o := newOwners(t, machineConfig())
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, host, "1.0.0", "")
+	if err := o.compute.PublishAgentRelease(ctx, compute.AgentRelease{
+		Version: "2.0.0", SHA256: map[string]string{"amd64": strings.Repeat("c", 64)}, RolloutPercent: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	container := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
+	if n := place(t, o); n != 0 {
+		t.Fatalf("placed %d containers on a host due an agent update", n)
+	}
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update == nil || update.Version != "2.0.0" {
+		t.Fatalf("update for an old agent: %+v %v", update, err)
+	}
+	// It restarts on the target.
+	openAgent(t, o, host, "2.0.0", "")
+	if n := place(t, o); n != 1 {
+		t.Fatalf("placed %d containers once the host runs the target, want 1", n)
+	}
+	if got := scan[*uuid.UUID](t, o.pool, "select host_id from containers where id = $1", container); got == nil || *got != uuid.UUID(host) {
+		t.Fatalf("container on %v, want %s", got, host)
+	}
+
+	rejected := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, rejected, "1.0.0", "2.0.0")
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 1000, gib)
+	pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{}`), 3000, gib)
+	if n := place(t, o); n != 2 {
+		t.Fatalf("placed %d containers with a host that rolled back from the target, want 2", n)
+	}
+}
+
+// openAgent opens a session for host as an agent of version that can
+// update itself, having rolled back from rejected when it is set.
+func openAgent(t *testing.T, o owners, host compute.HostID, version, rejected string) {
+	t.Helper()
+	open := compute.SessionOpen{BootID: "boot", Capacity: compute.Capacity{CPUMillis: 4000, MemoryBytes: 8 * gib}, AgentVersion: version, AgentUpdatable: true}
+	if rejected != "" {
+		open.AgentRejected = &rejected
+	}
+	if _, err := o.compute.OpenSession(t.Context(), host, open); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A fleet that launches instances needs a public install origin and server
-// address they can reach with TLS.
+// address they can reach with TLS, and the region of the storage it prices
+// transfer from.
 func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
-	fleet := compute.Fleet{Networks: fleetNetworks()}
+	t.Parallel()
+	fleet := compute.Fleet{Networks: fleetNetworks(), StorageRegion: "us-east-1"}
 	for name, c := range map[string]compute.Config{
+		"no storage region":    {InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: compute.Fleet{Networks: fleetNetworks()}},
 		"no install URL":       {ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"plain HTTP install":   {InstallURL: "http://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"loopback install":     {InstallURL: "https://127.0.0.1", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
@@ -195,6 +263,7 @@ func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
 // Dropping a workspace from a machine drains that workspace's containers on
 // it, and placement stops sending it more.
 func TestDroppingAWorkspaceDrainsItsWorkOnTheMachine(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -220,6 +289,7 @@ func TestDroppingAWorkspaceDrainsItsWorkOnTheMachine(t *testing.T) {
 // A connection host launches only when the authorization names the node
 // role its identity proof will be checked against.
 func TestConnectionLaunchesNeedTheNodeRole(t *testing.T) {
+	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
@@ -236,5 +306,65 @@ values ('h', 'offline', 'connection', 'aws', $1, 'requested', 1000, 1 << 30, 'us
 	}
 	if calls := emulator.calls("RunInstances"); len(calls) != 0 {
 		t.Fatalf("RunInstances called %d times, want none", len(calls))
+	}
+}
+
+// releaseArchive is a release archive holding version and an agent of
+// bytes agent.
+func releaseArchive(t *testing.T, version, agent string) *bytes.Buffer {
+	t.Helper()
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	for name, data := range map[string]string{compute.VersionFile: version + "\n", "lazycloud-agent": agent} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return &archive
+}
+
+// Releases whose archives differ only in their VERSION file are one build:
+// a host on the older one is on the target, so it is offered no update and
+// takes work. A release of another build updates it.
+func TestAReleaseOfTheSameBuildUpdatesNoHost(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o := newOwners(t, machineConfig())
+	build := func(version, agent string) string {
+		t.Helper()
+		b, err := compute.ReleaseBuild(map[string]io.Reader{"amd64": releaseArchive(t, version, agent)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	publishBuild := func(version, b string) {
+		t.Helper()
+		if err := o.compute.PublishAgentRelease(ctx, compute.AgentRelease{
+			Version: version, SHA256: map[string]string{"amd64": strings.Repeat(version[:1], 64)}, RolloutPercent: 100, Build: b,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if build("1.0.0", "agent") != build("2.0.0", "agent") || build("2.0.0", "agent") == build("3.0.0", "agent v3") {
+		t.Fatal("a release's build follows its VERSION file or misses a change of its agent")
+	}
+	publishBuild("1.0.0", build("1.0.0", "agent"))
+	host := newHost(t, o.pool, hostSpec{})
+	openAgent(t, o, host, "1.0.0", "")
+	publishBuild("2.0.0", build("2.0.0", "agent"))
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update != nil {
+		t.Fatalf("update for a host of the target's build: %+v %v", update, err)
+	}
+	publishBuild("3.0.0", build("3.0.0", "agent v3"))
+	if update, err := o.compute.UpdateFor(ctx, host); err != nil || update == nil || update.Version != "3.0.0" {
+		t.Fatalf("update for a host of another build: %+v %v", update, err)
 	}
 }

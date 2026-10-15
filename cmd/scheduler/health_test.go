@@ -29,7 +29,7 @@ func TestSchedulerReadinessAndShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- run(ctx, slog.New(slog.DiscardHandler), testTicks()) }()
 
 	base := "http://" + addr
 	waitOK(t, base+"/readyz")
@@ -53,6 +53,7 @@ func TestSchedulerReadinessAndShutdown(t *testing.T) {
 
 // A loop that stops finishing passes fails /healthz and /readyz.
 func TestHeartbeatsReportStalledLoops(t *testing.T) {
+	t.Parallel()
 	beats := newHeartbeats(func() bool { return true })
 	pass := beats.track("placement", time.Second, func(context.Context) bool { return false })
 	beats.track("planning", time.Second, func(context.Context) bool { return false })
@@ -72,6 +73,7 @@ func TestHeartbeatsReportStalledLoops(t *testing.T) {
 // and progress within a pass is a heartbeat, so slow work never stalls a
 // loop into a restart.
 func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
+	t.Parallel()
 	beats := newHeartbeats(func() bool { return true })
 	beats.passTimeout = 50 * time.Millisecond
 	var beatDuringPass time.Time
@@ -97,6 +99,38 @@ func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
 	}
 }
 
+// testTicks shortens the loops a test measures across to a few hundred
+// milliseconds. The safety tick stays production's, so within a test quiet
+// loops run only on wakes.
+func testTicks() ticks {
+	t := productionTicks()
+	t.tick = 100 * time.Millisecond
+	t.leaderCheck = 50 * time.Millisecond
+	t.hostLoss, t.fleet, t.email, t.payments = 500*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond
+	t.deletion = 200 * time.Millisecond
+	return t
+}
+
+// holdLeadership holds the leader lock until the returned release runs, so
+// replicas started meanwhile finish their start-up passes as standbys and
+// leadership is their next wake.
+func holdLeadership(t *testing.T, pool *pgxpool.Pool) (release func()) {
+	t.Helper()
+	conn, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), "select pg_advisory_lock(hashtextextended($1, 0))", leaderLock); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := conn.Exec(t.Context(), "select pg_advisory_unlock(hashtextextended($1, 0))", leaderLock); err != nil {
+			t.Fatal(err)
+		}
+		conn.Release()
+	}
+}
+
 // schedulerEnv points the scheduler at pool, a fresh secrets key and the test
 // object store, with email delivery off.
 func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
@@ -119,6 +153,7 @@ func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
 		"LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": store.SecretAccessKey,
 		"LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER":      string(store.Workspaces.Provider),
 		"LAZYCLOUD_WORKSPACE_BUCKET_PREFIX":        store.Workspaces.Prefix,
+		"LAZYCLOUD_FLEET_ACCOUNT_ID":               store.Workspaces.AccountID,
 		"LAZYCLOUD_GARAGE_ADMIN_URL":               store.Workspaces.GarageAdminURL,
 		"LAZYCLOUD_GARAGE_ADMIN_TOKEN":             store.Workspaces.GarageAdminToken,
 		"LAZYCLOUD_RESEND_API_KEY":                 "",

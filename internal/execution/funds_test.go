@@ -24,6 +24,7 @@ where user_id in (select user_id from owner)`, f.workspace, balance)
 }
 
 func TestPlanningStartsWhatTheAccountMayRun(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 40}}`)
@@ -43,6 +44,7 @@ func TestPlanningStartsWhatTheAccountMayRun(t *testing.T) {
 }
 
 func TestPlanningRecordsWhatBillingPrices(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"resources": {"cpu_millis": 1000, "memory_mib": 512, "gpu": ["L4"]},
@@ -60,6 +62,7 @@ func TestPlanningRecordsWhatBillingPrices(t *testing.T) {
 }
 
 func TestSubmitNeedsCreditAndRoomForColdWork(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"handler": "reports:summarize", "max_pending_tasks": 100,
@@ -86,9 +89,9 @@ with ws as (insert into workspaces (id, name) values ($1, 'other') returning id)
      app as (insert into apps (workspace_id, name, state) select id, 'busy', 'active' from ws returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}'::jsonb, sha256('busy'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select ws.id, rel.id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(1, 10)`, uuid.UUID(other), uuid.UUID(f.workspace))
+             select id, 1, '{}'::jsonb, sha256('busy'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select ws.id, rel.id, rel.workload_id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(1, 10)`, uuid.UUID(other), uuid.UUID(f.workspace))
 	var limit *billing.LimitError
 	if err := submit(); !errors.As(err, &limit) {
 		t.Fatalf("cold submit at the limit: %v", err)
@@ -100,25 +103,11 @@ select ws.id, rel.id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(
 	}
 }
 
-func TestStopUnfundedStopsEveryRunningContainerAndSkipsDraining(t *testing.T) {
-	pool := dbtest.New(t)
-	e := NewExecution(pool)
-	f := newRelease(t, pool, `{}`)
-	host := newHost(t, pool)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-		select $1, $2, 'ready', $3, 1, 1000, 1 << 29, now(), now() from generate_series(1, 150)`, f.workspace, f.release, host)
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-		values ($1, $2, 'draining', $3, 1, 1000, 1 << 29, now(), now())`, f.workspace, f.release, host)
-	stopped, err := e.StopUnfunded(t.Context(), identity.WorkspaceID(f.workspace), "the account's credit ran out")
-	if err != nil || stopped != 150 {
-		t.Fatalf("stopped %d: %v", stopped, err)
-	}
-	if states := containerStates(t, pool, f.release); states[ContainerReady] != 0 || states[ContainerDraining] != 151 {
-		t.Fatalf("states %v", states)
-	}
-}
-
+// An account billing finds unfunded stops every running container of its
+// workspace, past one listing's batch: each drains and its running attempts
+// are lost. A draining container is left alone.
 func TestUnfundedAccountsStopTheirContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{}`)
@@ -126,9 +115,12 @@ func TestUnfundedAccountsStopTheirContainers(t *testing.T) {
 	host := newHost(t, pool)
 	container := readyContainer(t, pool, f, host, 0)
 	attempt := attemptOn(t, pool, f, container, 0)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+		select $1, $2, (select workload_id from releases where id = $2), case when n = 0 then 'draining' else 'ready' end, $3, 1, 1000, 1 << 29, now(), now()
+		from generate_series(0, $4) n`, f.workspace, f.release, host, unfundedBatch)
 
-	// Credit runs out while the container runs: the metering pass records
-	// it live, and the rollup leaves nothing to spend.
+	// Credit runs out while the containers run: the metering pass records
+	// them live, and the rollup leaves nothing to spend.
 	exec(t, pool, `update billing_balances set balance_nanos = 0, live_containers = 1
 		where user_id = (select user_id from workspace_members where workspace_id = $1 and role = 'owner')`, f.workspace)
 	b := billing.NewBilling(pool, billing.Config{}, discardLogger())
@@ -137,11 +129,11 @@ func TestUnfundedAccountsStopTheirContainers(t *testing.T) {
 		t.Fatalf("unfunded accounts %+v, %v", unfunded, err)
 	}
 	stopped, err := e.StopUnfunded(t.Context(), identity.WorkspaceID(unfunded[0].Workspaces[0]), unfunded[0].Reason)
-	if err != nil || stopped != 1 {
-		t.Fatalf("stopped %d: %v", stopped, err)
+	if err != nil || stopped != unfundedBatch+1 {
+		t.Fatalf("stopped %d: %v, want %d", stopped, err, unfundedBatch+1)
 	}
-	if state := containerState(t, pool, container); state != ContainerDraining {
-		t.Fatalf("container %s, want draining", state)
+	if states := containerStates(t, pool, f.release); states[ContainerReady] != 0 || states[ContainerDraining] != unfundedBatch+2 {
+		t.Fatalf("states %v", states)
 	}
 	var attemptState string
 	if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&attemptState); err != nil || attemptState != string(AttemptLost) {

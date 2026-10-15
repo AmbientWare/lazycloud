@@ -32,6 +32,7 @@ func once(_ context.Context, fn func() error) error { return fn() }
 // A pair's data parts go up uploadParts at once, never more, and the index
 // only after every part is stored.
 func TestUploadPutsPartsInParallelAndTheIndexLast(t *testing.T) {
+	t.Parallel()
 	const parts, partBytes = 10, 1000
 	data := bytes.Repeat([]byte("0123456789"), parts*partBytes/10-5)
 	var mu sync.Mutex
@@ -100,6 +101,7 @@ func TestUploadPutsPartsInParallelAndTheIndexLast(t *testing.T) {
 // the store's code but not the signature the store echoes, and the index
 // never goes up.
 func TestUploadStopsAtARefusedPart(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var paths []string
 	refused := refusingStore(t)

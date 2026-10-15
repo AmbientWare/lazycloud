@@ -97,11 +97,12 @@ func unconverted(t *testing.T, im *images.Images, reference string, host compute
 // the layer bucket. A check that found a layer missing waits out the
 // recheck period, and the sweep takes a layer's checks with it.
 func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
-	store := storage.NewStorage(pool, cfg)
-	im := images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{})
+	store := storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{}))
+	im := newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff})
 	reference := "registry.test/lazycloud/images/regional@sha256:" + hex64("1")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("base layer"), []byte("app layer")})
 	regional, elsewhere := hostIn(t, pool, replicaRegion), hostIn(t, pool, "us-west-2")
@@ -169,13 +170,14 @@ func TestGrantsReadTheirRegionsCopyOnceConfirmed(t *testing.T) {
 // Concurrent checks of one reference and region on two servers check each
 // layer once between them.
 func TestReplicaChecksRunOncePerLayerAcrossServers(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	cfg := replicated(t)
-	store := storage.NewStorage(pool, cfg)
+	store := storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{}))
 	servers := []*images.Images{
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{}),
-		images.NewImages(pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg), images.Config{}),
+		newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), store, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff}),
+		newImages(t, pool, execution.NewExecution(pool), newVault(t, pool), storage.NewStorage(pool, cfg, compute.NewCompute(pool, nil, compute.Config{})), images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff}),
 	}
 	reference := "registry.test/lazycloud/images/deduped@sha256:" + hex64("2")
 	convertReference(t, pool, store, reference, [][]byte{[]byte("one"), []byte("two"), []byte("three")})

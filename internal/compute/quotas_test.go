@@ -14,6 +14,7 @@ import (
 // and a quota refusal holds the class at no room. The planner subtracts
 // what the fleet runs (TestQuotaRoomsAndSpotPricesSteerPurchases).
 func TestQuotaReadsAreStoredAndARefusalCoolsTheClass(t *testing.T) {
+	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
 	quotas := map[string]float64{
 		"L-1216C47A": 64, "L-34B43A08": 32, "L-DB2E81BA": 8, "L-3819A6DF": 0, "L-417A185B": 0, "L-7212CCBC": 0,
@@ -88,6 +89,7 @@ values ('g', 'offline', 'platform', 'aws', 'requested', 3500, 14::bigint << 30, 
 }
 
 func TestQuotaClassFollowsTheInstanceFamily(t *testing.T) {
+	t.Parallel()
 	for instanceType, want := range map[string]compute.QuotaClass{
 		"m7i.large": compute.QuotaStandard, "c6a.8xlarge": compute.QuotaStandard, "r6a.2xlarge": compute.QuotaStandard,
 		"g4dn.xlarge": compute.QuotaG, "g6e.12xlarge": compute.QuotaG, "p5.48xlarge": compute.QuotaP, "p4de.24xlarge": compute.QuotaP,

@@ -3,31 +3,99 @@ package compute
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
-// fleetRead is what one planning pass reads, all in its transaction.
-type fleetRead struct {
+// offerRead is what offers rank from, read with a fixed number of
+// statements, each bounded by live rows or a sample. A reserve whose start
+// EC2 refused within cooldown reads as refused.
+type offerRead struct {
 	now       time.Time
 	hosts     []PlannerHostsRow
-	pending   []PendingDemandRow
 	recent    []RecentShapesRow
 	cooldowns []PlannerCooldownsRow
-	markets   map[string]FleetMarketsRow
-	// release is the target agent release; nil when none is published.
-	release     *AgentRelease
+	spot      []SpotQuote
+	zoneTypes map[string]map[string][]string
+	quotas    []QuotaRoom
+	rates     []billing.ComputeRate
+	// reported is the memory hosts of each type advertise, once one has
+	// reported.
+	reported map[string]int64
+}
+
+func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time, cooldown time.Duration) (offerRead, error) {
+	r := offerRead{now: now, reported: map[string]int64{}}
+	var err error
+	if r.hosts, err = q.PlannerHosts(ctx, cooldown.Seconds()); err != nil {
+		return r, fmt.Errorf("read fleet hosts: %w", err)
+	}
+	for _, h := range r.hosts {
+		if seen, ok := r.reported[h.InstanceType]; h.SessionEpoch > 0 && h.InstanceType != "" && (!ok || h.MemoryBytes < seen) {
+			r.reported[h.InstanceType] = h.MemoryBytes
+		}
+	}
+	if r.recent, err = q.RecentShapes(ctx, recentShapesParams(p)); err != nil {
+		return r, fmt.Errorf("read recent container shapes: %w", err)
+	}
+	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
+		return r, fmt.Errorf("read cooldowns: %w", err)
+	}
+	if r.spot, err = readSpotPrices(ctx, q); err != nil {
+		return r, err
+	}
+	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
+		return r, err
+	}
+	if r.zoneTypes, err = readZoneOfferings(ctx, q); err != nil {
+		return r, err
+	}
+	if r.rates, err = billing.FleetComputeRates(now); err != nil {
+		return r, fmt.Errorf("read the fleet's compute rates: %w", err)
+	}
+	return r, nil
+}
+
+// inputs are what an owner's offers rank from in networks with hosts: the
+// platform's, with its rates, quotas and market reads, or a connection's,
+// which pays its own hosts.
+func (r offerRead) inputs(storageRegion string, networks map[string]Network, connection *uuid.UUID, hosts []FleetHost) OfferInputs {
+	zones := map[string]int{}
+	for _, h := range hosts {
+		if h.State != FleetTerminating && h.ZoneID != "" {
+			zones[h.ZoneID]++
+		}
+	}
+	in := OfferInputs{
+		Now: r.now, Catalog: FleetCatalog(), Networks: networks, Spot: r.spot, Cooldowns: offerCooldowns(r.cooldowns, ownerPlatform),
+		ReportedMemory: r.reported, ZoneHosts: zones, ZoneTypes: r.zoneTypes, StorageRegion: storageRegion,
+	}
+	if connection != nil {
+		in.Cooldowns, in.OwnerPays = offerCooldowns(r.cooldowns, connection.String()), true
+	} else {
+		in.Rates, in.Quotas, in.ReadBytes = r.rates, vcpuQuotas(r.quotas), readsByMarket(r.recent)
+	}
+	return in
+}
+
+// ownedBy reports a host of connection's, or of the platform for none.
+func ownedBy(h PlannerHostsRow, connection *uuid.UUID) bool {
+	return connection == nil && h.ConnectionID == nil || connection != nil && h.ConnectionID != nil && *connection == *h.ConnectionID
+}
+
+// fleetRead is what one planning pass reads, all in its transaction.
+type fleetRead struct {
+	offerRead
+	pending     []PendingDemandRow
+	markets     map[string]FleetMarketsRow
 	connections []HostingConnectionsRow
-	spot        []SpotQuote
-	zoneTypes   map[string]map[string][]string
-	quotas      []QuotaRoom
 	// batchWait is how long the platform's arrival batch stays open, and
 	// connectionWaits each connection's.
 	batchWait       time.Duration
@@ -36,21 +104,14 @@ type fleetRead struct {
 
 // readFleet reads one pass's snapshot with a fixed number of statements,
 // each bounded by live rows or the pending batch.
-func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetRead, error) {
-	r := fleetRead{now: now, markets: map[string]FleetMarketsRow{}}
-	var err error
-	if r.hosts, err = q.PlannerHosts(ctx); err != nil {
-		return r, fmt.Errorf("read fleet hosts: %w", err)
+func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time, cooldown time.Duration) (fleetRead, error) {
+	offers, err := readOffers(ctx, q, p, now, cooldown)
+	if err != nil {
+		return fleetRead{}, err
 	}
+	r := fleetRead{offerRead: offers, markets: map[string]FleetMarketsRow{}}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
-	}
-	if r.recent, err = q.RecentShapes(ctx, RecentShapesParams{
-		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, BuildWindowSeconds: p.BuildWindow.Seconds(),
-		BuildScanSeconds: (p.BuildWindow + p.LongestBuild).Seconds(), ArrivalSeconds: p.ArrivalWindow.Seconds(),
-		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
-	}); err != nil {
-		return r, fmt.Errorf("read recent container shapes: %w", err)
 	}
 	waits, err := q.BatchWaits(ctx, BatchWaitsParams{
 		SampleSize: demandBatch, QuietSeconds: p.Batch.Quiet.Seconds(), MaxSeconds: p.Batch.Max.Seconds(),
@@ -68,9 +129,6 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 		}
 		r.connectionWaits[*w.ConnectionID] = wait
 	}
-	if r.cooldowns, err = q.PlannerCooldowns(ctx); err != nil {
-		return r, fmt.Errorf("read cooldowns: %w", err)
-	}
 	markets, err := q.FleetMarkets(ctx)
 	if err != nil {
 		return r, fmt.Errorf("read fleet markets: %w", err)
@@ -78,27 +136,11 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time) (fleetR
 	for _, m := range markets {
 		r.markets[m.Market] = m
 	}
-	switch release, err := q.TargetRelease(ctx); {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return r, fmt.Errorf("read target release: %w", err)
-	default:
-		r.release = ptr(releaseOf(release.Version, release.Sha256Amd64, release.Sha256Arm64, release.RolloutPercent))
-	}
 	if slices.ContainsFunc(r.pending, func(g PendingDemandRow) bool { return g.ConnectionID != nil }) ||
 		slices.ContainsFunc(r.hosts, func(h PlannerHostsRow) bool { return h.ConnectionID != nil }) {
 		if r.connections, err = q.HostingConnections(ctx); err != nil {
 			return r, fmt.Errorf("read connections: %w", err)
 		}
-	}
-	if r.spot, err = readSpotPrices(ctx, q); err != nil {
-		return r, err
-	}
-	if r.quotas, err = quotaRooms(ctx, q, now); err != nil {
-		return r, err
-	}
-	if r.zoneTypes, err = readZoneOfferings(ctx, q); err != nil {
-		return r, err
 	}
 	return r, nil
 }
@@ -164,50 +206,31 @@ func fleetStateOf(h hostStanding, now time.Time) FleetState {
 // or a Spot host on a persistent request can stop. A host whose agent
 // refused to prove a stop serves with its reserve mode still set; it is not
 // asked again, so retention drains it.
-func fleetHostOf(h PlannerHostsRow, now time.Time, release *AgentRelease) FleetHost {
+func fleetHostOf(h PlannerHostsRow, now time.Time) FleetHost {
 	market := marketOf(h.Market)
+	moves := make([]Requirement, len(h.MoveCpu))
+	for n := range moves {
+		moves[n] = Requirement{Region: h.MoveRegion[n], Preemptible: true, GPUCount: int(h.MoveGpuCount[n]),
+			CPUMillis: cpu.Millis(h.MoveCpu[n]), MemoryBytes: h.MoveMemory[n]}
+		if h.MoveGpus[n] != "" {
+			moves[n].GPUs = strings.Split(h.MoveGpus[n], ",")
+		}
+	}
 	return FleetHost{
 		ID: HostID(h.ID), InstanceType: h.InstanceType, Region: h.Region, Zone: h.AvailabilityZone, ZoneID: h.AvailabilityZoneID,
 		Market: market, GPU: h.GpuType, State: fleetStateOf(h.standing(), now),
 		Usable:     FleetCapacity{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUs: int(h.GpuCount)},
 		Load:       FleetCapacity{CPUMillis: cpu.Millis(h.UsedCpu), MemoryBytes: h.UsedMemory, GPUs: int(h.UsedGpus)},
-		Lent:       lent(market, int(h.GpuCount), FleetCapacity{CPUMillis: cpu.Millis(h.TolerantCpu), MemoryBytes: h.TolerantMemory}),
-		Containers: int(h.Containers), Protected: h.InterruptionAt != nil,
-		Current: onRelease(HostID(h.ID), h.PreparedAgentVersion, release), ReserveMode: (*ReserveMode)(h.ReserveMode),
+		Containers: int(h.Containers), UsedDisks: int(h.UsedDisks), Protected: h.InterruptionAt != nil,
+		Requested: Phase(h.Phase) == PhaseRequested,
+		UpdateDue: h.UpdateDue, ReserveMode: (*ReserveMode)(h.ReserveMode),
 		HibernationConfigured: h.HibernationConfigured,
 		Stoppable:             (market == MarketOnDemand || h.SpotRequestID != nil) && !refusedReserve(h),
-		HourlyMicros:          h.HourlyMicros, IdleSince: h.IdleSince, BusySince: busySince(h), PhaseAt: h.PhaseAt,
-		Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		HourlyMicros:          h.HourlyMicros, PhaseAt: h.PhaseAt,
+		StartRefused: h.StartRefused, Replaces: (*HostID)(h.Replaces), Slept: h.PreparedAgentVersion != nil, RightsizeRefusedAt: h.RightsizeRefusedAt,
+		HandsBack: h.HandsBackAt != nil, Moves: moves, Stays: h.Stays, StoppedAt: h.StoppedAt,
+		Packed: FleetCapacity{CPUMillis: cpu.Millis(h.PackedCpu), MemoryBytes: h.PackedMemory},
 	}
-}
-
-// busySince is when the host's newest live container was placed; nil
-// without one.
-func busySince(h PlannerHostsRow) *time.Time {
-	if h.Containers == 0 {
-		return nil
-	}
-	return &h.BusySince
-}
-
-// lent is what Spot-tolerant work holds on a host: on an on-demand CPU host
-// it is lent to the Spot market, and elsewhere nothing.
-func lent(market Market, gpus int, tolerant FleetCapacity) FleetCapacity {
-	if market != MarketOnDemand || gpus > 0 {
-		return FleetCapacity{}
-	}
-	return tolerant
-}
-
-// onRelease reports whether version is the agent release a host should run:
-// the target once the rollout reaches it, any release outside the rollout
-// or without a target. A reserve passes the release it last proved it could
-// stop on.
-func onRelease(host HostID, version *string, release *AgentRelease) bool {
-	if release == nil || rolloutBucket(host) >= release.RolloutPercent {
-		return true
-	}
-	return version != nil && *version == release.Version
 }
 
 // refusedReserve reports a host serving after its agent refused to prove a
@@ -243,10 +266,11 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		}
 		g := pendingGroup{connection: r.ConnectionID, group: DemandGroup{Need: Requirement{
 			Region: r.Region, Zone: r.Zone, Preemptible: r.Preemptible, GPUs: gpus, GPUCount: int(r.GpuCount),
-			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes,
+			CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, Disks: int(r.Disks),
+			Read: VolumeReadOf(r.ReadRegion, r.ReadBytes), Packs: r.Packs,
 		}}}
 		for n, id := range r.Ids {
-			c := PendingContainer{ID: id}
+			c := PendingContainer{ID: id, Since: r.Created[n]}
 			if r.Bought[n] != uuid.Nil {
 				c.Host = ptr(HostID(r.Bought[n]))
 			}
@@ -257,43 +281,73 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 	return out, nil
 }
 
+func recentShapesParams(p Policy) RecentShapesParams {
+	return RecentShapesParams{
+		WindowSeconds: p.LargestShape.Window.Seconds(), SampleSize: demandBatch, ArrivalSeconds: p.ArrivalWindow.Seconds(), WarmSeconds: p.WarmWindow.Seconds(),
+		BatchQuietSeconds: p.Batch.Quiet.Seconds(), BatchMaxSeconds: p.Batch.Max.Seconds(),
+	}
+}
+
+// market is the market a RecentShapes row measures: GPU work belongs to
+// its model's market of its tolerance, as its demand does, and GPU work
+// without a model to none.
+func (r RecentShapesRow) market() (ReserveMarket, bool) {
+	switch {
+	case r.GpuType != "":
+		return ReserveMarket{Preemptible: r.Preemptible, GPU: r.GpuType}, true
+	case r.Gpus > 0:
+		return ReserveMarket{}, false
+	}
+	return ReserveMarket{Preemptible: r.Preemptible}, true
+}
+
+// readsByMarket is what a start of each market read from its workspace's
+// bucket on average over its recent starts, for the markets whose starts
+// read any.
+func readsByMarket(rows []RecentShapesRow) map[ReserveMarket]int64 {
+	reads := map[ReserveMarket]int64{}
+	for _, r := range rows {
+		if m, ok := r.market(); ok && shapeKind(r.Kind) == shapeRecent && r.ReadBytes > 0 && r.Starts > 0 {
+			reads[m] = r.ReadBytes / int64(r.Starts)
+		}
+	}
+	return reads
+}
+
 // shapeKind is what a RecentShapes row measures.
 type shapeKind string
 
 const (
 	shapeRecent  shapeKind = "recent"
-	shapeBuild   shapeKind = "build"
+	shapeStarted shapeKind = "started"
+	shapeBurst   shapeKind = "burst"
 	shapeArrived shapeKind = "arrived"
 )
 
 // shapesByMarket are, by market, the largest shape placed platform
-// containers reserved and the largest its finished builds did, and what
-// arrived within the arrival window. GPU work belongs to the on-demand
-// market of its model, as its demand does; GPU work without a model
-// belongs to none.
-func shapesByMarket(rows []RecentShapesRow) (recent, builds, arrived map[ReserveMarket]FleetCapacity) {
-	recent, builds, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+// containers reserved and the most disks one attached, and what arrived
+// within the arrival window.
+func shapesByMarket(rows []RecentShapesRow) (recent, started, burst, arrived map[ReserveMarket]FleetCapacity, disks map[ReserveMarket]int) {
+	recent, started, burst, arrived = map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}, map[ReserveMarket]FleetCapacity{}
+	disks = map[ReserveMarket]int{}
 	for _, r := range rows {
-		var m ReserveMarket
-		switch {
-		case r.GpuType != "":
-			m = ReserveMarket{GPU: r.GpuType}
-		case r.Gpus > 0:
+		m, ok := r.market()
+		if !ok {
 			continue
-		default:
-			m = ReserveMarket{Preemptible: r.Preemptible}
 		}
 		shape := FleetCapacity{CPUMillis: cpu.Millis(r.CpuMillis), MemoryBytes: r.MemoryBytes, GPUs: int(r.Gpus)}
 		switch shapeKind(r.Kind) {
 		case shapeRecent:
-			recent[m] = recent[m].Upper(shape)
-		case shapeBuild:
-			builds[m] = builds[m].Upper(shape)
+			recent[m], disks[m] = recent[m].Upper(shape), max(disks[m], int(r.Disks))
+		case shapeStarted:
+			started[m] = started[m].Upper(shape)
+		case shapeBurst:
+			burst[m] = burst[m].Upper(shape)
 		case shapeArrived:
 			arrived[m] = arrived[m].Plus(shape)
 		}
 	}
-	return recent, builds, arrived
+	return recent, started, burst, arrived, disks
 }
 
 // offerCooldowns are the cooldowns of one owner: "platform" or a

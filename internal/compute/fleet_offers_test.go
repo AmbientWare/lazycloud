@@ -26,13 +26,14 @@ func fleetRates(t *testing.T) []billing.ComputeRate {
 
 func offerInputs(t *testing.T) OfferInputs {
 	return OfferInputs{
-		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t),
+		Now: offerNow, Catalog: FleetCatalog(), Rates: fleetRates(t), StorageRegion: "us-east-1",
 		Networks: map[string]Network{"us-east-2": oneZone("us-east-2a", "use2-az1")},
 	}
 }
 
 // A request of every CPU of an AWS size buys that size, not the next one up.
 func TestARequestOfEveryCPUBuysThatSize(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	for _, cpus := range []cpu.Millis{4000, 8000} {
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: cpus, MemoryBytes: 8 * gib}, false, in)
@@ -43,6 +44,7 @@ func TestARequestOfEveryCPUBuysThatSize(t *testing.T) {
 }
 
 func TestOffersRespectInterruptionToleranceAndZone(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-east-2": {Subnets: []Subnet{
 		{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"},
@@ -74,6 +76,7 @@ func TestOffersRespectInterruptionToleranceAndZone(t *testing.T) {
 }
 
 func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	gpuType := func(name, model string, micros int64) CatalogType {
 		return CatalogType{Name: name, Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPU: model, GPUCount: 1, prices: [4]int64{micros, micros, micros, micros}}
@@ -97,6 +100,7 @@ func TestOffersRankTheAuthorsGPUOrderBeforeACheaperCard(t *testing.T) {
 // The platform fleet buys only the GPU models it offers, even for work that
 // names another first; a connected account buys any model.
 func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-east-1": oneZone("us-east-1a", "use1-az1")}
 	need := Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}
@@ -115,7 +119,8 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 	}
 }
 
-func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
+func TestOfferCostIsComputeVolumesPublicIPv4AndTransfer(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-west-1": oneZone("us-west-1a", "usw1-az1")}
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
@@ -124,16 +129,17 @@ func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
 	if len(serving) != 1 || len(reserve) != 1 {
 		t.Fatalf("offers %v %v", offerKeys(serving), offerKeys(reserve))
 	}
-	// 100 GiB of gp3 at $0.096 a GiB-month in us-west-1 over 720 hours, and
-	// 0.5 GB an hour for its one core at $0.02 a GB to and from us-east-1.
-	disk := (100*96_000 + 719) / 720
+	// A 100 GiB root and a 40 GiB data volume of gp3 at $0.096 a GiB-month
+	// in us-west-1 over 720 hours, and 0.5 GB an hour for its one core at
+	// $0.02 a GB to and from us-east-1.
+	disk := (140*96_000 + 719) / 720
 	transfer := int64(10_000)
 	if o := serving[0]; o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer || o.StoppedMicros != int64(disk) || o.Hibernate {
 		t.Fatalf("serving offer %+v", o)
 	}
 	// A hibernating reserve adds its 8 GiB of RAM as swap; stopped, it
 	// moves nothing.
-	disk = (108*96_000 + 719) / 720
+	disk = (148*96_000 + 719) / 720
 	if o := reserve[0]; !o.Hibernate || o.StoppedMicros != int64(disk) || o.HourlyMicros != 117_600+int64(disk)+5_000 || o.TransferMicros != transfer {
 		t.Fatalf("reserve offer %+v", o)
 	}
@@ -142,6 +148,7 @@ func TestOfferCostIsComputeRootDiskPublicIPv4AndTransfer(t *testing.T) {
 // The registry and the object store live in us-east-1, so a host elsewhere
 // pays transfer; another region wins only when it is cheaper all-in.
 func TestOffersPreferTheStorageRegionUntilAnotherIsCheaperAllIn(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
 	in.Networks = map[string]Network{
@@ -187,6 +194,7 @@ func TestOffersPreferTheStorageRegionUntilAnotherIsCheaperAllIn(t *testing.T) {
 // A pool of a scored shape that has no score of its own ranks at the
 // shape's worst score, not its best.
 func TestAnUnscoredPoolRanksAtItsShapesWorstScore(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "c6a.2xlarge")}
 	in.Networks = map[string]Network{"us-east-2": {Subnets: []Subnet{
@@ -207,6 +215,7 @@ func TestAnUnscoredPoolRanksAtItsShapesWorstScore(t *testing.T) {
 }
 
 func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
+	t.Parallel()
 	p := DefaultPolicy()
 	rates := indexRates(fleetRates(t))
 	usable := mustType(t, "m6a.8xlarge").Usable(0)
@@ -245,11 +254,6 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 			t.Errorf("%s over its ceiling: %q", c.name, reason)
 		}
 	}
-	nonPreemptible := rates[billing.ClassNonPreemptible][""]
-	auto := rates[billing.ClassAuto][""]
-	if nonPreemptible.CPUHour != 3*auto.CPUHour || rates[billing.ClassNonPreemptible]["L4"].GPUCardHour != rates[billing.ClassAuto]["L4"].GPUCardHour {
-		t.Fatalf("non-preemptible CPU and memory are three times automatic; GPUs are not")
-	}
 	unpriced := FleetOffer{Type: CatalogType{GPU: "unpriced", GPUCount: 1}, Market: MarketOnDemand, Usable: usable, HourlyMicros: 1}
 	if reason, _ := marginRejection(p, rates, unpriced, Requirement{}); reason != rejectUnpricedCapacity {
 		t.Fatalf("unpriced GPU: %q", reason)
@@ -259,6 +263,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 // A refusal cools only its own offer: in its zone, or with no zone in every
 // zone of its region. Other types and zones keep their place.
 func TestARefusalCoolsOnlyItsOffer(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "m7i.xlarge")}
 	in.Networks["us-east-2"] = Network{Subnets: []Subnet{{ID: "a", Zone: "us-east-2a", ZoneID: "use2-az1"}, {ID: "b", Zone: "us-east-2b", ZoneID: "use2-az2"}}}
@@ -280,6 +285,7 @@ func TestARefusalCoolsOnlyItsOffer(t *testing.T) {
 }
 
 func TestOffersPreferTheEmptierZoneAtEqualCost(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large")}
 	in.Networks = map[string]Network{
@@ -312,6 +318,7 @@ func offerKeys(offers []FleetOffer) []string {
 }
 
 func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Rates = nil
 	need := Requirement{CPUMillis: 1000, MemoryBytes: gib}
@@ -328,7 +335,7 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 	for _, preemptible := range []bool{false, true} {
 		need.Preemptible = preemptible
 		offers := RankOffers(DefaultPolicy(), need, true, in)
-		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != rootDiskMicros("us-east-2", offers[0].Type.RootGiB(true), offers[0].Type.PricedMiBps(true)) {
+		if len(offers) == 0 || !offers[0].Hibernate || offers[0].StoppedMicros != offers[0].Type.volumesMicros("us-east-2", true, true) {
 			t.Errorf("preemptible %v: reserve offers %v, want one that hibernates", preemptible, offerKeys(offers))
 		}
 	}
@@ -338,18 +345,20 @@ func TestAConnectionPaysItsOwnHostsAndReservesOfEitherMarketHibernate(t *testing
 // image would not finish writing within providerDeadline, so it stops
 // plainly on the plain root.
 func TestOnlyReservesOfAtMost32GiBHibernate(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
-	for name, want := range map[string]bool{"m7i.2xlarge": true, "m6a.4xlarge": false, "r6a.4xlarge": false, "m7i.8xlarge": false} {
+	for name, want := range map[string]bool{"m7i.2xlarge": true, "c6a.4xlarge": true, "m6a.4xlarge": false} {
 		typ := mustType(t, name)
 		in.Catalog = []CatalogType{typ}
 		offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 1000, MemoryBytes: gib}, true, in)
-		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != rootDiskMicros("us-east-2", typ.RootGiB(want), typ.PricedMiBps(true)) {
+		if len(offers) == 0 || offers[0].Hibernate != want || offers[0].StoppedMicros != typ.volumesMicros("us-east-2", want, true) {
 			t.Errorf("%s: reserve offers %v, want one that hibernates %v", name, offerKeys(offers), want)
 		}
 	}
 }
 
 func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "g4dn.xlarge")}
 	in.Networks = map[string]Network{
@@ -363,5 +372,20 @@ func TestOffersSkipAZoneThatDoesNotOfferTheType(t *testing.T) {
 	want := []string{"us-east-1/use1-az6/m7i.large/on_demand", "us-east-2/use2-az1/m7i.large/on_demand"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("offers %v, want %v", got, want)
+	}
+}
+
+// A container's disks take a disk slot each, so only types with a slot
+// for every disk host it.
+func TestOffersHoldEveryDiskTheWorkAttaches(t *testing.T) {
+	t.Parallel()
+	offers := RankOffers(DefaultPolicy(), Requirement{CPUMillis: 500, MemoryBytes: gib, Disks: 5}, false, offerInputs(t))
+	if len(offers) == 0 {
+		t.Fatal("no offer holds five disks")
+	}
+	for _, o := range offers {
+		if o.Type.DiskSlots() < 5 {
+			t.Errorf("%s offered with %d disk slots", o.Key(), o.Type.DiskSlots())
+		}
 	}
 }

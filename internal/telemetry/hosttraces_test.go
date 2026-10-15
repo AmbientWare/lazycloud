@@ -33,6 +33,7 @@ func (r *requests) Export(_ context.Context, req *collector.ExportTraceServiceRe
 // a host cannot make them look like the control plane's, carry AWS metadata
 // or a presigned query, and a host past its span budget is dropped.
 func TestHostSpansCarryTheirHost(t *testing.T) {
+	t.Parallel()
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

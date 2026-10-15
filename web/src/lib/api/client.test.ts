@@ -3,23 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError, api, ok, responseErrorMessage } from "./client";
 
 describe("API errors", () => {
-  it("reports the API's typed error message", () => {
-    const body = JSON.stringify({ code: "forbidden", message: "Only administrators can do that" });
-    const error = new ApiError(403, "Forbidden", body);
-    expect(error.message).toBe("Only administrators can do that");
-    expect(error.body).toBe(body);
-  });
-
-  it("falls back to the HTTP status for an unstructured or HTML body", () => {
-    expect(responseErrorMessage(500, "Internal Server Error", '{"error":true}')).toBe(
-      "500 Internal Server Error",
-    );
-    expect(responseErrorMessage(404, "Not Found", "<!DOCTYPE html><html>shell</html>")).toBe(
-      "404 Not Found",
-    );
-  });
-
-  it("keeps the request id and rate-limit timing of a failed call", async () => {
+  it("reports the typed error message, request id and rate-limit timing of a failed call", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -39,5 +23,14 @@ describe("API errors", () => {
     expect(failure).toMatchObject({ status: 429, requestId: "req-server-42" });
     expect((failure as ApiError).message).toBe("Too many requests");
     expect((failure as ApiError).retryAt).toBeGreaterThanOrEqual(before + 2_000);
+  });
+
+  it("falls back to the HTTP status for an unstructured or HTML body", () => {
+    expect(responseErrorMessage(500, "Internal Server Error", '{"error":true}')).toBe(
+      "500 Internal Server Error",
+    );
+    expect(responseErrorMessage(404, "Not Found", "<!DOCTYPE html><html>shell</html>")).toBe(
+      "404 Not Found",
+    );
   });
 });

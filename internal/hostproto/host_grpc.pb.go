@@ -26,8 +26,10 @@ const (
 	HostService_AppendLogs_FullMethodName              = "/lazycloud.host.v1.HostService/AppendLogs"
 	HostService_AcquireDisk_FullMethodName             = "/lazycloud.host.v1.HostService/AcquireDisk"
 	HostService_RecordDiskGeneration_FullMethodName    = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
-	HostService_RecordDiskCollection_FullMethodName    = "/lazycloud.host.v1.HostService/RecordDiskCollection"
+	HostService_CollectDisk_FullMethodName             = "/lazycloud.host.v1.HostService/CollectDisk"
+	HostService_GrantDiskRead_FullMethodName           = "/lazycloud.host.v1.HostService/GrantDiskRead"
 	HostService_ReleaseDisk_FullMethodName             = "/lazycloud.host.v1.HostService/ReleaseDisk"
+	HostService_RecordDiskFailure_FullMethodName       = "/lazycloud.host.v1.HostService/RecordDiskFailure"
 	HostService_ContainerAPI_FullMethodName            = "/lazycloud.host.v1.HostService/ContainerAPI"
 	HostService_CompleteImageBuild_FullMethodName      = "/lazycloud.host.v1.HostService/CompleteImageBuild"
 	HostService_AppendImageBuildLogs_FullMethodName    = "/lazycloud.host.v1.HostService/AppendImageBuildLogs"
@@ -63,12 +65,24 @@ type HostServiceClient interface {
 	// ABORTED means another container still holds it; the host retries.
 	AcquireDisk(ctx context.Context, in *AcquireDiskRequest, opts ...grpc.CallOption) (*AcquireDiskResponse, error)
 	// RecordDiskGeneration records an uploaded generation under the lease. A
-	// stale lease returns FAILED_PRECONDITION.
+	// stale lease returns FAILED_PRECONDITION, and the upload is left for the
+	// disk's holder to collect.
 	RecordDiskGeneration(ctx context.Context, in *RecordDiskGenerationRequest, opts ...grpc.CallOption) (*RecordDiskGenerationResponse, error)
-	// RecordDiskCollection records the bytes a collection removed.
-	RecordDiskCollection(ctx context.Context, in *RecordDiskCollectionRequest, opts ...grpc.CallOption) (*RecordDiskCollectionResponse, error)
+	// CollectDisk deletes objects of the disk the generation it names no
+	// longer reads. The server deletes them while it holds the lease, so a
+	// host that lost the disk deletes nothing a newer holder stored. A stale
+	// lease returns FAILED_PRECONDITION.
+	CollectDisk(ctx context.Context, in *CollectDiskRequest, opts ...grpc.CallOption) (*CollectDiskResponse, error)
+	// GrantDiskRead issues a credential that reads the disk's objects and
+	// nothing else, with which the host's snapshotter serves its generations.
+	// A stale lease returns FAILED_PRECONDITION.
+	GrantDiskRead(ctx context.Context, in *GrantDiskReadRequest, opts ...grpc.CallOption) (*GrantDiskReadResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
+	// RecordDiskFailure records why the holder's last publish or release
+	// failed, which the disk shows until a later one succeeds. A stale lease
+	// returns FAILED_PRECONDITION.
+	RecordDiskFailure(ctx context.Context, in *RecordDiskFailureRequest, opts ...grpc.CallOption) (*RecordDiskFailureResponse, error)
 	// ContainerAPI carries one public API request a container made through its
 	// supervisor. The first APIRequest holds the head, later ones the body;
 	// the host half-closes after the body. The server answers with the head,
@@ -170,10 +184,20 @@ func (c *hostServiceClient) RecordDiskGeneration(ctx context.Context, in *Record
 	return out, nil
 }
 
-func (c *hostServiceClient) RecordDiskCollection(ctx context.Context, in *RecordDiskCollectionRequest, opts ...grpc.CallOption) (*RecordDiskCollectionResponse, error) {
+func (c *hostServiceClient) CollectDisk(ctx context.Context, in *CollectDiskRequest, opts ...grpc.CallOption) (*CollectDiskResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RecordDiskCollectionResponse)
-	err := c.cc.Invoke(ctx, HostService_RecordDiskCollection_FullMethodName, in, out, cOpts...)
+	out := new(CollectDiskResponse)
+	err := c.cc.Invoke(ctx, HostService_CollectDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) GrantDiskRead(ctx context.Context, in *GrantDiskReadRequest, opts ...grpc.CallOption) (*GrantDiskReadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantDiskReadResponse)
+	err := c.cc.Invoke(ctx, HostService_GrantDiskRead_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +208,16 @@ func (c *hostServiceClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReleaseDiskResponse)
 	err := c.cc.Invoke(ctx, HostService_ReleaseDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) RecordDiskFailure(ctx context.Context, in *RecordDiskFailureRequest, opts ...grpc.CallOption) (*RecordDiskFailureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordDiskFailureResponse)
+	err := c.cc.Invoke(ctx, HostService_RecordDiskFailure_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -271,12 +305,24 @@ type HostServiceServer interface {
 	// ABORTED means another container still holds it; the host retries.
 	AcquireDisk(context.Context, *AcquireDiskRequest) (*AcquireDiskResponse, error)
 	// RecordDiskGeneration records an uploaded generation under the lease. A
-	// stale lease returns FAILED_PRECONDITION.
+	// stale lease returns FAILED_PRECONDITION, and the upload is left for the
+	// disk's holder to collect.
 	RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error)
-	// RecordDiskCollection records the bytes a collection removed.
-	RecordDiskCollection(context.Context, *RecordDiskCollectionRequest) (*RecordDiskCollectionResponse, error)
+	// CollectDisk deletes objects of the disk the generation it names no
+	// longer reads. The server deletes them while it holds the lease, so a
+	// host that lost the disk deletes nothing a newer holder stored. A stale
+	// lease returns FAILED_PRECONDITION.
+	CollectDisk(context.Context, *CollectDiskRequest) (*CollectDiskResponse, error)
+	// GrantDiskRead issues a credential that reads the disk's objects and
+	// nothing else, with which the host's snapshotter serves its generations.
+	// A stale lease returns FAILED_PRECONDITION.
+	GrantDiskRead(context.Context, *GrantDiskReadRequest) (*GrantDiskReadResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
+	// RecordDiskFailure records why the holder's last publish or release
+	// failed, which the disk shows until a later one succeeds. A stale lease
+	// returns FAILED_PRECONDITION.
+	RecordDiskFailure(context.Context, *RecordDiskFailureRequest) (*RecordDiskFailureResponse, error)
 	// ContainerAPI carries one public API request a container made through its
 	// supervisor. The first APIRequest holds the head, later ones the body;
 	// the host half-closes after the body. The server answers with the head,
@@ -326,11 +372,17 @@ func (UnimplementedHostServiceServer) AcquireDisk(context.Context, *AcquireDiskR
 func (UnimplementedHostServiceServer) RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordDiskGeneration not implemented")
 }
-func (UnimplementedHostServiceServer) RecordDiskCollection(context.Context, *RecordDiskCollectionRequest) (*RecordDiskCollectionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RecordDiskCollection not implemented")
+func (UnimplementedHostServiceServer) CollectDisk(context.Context, *CollectDiskRequest) (*CollectDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CollectDisk not implemented")
+}
+func (UnimplementedHostServiceServer) GrantDiskRead(context.Context, *GrantDiskReadRequest) (*GrantDiskReadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantDiskRead not implemented")
 }
 func (UnimplementedHostServiceServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
+}
+func (UnimplementedHostServiceServer) RecordDiskFailure(context.Context, *RecordDiskFailureRequest) (*RecordDiskFailureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordDiskFailure not implemented")
 }
 func (UnimplementedHostServiceServer) ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error {
 	return status.Error(codes.Unimplemented, "method ContainerAPI not implemented")
@@ -483,20 +535,38 @@ func _HostService_RecordDiskGeneration_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HostService_RecordDiskCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RecordDiskCollectionRequest)
+func _HostService_CollectDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CollectDiskRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HostServiceServer).RecordDiskCollection(ctx, in)
+		return srv.(HostServiceServer).CollectDisk(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: HostService_RecordDiskCollection_FullMethodName,
+		FullMethod: HostService_CollectDisk_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).RecordDiskCollection(ctx, req.(*RecordDiskCollectionRequest))
+		return srv.(HostServiceServer).CollectDisk(ctx, req.(*CollectDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_GrantDiskRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantDiskReadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GrantDiskRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GrantDiskRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GrantDiskRead(ctx, req.(*GrantDiskReadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -515,6 +585,24 @@ func _HostService_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(HostServiceServer).ReleaseDisk(ctx, req.(*ReleaseDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_RecordDiskFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordDiskFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).RecordDiskFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_RecordDiskFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).RecordDiskFailure(ctx, req.(*RecordDiskFailureRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -630,12 +718,20 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _HostService_RecordDiskGeneration_Handler,
 		},
 		{
-			MethodName: "RecordDiskCollection",
-			Handler:    _HostService_RecordDiskCollection_Handler,
+			MethodName: "CollectDisk",
+			Handler:    _HostService_CollectDisk_Handler,
+		},
+		{
+			MethodName: "GrantDiskRead",
+			Handler:    _HostService_GrantDiskRead_Handler,
 		},
 		{
 			MethodName: "ReleaseDisk",
 			Handler:    _HostService_ReleaseDisk_Handler,
+		},
+		{
+			MethodName: "RecordDiskFailure",
+			Handler:    _HostService_RecordDiskFailure_Handler,
 		},
 		{
 			MethodName: "CompleteImageBuild",

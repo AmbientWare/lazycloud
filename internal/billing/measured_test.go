@@ -10,6 +10,7 @@ import (
 // less, or reported nothing, bills the reservation. Recent periods read the
 // samples and older ones the minutes, so nothing counts twice.
 func TestMeteringBillsTheGreaterOfReservationAndMeasuredUse(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -62,6 +63,7 @@ values ($1, $2::timestamptz + interval '20 minutes 5 seconds', 5000, 50000, 1048
 // complete. Until then the period accrues at the reservation, and a sample
 // that lands late is billed once the period closes.
 func TestMeteringWaitsForMeasuredUseBeforeClosingAPeriod(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)

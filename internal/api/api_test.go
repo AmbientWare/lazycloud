@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -61,6 +63,18 @@ type env struct {
 	distDir string
 }
 
+// document is the OpenAPI document the handlers validate against, parsed
+// once for the test binary as a server parses it once.
+var document *openapi3.T
+
+func TestMain(m *testing.M) {
+	var err error
+	if document, err = api.GetSpec(); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	return newEnvWith(t, observability.DefaultChangesConfig())
@@ -75,7 +89,10 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
-	changes := observability.NewChanges(pool, changesConfig, nil, slog.New(slog.DiscardHandler))
+	changes, err := observability.NewChanges(pool, changesConfig, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	probe, _, err := changes.Subscribe(identity.WorkspaceID{}, "test", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -104,21 +121,24 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		t.Fatal(err)
 	}
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
-	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test"}, logger)
+	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := storage.NewStorage(pool, storagetest.Config(t))
-	handler, err := api.NewHandler(api.Owners{
+	store := storage.NewStorage(pool, storagetest.Config(t), comp)
+	im, err := images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{
+		Registry: "registry.example.com", Repository: "lazycloud", PlatformTransferBackoff: images.PlatformTransferBackoff,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := api.NewHandler(document, api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
-		Images:        images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Images:        im,
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
@@ -238,6 +258,7 @@ func (e *env) deploy() apitypes.Deployment {
 // A deployed function answers on its own host, so deploy and workload
 // reads say where, as they do for endpoints.
 func TestDeployedFunctionsReportWhereTheyAnswer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	release := e.deploy().Releases[0]
 	if release.Url == nil || !strings.HasPrefix(*release.Url, "https://summarize-sales-") || release.InvokePath == nil ||
@@ -252,6 +273,7 @@ func TestDeployedFunctionsReportWhereTheyAnswer(t *testing.T) {
 }
 
 func TestAuthenticationAuthorizationAndValidation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	var apiErr apitypes.Error
 	if status := e.do("GET", "/v1/me", "", nil, &apiErr); status != 401 || apiErr.Code != apitypes.Unauthenticated {
@@ -296,8 +318,8 @@ func (e *env) runOnHost(result string) {
 	err := e.pool.QueryRow(ctx, `
 with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
               values ('h', sha256('h'), 'online', 4000, 1 << 32) returning id),
-     ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-             select w.id, r.id, 'ready', host.id, 1, 1000, 1 << 28
+     ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+             select w.id, r.id, (select workload_id from releases where id = r.id), 'ready', host.id, 1, 1000, 1 << 28
              from workspaces w, releases r, host returning id)
 select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 	if err != nil {
@@ -317,7 +339,6 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 		e.t.Error(err)
 		return
 	}
-	time.Sleep(100 * time.Millisecond)
 	if err := e.execution.CompleteAttempt(ctx, host, container, execution.AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: execution.AttemptSucceeded,
 		Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(result)},
@@ -328,6 +349,7 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 }
 
 func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
@@ -400,6 +422,7 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 }
 
 func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	var submitted apitypes.SubmitTasksResponse
@@ -448,6 +471,7 @@ func TestWaitTasksAuthorizesBoundsAndInlinesResults(t *testing.T) {
 }
 
 func TestWaitTasksResponseStaysWithinTheInlineBudget(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	inputs := make([]apitypes.TaskInput, 30)
@@ -544,6 +568,7 @@ func (e *env) runEvents(path string, body apitypes.RunTaskRequest) (int, string,
 }
 
 func TestRunTaskStreamsTheTaskItsLogsAndResult(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"

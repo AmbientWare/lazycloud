@@ -143,7 +143,7 @@ func (a *Agent) reserveBlocker(ctx context.Context) string {
 		return "listing containers failed: " + err.Error()
 	}
 	for _, summary := range list.Items {
-		if kind := summary.Labels[labelKind]; kind == kindMount || kind == kindBucket {
+		if summary.Labels[labelKind] == kindMount {
 			return "a volume is mounted"
 		}
 	}

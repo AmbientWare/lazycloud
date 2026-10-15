@@ -1,8 +1,14 @@
+//go:build hostruntime
+
 // Package acceptance runs cross-owner workflows against real PostgreSQL, the
 // local object store, a registry, Docker with lazycloud-snapshotter and the
 // managed Python runtime: server owners, scheduler loops and an agent in one
 // test process. The managed image and the agent's platform images convert
 // for real, so the first start of a test waits for those conversions.
+// Each test runs its own platform over its own database, in parallel with
+// the others unless it needs the host to itself. The hostruntime build tag
+// keeps the package out of the default go test run;
+// deploy/local/acceptance.sh runs it on a host.
 package acceptance
 
 import (
@@ -27,10 +33,11 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moby/moby/client"
-	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
@@ -45,8 +52,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 	"github.com/AmbientWare/lazycloud/internal/images"
-	"github.com/AmbientWare/lazycloud/internal/platformimages"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
@@ -68,6 +75,10 @@ var supervisorBinary, registry string //nolint:gochecknoglobals // Set once in T
 // objectStore holds the buckets every test's server shares: the converted
 // images of the template database live in its layer bucket.
 var objectStore storage.Config //nolint:gochecknoglobals // Set once in TestMain.
+
+// tlsStore is the same store over HTTPS with a private CA, whose root
+// every test's agent takes as its trust bundle.
+var tlsStore storagetest.HTTPS //nolint:gochecknoglobals // Set once in TestMain.
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lcaccept")
@@ -96,7 +107,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	objectStore = store
+	if tlsStore, err = storagetest.OpenTLS(context.Background(), dir); err != nil {
+		stop()
+		_ = removeStore(context.Background())
+		panic(err)
+	}
 	code := m.Run()
+	if err := removeRegistryImages(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = max(code, 1)
+	}
 	if err := removeStore(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "remove the test buckets:", err)
 		code = max(code, 1)
@@ -104,6 +124,30 @@ func TestMain(m *testing.M) {
 	stop()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// removeRegistryImages removes the images agents pulled from the test
+// registry, which read their layers from the test store's buckets.
+func removeRegistryImages() error {
+	out, err := exec.CommandContext(context.Background(), "docker", "image", "ls", "--no-trunc", "--format", "{{.Repository}} {{.ID}}").Output()
+	if err != nil {
+		return fmt.Errorf("list images: %w", err)
+	}
+	removed := map[string]bool{}
+	for line := range strings.Lines(string(out)) {
+		repository, id, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if !strings.HasPrefix(repository, registry+"/") || removed[id] {
+			continue
+		}
+		removed[id] = true
+		if out, err := exec.CommandContext(context.Background(), "docker", "image", "rm", "-f", id).CombinedOutput(); err != nil {
+			return fmt.Errorf("remove %s: %w: %s", repository, err, out)
+		}
+		if exec.CommandContext(context.Background(), "docker", "image", "inspect", id).Run() == nil {
+			return fmt.Errorf("remove %s: it remains", repository)
+		}
+	}
+	return nil
 }
 
 // platform is one server, scheduler and agent over a fresh database.
@@ -127,6 +171,30 @@ type platform struct {
 	geesefs string
 	// newEdge makes another server's edge on the same database, for relays.
 	newEdge func(url, relay string) (*edge.Edge, error)
+	// compute and images are the server's owners; hosts is where agents
+	// dial it, and join enrolls one.
+	compute *compute.Compute
+	images  *images.Images
+	hosts   string
+	join    string
+	// dirs holds agents' directories; see dir.
+	dirs string
+	// agents counts the agents runAgent started; only the first registers
+	// metrics, which one registry holds once.
+	agents int
+	// ctx ends when the test does; wg holds the platform's goroutines,
+	// which cleanup waits for.
+	ctx    context.Context //nolint:containedctx // The platform's lifetime.
+	wg     *sync.WaitGroup
+	logger *slog.Logger
+	tel    *telemetry.Telemetry
+}
+
+// serverOptions shape the platform's server.
+type serverOptions struct {
+	// dist holds agent release archives, which the API serves and hosts
+	// update from.
+	dist string
 }
 
 func (p *platform) port() string {
@@ -146,20 +214,24 @@ func runtimeDir(t *testing.T) string {
 	return dir
 }
 
-// startRegistry runs the platform registry on a loopback port and returns
-// its address and how to remove it.
+// startRegistry runs the platform registry, from the image cache, on a
+// loopback port and returns its address and how to remove it.
 func startRegistry() (string, func(), error) {
 	ctx := context.Background()
-	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", registryImage).Output()
+	image, err := imagefstest.Load(ctx, registryImage, v1.Platform{OS: "linux", Architecture: goruntime.GOARCH})
 	if err != nil {
-		return "", nil, fmt.Errorf("start registry: %w", err)
+		return "", nil, err
+	}
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", image).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("start registry: %w", withStderr(err))
 	}
 	id := strings.TrimSpace(string(out))
 	stop := func() { _ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run() }
 	port, err := exec.CommandContext(ctx, "docker", "port", id, "5000/tcp").Output()
 	if err != nil {
 		stop()
-		return "", nil, fmt.Errorf("registry port: %w", err)
+		return "", nil, fmt.Errorf("registry port: %w", withStderr(err))
 	}
 	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
@@ -173,6 +245,15 @@ func startRegistry() (string, func(), error) {
 			return "", nil, fmt.Errorf("registry did not start: %w", err)
 		}
 	}
+}
+
+// withStderr adds what a failed command printed to err.
+func withStderr(err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(exit.Stderr))
+	}
+	return err
 }
 
 // pushPythonBase builds the platform's Python base of pythonVersion with
@@ -194,61 +275,59 @@ func pushPythonBase() error {
 	return nil
 }
 
-// newImages is the images owner every test's server runs over pool. Its
+// imagesConfig is the images owner's settings on every test's server. Its
 // managed template names the bases pushPythonBase pushed, and its builds
 // fit the test host.
-func newImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage) *images.Images {
-	return images.NewImages(pool, exec, vault, store, images.Config{
+func imagesConfig() images.Config {
+	return images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true, ManagedBase: registry + "/release/python:{version}-acceptance",
-		BuildCPU: 500,
-	})
+		BuildCPU: 500, PlatformTransferBackoff: images.PlatformTransferBackoff,
+	}
 }
 
 // convertImages converts the platform images and the managed image for
 // this host's architecture into pool, the template every test's database
 // is cloned from, so each test starts with them converted, as a server
-// that converted them at its start would.
+// that converted them at its start would. The conversion runs in
+// ./convert, outside this binary's race instrumentation, which makes it
+// many times slower.
 func convertImages(ctx context.Context, pool *pgxpool.Pool) error {
 	started := time.Now()
-	key, err := secrets.NewFileKey(make([]byte, 32))
+	// The spec is ./convert's. The images owner's Auth and ECR are nil:
+	// the test registry needs no login.
+	spec, err := json.Marshal(struct { //nolint:staticcheck // As above.
+		Database string
+		Store    storage.Config
+		Images   images.Config
+		Python   string
+	}{pool.Config().ConnString(), objectStore, imagesConfig(), pythonVersion})
 	if err != nil {
 		return err
 	}
-	exec := execution.NewExecution(pool)
-	im := newImages(pool, exec, secrets.NewSecrets(pool, key), storage.NewStorage(pool, objectStore))
-	source, err := im.ManagedSource(ctx, pythonVersion)
-	if err != nil {
-		return err
-	}
-	references := append(platformimages.All(), source)
-	g, converting := errgroup.WithContext(ctx)
-	for _, reference := range references {
-		g.Go(func() error {
-			began := time.Now()
-			if err := im.ConvertPlatformImage(converting, reference, goruntime.GOARCH); err != nil {
-				return err
-			}
-			fmt.Printf("converted %s in %s\n", reference, time.Since(began).Round(time.Millisecond))
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	var converted int
-	if err := pool.QueryRow(ctx, "select count(*) from platform_images where mirror is not null").Scan(&converted); err != nil {
-		return err
-	}
-	if converted != len(references) {
-		return fmt.Errorf("%d of %d images converted", converted, len(references))
+	cmd := exec.CommandContext(ctx, "go", "run", "./convert")
+	cmd.Stdin = bytes.NewReader(spec)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("convert the platform and managed images: %w", err)
 	}
 	fmt.Printf("converted the platform and managed images once in %s\n", time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
+// startPlatform starts a server and an agent in the test process.
 func startPlatform(t *testing.T) *platform {
 	t.Helper()
-	runtime := runtimeDir(t)
+	p := startServer(t, serverOptions{})
+	p.runAgent()
+	p.awaitHost()
+	return p
+}
+
+// startServer starts the server, its scheduler loops and its edge over a
+// fresh database, with no host yet.
+func startServer(t *testing.T, opts serverOptions) *platform {
+	t.Helper()
+	runtimeDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -265,8 +344,8 @@ func startPlatform(t *testing.T) *platform {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 	pool := dbtest.NewPrepared(t, "converted images", convertImages)
 	p := &platform{
-		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore),
-		execution: execution.NewExecution(pool),
+		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, objectStore, compute.NewCompute(pool, nil, compute.Config{})),
+		execution: execution.NewExecution(pool), ctx: ctx, wg: &wg, logger: logger, tel: tel,
 	}
 	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})
 	if _, err := ident.CreateUser(ctx, "dev@lazycloud.test", false); err != nil {
@@ -294,7 +373,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	p.newEdge = func(url, relay string) (*edge.Edge, error) {
-		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay}, logger)
+		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay, FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
 	}
 	p.edge, err = p.newEdge("http://lazycloud.localhost:"+port, relayListener.Addr().String())
 	if err != nil {
@@ -308,29 +387,39 @@ func startPlatform(t *testing.T) *platform {
 		},
 		MaxIdleConnsPerHost: 1024,
 	}}
+	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.api = "http://" + apiListener.Addr().String()
+	p.compute = compute.NewCompute(pool, p.execution, compute.Config{InstallURL: p.api})
 	masterKey, err := secrets.NewFileKey(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := newImages(pool, p.execution, vault, p.storage)
+	if p.images, err = images.NewImages(pool, p.execution, vault, p.storage, imagesConfig()); err != nil {
+		t.Fatal(err)
+	}
 	p.secrets = vault
+	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
-		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,
+		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
-	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
+	document, err := api.GetSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	containerAPI, err := api.NewContainerHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
+	apiHandler := api.NewHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1", AgentDistDir: opts.dist}, logger)
+	containerAPI := api.NewContainerHandler(document, owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
+	hosts, err := hostsession.NewServer(p.compute, p.execution, p.storage, p.images, listener, hostsession.Config{
 		TouchInterval: 5 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(),
+		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Tracer: tel.Tracer(), SSH: sshKeys,
 	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer(hostsession.HostFrom))
@@ -338,14 +427,10 @@ func startPlatform(t *testing.T) *platform {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.hosts = grpcListener.Addr().String()
 	edgeServer := &http.Server{Handler: tel.EdgeHandler(p.edge), ReadHeaderTimeout: 10 * time.Second}
-	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.api = "http://" + apiListener.Addr().String()
 	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
-	sched := scheduling.NewScheduling(pool, logger)
+	sched := scheduling.NewScheduling(pool, p.execution, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
 	wg.Go(func() { _ = listener.Run(ctx) })
@@ -365,6 +450,9 @@ func startPlatform(t *testing.T) *platform {
 			}
 			if _, err := p.execution.PlanServing(passCtx, logger); err != nil && ctx.Err() == nil {
 				t.Logf("plan serving: %v", err)
+			}
+			if _, err := p.execution.PlanPods(passCtx, logger); err != nil && ctx.Err() == nil {
+				t.Logf("plan pods: %v", err)
 			}
 			if _, err := sched.Place(passCtx); err != nil && ctx.Err() == nil {
 				t.Logf("place: %v", err)
@@ -389,8 +477,7 @@ func startPlatform(t *testing.T) *platform {
 		hosts.Wait()
 	})
 
-	join, _, err := compute.NewCompute(pool, p.execution, compute.Config{}).CreateJoinToken(ctx, time.Hour)
-	if err != nil {
+	if p.join, _, err = p.compute.CreateJoinToken(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	socketDir, err := os.MkdirTemp("", "lcs")
@@ -399,7 +486,6 @@ func startPlatform(t *testing.T) *platform {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	p.socketDir = socketDir
-	stateDir := t.TempDir()
 	// Volumes mount with the pinned GeeseFS deploy/local/fetch-geesefs.sh
 	// installs; without it they are unavailable.
 	geesefs, err := filepath.Abs("../bin/geesefs")
@@ -410,54 +496,98 @@ func startPlatform(t *testing.T) *platform {
 		geesefs = ""
 	}
 	p.geesefs = geesefs
+	p.dirs = t.TempDir()
 	// Cleanups run last first: this one stops everything before the
 	// database and directories go.
 	t.Cleanup(func() {
 		cancel()
 		wg.Wait()
-		removeContainers(t)
+		removeContainers(t, p.dirs)
 	})
-	wg.Go(func() {
-		err := agent.Run(ctx, agent.Config{
-			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
-			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger, Telemetry: tel,
-		})
-		if err != nil && ctx.Err() == nil {
-			t.Errorf("agent: %v", err)
-		}
-	})
-	p.awaitHost(im)
 	return p
 }
 
-// awaitHost waits until the host joined and the managed image pulls for
-// it, so tests' deadlines measure their own workflows.
-func (p *platform) awaitHost(im *images.Images) {
+// dir is a new directory that outlasts the platform's agents: mounts in it
+// are gone before it is removed.
+func (p *platform) dir() string {
+	p.t.Helper()
+	dir, err := os.MkdirTemp(p.dirs, "")
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	return dir
+}
+
+// ociRuntime is the Docker runtime workloads run with:
+// LAZYCLOUD_TEST_OCI_RUNTIME, runsc as on hosts, or runc.
+func ociRuntime() string {
+	if runtime := os.Getenv("LAZYCLOUD_TEST_OCI_RUNTIME"); runtime != "" {
+		return runtime
+	}
+	return "runc"
+}
+
+// runAgent runs an agent in the test process until the platform stops.
+// Its volume mounts trust only the HTTPS store's CA.
+func (p *platform) runAgent() {
+	p.t.Helper()
+	stateDir := p.dir()
+	runtime := runtimeDir(p.t)
+	tel := p.tel
+	if p.agents++; p.agents > 1 {
+		tel = nil
+	}
+	p.wg.Go(func() {
+		err := agent.Run(p.ctx, agent.Config{
+			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
+			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
+			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel, CommitAfter: agent.DefaultCommitAfter,
+		})
+		if err != nil && p.ctx.Err() == nil {
+			p.t.Errorf("agent: %v", err)
+		}
+	})
+}
+
+// awaitHost waits until a host joined and the managed image pulls for it,
+// so tests' requests measure their own workflows.
+func (p *platform) awaitHost() {
 	p.t.Helper()
 	ctx := p.t.Context()
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			p.t.Fatal("the host did not join with the managed image converted within a minute")
-		}
+	waitFor(p.t, "a host online with the managed image converted", func() bool {
 		var host uuid.UUID
 		if err := p.pool.QueryRow(ctx, "select id from hosts where state = 'online' limit 1").Scan(&host); err != nil {
-			continue
+			return false
 		}
-		_, err := im.ManagedPull(ctx, compute.HostID(host), pythonVersion)
-		switch {
-		case err == nil:
-			return
-		case errors.Is(err, images.ErrNotReady):
-		default:
+		_, err := p.images.ManagedPull(ctx, compute.HostID(host), pythonVersion)
+		if err != nil && !errors.Is(err, images.ErrNotReady) {
 			p.t.Fatalf("pull the managed image: %v", err)
+		}
+		return err == nil
+	})
+}
+
+// settle bounds every wait on a state the platform reaches by itself; it
+// only ends a test that hangs.
+const settle = 3 * time.Minute
+
+// waitFor polls done until it holds and fails the test, naming what it
+// waited for, if it never does.
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(settle); !done(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited %s for %s", settle, what)
 		}
 	}
 }
 
-// removeContainers deletes the Docker containers the test's agent left.
-func removeContainers(t *testing.T) {
+// removeContainers deletes the Docker containers the test's agents left
+// and the mounts they left in dirs. Like an agent stopping a volume mount,
+// it removes the workloads and their binds first, so GeeseFS exits on
+// SIGTERM and leaves no dead FUSE mount.
+func removeContainers(t *testing.T, dirs string) {
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Logf("docker client: %v", err)
@@ -472,16 +602,38 @@ func removeContainers(t *testing.T) {
 		t.Logf("list containers: %v", err)
 		return
 	}
-	// Volume mount containers stop first and gracefully, so GeeseFS
-	// unmounts and leaves no dead FUSE mount in the test's directories.
-	timeout := 10
+	var platform []string
 	for _, c := range list.Items {
-		if c.Labels["lazycloud.kind"] != "" {
-			_, _ = docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout})
+		if c.Labels["lazycloud.kind"] == "" {
+			_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+		} else {
+			platform = append(platform, c.ID)
 		}
 	}
-	for _, c := range list.Items {
-		_, _ = docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true})
+	unmount(t, dirs, "/binds/")
+	var stops sync.WaitGroup
+	timeout := 10
+	for _, id := range platform {
+		stops.Go(func() {
+			_, _ = docker.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
+			_, _ = docker.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+		})
+	}
+	stops.Wait()
+	unmount(t, dirs, "")
+}
+
+// unmount detaches every mount under dirs whose path holds part.
+func unmount(t *testing.T, dirs, part string) {
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		t.Logf("list mounts: %v", err)
+		return
+	}
+	for line := range strings.Lines(string(mounts)) {
+		if point := strings.Fields(line)[4]; strings.HasPrefix(point, dirs+"/") && strings.Contains(point, part) {
+			_ = unix.Unmount(point, unix.MNT_DETACH)
+		}
 	}
 }
 

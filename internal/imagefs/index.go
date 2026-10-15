@@ -9,12 +9,15 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
 
 const (
-	indexMagic = "LCIX"
+	// indexMagic and diskIndexMagic start a stored Index and DiskIndex.
+	indexMagic     = "LCIX"
+	diskIndexMagic = "LCDX"
 	// formatVersion is the only stored format this package reads and writes.
 	formatVersion uint32 = 1
 	headerSize           = len(indexMagic) + 4
@@ -64,6 +67,13 @@ func (ix Index) Marshal() ([]byte, error) {
 			Size:           e.Size,
 		}
 	}
+	return marshalStored(indexMagic, msg)
+}
+
+// marshalStored encodes msg in the stored format: magic, the format
+// version, then the protobuf encoding compressed as one zstd frame. Equal
+// messages encode to equal bytes.
+func marshalStored(magic string, msg proto.Message) ([]byte, error) {
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("encode index: %w", err)
@@ -74,36 +84,45 @@ func (ix Index) Marshal() ([]byte, error) {
 	}
 	defer func() { _ = enc.Close() }()
 	out := make([]byte, headerSize, headerSize+len(raw)/4)
-	copy(out, indexMagic)
-	binary.BigEndian.PutUint32(out[len(indexMagic):], formatVersion)
+	copy(out, magic)
+	binary.BigEndian.PutUint32(out[len(magic):], formatVersion)
 	return enc.EncodeAll(raw, out), nil
+}
+
+// unmarshalStored decodes into msg what marshalStored encoded with magic,
+// first refusing more records of a repeated field than limits allows it.
+func unmarshalStored(magic string, b []byte, msg proto.Message, limits map[protoreflect.Name]int) error {
+	if len(b) < headerSize || string(b[:len(magic)]) != magic {
+		return fmt.Errorf("%w: no index header", ErrInvalidIndex)
+	}
+	if v := binary.BigEndian.Uint32(b[len(magic):headerSize]); v != formatVersion {
+		return fmt.Errorf("%w: %d, this reader knows %d", ErrUnsupportedVersion, v, formatVersion)
+	}
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(MaxIndexSize), zstd.IgnoreChecksum(false))
+	if err != nil {
+		return fmt.Errorf("start index decoder: %w", err)
+	}
+	defer dec.Close()
+	raw, err := dec.DecodeAll(b[headerSize:], nil)
+	if err != nil {
+		return fmt.Errorf("%w: decompress: %w", ErrInvalidIndex, err)
+	}
+	if err := checkRecordCounts(raw, msg, limits); err != nil {
+		return err
+	}
+	if err := proto.Unmarshal(raw, msg); err != nil {
+		return fmt.Errorf("%w: decode: %w", ErrInvalidIndex, err)
+	}
+	return nil
 }
 
 // Unmarshal decodes a stored index. It refuses an unknown format version
 // with ErrUnsupportedVersion and an index that breaks the format's
 // invariants with ErrInvalidIndex.
 func Unmarshal(b []byte) (Index, error) {
-	if len(b) < headerSize || string(b[:len(indexMagic)]) != indexMagic {
-		return Index{}, fmt.Errorf("%w: no index header", ErrInvalidIndex)
-	}
-	if v := binary.BigEndian.Uint32(b[len(indexMagic):headerSize]); v != formatVersion {
-		return Index{}, fmt.Errorf("%w: %d, this reader knows %d", ErrUnsupportedVersion, v, formatVersion)
-	}
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(MaxIndexSize), zstd.IgnoreChecksum(false))
-	if err != nil {
-		return Index{}, fmt.Errorf("start index decoder: %w", err)
-	}
-	defer dec.Close()
-	raw, err := dec.DecodeAll(b[headerSize:], nil)
-	if err != nil {
-		return Index{}, fmt.Errorf("%w: decompress: %w", ErrInvalidIndex, err)
-	}
-	if err := checkRecordCounts(raw); err != nil {
-		return Index{}, err
-	}
 	var msg imagefsproto.Index
-	if err := proto.Unmarshal(raw, &msg); err != nil {
-		return Index{}, fmt.Errorf("%w: decode: %w", ErrInvalidIndex, err)
+	if err := unmarshalStored(indexMagic, b, &msg, map[protoreflect.Name]int{"entries": maxEntries, "frame_sizes": maxFrames}); err != nil {
+		return Index{}, err
 	}
 	ix := Index{Layer: Digest(msg.GetLayer()), StreamSize: msg.GetStreamSize()}
 	for _, size := range msg.GetFrameSizes() {
@@ -144,13 +163,12 @@ func Unmarshal(b []byte) (Index, error) {
 	return ix, nil
 }
 
-// checkRecordCounts counts the entries and frames of an encoded index
-// before it is decoded.
-func checkRecordCounts(raw []byte) error {
-	fields := (&imagefsproto.Index{}).ProtoReflect().Descriptor().Fields()
-	entriesField := fields.ByName("entries").Number()
-	framesField := fields.ByName("frame_sizes").Number()
-	var entries, frames int
+// checkRecordCounts counts the records of the repeated fields limits names
+// in raw, an encoded msg, before it is decoded. A packed field's records
+// are its varints.
+func checkRecordCounts(raw []byte, msg proto.Message, limits map[protoreflect.Name]int) error {
+	fields := msg.ProtoReflect().Descriptor().Fields()
+	counts := make(map[protowire.Number]int, len(limits))
 	for len(raw) > 0 {
 		num, typ, n := protowire.ConsumeTag(raw)
 		if n < 0 {
@@ -161,23 +179,25 @@ func checkRecordCounts(raw []byte) error {
 		if n < 0 {
 			return fmt.Errorf("%w: decode: %w", ErrInvalidIndex, protowire.ParseError(n))
 		}
+		field := fields.ByNumber(num)
 		switch {
-		case num == entriesField:
-			entries++
-		case num == framesField && typ == protowire.BytesType:
+		case field == nil:
+		case typ == protowire.BytesType && field.IsPacked():
 			packed, _ := protowire.ConsumeBytes(raw)
 			for _, b := range packed {
 				if b < 0x80 {
-					frames++
+					counts[num]++
 				}
 			}
-		case num == framesField:
-			frames++
+		default:
+			counts[num]++
 		}
 		raw = raw[n:]
 	}
-	if entries > maxEntries || frames > maxFrames {
-		return fmt.Errorf("%w: %d entries and %d frames, at most %d and %d", ErrInvalidIndex, entries, frames, maxEntries, maxFrames)
+	for name, limit := range limits {
+		if n := counts[fields.ByName(name).Number()]; n > limit {
+			return fmt.Errorf("%w: %d records of %s, at most %d", ErrInvalidIndex, n, name, limit)
+		}
 	}
 	return nil
 }

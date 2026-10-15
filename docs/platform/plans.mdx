@@ -39,6 +39,8 @@ The pricing page lists base rates for automatic placement on preemptible
 capacity, metered per second. One CPU is one physical core, two vCPUs on
 LazyCloud hosts. CPU and memory each bill at the greater of the reservation
 and measured use. GPUs bill per card, on top of the workload's CPU and memory.
+An attempt that ends by preemption isn't charged, so a running job's cost
+reaches the Usage page once its attempt ends, at most its timeout later.
 
 Placement choices multiply the base compute rate:
 

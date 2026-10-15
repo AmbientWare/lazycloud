@@ -143,6 +143,7 @@ func presignedSignature(t *testing.T, identity *hostproto.CloudIdentity, hostID 
 }
 
 func TestCloudIdentityIsAPresignedCallerIdentityRequest(t *testing.T) {
+	t.Parallel()
 	metadata := newIMDSEmulator(t)
 	hostID := uuid.NewString()
 	identity, err := cloudIdentity(t.Context(), newIMDS(metadata.URL), hostID)
@@ -170,39 +171,5 @@ func TestCloudIdentityIsAPresignedCallerIdentityRequest(t *testing.T) {
 	}
 	if presignedSignature(t, identity, uuid.NewString()) == query.Get("X-Amz-Signature") {
 		t.Fatal("the signature validates for another host id")
-	}
-}
-
-func TestCloudHostEnrollsAndReportsSpotInterruptions(t *testing.T) {
-	metadata := newIMDSEmulator(t)
-	e := newEnv(t)
-	e.startAgent(func(cfg *Config) {
-		cfg.JoinToken, cfg.CloudHostID, cfg.IMDSEndpoint = "", e.server.hostID, metadata.URL
-	})
-	enroll := e.enrollment()
-	if enroll.GetJoinToken() != "" || enroll.GetCloudIdentity().GetHostId() != e.server.hostID || enroll.GetCloudIdentity().GetUrl() == "" {
-		t.Fatalf("cloud enrollment %v", enroll)
-	}
-	s := e.session()
-
-	// A notice arrives after the session token expired; the agent renews it.
-	metadata.expireTokens()
-	reclaimAt := time.Now().Add(2 * time.Minute).Truncate(time.Second)
-	metadata.setNotice("terminate", reclaimAt)
-	isInterruption := func(m *hostproto.HostMessage) bool { return m.GetInterruption() != nil }
-	notice := s.until(t, 20*time.Second, isInterruption).GetInterruption()
-	if notice.GetReason() != "aws-ec2-spot-terminate" || !notice.GetReclaimAt().AsTime().Equal(reclaimAt) {
-		t.Fatalf("interruption %v", notice)
-	}
-	if metadata.refusals() == 0 {
-		t.Fatal("the emulator never refused an expired token")
-	}
-
-	// A new session restates the standing notice right after Hello.
-	e.grpc.Stop()
-	e.grpc, _ = e.server.serve(t, e.address)
-	s = e.session()
-	if again := s.until(t, 10*time.Second, func(*hostproto.HostMessage) bool { return true }); again.GetInterruption().GetReason() != notice.GetReason() {
-		t.Fatalf("first message after reconnect %v", again)
 	}
 }

@@ -1,6 +1,6 @@
 -- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
-       r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
+       r.spec, release_mounters(r.spec) as mounters, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
        r.workload_id, wl.kind as workload_kind, c.traceparent, c.assigned_at
 from containers c
 join releases r on r.id = c.release_id
@@ -42,6 +42,24 @@ order by 1;
 -- name: RecordImageReference :execrows
 update containers set image_reference = @reference
 where id = @id and host_id = @host_id and state = 'starting';
+
+-- name: ContainerWorkload :one
+-- The workspace and workload of a live function container on the host.
+select workspace_id, workload_id::uuid as workload_id from containers
+where id = @id and host_id = @host_id and state <> 'stopped' and workload_id is not null;
+
+-- name: VolumePeers :many
+-- The other online hosts of the host's region that run a live container of
+-- the workspace and serve a volume cache, those with the newest container
+-- first.
+select h.id, h.peer_address
+from containers c
+join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
+  and h.region = (select me.region from hosts me where me.id = @host_id)
+where c.workspace_id = @workspace_id and c.state <> 'stopped' and c.host_id <> @host_id
+group by h.id
+order by max(c.created_at) desc
+limit @max_peers;
 
 -- name: ContainerImage :one
 -- The workspace and image reference of a live container on the host.

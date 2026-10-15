@@ -198,7 +198,6 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.layerReplicas, "object-store-layer-replicas", env("LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS", ""), "JSON object of region to bucket: the layer bucket's copies hosts in those regions read (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id; empty uses the AWS default credential chain (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar((*string)(&cfg.objectStore.Workspaces.Provider), "workspace-bucket-provider", env("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER", ""), "garage or aws: creates the per-workspace buckets of volumes and disks (LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER)")
-	fs.StringVar(&cfg.objectStore.Workspaces.Prefix, "workspace-bucket-prefix", env("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX", "lazycloud-ws"), "prefix of workspace bucket names (LAZYCLOUD_WORKSPACE_BUCKET_PREFIX)")
 	fs.StringVar(&cfg.objectStore.Workspaces.GarageAdminURL, "garage-admin-url", env("LAZYCLOUD_GARAGE_ADMIN_URL", ""), "Garage admin API URL (LAZYCLOUD_GARAGE_ADMIN_URL)")
 	fs.StringVar(&cfg.objectStore.Workspaces.RoleARN, "workspace-bucket-role-arn", env("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN", ""), "role STS issues host credentials for (LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN)")
 	fs.StringVar(&cfg.buildCPU, "build-cpu", env("LAZYCLOUD_BUILD_CPU", "4"), "CPUs a build container reserves (LAZYCLOUD_BUILD_CPU)")
@@ -249,6 +248,8 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.compute.Fleet = fleet
+	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
+	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
@@ -358,10 +359,11 @@ func (ls listeners) close() {
 // connections come from session (database.OpenSession).
 func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
-	// Billing supplies plan limits once it lands; until then account
-	// metrics leave them out.
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
-	changes := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
+	changes, err := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
+	if err != nil {
+		return fmt.Errorf("change streams: %w", err)
+	}
 	listener := database.NewListener(session, logger, database.ChannelHost, database.ChannelTask, database.ChannelTaskFinished,
 		database.ChannelClaim, database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog, database.ChannelContainerOp)
@@ -373,17 +375,21 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	cfg.objectStore.Links = storage.Links{
 		URL: strings.TrimRight(cfg.identity.PublicURL, "/") + api.LinksPath, Key: masterKey.Derive("lazycloud download links"),
 	}
-	store := storage.NewStorage(pool, cfg.objectStore)
+	exec := execution.NewExecution(pool)
+	comp := compute.NewCompute(pool, exec, cfg.compute)
+	store := storage.NewStorage(pool, cfg.objectStore, comp)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
 	if err := store.AllowBrowserAccess(ctx); err != nil {
 		logger.WarnContext(ctx, "dashboard transfers of artifacts will fail", "error", err)
 	}
-	exec := execution.NewExecution(pool)
 	vault := secrets.NewSecrets(pool, masterKey)
-	im := images.NewImages(pool, exec, vault, store, cfg.images)
+	cfg.images.PlatformTransferBackoff = images.PlatformTransferBackoff
+	im, err := images.NewImages(pool, exec, vault, store, cfg.images)
+	if err != nil {
+		return err
+	}
 	ident := identity.NewIdentity(pool, cfg.identity)
-	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
@@ -395,7 +401,9 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session}
+	edgeConfig := edge.Config{
+		URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url, SessionPool: session, FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush,
+	}
 	var tcpConfig edge.TCPConfig
 	if ls.tcp != nil {
 		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {
@@ -421,23 +429,24 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
 		Observability: obs, Changes: changes, Edge: edges, SSH: sshKeys,
 	}
-	handler, err := api.NewHandler(owners, cfg.api, logger)
+	document, err := api.GetSpec()
 	if err != nil {
-		return err
+		return fmt.Errorf("load openapi document: %w", err)
 	}
-	containerAPI, err := api.NewContainerHandler(owners, cfg.api, logger)
-	if err != nil {
-		return err
-	}
+	handler := api.NewHandler(document, owners, cfg.api, logger)
+	containerAPI := api.NewContainerHandler(document, owners, cfg.api, logger)
 	hostTraces, err := tel.HostTraces(logger)
 	if err != nil {
 		return err
 	}
-	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
+	hosts, err := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		TouchInterval: 10 * time.Second, LayerLifetime: hostsession.LayerLifetime, ReplicaRecheck: hostsession.ReplicaRecheck,
-		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
+		GrantAckWait: hostsession.GrantAckWait, Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 		Registerer: tel.Registry, Tracer: tel.Tracer(), Traces: hostTraces,
 	}, logger)
+	if err != nil {
+		return err
+	}
 	hosts.ConvertAtStart(platformimages.All(), compute.FleetArchitectures()) //nolint:contextcheck // Conversions run under the host service's lifetime.
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {

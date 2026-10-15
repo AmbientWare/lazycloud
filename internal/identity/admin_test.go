@@ -10,6 +10,7 @@ import (
 )
 
 func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
@@ -46,6 +47,7 @@ func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
 }
 
 func TestDisablingEndsCredentials(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
@@ -93,6 +95,7 @@ func TestDisablingEndsCredentials(t *testing.T) {
 }
 
 func TestConcurrentMutualDemotionKeepsAnAdministrator(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	a := f.account("a@example.com", true)

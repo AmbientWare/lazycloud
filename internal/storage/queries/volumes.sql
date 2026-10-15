@@ -1,12 +1,40 @@
 -- name: WorkspaceBucket :one
-select bucket from workspace_buckets where workspace_id = @workspace_id;
+-- The connected account the workspace lives in, null for the platform's,
+-- and its bucket once it has one.
+select w.connection_id, b.bucket, b.region
+from workspaces w
+left join workspace_buckets b on b.workspace_id = w.id
+where w.id = @workspace_id;
 
--- name: InsertWorkspaceBucket :exec
-insert into workspace_buckets (workspace_id, bucket) values (@workspace_id, @bucket)
-on conflict (workspace_id) do nothing;
+-- name: BucketByName :one
+select b.bucket, b.region, w.connection_id
+from workspace_buckets b
+join workspaces w on w.id = b.workspace_id
+where b.bucket = @bucket;
 
--- name: InsertVolume :exec
-insert into volumes (workspace_id, name) values (@workspace_id, @name)
+-- name: InsertWorkspaceBucket :one
+-- The workspace's recorded bucket: this one, or the one another server
+-- recorded first.
+insert into workspace_buckets (workspace_id, bucket, region)
+values (@workspace_id, @bucket, @region)
+on conflict (workspace_id) do update set workspace_id = excluded.workspace_id
+returning bucket, region;
+
+-- name: ReadWorkspacePeerKey :one
+select volume_peer_key from workspaces where id = @workspace_id;
+
+-- name: WorkspacePeerKey :one
+-- The workspace's volume peer key: this one, or the one another server
+-- made first.
+update workspaces set volume_peer_key = coalesce(volume_peer_key, @key::bytea)
+where id = @workspace_id
+returning volume_peer_key;
+
+-- name: DeleteWorkspaceBucket :exec
+delete from workspace_buckets where workspace_id = @workspace_id;
+
+-- name: InsertVolumes :exec
+insert into volumes (workspace_id, name) select @workspace_id, unnest(@names::text[])
 on conflict (workspace_id, name) where state = 'active' do nothing;
 
 -- name: ActiveVolume :one
@@ -19,9 +47,10 @@ select id from volumes
 where workspace_id = @workspace_id and name = @name and state = 'active'
 for update;
 
--- name: ShareActiveVolume :one
-select id from volumes
-where workspace_id = @workspace_id and name = @name and state = 'active'
+-- name: ShareActiveVolumes :many
+select id, name from volumes
+where workspace_id = @workspace_id and name = any(@names::text[]) and state = 'active'
+order by id
 for share;
 
 -- name: ListVolumes :many
@@ -54,13 +83,14 @@ limit 1;
 -- name: MarkVolumeDeleting :exec
 update volumes set state = 'deleting', deleted_at = now() where id = @id;
 
--- name: InsertVolumeMount :exec
-insert into volume_mounts (volume_id, container_id) values (@volume_id, @container_id)
+-- name: InsertVolumeMounts :exec
+insert into volume_mounts (volume_id, container_id) select unnest(@volume_ids::uuid[]), @container_id
 on conflict do nothing;
 
 -- name: DeletingVolumes :many
-select v.id, v.workspace_id, coalesce(b.bucket, '')::text as bucket
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
@@ -70,8 +100,9 @@ limit @max_rows;
 delete from volumes where id = @id and state = 'deleting';
 
 -- name: VolumesToMeasure :many
-select v.id, b.bucket
+select v.id, b.bucket, b.region, w.connection_id
 from volumes v
+join workspaces w on w.id = v.workspace_id
 join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => @every_seconds::float8))
@@ -112,19 +143,44 @@ delete from storage_grants where access_key_id = @access_key_id;
 -- name: ClaimOrphanCheck :one
 -- A workspace bucket whose orphaned prefixes were not checked for an hour;
 -- the claim lasts an hour, so schedulers check different buckets.
-update workspace_buckets
+update workspace_buckets b
 set orphans_checked_at = now()
-where workspace_id = (
-    select b.workspace_id from workspace_buckets b
-    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
-    order by b.orphans_checked_at nulls first
+from workspaces w
+where w.id = b.workspace_id and b.workspace_id = (
+    select o.workspace_id from workspace_buckets o
+    where o.orphans_checked_at is null or o.orphans_checked_at < now() - interval '1 hour'
+    order by o.orphans_checked_at nulls first
     limit 1
     for update skip locked
 )
-returning workspace_id, bucket;
+returning b.workspace_id, b.bucket, b.region, w.connection_id;
 
 -- name: KnownVolumes :many
 select id from volumes where id = any(@ids::uuid[]);
 
 -- name: KnownDisks :many
 select id from disks where id = any(@ids::uuid[]);
+
+-- name: VolumeTrace :one
+select volume_ids::uuid[] as volume_ids, paths::text[] as paths, recorded_at
+from volume_traces
+where workload_id = @workload_id and workspace_id = @workspace_id;
+
+-- name: RecordVolumeTrace :exec
+-- Stores the reads of the volumes the container mounts in the workspace, in
+-- their order, unless a trace of the workload younger than max_age_seconds
+-- is stored.
+with reads as (
+    select i.volume_id, p.path, i.n
+    from unnest(@volume_ids::uuid[]) with ordinality as i (volume_id, n)
+    join unnest(@paths::text[]) with ordinality as p (path, n) using (n)
+    join volume_mounts m on m.volume_id = i.volume_id and m.container_id = @container_id
+    join volumes v on v.id = i.volume_id and v.workspace_id = @workspace_id
+)
+insert into volume_traces (workload_id, workspace_id, volume_ids, paths)
+select @workload_id, @workspace_id, array_agg(volume_id order by n), array_agg(path order by n)
+from reads
+having count(*) > 0
+on conflict (workload_id) do update
+set volume_ids = excluded.volume_ids, paths = excluded.paths, recorded_at = now()
+where volume_traces.recorded_at < now() - make_interval(secs => @max_age_seconds::float8);

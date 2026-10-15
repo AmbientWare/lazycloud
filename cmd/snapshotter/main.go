@@ -1,7 +1,8 @@
 // Command lazycloud-snapshotter serves containerd's snapshotter API with
-// lazily read image layers on a host. It runs as root in its own systemd
-// unit, which agent updates never restart: the FUSE mounts it serves die
-// with it.
+// lazily read image layers, the disk engine its disks' published
+// generations, and volume mounts an S3 endpoint, on a host. It runs as root
+// in its own systemd unit, which the agent restarts only on a host that
+// runs no container: the FUSE mounts it serves die with it.
 //
 //	lazycloud-snapshotter
 package main
@@ -13,18 +14,22 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/snapshotter"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
-	// cacheBytes bounds the frame cache on disk.
-	cacheBytes = 20 << 30
-	// fetches bounds the frames read from the layer store at once.
-	fetches = 16
+	// fetches bounds the frames read from the stores at once, half of them
+	// in the background: 32 parallel 8 MiB reads fill a volume object at the
+	// store's full speed.
+	fetches = 64
 	// fillBytes is the largest layer, uncompressed, fetched whole in the
 	// background once mounted.
 	fillBytes = 256 << 20
@@ -70,8 +75,28 @@ func run(args []string) int {
 	// Every fetch slot keeps its connection to the store between frames.
 	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // the standard library's transport
 	transport.MaxIdleConnsPerHost = fetches
+	// Each disk's writes stall at its dirty budget, so the cache keeps the
+	// budget of every disk slot the volume's free space holds free for
+	// them. The cache starts empty; what else the volume holds, such as
+	// disks' writes or, off a data volume, the host's own files, stays.
+	var volume unix.Statfs_t
+	if err := os.RemoveAll(layersource.CacheDir); err != nil {
+		logger.Error("clearing the frame cache failed", "error", err)
+		return 1
+	}
+	if err := os.MkdirAll(layersource.CacheDir, 0o700); err != nil {
+		logger.Error("creating the frame cache directory failed", "error", err)
+		return 1
+	}
+	if err := unix.Statfs(layersource.CacheDir, &volume); err != nil {
+		logger.Error("reading the data volume's free space failed", "error", err)
+		return 1
+	}
+	reserve := hostproto.DiskSlots(int64(volume.Bavail)*volume.Bsize) * hostproto.DiskDirtyBytes //nolint:gosec // Block counts fit an int64.
 	cfg := snapshotter.Config{
-		Root: layersource.Root, CacheBytes: cacheBytes, Fetches: fetches, FillBytes: fillBytes,
+		Root: layersource.Root, CacheDir: layersource.CacheDir, CacheBytes: hostproto.FrameCacheBytes,
+		ReserveBytes: reserve, Fetches: fetches, FillBytes: fillBytes, VolumeAddr: layersource.VolumeEndpoint,
+		PeerAddr: ":" + strconv.Itoa(layersource.VolumePeerPort), LinkDir: layersource.VolumeLinkDir,
 		HTTP: &http.Client{Transport: transport}, Logger: logger, Tracer: tel.Tracer(),
 	}
 	err = snapshotter.Serve(ctx, cfg, layersource.Socket, func() {

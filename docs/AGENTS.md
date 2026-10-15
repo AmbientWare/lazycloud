@@ -7,3 +7,6 @@
 - Keep examples runnable and aligned with typed configuration. Distinguish local
   code from remote execution and use public resource types such as `GpuType`.
 - Name secret variables without values. Avoid repeating frontmatter in body copy.
+- Say what each thing is for and when it fits rather than directing the
+  reader; imperative only for literal setup steps and CLI syntax. One job per
+  page.

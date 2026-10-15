@@ -27,6 +27,7 @@ func constrained(t *testing.T, o owners, workspace uuid.UUID, specs ...string) [
 func on(got *uuid.UUID, host compute.HostID) bool { return got != nil && *got == uuid.UUID(host) }
 
 func TestGPUWorkTakesAnAcceptedModelAndCountsReservedGPUs(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -34,8 +35,8 @@ func TestGPUWorkTakesAnAcceptedModelAndCountsReservedGPUs(t *testing.T) {
 	t4 := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, CPU: 16000, Memory: 64 * gib, GPUType: "T4", GPUCount: 4})
 	// A live container naming a model without a count reserves one T4.
 	held := newRelease(t, o.pool, dev, `{"resources": {"gpu": ["T4"]}}`)
-	run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4))
+	run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4))
 
 	got := constrained(t, o, dev,
 		`{"resources": {"gpu": ["L4", "T4"], "gpu_count": 2}}`,
@@ -67,6 +68,7 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 30, now())`, dev, held, uuid.UUID(t4)
 }
 
 func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -98,7 +100,30 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 	}
 }
 
+// CPU work that can move fills the spare room of a fleet GPU instance
+// running GPU work ahead of a CPU host, and none of one running none. Work
+// that cannot move stays off it.
+func TestMovableCPUWorkFillsAFleetGPUInstanceOnlyWhileItRunsGPUWork(t *testing.T) {
+	t.Parallel()
+	o := newOwners(t, compute.Config{})
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	gpuHost := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 8000, Memory: 32 * gib, GPUType: "T4", GPUCount: 1})
+	cpuHost := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 8000, Memory: 32 * gib})
+	const moves, stays = `{"kind": "function"}`, `{"kind": "pod"}`
+	if got := constrained(t, o, dev, moves); !on(got[0], cpuHost) {
+		t.Fatalf("CPU work went to %v, want the CPU host while the GPU instance runs no GPU work", got[0])
+	}
+	if got := constrained(t, o, dev, `{"kind": "function", "resources": {"gpu": ["T4"]}}`); !on(got[0], gpuHost) {
+		t.Fatalf("GPU work went to %v, want the GPU instance", got[0])
+	}
+	if got := constrained(t, o, dev, moves, stays); !on(got[0], gpuHost) || !on(got[1], cpuHost) {
+		t.Fatalf("CPU work that can move went to %v and a pod to %v; want the GPU instance, then the CPU host", got[0], got[1])
+	}
+}
+
 func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -142,6 +167,7 @@ func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 }
 
 func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -163,7 +189,23 @@ func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
 	}
 }
 
+// An on-demand host handing Spot-tolerant work back lends that work no room
+// and still takes work that cannot run on Spot.
+func TestAHostHandingWorkBackTakesOnlyWorkThatCannotRunOnSpot(t *testing.T) {
+	t.Parallel()
+	o := newOwners(t, compute.Config{})
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	onDemand := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketOnDemand, Region: "us-east-2"})
+	run(t, o.pool, "update hosts set hands_back_at = now() where id = $1", uuid.UUID(onDemand))
+	got := constrained(t, o, dev, `{"placement": {"preemptible": false}}`, `{}`)
+	if !on(got[0], onDemand) || got[1] != nil {
+		t.Fatalf("work that cannot run on Spot went to %v, Spot-tolerant work to %v; want the host, and none", got[0], got[1])
+	}
+}
+
 func TestRegionAndZonePinsChooseTheHost(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)

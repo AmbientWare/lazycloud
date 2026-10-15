@@ -17,20 +17,25 @@ import (
 //	LAZYCLOUD_FLEET_NODE_ROLE_ARN     role platform instances run as
 //	LAZYCLOUD_FLEET_INSTANCE_PROFILE  its instance profile
 //	LAZYCLOUD_FLEET_NETWORKS          {"us-east-2": {"vpc_id", "security_group_id", "subnets": [{"id", "zone", "zone_id"}]}}
+//	LAZYCLOUD_OBJECT_STORE_REGION     region of the registry and object store hosts read
 //	LAZYCLOUD_FLEET_IMAGES            {"cpu": {"us-east-2": "ami-..."}, "gpu": {...}}; unset uses stock Amazon Linux
 //	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per owner, and platform reserves (20)
-//	LAZYCLOUD_FLEET_IDLE_TIMEOUT      idle time before a host leaves (5m)
 //	LAZYCLOUD_AWS_PRINCIPAL_ARN       principal connection roles trust
+//	LAZYCLOUD_WORKSPACE_BUCKET_PREFIX workspace bucket names' prefix (lazycloud-ws)
 //	LAZYCLOUD_AWS_ENDPOINT_EC2, _STS, _CLOUDFORMATION  service endpoint overrides
 func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	f := Fleet{
 		Name: getenv("LAZYCLOUD_FLEET_NAME"), AccountID: getenv("LAZYCLOUD_FLEET_ACCOUNT_ID"),
 		NodeRoleARN: getenv("LAZYCLOUD_FLEET_NODE_ROLE_ARN"), InstanceProfile: getenv("LAZYCLOUD_FLEET_INSTANCE_PROFILE"),
-		PrincipalARN: getenv("LAZYCLOUD_AWS_PRINCIPAL_ARN"),
+		PrincipalARN: getenv("LAZYCLOUD_AWS_PRINCIPAL_ARN"), BucketPrefix: getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"),
+		StorageRegion: getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
 		Endpoints: Endpoints{
 			EC2: getenv("LAZYCLOUD_AWS_ENDPOINT_EC2"), STS: getenv("LAZYCLOUD_AWS_ENDPOINT_STS"),
 			CloudFormation: getenv("LAZYCLOUD_AWS_ENDPOINT_CLOUDFORMATION"),
 		},
+	}
+	if f.BucketPrefix == "" {
+		f.BucketPrefix = "lazycloud-ws"
 	}
 	if raw := getenv("LAZYCLOUD_FLEET_NETWORKS"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &f.Networks); err != nil {

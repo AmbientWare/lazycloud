@@ -237,8 +237,7 @@ func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Aut
 }
 
 func (c *Compute) assumeWithoutExternalID(role, session string) awsScope {
-	clients := c.aws()
-	return awsScope{credentials: aws.NewCredentialsCache(stsAssume{client: clients.sts(awsScope{}, ""), role: role, session: session})}
+	return awsScope{credentials: aws.NewCredentialsCache(stsAssume{client: c.sts, role: role, session: session})}
 }
 
 // stsAssume assumes a role without an external ID, to prove the role

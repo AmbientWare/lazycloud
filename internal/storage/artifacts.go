@@ -73,7 +73,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 		return apitypes.ArtifactUpload{}, fmt.Errorf("artifact id: %w", err)
 	}
 	key := artifactKey(workspace, id)
-	lifetime, err := s.signedLifetime(ctx, uploadLifetime)
+	lifetime, err := s.signedLifetime(ctx, s.platform.client, uploadLifetime)
 	if err != nil {
 		return apitypes.ArtifactUpload{}, err
 	}
@@ -82,15 +82,15 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 		// The signed length makes the store refuse other bytes. The content
 		// type is applied when the artifact is read, so clients send no
 		// signed headers.
-		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(s.bucket), Key: aws.String(key), ContentLength: aws.Int64(req.SizeBytes),
+		r, err := s.platform.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(s.platform.name), Key: aws.String(key), ContentLength: aws.Int64(req.SizeBytes),
 		}, s3.WithPresignExpires(lifetime))
 		if err != nil {
 			return apitypes.ArtifactUpload{}, fmt.Errorf("presign artifact upload: %w", err)
 		}
 		upload.Parts = []apitypes.UploadPart{{Number: 1, Offset: 0, SizeBytes: req.SizeBytes, Url: r.URL}}
 	} else {
-		uploadID, parts, err := s.startMultipart(ctx, s.bucket, key, contentType, req.SizeBytes, artifactPartBytes, lifetime)
+		uploadID, parts, err := s.startMultipart(ctx, s.platform, key, contentType, req.SizeBytes, artifactPartBytes, lifetime)
 		if err != nil {
 			return apitypes.ArtifactUpload{}, err
 		}
@@ -106,7 +106,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	})
 	if err != nil {
 		if upload.UploadId != nil {
-			err = errors.Join(err, s.abortMultipart(context.WithoutCancel(ctx), s.bucket, key, *upload.UploadId))
+			err = errors.Join(err, s.abortMultipart(context.WithoutCancel(ctx), s.platform, key, *upload.UploadId))
 		}
 		return apitypes.ArtifactUpload{}, fmt.Errorf("record artifact: %w", err)
 	}
@@ -137,11 +137,11 @@ func (s *Storage) CompleteArtifact(ctx context.Context, workspace identity.Works
 			if len(parts) == 0 {
 				return invalid("a multipart artifact needs its part ETags")
 			}
-			if err := s.completeMultipart(ctx, s.bucket, key, *row.UploadID, parts); err != nil {
+			if err := s.completeMultipart(ctx, s.platform, key, *row.UploadID, parts); err != nil {
 				return err
 			}
 		}
-		o, err := head(ctx, s.client, s.bucket, key)
+		o, err := head(ctx, s.platform, key)
 		if errors.Is(err, ErrNotFound) {
 			return invalid("the artifact's bytes were not uploaded")
 		}
@@ -265,8 +265,8 @@ func (s *Storage) PresignArtifact(ctx context.Context, workspace identity.Worksp
 		disposition = "attachment"
 	}
 	expires := time.Now().Add(lifetime)
-	url, err := s.linkURL(ctx, link{
-		Bucket: s.bucket, Key: artifactKey(workspace, id), ContentType: row.ContentType,
+	url, err := s.linkURL(ctx, s.platform, link{
+		Key: artifactKey(workspace, id), ContentType: row.ContentType,
 		Disposition: mime.FormatMediaType(disposition, map[string]string{"filename": row.Filename}), Expires: expires.Unix(),
 	})
 	if err != nil {
@@ -291,12 +291,12 @@ func (s *Storage) DeleteArtifacts(ctx context.Context, workspace identity.Worksp
 			deleted[n] = row.ID
 			keys[n] = artifactKey(workspace, row.ID)
 			if row.UploadID != nil {
-				if err := s.abortMultipart(ctx, s.bucket, keys[n], *row.UploadID); err != nil {
+				if err := s.abortMultipart(ctx, s.platform, keys[n], *row.UploadID); err != nil {
 					return err
 				}
 			}
 		}
-		return s.deleteKeys(ctx, s.bucket, keys)
+		return s.deleteKeys(ctx, s.platform, keys)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("delete artifacts: %w", err)

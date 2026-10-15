@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package agent
 
 import (
@@ -11,10 +13,11 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefstest"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -34,57 +37,15 @@ const (
 	testWorkspace = "6f0c2b7e-3f4a-4c1d-9b8e-2a5d7c9e1f30"
 )
 
-func (s *hostServer) CompleteImageBuild(_ context.Context, r *hostproto.CompleteImageBuildRequest) (*hostproto.CompleteImageBuildResponse, error) {
-	s.builds <- r
-	s.mu.Lock()
-	answer := s.answerBuild
-	s.mu.Unlock()
-	if answer != nil {
-		return answer(r), nil
-	}
-	return &hostproto.CompleteImageBuildResponse{}, nil
-}
-
-func (s *hostServer) AppendImageBuildLogs(_ context.Context, r *hostproto.AppendImageBuildLogsRequest) (*hostproto.AppendImageBuildLogsResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, line := range r.GetLines() {
-		s.buildLogs = append(s.buildLogs, line.GetData())
-	}
-	return &hostproto.AppendImageBuildLogsResponse{}, nil
-}
-
-func (s *hostServer) buildOutput() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return strings.Join(s.buildLogs, "\n")
-}
-
 // startTestRegistry runs a registry on a loopback port for the test.
 func startTestRegistry(t *testing.T) string {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "-d", "--rm", "-p", "127.0.0.1::5000", testRegistryImage).Output()
-	if err != nil {
-		t.Fatalf("start registry: %v", err)
-	}
-	id := strings.TrimSpace(string(out))
-	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
-	port, err := exec.CommandContext(t.Context(), "docker", "port", id, "5000/tcp").Output()
+	address, stop, err := startRegistry(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := strings.TrimSpace(strings.Split(string(port), "\n")[0])
-	for deadline := time.Now().Add(30 * time.Second); ; {
-		resp, err := http.Get("http://" + address + "/v2/") //nolint:noctx // Readiness probe.
-		if err == nil {
-			_ = resp.Body.Close()
-			return address
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("registry did not start: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	t.Cleanup(stop)
+	return address
 }
 
 // buildBase copies testBuildBase into registry and names the copy, so test
@@ -92,13 +53,9 @@ func startTestRegistry(t *testing.T) string {
 // on a registry's transient 5xx, and the copy retries it.
 func buildBase(t *testing.T, registry string) string {
 	t.Helper()
-	src, err := name.ParseReference(testBuildBase)
+	img, err := imagefstest.Image(t.Context(), testBuildBase, v1.Platform{OS: "linux", Architecture: "amd64"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	img, err := remote.Image(src, remote.WithContext(t.Context()), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
-	if err != nil {
-		t.Fatalf("read %s: %v", testBuildBase, err)
 	}
 	dst, err := name.ParseReference(registry+"/lazycloud/base:test", name.Insecure)
 	if err != nil {
@@ -132,6 +89,7 @@ func buildCommand(registry, dockerfile string) *hostproto.ServerMessage {
 }
 
 func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -198,6 +156,7 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 // A cache export that fails after the push leaves the build published: the
 // digest is reported and only the exit names the cache.
 func TestAgentPublishesABuildWhoseCacheExportFails(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -231,6 +190,7 @@ func TestAgentPublishesABuildWhoseCacheExportFails(t *testing.T) {
 }
 
 func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -254,6 +214,7 @@ func TestAgentReportsAFailedBuildWithItsOutputTail(t *testing.T) {
 // A build secret reaches the step that mounts it and nothing else: not the
 // image's files, history or config, and not the host once the build ends.
 func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -328,6 +289,7 @@ func TestAgentBuildSecretsReachOnlyTheStepThatMountsThem(t *testing.T) {
 // rotated secret reuses the cached layer unless the secret versions argument
 // the images owner renders changes with it.
 func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -371,6 +333,7 @@ func TestAgentRebuildsASecretStepOnlyWhenItsVersionsChange(t *testing.T) {
 // build reads, cache mounts included, and that no build of an image every
 // workspace may use reads either.
 func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -399,6 +362,7 @@ func TestAgentBuildCachesStayWithTheirWorkspace(t *testing.T) {
 }
 
 func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	registry := startTestRegistry(t)
 	base := buildBase(t, registry)
@@ -418,16 +382,5 @@ func TestAgentStopsABuildWithoutAnOutcome(t *testing.T) {
 	case outcome := <-e.server.builds:
 		t.Fatalf("a stopped build reports no outcome, got %v", outcome)
 	default:
-	}
-}
-
-// Build output keeps streaming past a line longer than any batch, so the
-// lines after it, such as the push, still arrive.
-func TestBuildOutputReadsPastAnOverlongLine(t *testing.T) {
-	long := strings.Repeat("x", 2<<20)
-	var lines []string
-	err := readBuildLines(strings.NewReader("first\r\n"+long+"\n\n"+imagePushed), func(line string) { lines = append(lines, line) })
-	if want := []string{"first", long[:maxBuildLine], "", imagePushed}; err != nil || !slices.Equal(lines, want) {
-		t.Fatalf("read %d lines (%v), want %d", len(lines), err, len(want))
 	}
 }

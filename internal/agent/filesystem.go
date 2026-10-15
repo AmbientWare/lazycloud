@@ -164,11 +164,9 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	return request.GetRepository() + "@" + digest, source.Architecture, nil
 }
 
-// encodeLogin is auth as Docker takes it on a push; nil is anonymous.
+// encodeLogin is auth as Docker takes it on a push; nil is anonymous, an
+// empty login, since the Docker hosts run refuses a push without one.
 func encodeLogin(auth *hostproto.RegistryAuth) (string, error) {
-	if auth == nil {
-		return "", nil
-	}
 	encoded, err := authconfig.Encode(registry.AuthConfig{
 		Username: auth.GetUsername(), Password: auth.GetPassword(), IdentityToken: auth.GetIdentityToken(),
 	})

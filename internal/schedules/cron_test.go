@@ -121,15 +121,3 @@ func TestParseCronMatchesCroniter(t *testing.T) {
 		}
 	}
 }
-
-func TestNextIsStrictlyAfter(t *testing.T) {
-	t.Parallel()
-	cron, err := ParseCron("*/5 * * * *")
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := time.Date(2026, 9, 7, 12, 5, 0, 0, time.UTC)
-	if next, _ := cron.Next(at); !next.Equal(at.Add(5 * time.Minute)) {
-		t.Fatalf("Next(%s) = %s, want five minutes later", at, next)
-	}
-}

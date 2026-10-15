@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -97,6 +99,18 @@ select pg_notify('lc_image_build', 'platform-images')`,
 	}
 }
 
+// document is the OpenAPI document the handlers validate against, parsed
+// once for the test binary as a server parses it once.
+var document *openapi3.T
+
+func TestMain(m *testing.M) {
+	var err error
+	if document, err = api.GetSpec(); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 type harness struct {
 	t         *testing.T
 	pool      *pgxpool.Pool
@@ -131,7 +145,7 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim, database.ChannelContainerOp, database.ChannelImageBuild)
 	e := execution.NewExecution(pool)
 	c := compute.NewCompute(pool, e, compute.Config{})
-	store := storage.NewStorage(pool, cfg)
+	store := storage.NewStorage(pool, cfg, c)
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
@@ -141,20 +155,23 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, key)
-	containerAPI, err := api.NewContainerHandler(api.Owners{
+	containerAPI := api.NewContainerHandler(document, api.Owners{
 		Identity: identity.NewIdentity(pool, identity.Config{}), Control: control.NewControl(pool), Storage: store, Execution: e,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, e), Listener: listener,
 	}, api.Config{}, logger)
+	im, err := images.NewImages(pool, e, vault, store, images.Config{
+		Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate, PlatformTransferBackoff: images.PlatformTransferBackoff,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	im := images.NewImages(pool, e, vault, store, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", ManagedBase: managedTemplate})
 	publishManagedImage(t, pool, "3.12")
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 	config := hostsession.Config{
 		TouchInterval:  100 * time.Millisecond,
 		LayerLifetime:  hostsession.LayerLifetime,
 		ReplicaRecheck: hostsession.ReplicaRecheck,
+		GrantAckWait:   hostsession.GrantAckWait,
 		Secrets:        vault,
 		ContainerAPI:   containerAPI,
 		Observability:  obs,
@@ -162,7 +179,10 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 	for _, c := range configure {
 		c(&config)
 	}
-	srv := hostsession.NewServer(c, e, store, im, listener, config, logger)
+	srv, err := hostsession.NewServer(c, e, store, im, listener, config, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spans := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
 	g := grpc.NewServer(append(srv.ServerOptions(), grpc.StatsHandler(otelgrpc.NewServerHandler(
@@ -241,8 +261,8 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 		h.t.Fatal(err)
 	}
 	err = h.pool.QueryRow(ctx, `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 2, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 2, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -290,6 +310,7 @@ func receive(t *testing.T, stream hostStream) *hostproto.ServerMessage {
 }
 
 func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, container := h.startingContainer(host)
@@ -333,6 +354,7 @@ func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
 }
 
 func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -412,13 +434,12 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 	}
 }
 
-// A container whose start cannot be built fails alone: the host's session
-// stays open and its other containers still start.
 // A pickled result keeps the display its runner made when it is a valid
 // one, and loses only the display, never the result, when a runner forges
 // one: an image that is no PNG, HTML beside an image, an unknown field or
 // text past the limit.
 func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -493,31 +514,52 @@ func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
 	}
 }
 
-func TestUnbuildableStartFailsOnlyItsContainer(t *testing.T) {
+// A container whose start cannot be built fails alone with its reason: the
+// host's session stays open and its other containers still start.
+func TestUnstartableContainersFailAlone(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
+	failing := map[uuid.UUID]string{}
 	// An image id without its pinned reference cannot be pulled.
-	ws, bad := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12", "image_id": "img_0123456789abcdef01234567"}}`)
-	var good uuid.UUID
-	err := h.pool.QueryRow(t.Context(), `
-with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select workload_id, 2, '{"handler": "reports:summarize", "image": {"python_version": "3.12"}}'::jsonb, sha256('spec2'), sha256('src')
-             from releases limit 1 returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id`, uuid.UUID(ws), uuid.UUID(host)).Scan(&good)
+	_, unpinned := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12", "image_id": "img_0123456789abcdef01234567"}}`)
+	failing[unpinned] = "the release's image has no pinned reference; deploy it again"
+	_, missing := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "secrets": ["TOKEN"]}`)
+	failing[missing] = "secret not found: TOKEN"
+	_, bucket := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "models", "mount_path": "/models", "cloud_bucket": {"bucket": "user-models", "region": "us-east-2",
+		  "access_key_secret": "AWS_KEY", "secret_key_secret": "AWS_SECRET"}}]}`)
+	failing[bucket] = "secret not found: AWS_KEY"
+	// A value sealed under a master key this server does not hold.
+	sealedWS, sealed := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "secrets": ["SEALED_ELSEWHERE"]}`)
+	failing[sealed] = "secret SEALED_ELSEWHERE cannot be read"
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := secrets.NewFileKey(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream := open(t, ctx, h.client)
-	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
-		t.Fatalf("first start %s; want the buildable container %s", got, good)
-	}
-	var state, reason, message string
-	if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1`,
-		uuid.UUID(bad)).Scan(&state, &reason, &message); err != nil {
+	if _, err := secrets.NewSecrets(h.pool, otherKey).Set(t.Context(), sealedWS, "SEALED_ELSEWHERE", "value"); err != nil {
 		t.Fatal(err)
 	}
-	if state != "stopped" || reason != "start_failed" || message != "the release's image has no pinned reference; deploy it again" {
-		t.Fatalf("unbuildable container %s/%s %q; want stopped/start_failed with the owner's reason", state, reason, message)
+	_, good := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}}`)
+
+	stream := open(t, ctx, h.client)
+	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
+		t.Fatalf("first start %s; want the startable container %s", got, good)
+	}
+	for container, want := range failing {
+		var state, reason, message string
+		for deadline := time.Now().Add(5 * time.Second); state != "stopped" && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1`,
+				container).Scan(&state, &reason, &message); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if state != "stopped" || reason != "start_failed" || message != want {
+			t.Errorf("container %s/%s %q; want stopped/start_failed %q", state, reason, message, want)
+		}
 	}
 }

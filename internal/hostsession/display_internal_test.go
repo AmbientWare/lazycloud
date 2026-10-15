@@ -11,6 +11,7 @@ import (
 // A result's HTML keeps what it shows and loses everything that could
 // redirect the dashboard's frame, load from the network or run code.
 func TestResultHTMLCannotNavigateOrLoad(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ in, want string }{
 		{`<table class="df"><tr><th>a</th></tr><tr><td>1 &lt; 2</td></tr></table>`, `<table class="df"><tr><th>a</th></tr><tr><td>1 &lt; 2</td></tr></table>`},
 		{`<meta http-equiv="refresh" content="0;url=https://evil.example/"><p>x</p>`, `<p>x</p>`},
@@ -33,6 +34,7 @@ func TestResultHTMLCannotNavigateOrLoad(t *testing.T) {
 // The host session keeps the inert HTML, and drops a display with nothing
 // left to show.
 func TestResultDisplayKeepsOnlyInertHTML(t *testing.T) {
+	t.Parallel()
 	kept, err := resultDisplay([]byte(`{"text": "t", "rich": {"kind": "html", "html": "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\"><table></table>"}}`))
 	if err != nil {
 		t.Fatal(err)

@@ -313,12 +313,25 @@ def test_cloud_disconnect_opens_only_the_recovery_action(
     assert opened == ["https://console.aws.amazon.com/cloudformation/final"]
 
 
+# A stand-in `aws` binary. Its replies are the complete `--output json`
+# documents aws-cli v2 prints for these calls, as in the AWS CLI command
+# reference examples for sts get-caller-identity, ec2
+# describe-availability-zones and cloudformation create-stack; only the
+# account, region and zone names are this test's.
 _FAKE_AWS = """#!/bin/sh
 echo "$*" >> "$FAKE_AWS_LOG"
 case "$*" in
-  *"sts get-caller-identity"*) printf '{"Account": "%s"}' "$FAKE_AWS_ACCOUNT" ;;
+  *"sts get-caller-identity"*)
+    printf '{"UserId": "AIDASAMPLEUSERID", "Account": "%s",' "$FAKE_AWS_ACCOUNT"
+    printf ' "Arn": "arn:aws:iam::%s:user/DevAdmin"}' "$FAKE_AWS_ACCOUNT" ;;
   *"ec2 describe-availability-zones"*)
-    printf '{"AvailabilityZones": [{"ZoneName": "us-east-2c"}, {"ZoneName": "us-east-2a"}]}' ;;
+    for zone in c:use2-az3 a:use2-az1; do
+      printf '{"State": "available", "OptInStatus": "opt-in-not-required", "Messages": [],'
+      printf ' "RegionName": "us-east-2", "ZoneName": "us-east-2%s", "ZoneId": "%s",' \
+        "${zone%%:*}" "${zone#*:}"
+      printf ' "GroupName": "us-east-2", "NetworkBorderGroup": "us-east-2",'
+      printf ' "ZoneType": "availability-zone"}\n'
+    done | paste -sd, | sed 's/^/{"AvailabilityZones": [/; s/$/]}/' ;;
   *"cloudformation create-stack"*)
     for argument in "$@"; do
       case "$argument" in file://*) cp "${argument#file://}" "$FAKE_AWS_STACK" ;; esac

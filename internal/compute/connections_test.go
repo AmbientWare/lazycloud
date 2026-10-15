@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -143,7 +144,7 @@ func (c *customerAWS) setStatus(name, status string) {
 func connectionFleet(t *testing.T) (owners, *awsEmulator, *customerAWS) {
 	t.Helper()
 	emulator := newAWS(t)
-	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal})))
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal, BucketPrefix: "lazycloud-ws-test"})))
 	return o, emulator, newCustomerAWS(emulator)
 }
 
@@ -200,6 +201,7 @@ func current(t *testing.T, o owners, account identity.UserID) *compute.Connectio
 }
 
 func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
+	t.Parallel()
 	o, _, _ := connectionFleet(t)
 	free := identity.UserID(scan[uuid.UUID](t, o.pool, "insert into users (email) values ('free@example.com') returning id"))
 	var unpaid *billing.PaymentRequiredError
@@ -211,7 +213,67 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 	}
 }
 
+// The connection role reaches storage only in buckets named for the
+// deployment and the customer's own account, and the objects in them, and
+// only while that account owns the bucket.
+func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
+	t.Parallel()
+	o, _, _ := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	stack := o.compute.View(connect(t, o, alice, "111111111111")).Stack
+	var template struct {
+		Resources map[string]struct {
+			Properties struct {
+				Policies []struct {
+					PolicyDocument struct {
+						Statement []struct {
+							Action    any
+							Resource  any
+							Condition struct {
+								StringEquals map[string]any
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(stack.TemplateBody), &template); err != nil {
+		t.Fatal(err)
+	}
+	buckets := "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"
+	scoped := map[string]bool{}
+	for name, resource := range template.Resources {
+		for _, policy := range resource.Properties.Policies {
+			for _, statement := range policy.PolicyDocument.Statement {
+				actions, _ := statement.Action.([]any)
+				if action, ok := statement.Action.(string); ok {
+					actions = []any{action}
+				}
+				for _, action := range actions {
+					if !strings.HasPrefix(action.(string), "s3:") { //nolint:forcetypeassert // IAM actions are strings.
+						continue
+					}
+					sub, _ := statement.Resource.(map[string]any)
+					arn, _ := sub["Fn::Sub"].(string)
+					if arn != buckets && arn != buckets+"/*" {
+						t.Errorf("%s grants %s on %v", name, action, statement.Resource)
+					}
+					if owner, _ := statement.Condition.StringEquals["s3:ResourceAccount"].(map[string]any); owner["Ref"] != "AWS::AccountId" {
+						t.Errorf("%s grants %s on buckets of account %q, want the stack's own", name, action, owner)
+					}
+					scoped[arn] = true
+				}
+			}
+		}
+	}
+	if !scoped[buckets] || !scoped[buckets+"/*"] {
+		t.Fatalf("the template grants storage on %v, want the account's buckets and their objects", scoped)
+	}
+}
+
 func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -246,7 +308,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 		params[p[0]] = p[1]
 	}
 	if len(params["ExternalId"]) < 32 || params["PlatformPrincipalArn"] != platformPrincipal ||
-		params["FleetName"] != "lazycloud-test" || params["TargetAccountId"] != "111111111111" {
+		params["FleetName"] != "lazycloud-test" || params["TargetAccountId"] != "111111111111" || params["BucketPrefix"] != "lazycloud-ws-test" {
 		t.Fatalf("stack parameters %v", params)
 	}
 	again := connect(t, o, alice, "111111111111")
@@ -270,6 +332,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 }
 
 func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
+	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	ready, denied, open, drifted := newUser(t, o.pool, "ready@example.com"), newUser(t, o.pool, "denied@example.com"),
 		newUser(t, o.pool, "open@example.com"), newUser(t, o.pool, "drifted@example.com")
@@ -326,6 +389,7 @@ func code(a *compute.Authorization) compute.AuthorizationError {
 }
 
 func TestReconnectRetiresTheReplacedStack(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -367,6 +431,7 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 }
 
 func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
@@ -388,8 +453,18 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
 		Region: "us-east-2", InstanceID: "i-0000000000000c001"})
 	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(host))
-	emulator.on("TerminateInstances", terminateInstancesReply)
-	emulator.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
+	var ended atomic.Bool
+	emulator.on("TerminateInstances", func(call awsCall) awsReply {
+		ended.Store(true)
+		return terminateInstancesReply(call)
+	})
+	emulator.on("DescribeInstances", func(call awsCall) awsReply {
+		if ended.Load() || !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+			return describeInstancesReply()
+		}
+		return describeInstancesReply(ec2Instance{ID: "i-0000000000000c001", State: "running",
+			Tags: map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": uuid.UUID(host).String()}})
+	})
 
 	draining, err := o.compute.Disconnect(ctx, alice)
 	if err != nil || draining == nil || draining.Phase != compute.ConnDraining {
@@ -402,6 +477,7 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	if _, err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
+	actuate(t, o)
 	terms := emulator.calls("TerminateInstances")
 	if len(terms) != 1 || terms[0].AccessKey != assumedKey(conn.Active.RoleARN) {
 		t.Fatalf("TerminateInstances calls %v, want the account's instance terminated through its role", terms)
@@ -432,6 +508,7 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 }
 
 func TestFailedStackDeletionAsksTheCustomerAndRetryResumes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")

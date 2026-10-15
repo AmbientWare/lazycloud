@@ -13,45 +13,27 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// AccountMetrics counts live containers in every workspace of member, and
-// the concurrency plan limits govern: live containers in the workspaces
-// account owns. Containers hold no GPUs yet, so every one counts as a CPU
-// container.
-func (o *Observability) AccountMetrics(ctx context.Context, account identity.UserID, member []identity.Workspace) (apitypes.AccountMetrics, error) {
+// ContainerCounts counts live containers in every workspace of member.
+func (o *Observability) ContainerCounts(ctx context.Context, member []identity.Workspace) (apitypes.ContainerCounts, error) {
+	var out apitypes.ContainerCounts
+	if len(member) == 0 {
+		return out, nil
+	}
 	ids := make([]uuid.UUID, len(member))
-	owned := map[uuid.UUID]bool{}
 	for i, ws := range member {
 		ids[i] = uuid.UUID(ws.ID)
-		owned[ids[i]] = ws.Role == identity.RoleOwner
 	}
-	var out apitypes.AccountMetrics
-	if len(ids) > 0 {
-		rows, err := o.queries.LiveContainerCounts(ctx, ids)
-		if err != nil {
-			return out, fmt.Errorf("count live containers: %w", err)
-		}
-		for _, r := range rows {
-			switch execution.ContainerState(r.State) {
-			case execution.ContainerPending, execution.ContainerStarting:
-				out.Containers.Pending += int(r.Containers)
-			case execution.ContainerReady, execution.ContainerDraining:
-				out.Containers.Running += int(r.Containers)
-			case execution.ContainerStopped:
-			}
-			if owned[r.WorkspaceID] {
-				out.Concurrency.CpuContainers += int(r.Containers)
-			}
-		}
+	rows, err := o.queries.LiveContainerCounts(ctx, ids)
+	if err != nil {
+		return out, fmt.Errorf("count live containers: %w", err)
 	}
-	if o.limits != nil {
-		limits, err := o.limits.ConcurrencyLimits(ctx, account)
-		if err != nil {
-			return out, fmt.Errorf("read plan limits: %w", err)
-		}
-		if limits != nil {
-			out.Concurrency.Limits = &apitypes.ConcurrencyLimits{
-				MaxCpuContainers: limits.MaxCPUContainers, MaxGpus: limits.MaxGPUs,
-			}
+	for _, r := range rows {
+		switch execution.ContainerState(r.State) {
+		case execution.ContainerPending, execution.ContainerStarting:
+			out.Pending += int(r.Containers)
+		case execution.ContainerReady, execution.ContainerDraining:
+			out.Running += int(r.Containers)
+		case execution.ContainerStopped:
 		}
 	}
 	return out, nil

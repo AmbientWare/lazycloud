@@ -1,12 +1,18 @@
 package imagefs
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -87,6 +93,58 @@ func (o RangeReader) read(ctx context.Context, off int64, p []byte) error {
 	}
 	if _, err := io.ReadFull(resp.Body, p); err != nil {
 		return fmt.Errorf("read object range: %w", err)
+	}
+	return nil
+}
+
+// Bucket reads and writes the objects of one S3 bucket, such as a
+// workspace's disks.
+type Bucket struct {
+	client *s3.Client
+	name   string
+}
+
+// NewBucket is the bucket name at endpoint in region, signed with creds.
+// Checksums are computed only where S3 requires them: S3-compatible stores
+// reject the streaming trailers the SDK otherwise adds to every upload.
+func NewBucket(endpoint, region, name string, pathStyle bool, creds aws.CredentialsProvider, opts ...func(*s3.Options)) Bucket {
+	return Bucket{name: name, client: s3.New(s3.Options{
+		Region: region, BaseEndpoint: aws.String(endpoint), UsePathStyle: pathStyle, Credentials: creds,
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+	}, opts...)}
+}
+
+// Get reads the object at key, at most limit bytes. A missing object is
+// fs.ErrNotExist, and a larger one ErrInvalidIndex.
+func (b Bucket) Get(ctx context.Context, key string, limit int64) ([]byte, error) {
+	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &b.name, Key: &key})
+	var missing *types.NoSuchKey
+	if errors.As(err, &missing) {
+		return nil, fmt.Errorf("s3://%s/%s: %w", b.name, key, fs.ErrNotExist)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get s3://%s/%s: %w", b.name, key, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(out.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read s3://%s/%s: %w", b.name, key, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%w: s3://%s/%s is larger than %d bytes", ErrInvalidIndex, b.name, key, limit)
+	}
+	return data, nil
+}
+
+// Put writes body to key.
+func (b Bucket) Put(ctx context.Context, key string, body []byte) error {
+	_, err := b.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &b.name, Key: &key, Body: bytes.NewReader(body), ContentLength: aws.Int64(int64(len(body))),
+		ContentType: aws.String("application/octet-stream"),
+	})
+	if err != nil {
+		return fmt.Errorf("put s3://%s/%s: %w", b.name, key, err)
 	}
 	return nil
 }

@@ -66,24 +66,35 @@ func (c *container) setRunning(attempts ...string) {
 	}
 }
 
-// An outcome outlives a server outage longer than any fixed delivery bound,
-// and its attempt keeps its slot until the server records it.
+// An outcome is retried through a server outage until the server records
+// it, and its attempt keeps its slot until then.
 func TestCompletionOutlastsAServerOutage(t *testing.T) {
-	const outage = 17 * time.Second
+	t.Parallel()
 	server := newHostServer()
 	c := newTestContainer(t, server)
 	attempt := uuid.NewString()
 	c.setRunning(attempt)
-	began := time.Now()
+	refused := func() int {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return server.refusedCompletions
+	}
 	server.mu.Lock()
-	server.completeOutage = began.Add(outage)
+	server.completeOutage = true
 	server.mu.Unlock()
 
 	c.onFinished(succeeded(attempt))
-	time.Sleep(outage - time.Second)
+	for deadline := time.Now().Add(30 * time.Second); refused() < 3; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the outcome was tried %d times during the outage", refused())
+		}
+	}
 	if running := c.snapshot().GetRunningAttempts(); !slices.Equal(running, []string{attempt}) {
 		t.Fatalf("running attempts during the outage %v", running)
 	}
+	server.mu.Lock()
+	server.completeOutage = false
+	server.mu.Unlock()
 	select {
 	case r := <-server.completions:
 		if r.GetAttemptId() != attempt {
@@ -92,28 +103,31 @@ func TestCompletionOutlastsAServerOutage(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("outcome was not delivered after the outage")
 	}
-	t.Logf("delivered %s after a %s outage", time.Since(began), outage)
+	c.completions.Wait()
+	if running := c.snapshot().GetRunningAttempts(); len(running) != 0 {
+		t.Fatalf("running attempts once the outcome was recorded %v", running)
+	}
 }
 
 // An outcome call in flight when the agent stops keeps going, so the
 // outcome still lands, until the drain ends it, so the agent exits inside
 // its stop timeout; an outcome whose window ends makes no call past it.
 func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
+	t.Parallel()
 	calls := 0
-	deliver := func(ctx, until context.Context) chan struct{} {
-		calling, delivered := make(chan struct{}), make(chan struct{})
+	deliver := func(ctx, until context.Context) (context.Context, chan struct{}) {
+		calling, delivered := make(chan context.Context), make(chan struct{})
 		go func() {
 			defer close(delivered)
 			deliverOutcome(ctx, until, slog.New(slog.DiscardHandler), "task", time.Hour, func(ctx context.Context) error {
 				if calls++; calls == 1 {
-					close(calling)
+					calling <- ctx
 				}
 				<-ctx.Done()
 				return status.Error(codes.Unavailable, ctx.Err().Error())
 			})
 		}()
-		<-calling
-		return delivered
+		return <-calling, delivered
 	}
 	ended := func(delivered chan struct{}, what string) {
 		t.Helper()
@@ -126,12 +140,10 @@ func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
 
 	stopped, stop := context.WithCancel(t.Context())
 	drain, endDrain := context.WithCancel(t.Context())
-	delivered := deliver(stopped, drain)
+	call, delivered := deliver(stopped, drain)
 	stop()
-	select {
-	case <-delivered:
+	if call.Err() != nil {
 		t.Fatal("the agent's stop cut the outcome call in flight")
-	case <-time.After(200 * time.Millisecond):
 	}
 	endDrain()
 	ended(delivered, "the drain")
@@ -139,7 +151,8 @@ func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
 	calls = 0
 	window, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	ended(deliver(window, window), "its window")
+	_, delivered = deliver(window, window)
+	ended(delivered, "its window")
 	if calls != 1 {
 		t.Fatalf("an outcome made %d calls in a window one call outlasted", calls)
 	}
@@ -148,6 +161,7 @@ func TestOutcomeCallsEndWithTheirBound(t *testing.T) {
 // The supervisor is untrusted: an outcome counts once, and only for an
 // attempt the agent runs.
 func TestContainerAcceptsOneOutcomePerRunningAttempt(t *testing.T) {
+	t.Parallel()
 	server := newHostServer()
 	c := newTestContainer(t, server)
 	attempt := uuid.NewString()
@@ -164,12 +178,12 @@ func TestContainerAcceptsOneOutcomePerRunningAttempt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no completion")
 	}
-	c.completions.Wait()
 	c.onFinished(succeeded(attempt))
+	c.completions.Wait()
 	select {
 	case r := <-server.completions:
 		t.Fatalf("unexpected completion %v", r)
-	case <-time.After(500 * time.Millisecond):
+	default:
 	}
 	if running := c.snapshot().GetRunningAttempts(); len(running) != 0 {
 		t.Fatalf("running attempts %v", running)
@@ -179,6 +193,7 @@ func TestContainerAcceptsOneOutcomePerRunningAttempt(t *testing.T) {
 // A supervisor that reconnects while commands flow receives every command on
 // one of its connections, and no reconnect panics the agent.
 func TestLinkDeliversEveryCommandAcrossReconnects(t *testing.T) {
+	t.Parallel()
 	const commands, reconnects = 2000, 40
 	c := newTestContainer(t, newHostServer())
 	l, err := listenLink(t.Context(), c, c.linkDir())
@@ -256,6 +271,7 @@ func TestLinkDeliversEveryCommandAcrossReconnects(t *testing.T) {
 // A link closed before it served, as when the container fails to start,
 // releases its socket.
 func TestLinkClosedBeforeServingReleasesItsListener(t *testing.T) {
+	t.Parallel()
 	c := newTestContainer(t, newHostServer())
 	l, err := listenLink(t.Context(), c, c.linkDir())
 	if err != nil {

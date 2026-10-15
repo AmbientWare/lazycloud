@@ -14,17 +14,19 @@ import (
 // nothing for a Spot instance it reclaims in its first hour. The fleet
 // terminates it only once the reclaim is overdue.
 func TestInterruptedHostDrainsAtOnceAndIsPreemptedBeforeReclaim(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	o := newOwners(t, compute.Config{})
+	o, _, ec2 := reserveFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	release := newRelease(t, o.pool, dev, `{}`)
 	later := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib})
 	soon := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16000, Memory: 32 * gib,
 		InstanceID: "i-soon"})
+	ec2.add(fakeInstance{ID: "i-soon", State: "running"}, soon.String())
 	running := runningAttempt(t, o.pool, dev, release, later)
-	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
-values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
+	starting := scan[uuid.UUID](t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, release, uuid.UUID(later))
 	doomed := runningAttempt(t, o.pool, dev, release, soon)
 
 	reclaim := time.Now().Add(2 * time.Minute).Truncate(time.Microsecond)
@@ -68,9 +70,7 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, rel
 		t.Fatalf("preempted %d hosts, want only the one reclaimed within the lead", preempted)
 	}
 	assertRetried(t, o.pool, doomed)
-	if _, err := o.compute.Retire(ctx, discard()); err != nil {
-		t.Fatal(err)
-	}
+	actuate(t, o)
 	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseDraining) {
 		t.Fatalf("preempted host is %s, want draining until the provider reclaims it", phase)
 	}
@@ -86,10 +86,8 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, dev, rel
 
 	run(t, o.pool, "update hosts set interruption_at = now() - make_interval(secs => $2) where id = $1",
 		uuid.UUID(soon), (compute.ReclaimGrace + time.Second).Seconds())
-	if _, err := o.compute.Retire(ctx, discard()); err != nil {
-		t.Fatal(err)
-	}
-	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseTerminating) {
-		t.Fatalf("host the provider did not reclaim in time is %s, want terminating", phase)
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, soon); phase != string(compute.PhaseTerminating) || ec2.get("i-soon").State != "shutting-down" {
+		t.Fatalf("host the provider did not reclaim in time is %s with its instance %s, want terminating", phase, ec2.get("i-soon").State)
 	}
 }

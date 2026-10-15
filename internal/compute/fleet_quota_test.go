@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 )
 
 func TestOffersSkipTypesAKnownVCPUQuotaCannotHold(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-west-2": oneZone("us-west-2a", "usw2-az1")}
 	in.Spot = []SpotQuote{
@@ -37,6 +39,7 @@ func TestOffersSkipTypesAKnownVCPUQuotaCannotHold(t *testing.T) {
 }
 
 func TestAQuotaRefusalCoolsTheWholeClassInItsRegionAndMarket(t *testing.T) {
+	t.Parallel()
 	in := offerInputs(t)
 	in.Catalog = []CatalogType{mustType(t, "m7i.large"), mustType(t, "c6a.2xlarge"), mustType(t, "g4dn.2xlarge")}
 	in.Cooldowns = []OfferCooldown{{
@@ -51,6 +54,7 @@ func TestAQuotaRefusalCoolsTheWholeClassInItsRegionAndMarket(t *testing.T) {
 }
 
 func TestCoverStaysWithinTheQuotaRoomAcrossNodes(t *testing.T) {
+	t.Parallel()
 	key := QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}
 	eight := mustType(t, "c6a.2xlarge")
 	o := FleetOffer{Type: eight, Usable: eight.Usable(0), HourlyMicros: 306_000, Quota: key}
@@ -65,12 +69,13 @@ func TestCoverStaysWithinTheQuotaRoomAcrossNodes(t *testing.T) {
 }
 
 func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) {
+	t.Parallel()
 	key := QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketOnDemand}
 	s := planSnapshot(t, planHost(1, planSmall, FleetServing), planHost(2, planSmall, FleetStopped))
 	s.Offers.Quotas = []VCPUQuota{{Key: key, VCPUs: 48}}
 	s.Hosts[0].Load = small
 	whole := Requirement{CPUMillis: small.CPUMillis, MemoryBytes: small.MemoryBytes}
-	s.Pending = []DemandGroup{{Need: whole, Containers: []PendingContainer{{ID: uuid.New()}, {ID: uuid.New()}, {ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{{Need: whole, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}, {ID: uuid.New(), Since: offerNow}, {ID: uuid.New(), Since: offerNow}}}}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
 	// 16 vCPUs run; the stopped reserve resumes into 16 more and one host
 	// is bought with the last 16.
@@ -78,10 +83,25 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 		t.Fatalf("actions %+v", plan.Actions)
 	}
 	g, _ := pendingOne(Requirement{CPUMillis: 1000, MemoryBytes: gib}, nil)
-	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New()}}}}
+	s.Pending = []DemandGroup{g, {Need: g.Need, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
 	s.Offers.Quotas[0].VCPUs = 16
 	s.Hosts = s.Hosts[:1]
 	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); len(plan.Actions) > 0 {
 		t.Fatalf("a full quota still buys: %+v", plan.Actions)
+	}
+}
+
+// A stopping Spot reserve counts against its quota already, so work waits
+// for it even when the quota has no room for another host.
+func TestWorkWaitsForAStoppingReserveInAFullQuota(t *testing.T) {
+	t.Parallel()
+	h := planHost(1, planSmall, FleetStopping)
+	h.Market, h.StoppedAt = MarketSpot, ptr(offerNow.Add(-DefaultPolicy().Starts.SpotDisable))
+	s := planSnapshot(t, h)
+	s.Offers.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketSpot}, VCPUs: 16}}
+	g, _ := pendingOne(Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: gib}, nil)
+	s.Pending = []DemandGroup{g}
+	if plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s); !slices.Equal(hostsOf(actionsOf(plan, ActionResume)), []HostID{h.ID}) {
+		t.Fatalf("actions %+v, want the stopping reserve resumed", plan.Actions)
 	}
 }

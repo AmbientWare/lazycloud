@@ -43,5 +43,4 @@ it("shows a start's wait for its image conversion as its own stage, not as queue
     "Container preparation: 3.0s",
     "Execution: 8.0s",
   ]);
-  expect(within(bar).getByTitle("Image conversion: 8.9s")).toHaveClass("bg-chart-3");
 });

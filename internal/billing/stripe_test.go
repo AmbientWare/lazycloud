@@ -60,6 +60,7 @@ func checkoutAhead(err error) bool {
 // TestStripeAcceptsEveryRequest sends each call billing makes to
 // stripe-mock, which refuses parameters Stripe's API does not take.
 func TestStripeAcceptsEveryRequest(t *testing.T) {
+	t.Parallel()
 	f := newStripeFixture(t)
 	s := f.billing.stripe
 	ctx := t.Context()
@@ -115,6 +116,7 @@ func TestStripeAcceptsEveryRequest(t *testing.T) {
 }
 
 func TestPaymentOperationsNeedStripe(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	user := f.user()
 	if _, err := f.billing.PaymentMethodSession(t.Context(), user, hosted("https://lazycloud.test/billing")); !errors.Is(err, ErrPaymentsUnavailable) {
@@ -126,6 +128,7 @@ func TestPaymentOperationsNeedStripe(t *testing.T) {
 }
 
 func TestReturnAddressesStayOnThePlatform(t *testing.T) {
+	t.Parallel()
 	f := newStripeFixture(t)
 	user := f.user()
 	for _, target := range []string{"https://evil.test/billing", "http://lazycloud.test/billing", "://"} {
@@ -149,6 +152,7 @@ func TestReturnAddressesStayOnThePlatform(t *testing.T) {
 }
 
 func TestWebhooksAreVerifiedAndStoredOnce(t *testing.T) {
+	t.Parallel()
 	f := newStripeFixture(t)
 	payload := []byte(`{"id": "evt_1", "object": "event", "api_version": "2020-08-27", "type": "payment_method.detached",
 		"data": {"object": {"id": "pm_1", "object": "payment_method", "customer": null},
@@ -188,6 +192,7 @@ func TestWebhooksAreVerifiedAndStoredOnce(t *testing.T) {
 }
 
 func TestPaymentOutcomesFundOnceAndTakeBackReversals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.account(owner)
@@ -259,6 +264,7 @@ func TestPaymentOutcomesFundOnceAndTakeBackReversals(t *testing.T) {
 }
 
 func TestSubscriptionsSetTheAccountsPlan(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.account(owner)
@@ -309,6 +315,7 @@ func TestSubscriptionsSetTheAccountsPlan(t *testing.T) {
 }
 
 func TestIncludedCreditForNewUpgradedAndRenewedPeriods(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	half := start.Add(end.Sub(start) / 2)

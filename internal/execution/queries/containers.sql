@@ -11,14 +11,42 @@ where id = @id;
 select id from attempts where container_id = @container_id and state = 'running' order by id;
 
 -- name: FailQueuedTasksOfRelease :many
--- The caller holds the rows from LockQueuedWithDependents.
+-- The ids are queued tasks the caller locked with LockQueuedWithDependents.
+-- They are read by key alone: a status test would let a generic plan scan
+-- the whole queue through a queued partial index.
 update tasks
 set status = 'failed', failure = @failure, finished_at = now()
-where id = any(@ids::uuid[]) and status = 'queued'
+where id = any(@ids::uuid[])
 returning id;
 
 -- name: RecordLoadError :exec
 update releases set load_error = @load_error where id = @id;
 
+-- name: ReleaseHasPlacedContainer :one
+-- Whether a container of the release other than this one holds a host, and
+-- so takes the release's queued work.
+select exists (
+    select 1 from containers where release_id = @release_id::uuid and id <> @id and state not in ('pending', 'stopped')
+)::bool;
+
 -- name: CountStartFailure :one
 update releases set start_failures = start_failures + 1 where id = @id returning start_failures;
+
+-- name: LockStoppedReleases :many
+-- The releases among the ids that stopped starting, on a load error or
+-- the start failure limit, locked, with when and why their newest serve
+-- container stopped.
+select r.id, r.start_failures, r.load_error, last_stop.stopped_at, coalesce(last_stop.reason, '')::text as reason
+from releases r
+left join lateral (
+    select lc.stopped_at, coalesce(nullif(lc.exit_message, ''), lc.stop_reason)::text as reason
+    from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on true
+where r.id = any(@ids::uuid[]) and (r.load_error is not null or r.start_failures >= @start_failure_limit::int)
+order by r.id
+for update of r;
+
+-- name: RetryReleaseStarts :exec
+update releases set start_failures = @start_failures, load_error = null where id = any(@ids::uuid[]);

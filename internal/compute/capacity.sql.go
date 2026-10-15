@@ -29,11 +29,17 @@ select h.id,
        (h.cpu_millis - coalesce(used.cpu, 0))::bigint as free_cpu_millis,
        (h.memory_bytes - coalesce(used.memory, 0))::bigint as free_memory_bytes,
        (h.gpu_count - coalesce(used.gpus, 0))::int as free_gpus,
+       (h.disk_slots - coalesce(used.disks, 0))::int as free_disk_slots,
+       (h.hands_back_at is not null)::bool as hands_back,
+       coalesce(used.packed_cpu, 0)::bigint as packed_cpu_millis, coalesce(used.packed_memory, 0)::bigint as packed_memory_bytes,
        array(select hw.workspace_id from host_workspaces hw where hw.host_id = h.id order by hw.workspace_id)::uuid[] as workspaces
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus
+           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
+           sum(c.cpu_millis) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_cpu,
+           sum(c.memory_bytes) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_memory
     from containers c
     left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
@@ -42,31 +48,38 @@ where h.state = 'online'
   and h.phase = 'ready'
   and h.capacity_state = 'available'
   and h.last_seen_at >= now() - make_interval(secs => $1::float8)
+  and not exists (select 1 from agent_updates u where u.host_id = h.id)
 order by h.id
 `
 
 type AvailableCapacityRow struct {
-	ID               uuid.UUID
-	Kind             string
-	Provider         string
-	ConnectionID     *uuid.UUID
-	Name             string
-	Region           string
-	AvailabilityZone string
-	ZoneID           string
-	Market           *string
-	GpuType          string
-	GpuCount         int32
-	CpuMillis        cpu.Millis
-	MemoryBytes      int64
-	FreeCpuMillis    int64
-	FreeMemoryBytes  int64
-	FreeGpus         int32
-	Workspaces       []uuid.UUID
+	ID                uuid.UUID
+	Kind              string
+	Provider          string
+	ConnectionID      *uuid.UUID
+	Name              string
+	Region            string
+	AvailabilityZone  string
+	ZoneID            string
+	Market            *string
+	GpuType           string
+	GpuCount          int32
+	CpuMillis         cpu.Millis
+	MemoryBytes       int64
+	FreeCpuMillis     int64
+	FreeMemoryBytes   int64
+	FreeGpus          int32
+	FreeDiskSlots     int32
+	HandsBack         bool
+	PackedCpuMillis   int64
+	PackedMemoryBytes int64
+	Workspaces        []uuid.UUID
 }
 
 // Hosts that take new containers, with their capacity minus the resources of
-// their live containers. Reads the live-container partial index per host.
+// their live containers, and what packed CPU work holds, which GPU work
+// evicts. A host whose agent must move to the target release takes none
+// until it runs it. Reads the live-container partial index per host.
 func (q *Queries) AvailableCapacity(ctx context.Context, timeoutSeconds float64) ([]AvailableCapacityRow, error) {
 	rows, err := q.db.Query(ctx, availableCapacity, timeoutSeconds)
 	if err != nil {
@@ -93,6 +106,10 @@ func (q *Queries) AvailableCapacity(ctx context.Context, timeoutSeconds float64)
 			&i.FreeCpuMillis,
 			&i.FreeMemoryBytes,
 			&i.FreeGpus,
+			&i.FreeDiskSlots,
+			&i.HandsBack,
+			&i.PackedCpuMillis,
+			&i.PackedMemoryBytes,
 			&i.Workspaces,
 		); err != nil {
 			return nil, err

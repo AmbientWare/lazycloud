@@ -3,9 +3,12 @@ package billing
 import (
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -55,6 +58,7 @@ func TestMeteringBillsReadyToStoppedOnTheGrid(t *testing.T) {
 }
 
 func TestMeteringStopsAtTheHostsLastReport(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -103,6 +107,7 @@ func TestMeteringStopsAtTheHostsLastReport(t *testing.T) {
 }
 
 func TestMeteringSplitsAtPublishedRateChanges(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -123,6 +128,7 @@ func TestMeteringSplitsAtPublishedRateChanges(t *testing.T) {
 }
 
 func TestMeteringFindsContainersThatLivedBetweenPasses(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -141,6 +147,7 @@ func TestMeteringFindsContainersThatLivedBetweenPasses(t *testing.T) {
 
 // A build reserves 8 GiB to place it and bills 2 GiB of memory.
 func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
@@ -159,9 +166,124 @@ func TestMeteringBillsABuildTwoGiBWhileItReservesEight(t *testing.T) {
 	}
 }
 
+// A container a replacement took over from bills until the first of its
+// replacements was ready, or its own stop if that came first, and the
+// replacement from then on, so the two never bill the same instant.
+func TestMeteringEndsAReplacedContainerWhenItsReplacementIsReady(t *testing.T) {
+	t.Parallel()
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	ready, takeover, stop := base.Add(5*time.Minute), base.Add(40*time.Minute), base.Add(50*time.Minute)
+	for _, c := range []struct {
+		name string
+		// replacements are when each became ready, nil for never; stopped
+		// is when the replaced container stopped, nil while it drains.
+		replacements []*time.Time
+		stopped      *time.Time
+		end          time.Time
+	}{
+		{"replacement ready while the old one drains", []*time.Time{&takeover}, nil, takeover},
+		{"replacement never ready", []*time.Time{nil}, &stop, stop},
+		{"first replacement never ready, second ready", []*time.Time{nil, &takeover}, &stop, takeover},
+		{"old one stops before its replacement is ready", []*time.Time{new(stop.Add(5 * time.Minute))}, &stop, stop},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			ws := f.workspace(f.user())
+			rel := f.release(ws)
+			host := f.host(time.Now())
+			old := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: ready, stopped: c.stopped, cpuMillis: 1000, memoryBytes: 1 << 30})
+			var billed []uuid.UUID
+			for _, at := range c.replacements {
+				var id uuid.UUID
+				err := f.pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at, replaces)
+values ($1, $2, (select workload_id from releases where id = $2), case when $4::timestamptz is null then 'stopped' else 'ready' end, $3, 1, 1000, 1 << 30, $4, $4, $5) returning id`,
+					ws, rel.id, host, at, old).Scan(&id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if at != nil {
+					billed = append(billed, id)
+				}
+			}
+			f.meter()
+			entries := f.ledger(old)
+			if len(entries) == 0 || !entries[0].start.Equal(ready) || !entries[len(entries)-1].end.Equal(c.end) {
+				t.Fatalf("replaced container billed %+v, want [%s, %s)", entries, ready, c.end)
+			}
+			for _, id := range billed {
+				next := f.ledger(id)
+				if len(next) == 0 || next[0].start.Before(entries[len(entries)-1].end) {
+					t.Fatalf("replacement billed from %+v while the replaced container billed to %s", next, entries[len(entries)-1].end)
+				}
+			}
+		})
+	}
+}
+
 func abs(n int64) int64 {
 	if n < 0 {
 		return -n
 	}
 	return n
+}
+
+// An attempt that ends by preemption, as GPU work's eviction or a Spot
+// reclaim ends it, bills nothing; the attempts that completed on the same
+// container bill, overlapping it or not. While attempts run no entry passes
+// the start of the oldest, since preemption may yet void it. A period the
+// voided time splits bills its measured use over the time it was read.
+func TestMeteringChargesNothingForAPreemptedAttempt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ws := f.workspace(f.user())
+	rel := f.release(ws)
+	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	at := func(minutes int) time.Time { return base.Add(time.Duration(minutes) * time.Minute) }
+	c := f.container(containerSpec{workspace: ws, host: f.host(time.Now()), release: &rel.id, ready: at(5), cpuMillis: 1000, memoryBytes: 1 << 30})
+	// attempt runs from start, finishing as state at end unless it is still
+	// running.
+	attempt := func(start time.Time, state string, end *time.Time) uuid.UUID {
+		var id uuid.UUID
+		if err := f.pool.QueryRow(t.Context(), `
+with task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
+              values ($1, $2, $3, 'running', 1, 1, $5) returning id)
+insert into attempts (task_id, number, container_id, state, started_at, finished_at, deadline_at)
+select id, 1, $4, $6, $5, $7, now() + interval '1 hour' from task returning id`,
+			ws, rel.workload, rel.id, c, start, state, end).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	attempt(at(10), "succeeded", new(at(20)))
+	overlapping := attempt(at(35), "running", nil)
+	lost := attempt(at(40), "running", nil)
+
+	f.meter()
+	if got := f.ledger(c); len(got) != 2 || !got[1].end.Equal(at(30)) {
+		t.Fatalf("while attempts run, entries %+v; want them to end at %s, the quarter-hour before the oldest", got, at(30))
+	}
+	f.exec("update attempts set state = 'succeeded', finished_at = $2 where id = $1", overlapping, at(45))
+	attempt(at(50), "succeeded", new(at(55)))
+	// Two cores through minutes 45 to 54, which the voided time splits.
+	f.exec(`insert into container_metric_minutes (container_id, minute, samples, interval_ms, cpu_usage_usec, memory_rss_bytes,
+            memory_swap_bytes, network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes)
+select $1, $2::timestamptz + interval '1 minute' * g, 12, 60000, 120000000, 0, 0, 0, 0, 0, 0
+from generate_series(0, 9) g`, c, at(45))
+	f.exec("update attempts set state = 'lost', preempted = true, finished_at = now() where id = $1", lost)
+	f.exec("update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", c)
+	f.meter()
+	got := f.ledger(c)
+	if n := len(got); n != 4 || !got[0].start.Equal(at(5)) || !got[2].end.Equal(at(45)) || !got[3].start.Equal(at(50)) || !got[3].end.Equal(at(55)) {
+		t.Fatalf("entries %+v; want [%s, %s) up to the preempted attempt and on while the overlapping one ran, then [%s, %s)",
+			got, at(5), at(45), at(50), at(55))
+	}
+	var millis int64
+	if err := f.pool.QueryRow(t.Context(), "select cpu_millis from ledger_entries where source_id = $1 and started_at = $2", c, at(50)).Scan(&millis); err != nil {
+		t.Fatal(err)
+	}
+	if millis != 2000 {
+		t.Errorf("the entry after the voided time bills %d millicores, want the 2000 measured", millis)
+	}
 }

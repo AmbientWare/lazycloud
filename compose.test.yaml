@@ -1,7 +1,9 @@
 # Disposable services for Go tests: LAZYCLOUD_TEST_DATABASE_URL defaults to
 # this database, internal/storage/storagetest to this Garage
 # (LAZYCLOUD_TEST_OBJECT_STORE_ENDPOINT, LAZYCLOUD_TEST_GARAGE_ADMIN_URL) and
-# billing's Stripe tests to this stripe-mock (LAZYCLOUD_TEST_STRIPE_URL).
+# its HTTPS proxy (LAZYCLOUD_TEST_OBJECT_STORE_HTTPS,
+# LAZYCLOUD_TEST_OBJECT_STORE_CA_URL), and billing's Stripe tests to this
+# stripe-mock (LAZYCLOUD_TEST_STRIPE_URL).
 name: lazycloud-go-test
 
 services:
@@ -70,3 +72,38 @@ services:
       object-store:
         condition: service_healthy
         restart: true
+
+  # The object store over HTTPS with a private CA, as hosts reach a store in
+  # production: path-style at https://s3.localhost:15901 and virtual-hosted
+  # at https://<bucket>.s3.localhost:15901. The CA is made when the proxy
+  # starts; its root is at http://127.0.0.1:15919/pki/ca/local.
+  object-store-tls:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    configs:
+      - source: object-store-tls
+        target: /etc/caddy/Caddyfile
+    ports:
+      - "127.0.0.1:15901:443"
+      - "127.0.0.1:15919:2019"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/pki/ca/local"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      object-store:
+        condition: service_healthy
+        restart: true
+
+configs:
+  object-store-tls:
+    content: |
+      {
+      	admin 0.0.0.0:2019
+      	skip_install_trust
+      	local_certs
+      }
+
+      s3.localhost, *.s3.localhost {
+      	reverse_proxy object-store:3900
+      }

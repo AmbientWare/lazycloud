@@ -7,6 +7,7 @@ package execution
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -25,7 +26,7 @@ func (q *Queries) CountStartFailure(ctx context.Context, id uuid.UUID) (int32, e
 const failQueuedTasksOfRelease = `-- name: FailQueuedTasksOfRelease :many
 update tasks
 set status = 'failed', failure = $1, finished_at = now()
-where id = any($2::uuid[]) and status = 'queued'
+where id = any($2::uuid[])
 returning id
 `
 
@@ -34,7 +35,9 @@ type FailQueuedTasksOfReleaseParams struct {
 	Ids     []uuid.UUID
 }
 
-// The caller holds the rows from LockQueuedWithDependents.
+// The ids are queued tasks the caller locked with LockQueuedWithDependents.
+// They are read by key alone: a status test would let a generic plan scan
+// the whole queue through a queued partial index.
 func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTasksOfReleaseParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.Ids)
 	if err != nil {
@@ -80,6 +83,62 @@ func (q *Queries) LockContainer(ctx context.Context, id uuid.UUID) (LockContaine
 	return i, err
 }
 
+const lockStoppedReleases = `-- name: LockStoppedReleases :many
+select r.id, r.start_failures, r.load_error, last_stop.stopped_at, coalesce(last_stop.reason, '')::text as reason
+from releases r
+left join lateral (
+    select lc.stopped_at, coalesce(nullif(lc.exit_message, ''), lc.stop_reason)::text as reason
+    from containers lc
+    where lc.release_id = r.id and lc.purpose = 'serve'
+    order by lc.id desc limit 1
+) last_stop on true
+where r.id = any($1::uuid[]) and (r.load_error is not null or r.start_failures >= $2::int)
+order by r.id
+for update of r
+`
+
+type LockStoppedReleasesParams struct {
+	Ids               []uuid.UUID
+	StartFailureLimit int32
+}
+
+type LockStoppedReleasesRow struct {
+	ID            uuid.UUID
+	StartFailures int32
+	LoadError     *string
+	StoppedAt     *time.Time
+	Reason        string
+}
+
+// The releases among the ids that stopped starting, on a load error or
+// the start failure limit, locked, with when and why their newest serve
+// container stopped.
+func (q *Queries) LockStoppedReleases(ctx context.Context, arg LockStoppedReleasesParams) ([]LockStoppedReleasesRow, error) {
+	rows, err := q.db.Query(ctx, lockStoppedReleases, arg.Ids, arg.StartFailureLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockStoppedReleasesRow
+	for rows.Next() {
+		var i LockStoppedReleasesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.StartFailures,
+			&i.LoadError,
+			&i.StoppedAt,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordLoadError = `-- name: RecordLoadError :exec
 update releases set load_error = $1 where id = $2
 `
@@ -91,6 +150,40 @@ type RecordLoadErrorParams struct {
 
 func (q *Queries) RecordLoadError(ctx context.Context, arg RecordLoadErrorParams) error {
 	_, err := q.db.Exec(ctx, recordLoadError, arg.LoadError, arg.ID)
+	return err
+}
+
+const releaseHasPlacedContainer = `-- name: ReleaseHasPlacedContainer :one
+select exists (
+    select 1 from containers where release_id = $1::uuid and id <> $2 and state not in ('pending', 'stopped')
+)::bool
+`
+
+type ReleaseHasPlacedContainerParams struct {
+	ReleaseID uuid.UUID
+	ID        uuid.UUID
+}
+
+// Whether a container of the release other than this one holds a host, and
+// so takes the release's queued work.
+func (q *Queries) ReleaseHasPlacedContainer(ctx context.Context, arg ReleaseHasPlacedContainerParams) (bool, error) {
+	row := q.db.QueryRow(ctx, releaseHasPlacedContainer, arg.ReleaseID, arg.ID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const retryReleaseStarts = `-- name: RetryReleaseStarts :exec
+update releases set start_failures = $1, load_error = null where id = any($2::uuid[])
+`
+
+type RetryReleaseStartsParams struct {
+	StartFailures int32
+	Ids           []uuid.UUID
+}
+
+func (q *Queries) RetryReleaseStarts(ctx context.Context, arg RetryReleaseStartsParams) error {
+	_, err := q.db.Exec(ctx, retryReleaseStarts, arg.StartFailures, arg.Ids)
 	return err
 }
 

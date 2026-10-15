@@ -210,6 +210,7 @@ func get(t *testing.T, target string, header http.Header) (int, []byte) {
 // layers; a start whose image has no converted layers waits for the build
 // that converts it.
 func TestStartCarriesOnlyItsImageLayers(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	other, _ := h.enroll()
@@ -269,7 +270,8 @@ func TestStartCarriesOnlyItsImageLayers(t *testing.T) {
 // fresh grants before then for as long as a container uses the image, then
 // no more.
 func TestLayerGrantsOpenOnlyTheirObjectAndRefreshWhileUsed(t *testing.T) {
-	const lifetime = 3 * time.Second
+	t.Parallel()
+	const lifetime = 2 * time.Second
 	h := start(t, grantsLasting(lifetime))
 	host, ctx := h.enroll()
 	layer, other := h.storeLayer("granted"), h.storeLayer("not granted")
@@ -315,11 +317,14 @@ func TestLayerGrantsOpenOnlyTheirObjectAndRefreshWhileUsed(t *testing.T) {
 	if !refresh[0].GetExpiresAt().AsTime().After(first.GetExpiresAt().AsTime()) || !time.Now().Before(first.GetExpiresAt().AsTime()) {
 		t.Fatalf("refresh expires %s, first %s", refresh[0].GetExpiresAt().AsTime(), first.GetExpiresAt().AsTime())
 	}
-	time.Sleep(time.Until(first.GetExpiresAt().AsTime().Add(1500 * time.Millisecond)))
-	if status, _ := get(t, first.GetIndexUrl(), nil); status == http.StatusOK {
-		t.Fatal("an expired URL still reads")
-	} else {
-		t.Logf("expired URL answered %d", status)
+	// The store refuses the first URL soon after it expires.
+	for refused := false; !refused; {
+		status, _ := get(t, first.GetIndexUrl(), nil)
+		refused = status != http.StatusOK
+		if !refused && time.Now().After(first.GetExpiresAt().AsTime().Add(5*time.Second)) {
+			t.Fatal("an expired URL still reads")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	// The host keeps reading past the first expiry with what it was sent.
 	latest := next(t, in, lifetime, func(m *hostproto.ServerMessage) bool {
@@ -330,12 +335,13 @@ func TestLayerGrantsOpenOnlyTheirObjectAndRefreshWhileUsed(t *testing.T) {
 		t.Fatalf("refreshed index after the first expired: %d", status)
 	}
 
-	// Once the container stops, grants stop.
+	// Once the container stops, grants stop: none comes within the next
+	// renewal, a third of a lifetime away.
 	if _, err := h.pool.Exec(t.Context(), `update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1`, container); err != nil {
 		t.Fatal(err)
 	}
 	next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStop().GetContainerId() == container.String() })
-	quiet := time.After(2 * lifetime)
+	quiet := time.After(lifetime / 2)
 	for {
 		select {
 		case msg := <-in:
@@ -353,6 +359,7 @@ func TestLayerGrantsOpenOnlyTheirObjectAndRefreshWhileUsed(t *testing.T) {
 // with, the managed Python image included, and none for an image only a
 // stopped container used.
 func TestReconnectedSessionGrantsRunningImages(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, managed := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}}`)
@@ -381,15 +388,9 @@ func TestReconnectedSessionGrantsRunningImages(t *testing.T) {
 	if len(grants) != 1 || grants[0].GetDiffId() == string(layer.diffID) {
 		t.Fatalf("the reopened session granted %v", diffIDs(grants))
 	}
-	quiet := time.After(time.Second)
-	for {
-		select {
-		case msg := <-in:
-			if msg.GetLayerGrants() != nil {
-				t.Fatalf("the reopened session also granted %v", diffIDs(msg.GetLayerGrants().GetLayers()))
-			}
-		case <-quiet:
-			return
+	for _, msg := range h.synced(host, in) {
+		if msg.GetLayerGrants() != nil {
+			t.Fatalf("the reopened session also granted %v", diffIDs(msg.GetLayerGrants().GetLayers()))
 		}
 	}
 }
@@ -410,6 +411,7 @@ func bucketOf(t *testing.T, raw string) string {
 // from the copy then, not when its hour-long grant is due. Garage signs one
 // region, so the platform bucket stands in for that region's copy.
 func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
+	t.Parallel()
 	cfg := storagetest.Config(t)
 	cfg.LayerReplicas = map[string]string{cfg.Region: cfg.Bucket}
 	const recheck = 500 * time.Millisecond
@@ -469,6 +471,7 @@ func TestALateCopyIsGrantedOnceTheRecheckFindsIt(t *testing.T) {
 // here because its layers are not recorded yet, gets them at a later sync,
 // though no other grant is due.
 func TestAFailedLayerGrantIsIssuedAtALaterSync(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ref := reference("late")

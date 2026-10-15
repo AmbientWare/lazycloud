@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,12 @@ const (
 	containerSupervisor = "/opt/lazycloud/bin/supervisor"
 	containerWorkspace  = "/workspace"
 	containerLinkDir    = "/run/lazycloud"
-	linkSocketName      = "agent.sock"
+	// containerVolumeCache mirrors the volume mount paths with the complete
+	// objects the host caches, and containerVolumeCacheLib is the library
+	// workloads preload to open them in place of the mounts' files.
+	containerVolumeCache    = "/opt/lazycloud/volume-cache"
+	containerVolumeCacheLib = "/opt/lazycloud/lib/volume-cache.so"
+	linkSocketName          = "agent.sock"
 	// httpSocketName is where an HTTP workload's supervisor serves requests,
 	// in the same directory as the link socket.
 	httpSocketName = "http.sock"
@@ -105,8 +111,9 @@ type Config struct {
 	// in place of a join token.
 	CloudHostID string
 	// IMDSEndpoint is the instance metadata service. Set, the agent reports
-	// Spot interruption notices.
-	IMDSEndpoint string
+	// Spot interruption notices, asking for one every InterruptionPoll.
+	IMDSEndpoint     string
+	InterruptionPoll time.Duration
 	// Hostname is reported at enrollment; empty uses the system's.
 	Hostname string
 	// RuntimeDir holds managed Python runtimes at <dir>/<python_version>.
@@ -123,6 +130,13 @@ type Config struct {
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string
+	// TrustBundle is the CA bundle GeeseFS verifies object stores against;
+	// required with GeeseFSPath.
+	TrustBundle string
+	// VolumeCacheLib is the preload library workloads with platform volumes
+	// get, which opens cached objects in place of the mount's files; empty
+	// gives none.
+	VolumeCacheLib string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -145,6 +159,10 @@ type Config struct {
 	TraceSocket string
 	// MetricsInterval paces container metric samples; zero means 5 s.
 	MetricsInterval time.Duration
+	// CommitAfter is how long a session must stay open before a release on
+	// trial counts as working and is committed; DefaultCommitAfter in
+	// production.
+	CommitAfter time.Duration
 	// clock reports sleeps; nil uses the kernel's.
 	clock sleepClock
 }
@@ -162,6 +180,9 @@ type Agent struct {
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
+	// peerAddress is where other hosts reach this host's volume cache,
+	// host:port, empty when it mounts no volumes.
+	peerAddress string
 	// platform holds the images the agent runs on its own, as the server
 	// sent them.
 	platform *platformImages
@@ -206,6 +227,10 @@ type Agent struct {
 	// notice poll interval, after a resume.
 	reconnectNow    chan struct{}
 	interruptionNow chan struct{}
+	// reclaiming closes, once, at the first Spot notice, and the disks'
+	// publish loops then publish at once.
+	reclaiming chan struct{}
+	reclaimed  sync.Once
 	// reserveSlot runs one reserve preparation at a time.
 	reserveSlot chan struct{}
 
@@ -255,8 +280,22 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := os.MkdirAll(cfg.SocketDir, 0o700); err != nil {
 		return fmt.Errorf("create socket directory: %w", err)
 	}
+	if cfg.IMDSEndpoint != "" && cfg.InterruptionPoll <= 0 {
+		return errors.New("an agent that reads IMDS needs a positive interruption poll")
+	}
+	if cfg.CommitAfter <= 0 {
+		return fmt.Errorf("the update commit delay must be positive, not %s", cfg.CommitAfter)
+	}
 	if _, err := os.Stat(cfg.SupervisorPath); err != nil {
 		return fmt.Errorf("supervisor binary: %w", err)
+	}
+	if cfg.GeeseFSPath != "" {
+		if cfg.TrustBundle == "" {
+			return errors.New("volume mounts need a CA bundle: set --trust-bundle or SSL_CERT_FILE")
+		}
+		if _, err := os.Stat(cfg.TrustBundle); err != nil {
+			return fmt.Errorf("CA bundle: %w", err)
+		}
 	}
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
@@ -282,6 +321,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	offered := resolveOffer(machine, cfg.Limits)
+	diskErr := diskengine.Check()
+	offered.capacity.DiskSlots = diskSlots(diskErr)
 	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker), snapshotterCheck(ctx, docker)}, offered.checks...)
 	var metadata *imds.Client
 	if cfg.IMDSEndpoint != "" {
@@ -331,6 +372,7 @@ func Run(ctx context.Context, cfg Config) error {
 	a := &Agent{
 		cfg:             cfg,
 		log:             cfg.Logger,
+		peerAddress:     peerAddress(ctx, cfg),
 		docker:          docker,
 		identity:        id,
 		capacity:        offered.capacity,
@@ -352,6 +394,7 @@ func Run(ctx context.Context, cfg Config) error {
 		clock:           clock,
 		reconnectNow:    make(chan struct{}, 1),
 		interruptionNow: make(chan struct{}, 1),
+		reclaiming:      make(chan struct{}),
 		reserveSlot:     make(chan struct{}, 1),
 		sleep:           attempt,
 		ctx:             ctx,
@@ -365,14 +408,16 @@ func Run(ctx context.Context, cfg Config) error {
 		operations:      make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
+	defer a.volumes.close()
 	snapshotter, err := layersource.Dial(layersource.Socket)
 	if err != nil {
 		return err //nolint:wrapcheck // The client names the call.
 	}
 	defer func() { _ = snapshotter.Close() }()
 	a.layers = newLayerSources(snapshotter)
-	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
-	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
+	a.volumes.sources = snapshotter.Volumes
+	a.diskEngine = diskengine.New(layersource.DiskRoot, snapshotter.Disks, a.log.With("component", "disk"))
+	if a.diskErr = diskErr; a.diskErr != nil {
 		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
 	}
 	if a.diskQuota, err = detectDiskQuota(ctx, docker); err != nil {
@@ -397,6 +442,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
+	if err := a.replaceSnapshotter(ctx); err != nil {
+		a.log.Warn("replacing the snapshotter failed", "error", err)
+	}
+	a.volumes.adoptGrants()
 	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", a.capacity.GetCpuMillis(),
 		"memory_bytes", a.capacity.GetMemoryBytes(), "gpus", a.capacity.GetGpuCount(), "updatable", a.updatable)
@@ -452,7 +501,7 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 		}
 		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
 			return check("docker", false, "Docker is not reachable: "+err.Error(),
-				"start Docker and check that docker info works for the agent's user")
+				"start Docker and check that docker info works")
 		}
 	}
 }
@@ -532,7 +581,6 @@ func (a *Agent) pruneExited(ctx context.Context) {
 			}
 		}
 		a.mu.Unlock()
-		a.volumes.pruneIdle(ctx)
 	}
 }
 
@@ -643,3 +691,28 @@ var (
 	// ErrPreflightFailed: an error-severity preflight check failed.
 	ErrPreflightFailed = errors.New("preflight failed")
 )
+
+// peerAddress is the address other hosts of the region reach this host's
+// volume cache on: the address the host reaches the server from, on the
+// peer port. Empty when the host mounts no volumes.
+func peerAddress(ctx context.Context, cfg Config) string {
+	if cfg.GeeseFSPath == "" {
+		return ""
+	}
+	server := cfg.Server
+	if _, _, err := net.SplitHostPort(server); err != nil {
+		server = net.JoinHostPort(server, "443")
+	}
+	// A UDP dial sends nothing; it only picks the route's source address.
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", server)
+	if err != nil {
+		cfg.Logger.Warn("the host's peer address is unknown; it serves no volume peers", "server", cfg.Server, "error", err)
+		return ""
+	}
+	defer func() { _ = conn.Close() }()
+	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(layersource.VolumePeerPort))
+}

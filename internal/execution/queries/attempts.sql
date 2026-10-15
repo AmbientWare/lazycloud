@@ -20,8 +20,8 @@ for update of a;
 
 -- name: SetAttemptStates :exec
 update attempts a
-set state = v.state, finished_at = now()
-from (select unnest(@ids::uuid[]) as id, unnest(@states::text[]) as state) v
+set state = v.state, preempted = v.preempted, finished_at = now()
+from (select unnest(@ids::uuid[]) as id, unnest(@states::text[]) as state, unnest(@preempted::bool[]) as preempted) v
 where a.id = v.id;
 
 -- name: ReleaseSpecs :many

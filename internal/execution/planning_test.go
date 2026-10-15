@@ -12,7 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -90,8 +93,8 @@ func readyContainer(t *testing.T, pool *pgxpool.Pool, f releaseFixture, host uui
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 1000, 1 << 29, now() - make_interval(secs => $4), now() - make_interval(secs => $4))
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 29, now() - make_interval(secs => $4), now() - make_interval(secs => $4))
 returning id`, f.workspace, f.release, host, readyFor.Seconds()).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -176,6 +179,7 @@ func plan(t *testing.T, e *Execution) PlanResult {
 }
 
 func TestPlanScalesWithDemandWithinLimits(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"concurrency": 2, "autoscaler": {"tasks_per_container": 4, "max_containers": 3}}`)
@@ -213,7 +217,44 @@ func TestPlanScalesWithDemandWithinLimits(t *testing.T) {
 	}
 }
 
+// TestContainersReserveMemoryForTheirMounters: a container's memory, which
+// placement and billing read, is its spec's plus one mounter's share for its
+// platform volumes and one per distinct cloud bucket; its start tells the
+// host that share.
+func TestContainersReserveMemoryForTheirMounters(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	bucket := func(name, bucket, prefix string) string {
+		return `{"name": "` + name + `", "cloud_bucket": {"bucket": "` + bucket + `", "prefix": "` + prefix +
+			`", "access_key_secret": "K", "secret_key_secret": "S"}}`
+	}
+	f := newRelease(t, pool, `{"volumes": [{"name": "a"}, {"name": "b"}, `+
+		bucket("m1", "models", "x/")+`, `+bucket("m2", "models", "y/")+`, `+bucket("o", "other", "")+`]}`)
+	queueTasks(t, pool, f, 1, 0)
+	plan(t, e)
+	host := newHost(t, pool)
+	var memory int64
+	if err := pool.QueryRow(t.Context(), `
+update containers set state = 'starting', host_id = $2, assigned_at = now() where release_id = $1
+returning memory_bytes`, f.release, host).Scan(&memory); err != nil {
+		t.Fatal(err)
+	}
+	reserve := int64(3 * hostproto.MounterMemoryBytes)
+	if memory != 512<<20+reserve {
+		t.Fatalf("container memory %d MiB, want the spec's 512 MiB and three mounters'", memory>>20)
+	}
+	commands, err := e.HostCommands(t.Context(), compute.HostID(host))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands.Start) != 1 || commands.Start[0].MountReserveBytes != reserve || commands.Start[0].MemoryBytes != memory {
+		t.Fatalf("start commands %+v, want one reserving %d of its %d bytes for mounters", commands.Start, reserve, memory)
+	}
+}
+
 func TestMinimumAppliesOnlyToTheActiveRelease(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	spec := `{"autoscaler": {"min_containers": 2, "max_containers": 5}}`
@@ -241,6 +282,7 @@ func TestMinimumAppliesOnlyToTheActiveRelease(t *testing.T) {
 // Two planners racing on one release never create more than max_containers:
 // the planning lock lets one decide while the other skips.
 func TestConcurrentPlannersRespectMaxContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
@@ -269,6 +311,7 @@ func TestConcurrentPlannersRespectMaxContainers(t *testing.T) {
 }
 
 func TestIdleDrainRespectsKeepWarmAndRunningAttempts(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"keep_warm_seconds": 60, "autoscaler": {"max_containers": 5}}`)
@@ -310,6 +353,7 @@ func TestIdleDrainRespectsKeepWarmAndRunningAttempts(t *testing.T) {
 // must not lose the container to a drain: the planner skips it without
 // blocking, and afterwards sees the running attempt.
 func TestDrainSkipsAContainerBeingClaimed(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"keep_warm_seconds": 0, "autoscaler": {"max_containers": 5}}`)
@@ -360,6 +404,7 @@ func TestDrainSkipsAContainerBeingClaimed(t *testing.T) {
 // attempt only while it holds a ready container FOR SHARE, so no draining
 // container may ever carry a running attempt.
 func TestDrainNeverOverlapsConcurrentClaims(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{"keep_warm_seconds": 0, "autoscaler": {"max_containers": 100, "tasks_per_container": 1000}}`)
@@ -418,40 +463,187 @@ where c.state = 'draining'
 }
 
 func TestStoppedWorkloadOrPausedAppWindsDown(t *testing.T) {
-	for _, stop := range []string{
-		"update workloads set desired_state = 'stopped' where id = $1",
-		"update apps set state = 'paused' where id = (select app_id from workloads where id = $1)",
+	t.Parallel()
+	for name, stop := range map[string]string{
+		"stopped workload": "update workloads set desired_state = 'stopped' where id = $1",
+		"paused app":       "update apps set state = 'paused' where id = (select app_id from workloads where id = $1)",
 	} {
-		pool := dbtest.New(t)
-		e := NewExecution(pool)
-		f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
-		host := newHost(t, pool)
-		busy := readyContainer(t, pool, f, host, time.Minute)
-		attempt := attemptOn(t, pool, f, busy, 0)
-		queueTasks(t, pool, f, 3, 0)
-		plan(t, e) // requests pending containers for the queued tasks
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pool := dbtest.New(t)
+			e := NewExecution(pool)
+			f := newRelease(t, pool, `{"autoscaler": {"max_containers": 5}}`)
+			host := newHost(t, pool)
+			busy := readyContainer(t, pool, f, host, time.Minute)
+			attempt := attemptOn(t, pool, f, busy, 0)
+			queueTasks(t, pool, f, 3, 0)
+			plan(t, e) // requests pending containers for the queued tasks
 
-		exec(t, pool, stop, f.workload)
-		result := plan(t, e)
-		states := containerStates(t, pool, f.release)
-		if states[ContainerPending] != 0 || states[ContainerDraining] != 1 || states[ContainerReady] != 0 {
-			t.Fatalf("%s: containers %v; want pending stopped and the busy one draining", stop, states)
-		}
-		var queued, cancelled int
-		if err := pool.QueryRow(t.Context(), `
+			exec(t, pool, stop, f.workload)
+			result := plan(t, e)
+			states := containerStates(t, pool, f.release)
+			if states[ContainerPending] != 0 || states[ContainerDraining] != 1 || states[ContainerReady] != 0 {
+				t.Fatalf("%s: containers %v; want pending stopped and the busy one draining", stop, states)
+			}
+			var queued, cancelled int
+			if err := pool.QueryRow(t.Context(), `
 select count(*) filter (where status = 'queued'), count(*) filter (where status = 'cancelled')
 from tasks where release_id = $1`, f.release).Scan(&queued, &cancelled); err != nil {
-			t.Fatal(err)
-		}
-		if queued != 0 || cancelled != 3 || result.Cancelled != 3 {
-			t.Fatalf("%s: %d queued, %d cancelled; want every queued task cancelled", stop, queued, cancelled)
-		}
-		var attemptState string
-		if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&attemptState); err != nil {
-			t.Fatal(err)
-		}
-		if attemptState != string(AttemptRunning) {
-			t.Fatalf("%s: running attempt became %s; it finishes on the draining container", stop, attemptState)
+				t.Fatal(err)
+			}
+			if queued != 0 || cancelled != 3 || result.Cancelled != 3 {
+				t.Fatalf("%s: %d queued, %d cancelled; want every queued task cancelled", stop, queued, cancelled)
+			}
+			var attemptState string
+			if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&attemptState); err != nil {
+				t.Fatal(err)
+			}
+			if attemptState != string(AttemptRunning) {
+				t.Fatalf("%s: running attempt became %s; it finishes on the draining container", stop, attemptState)
+			}
+		})
+	}
+}
+
+// handingBack inserts a host that hands Spot-tolerant work back and one
+// that does not.
+func handingBack(t *testing.T, pool *pgxpool.Pool) (onDemand, spot uuid.UUID) {
+	t.Helper()
+	onDemand, spot = newHost(t, pool), newHost(t, pool)
+	exec(t, pool, "update hosts set market = 'on_demand', hands_back_at = now() where id = $1", onDemand)
+	return onDemand, spot
+}
+
+// replacements are the live containers that replace old.
+func replacements(t *testing.T, pool *pgxpool.Pool, old uuid.UUID) []uuid.UUID {
+	t.Helper()
+	var ids []uuid.UUID
+	if err := pool.QueryRow(t.Context(), "select coalesce(array_agg(id), '{}') from containers where replaces = $1 and state <> 'stopped'", old).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+// A ready container whose host hands Spot-tolerant work back serves until
+// its replacement is ready, past max_containers of one, then drains, even
+// once its host lends again: a function's and an HTTP workload's alike.
+func TestALeavingContainerServesUntilItsReplacementIsReady(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		kind string
+		spec string
+	}{
+		{"function", `{"kind": "function", "autoscaler": {"min_containers": 1}}`},
+		{"endpoint", `{"kind": "endpoint", "http": {}, "autoscaler": {"min_containers": 1}}`},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			t.Parallel()
+			pool := dbtest.New(t)
+			e := NewExecution(pool)
+			f := newRelease(t, pool, c.spec)
+			exec(t, pool, "update workloads set kind = $2 where id = $1", f.workload, c.kind)
+			plan := func() {
+				t.Helper()
+				if _, err := e.Plan(t.Context(), discardLogger()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.PlanServing(t.Context(), discardLogger()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			onDemand, spot := handingBack(t, pool)
+			old := readyContainer(t, pool, f, onDemand, time.Minute)
+
+			plan()
+			next := replacements(t, pool, old)
+			if state := containerState(t, pool, old); state != ContainerReady || len(next) != 1 {
+				t.Fatalf("leaving container is %s with replacements %v; want ready with one", state, next)
+			}
+			exec(t, pool, "update hosts set hands_back_at = null where id = $1", onDemand)
+			exec(t, pool, "update containers set state = 'ready', host_id = $2, assigned_at = now(), ready_at = now() where id = $1", next[0], spot)
+			plan()
+			if state := containerState(t, pool, old); state != ContainerDraining {
+				t.Fatalf("container with a ready replacement is %s, want draining", state)
+			}
+		})
+	}
+}
+
+// A busy container whose host hands work back drains at once, its attempts
+// still running there, and nothing replaces it while no other work asks.
+func TestABusyLeavingContainerDrainsAndKeepsItsAttempts(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"max_containers": 5, "tasks_per_container": 2}}`)
+	onDemand, _ := handingBack(t, pool)
+	busy := readyContainer(t, pool, f, onDemand, time.Minute)
+	attempt := attemptOn(t, pool, f, busy, 0)
+	attemptOn(t, pool, f, busy, 0)
+
+	plan(t, e)
+	var state string
+	if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", attempt).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if got := containerState(t, pool, busy); got != ContainerDraining || state != string(AttemptRunning) {
+		t.Fatalf("busy leaving container is %s with its attempt %s; want draining with it running", got, state)
+	}
+	if states := containerStates(t, pool, f.release); states[ContainerPending] != 0 {
+		t.Fatalf("containers %v; want no replacement", states)
+	}
+}
+
+// At the account's container limit a leaving container drains, so its
+// replacement starts once it stops.
+func TestALeavingContainerTheAccountHasNoRoomToReplaceDrains(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{"kind": "function", "autoscaler": {"min_containers": 1}}`)
+	unwaive(t, pool, f, billing.NanosPerUSD)
+	onDemand, _ := handingBack(t, pool)
+	old := readyContainer(t, pool, f, onDemand, time.Minute)
+	// Nine more containers of the account fill its limit of ten.
+	other := newVersion(t, pool, f, `{"kind": "function"}`)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select $1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29 from generate_series(1, 9)`, f.workspace, other.release)
+
+	plan(t, e)
+	if state := containerState(t, pool, old); state != ContainerDraining || len(replacements(t, pool, old)) != 0 {
+		t.Fatalf("leaving container at the account's limit is %s; want draining, unreplaced", state)
+	}
+	exec(t, pool, "update containers set state = 'stopped', stopped_at = now() where id = $1", old)
+	plan(t, e)
+	if states := containerStates(t, pool, f.release); states[ContainerPending] != 1 {
+		t.Fatalf("containers %v once it stopped; want its replacement pending", states)
+	}
+}
+
+// Work that cannot move keeps its container where it runs: a function with
+// a disk, one pinned to a zone and one that cannot run on Spot get no
+// replacement.
+func TestContainersThatCannotMoveStayOnAHostHandingWorkBack(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	host, _ := handingBack(t, pool)
+	var stay []uuid.UUID
+	for _, c := range []struct{ spec, class string }{
+		{`{"kind": "function", "disks": [{"name": "data", "mount_path": "/data", "size_gib": 1}]}`, "auto"},
+		{`{"kind": "function", "placement": {"availability_zone": "us-east-2a"}}`, "pinned"},
+		{`{"kind": "function", "placement": {"preemptible": false}}`, "non_preemptible"},
+	} {
+		f := newRelease(t, pool, c.spec)
+		id := readyContainer(t, pool, f, host, time.Minute)
+		exec(t, pool, "update containers set rate_class = $2 where id = $1", id, c.class)
+		attemptOn(t, pool, f, id, 0)
+		stay = append(stay, id)
+	}
+	plan(t, e)
+	for _, id := range stay {
+		if state := containerState(t, pool, id); state != ContainerReady || len(replacements(t, pool, id)) != 0 {
+			t.Errorf("container %s is %s, want ready and unreplaced", id, state)
 		}
 	}
 }

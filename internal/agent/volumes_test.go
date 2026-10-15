@@ -1,21 +1,44 @@
+//go:build hostruntime
+
 package agent
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/rand/v2"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime/pprof"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -33,41 +56,204 @@ func testGeeseFS(t *testing.T) string {
 	return path
 }
 
-func volumeStart(e *env, source *hostproto.Source, workspace, volume string, readOnly bool) *hostproto.ServerMessage {
-	start := e.startCommand("app:handle", 1)
-	start.GetStart().Source = source
-	start.GetStart().Volumes = []*hostproto.VolumeMount{{
-		MountPath: "/volumes/data", ReadOnly: readOnly,
+// testStore is the test object store's bucket and keys.
+type testStore struct {
+	endpoint, region, bucket, accessKey, secretKey string
+}
+
+func newTestStore(t *testing.T) testStore {
+	t.Helper()
+	cfg := storagetest.Config(t)
+	return testStore{endpoint: cfg.Endpoint, region: cfg.Region, bucket: cfg.Bucket, accessKey: cfg.AccessKeyID, secretKey: cfg.SecretAccessKey}
+}
+
+// grant gives workspace the store's bucket for an hour.
+func (s testStore) grant(workspace string) *hostproto.ServerMessage {
+	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
+		WorkspaceId: workspace, Endpoint: s.endpoint, Region: s.region, Bucket: s.bucket, ForcePathStyle: true,
+		AccessKeyId: s.accessKey, SecretAccessKey: s.secretKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
+	}}}
+}
+
+// reserveMounters adds the memory of n mounters to start's, as the server
+// does.
+func reserveMounters(start *hostproto.ServerMessage, n int64) {
+	r := start.GetStart().GetResources()
+	r.MountReserveBytes = n * hostproto.MounterMemoryBytes
+	r.MemoryBytes += r.MountReserveBytes
+}
+
+func platformVolume(workspace, volume, path string, readOnly bool) *hostproto.VolumeMount {
+	return &hostproto.VolumeMount{
+		MountPath: path, ReadOnly: readOnly,
 		Source: &hostproto.VolumeMount_Volume{Volume: &hostproto.PlatformVolume{
 			VolumeId: volume, WorkspaceId: workspace, Prefix: "volumes/" + volume + "/",
 		}},
-	}}
+	}
+}
+
+func volumeStart(e *env, source *hostproto.Source, workspace, volume string, readOnly bool) *hostproto.ServerMessage {
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = source
+	start.GetStart().Volumes = []*hostproto.VolumeMount{platformVolume(workspace, volume, "/volumes/data", readOnly)}
+	reserveMounters(start, 1)
 	return start
+}
+
+// startVolume starts a container on the volume and waits until it is ready.
+func (e *env) startVolume(s *serverSession, source *hostproto.Source, workspace, volume string) string {
+	e.t.Helper()
+	start := volumeStart(e, source, workspace, volume, false)
+	s.send(e.t, start)
+	s.phase(e.t, start.GetStart().GetContainerId(), ready)
+	return start.GetStart().GetContainerId()
+}
+
+// write writes text to path in container through a task.
+func (e *env) write(container, path, text string) {
+	e.t.Helper()
+	attempt := e.task(container, `{"args": ["write", "`+path+`", "`+text+`"]}`)
+	if failure := e.completion(attempt).GetFailure(); failure != nil {
+		e.t.Fatalf("write %s in %s: %v", path, container, failure)
+	}
+}
+
+// read reads path in container through a task.
+func (e *env) read(container, path string) string {
+	e.t.Helper()
+	return result(e.t, e.completion(e.task(container, `{"args": ["read", "`+path+`"]}`)))
+}
+
+// mounters lists the mount containers of container, with stopped ones when
+// all is set.
+func (e *env) mounters(all bool, container string) []containertypes.Summary {
+	e.t.Helper()
+	filters := client.Filters{}.Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kindMount).
+		Add("label", labelContainer+"="+container)
+	list, err := e.docker.ContainerList(context.Background(), client.ContainerListOptions{All: all, Filters: filters})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return list.Items
+}
+
+// mounter is container's one running mount container.
+func (e *env) mounter(container string) containertypes.Summary {
+	e.t.Helper()
+	mounters := e.mounters(false, container)
+	if len(mounters) != 1 {
+		e.t.Fatalf("%d mounts run for %s", len(mounters), container)
+	}
+	return mounters[0]
+}
+
+// sliceDir is the cgroup of container's slice.
+func (e *env) sliceDir(container string) string {
+	a := &Agent{identity: identity{HostID: e.server.hostID}}
+	return filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", a.workloadSlice(container))
+}
+
+// plantSlice makes a slice of this host's that names no container and
+// returns its cgroup.
+func (e *env) plantSlice() string {
+	e.t.Helper()
+	v := newVolumes(&Agent{identity: identity{HostID: e.server.hostID}})
+	defer v.close()
+	name := v.a.slicePrefix() + "planted.slice"
+	if err := v.startSlice(e.t.Context(), name, containertypes.Resources{Memory: 64 << 20, CPUShares: 1024}); err != nil {
+		e.t.Fatal(err)
+	}
+	dir := filepath.Join(cgroupRoot, "lazycloud.slice", "lazycloud-workloads.slice", name)
+	if _, err := os.Stat(dir); err != nil {
+		e.t.Fatal(err)
+	}
+	return dir
+}
+
+// cgroupOf is the cgroup of the Docker container id's first process.
+func (e *env) cgroupOf(id string) string {
+	e.t.Helper()
+	inspect, err := e.docker.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir, err := cgroupDir(inspect.Container.State.Pid)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return dir
+}
+
+// killGeeseFS kills the GeeseFS of a mount container, as the kernel's OOM
+// killer would.
+func (e *env) killGeeseFS(id string) {
+	e.t.Helper()
+	kill, err := e.docker.ExecCreate(context.Background(), id, client.ExecCreateOptions{Cmd: []string{"killall", "-KILL", "geesefs"}})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.docker.ExecStart(context.Background(), kill.ID, client.ExecStartOptions{Detach: true}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// adoptedExit is how an adopted container exited: in the Hello, in a report
+// an earlier wait passed over, or in a later one.
+func (s *serverSession) adoptedExit(t *testing.T, container string) *hostproto.ContainerExit {
+	t.Helper()
+	for _, r := range s.hello.GetContainers() {
+		if r.GetContainerId() == container && r.GetPhase() == exited {
+			return r.GetExit()
+		}
+	}
+	if exit, ok := s.exits[container]; ok {
+		return exit
+	}
+	return s.phase(t, container, exited).GetExit()
+}
+
+// copyFile copies src to a new file in a new directory, with extra appended.
+func copyFile(t *testing.T, src string, extra string) string {
+	t.Helper()
+	data, err := os.ReadFile(src) //nolint:gosec // Test inputs.
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), filepath.Base(src))
+	if err := os.WriteFile(dst, append(data, extra...), 0o755); err != nil { //nolint:gosec // GeeseFS is executable.
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// volumeEnv starts an agent that mounts volumes, configured by configure,
+// and returns its session and the test's object store.
+func volumeEnv(t *testing.T, configure ...func(*Config)) (*env, *serverSession, testStore) {
+	t.Helper()
+	geesefs := testGeeseFS(t)
+	// Made first so that the mounts stop before the bucket goes.
+	store := newTestStore(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent(configure...)
+	return e, e.session(), store
 }
 
 // TestVolumesMountThroughWorkspaceBucket runs two containers on one volume:
 // what one writes lands in the workspace bucket under the volume's prefix
-// and the other reads it, while neither sees a credential.
+// and the other reads it, while neither sees a credential. Each has a mount
+// of its own in its slice. The workload is limited to the memory it asked
+// for and the slice to that plus its mounter's reserve.
 func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
-	geesefs := testGeeseFS(t)
-	// Made first so that the mounts stop before the bucket goes.
-	cfg := storagetest.Config(t)
-	e := newEnv(t)
-	t.Cleanup(e.stopMounts)
-	e.geesefs = geesefs
-	e.startAgent()
-	s := e.session()
+	t.Parallel()
+	e, s, store := volumeEnv(t)
 	source := serveSource(t, "testdata/volumes")
 	workspace, volume := uuid.NewString(), uuid.NewString()
 
 	start := volumeStart(e, source, workspace, volume, false)
 	s.send(t, start)
-	// The start waits for the workspace's grant.
-	time.Sleep(500 * time.Millisecond)
-	s.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_StorageGrant{StorageGrant: &hostproto.StorageGrant{
-		WorkspaceId: workspace, Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
-		AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey, ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
-	}}})
+	s.send(t, store.grant(workspace))
 	writer := start.GetStart().GetContainerId()
 	s.phase(t, writer, ready)
 
@@ -83,17 +269,12 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	reader := volumeStart(e, source, workspace, volume, true)
 	s.send(t, reader)
 	s.phase(t, reader.GetStart().GetContainerId(), ready)
-	attempt = e.task(reader.GetStart().GetContainerId(), `{"args": ["read", "/volumes/data/notes/hello.txt"]}`)
-	if got := result(t, e.completion(attempt)); got != `"hello volume"` {
+	if got := e.read(reader.GetStart().GetContainerId(), "/volumes/data/notes/hello.txt"); got != `"hello volume"` {
 		t.Fatalf("read: %s", got)
-	}
-	attempt = e.task(reader.GetStart().GetContainerId(), `{"args": ["write", "/volumes/data/nope.txt", "x"]}`)
-	if failure := e.completion(attempt).GetFailure(); failure == nil {
-		t.Fatal("a read-only mount accepted a write")
 	}
 
 	key := "volumes/" + volume + "/notes/hello.txt"
-	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(cfg.Bucket), Key: aws.String(key)})
+	object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(key)})
 	if err != nil {
 		t.Fatalf("read %s from the bucket: %v", key, err)
 	}
@@ -107,90 +288,870 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 		t.Fatalf("mount directory mode %v err=%v, want 0700", info.Mode().Perm(), err)
 	}
 
-	// A mount that dies stops the containers using it.
-	timeout := 10
-	if _, err := e.docker.ContainerStop(t.Context(), mounterName(workspace), client.ContainerStopOptions{Timeout: &timeout}); err != nil {
-		t.Fatal(err)
-	}
-	// The two exits arrive in either order.
-	pending := map[string]bool{writer: true, reader.GetStart().GetContainerId(): true}
-	for len(pending) > 0 {
-		report := s.until(t, 60*time.Second, func(m *hostproto.HostMessage) bool {
-			r := m.GetContainer()
-			return pending[r.GetContainerId()] && r.GetPhase() == exited
-		}).GetContainer()
-		if !strings.Contains(report.GetExit().GetMessage(), "volume mount") {
-			t.Fatalf("exit of a container on a dead mount: %v", report.GetExit())
+	for _, id := range []string{writer, reader.GetStart().GetContainerId()} {
+		slice := e.sliceDir(id)
+		if workload, mount := e.cgroupOf("lazycloud-"+id), e.cgroupOf(e.mounter(id).ID); filepath.Dir(workload) != slice || filepath.Dir(mount) != slice {
+			t.Fatalf("the workload runs in %s and its mount in %s, not both in %s", workload, mount, slice)
 		}
-		delete(pending, report.GetContainerId())
+		limit, err := os.ReadFile(filepath.Join(slice, "memory.max")) //nolint:gosec // A cgroup file.
+		if err != nil || strings.TrimSpace(string(limit)) != strconv.Itoa(256<<20+hostproto.MounterMemoryBytes) {
+			t.Fatalf("the slice's memory limit is %q (%v), want the container's with its mounter's", limit, err)
+		}
+		inspect, err := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id, client.ContainerInspectOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := inspect.Container.HostConfig.Resources; r.Memory != 256<<20 || r.MemoryReservation != 256<<20 {
+			t.Fatalf("the workload's memory limit %d and reservation %d, want the 256 MiB it asked for", r.Memory, r.MemoryReservation)
+		}
 	}
 }
 
-// TestCloudBucketMountsWithItsKeys mounts a user's bucket with keys from the
-// start and removes the mount and its keys when the container goes.
-func TestCloudBucketMountsWithItsKeys(t *testing.T) {
+// TestLargeVolumeFilesReadWhole: model weights read whole through a volume
+// mount, one file alone and three at once, and the mounter stays inside its
+// memory.
+func TestLargeVolumeFilesReadWhole(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	names := []string{"alone", "first", "second", "third"}
+	sums := map[string][sha256.Size]byte{}
+	data := make([]byte, 256<<20)
+	for n, name := range names {
+		_, _ = rand.NewChaCha8([32]byte{byte(n)}).Read(data)
+		sums[name] = sha256.Sum256(data)
+		if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+			Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/" + name), Body: bytes.NewReader(data),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.send(t, store.grant(workspace))
+	id := e.startVolume(s, serveSource(t, "testdata/volumes"), workspace, volume)
+	dir := filepath.Join(e.stateDir, "mounts", mounterName(id, 0), volume)
+
+	read := func(names ...string) {
+		var wg sync.WaitGroup
+		for _, name := range names {
+			wg.Go(func() {
+				f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // The test's mount.
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer func() { _ = f.Close() }()
+				sum := sha256.New()
+				if _, err := io.Copy(sum, f); err != nil {
+					t.Errorf("read %s: %v", name, err)
+				} else if [sha256.Size]byte(sum.Sum(nil)) != sums[name] {
+					t.Errorf("%s reads other bytes than were stored", name)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	read(names[0])
+	read(names[1:]...)
+
+	inspect, err := e.docker.ContainerInspect(t.Context(), e.mounter(id).ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := inspect.Container.State; !state.Running || state.OOMKilled {
+		t.Fatalf("the mounter is running %v, killed for memory %v", state.Running, state.OOMKilled)
+	}
+}
+
+// list lists the directory path in container through a task.
+func (e *env) list(container, path string) []string {
+	e.t.Helper()
+	var names []string
+	if err := json.Unmarshal([]byte(result(e.t, e.completion(e.task(container, `{"args": ["list", "`+path+`"]}`)))), &names); err != nil {
+		e.t.Fatal(err)
+	}
+	return names
+}
+
+// TestPlatformVolumesShareOneMounter: a container's two volumes run on one
+// mounter of the workspace's volumes, and the container sees those two
+// only, each at its own path, not a third volume in the same bucket.
+func TestPlatformVolumesShareOneMounter(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	workspace, first, second, other := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + other + "/private.txt"), Body: strings.NewReader("not yours"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.send(t, store.grant(workspace))
+
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(t, "testdata/volumes")
+	start.GetStart().Volumes = []*hostproto.VolumeMount{
+		platformVolume(workspace, first, "/volumes/first", false),
+		platformVolume(workspace, second, "/volumes/second", true),
+	}
+	reserveMounters(start, 1)
+	id := start.GetStart().GetContainerId()
+	s.send(t, start)
+	s.phase(t, id, ready)
+	e.mounter(id)
+
+	e.write(id, "/volumes/first/a.txt", "first")
+	if got := e.read(id, "/volumes/first/a.txt"); got != `"first"` {
+		t.Fatalf("read: %s", got)
+	}
+	if got := e.list(id, "/volumes"); !slices.Equal(got, []string{"first", "second"}) {
+		t.Fatalf("the container sees volumes %v", got)
+	}
+	if got := e.list(id, "/volumes/second"); len(got) != 0 {
+		t.Fatalf("the second volume holds %v", got)
+	}
+	if failure := e.completion(e.task(id, `{"args": ["write", "/volumes/second/b.txt", "x"]}`)).GetFailure(); failure == nil {
+		t.Fatal("the read-only volume accepted a write")
+	}
+	if _, err := storagetest.Client().HeadObject(t.Context(), &s3.HeadObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + first + "/a.txt"),
+	}); err != nil {
+		e.dumpMounts()
+		t.Fatalf("the first volume's file is not under its prefix: %v", err)
+	}
+}
+
+// dockerProxy passes the agent's Docker connections through to the daemon;
+// cut drops those open, as a daemon restart does.
+type dockerProxy struct {
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+// proxyDocker points the agents the test starts at a new dockerProxy.
+func proxyDocker(t *testing.T) *dockerProxy {
+	t.Helper()
+	daemon := strings.TrimPrefix(cmp.Or(os.Getenv("DOCKER_HOST"), "unix:///var/run/docker.sock"), "unix://")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(shortDir(t), "docker.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	t.Setenv("DOCKER_HOST", "unix://"+listener.Addr().String())
+	p := &dockerProxy{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			upstream, err := (&net.Dialer{}).DialContext(context.Background(), "unix", daemon)
+			if err != nil {
+				_ = conn.Close()
+				continue
+			}
+			p.mu.Lock()
+			p.conns = append(p.conns, conn, upstream)
+			p.mu.Unlock()
+			go pipe(conn, upstream)
+			go pipe(upstream, conn)
+		}
+	}()
+	return p
+}
+
+func pipe(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	_ = dst.Close()
+	_ = src.Close()
+}
+
+func (p *dockerProxy) cut() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, conn := range p.conns {
+		_ = conn.Close()
+	}
+	p.conns = nil
+}
+
+// TestAMountThatDiesFailsOnlyItsContainer: two containers on one volume each
+// have a mount of their own. One's mount dying, as an out-of-memory kill
+// would, stops that container only, also after the agent lost its watch on
+// Docker; the other reads and writes on, and its mount and slice go when it
+// stops.
+func TestAMountThatDiesFailsOnlyItsContainer(t *testing.T) {
+	var docker *dockerProxy
+	e, s, store := volumeEnv(t, func(*Config) { docker = proxyDocker(t) })
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	heavy := e.startVolume(s, source, workspace, volume)
+	other := e.startVolume(s, source, workspace, volume)
+	e.write(heavy, "/volumes/data/shared.txt", "shared")
+
+	docker.cut()
+	e.killGeeseFS(e.mounter(heavy).ID)
+	if exit := s.phase(t, heavy, exited).GetExit(); !strings.Contains(exit.GetMessage(), "volume mount") {
+		t.Fatalf("exit of the container on the dead mount: %v", exit)
+	}
+	e.write(other, "/volumes/data/still.txt", "still here")
+	if got := e.read(other, "/volumes/data/shared.txt"); got != `"shared"` {
+		t.Fatalf("the other container reads %s", got)
+	}
+	e.eventually("the dead mount and its slice go", func() bool {
+		_, err := os.Stat(e.sliceDir(heavy))
+		return len(e.mounters(true, heavy)) == 0 && os.IsNotExist(err)
+	})
+
+	s.send(t, stopCommand(other, 1))
+	s.phase(t, other, exited)
+	e.eventually("the mount and slice go with their container", func() bool {
+		_, err := os.Stat(e.sliceDir(other))
+		return len(e.mounters(true, other)) == 0 && os.IsNotExist(err)
+	})
+}
+
+// TestMountsVerifyTheirStoreAgainstTheTrustBundle: a mount that reaches its
+// store itself, as a cloud bucket's does, trusts only the agent's CA
+// bundle: a store it does not trust fails the start at once, with the
+// certificate's error, and one it trusts mounts.
+func TestMountsVerifyTheirStoreAgainstTheTrustBundle(t *testing.T) {
+	t.Parallel()
 	geesefs := testGeeseFS(t)
-	cfg := storagetest.Config(t)
+	store := newTestStore(t)
+	target, err := url.Parse(store.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Made before the agent so that the mounts stop before the proxy goes.
+	proxy := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	t.Cleanup(proxy.Close)
+	store.endpoint = proxy.URL
+	// A CA that signed none of the store's certificates.
+	bundle, _, _ := writeCertificate(t)
 	e := newEnv(t)
 	t.Cleanup(e.stopMounts)
 	e.geesefs = geesefs
-	e.startAgent()
+	e.startAgent(func(c *Config) { c.TrustBundle = bundle })
 	s := e.session()
 	prefix := "test-buckets/" + uuid.NewString() + "/"
 	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: aws.String(cfg.Bucket), Key: aws.String(prefix + "weights.txt"), Body: strings.NewReader("from the bucket"),
+		Bucket: aws.String(store.bucket), Key: aws.String(prefix + "hello.txt"), Body: strings.NewReader("over https"),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	start := e.startCommand("app:handle", 1)
-	start.GetStart().Source = serveSource(t, "testdata/volumes")
-	start.GetStart().Volumes = []*hostproto.VolumeMount{{
-		MountPath: "/models", ReadOnly: true,
+	untrusted := cloudBucketStart(e, store.bucketMount("/bucket", prefix))
+	began := time.Now()
+	s.send(t, untrusted)
+	exit := s.phase(t, untrusted.GetStart().GetContainerId(), exited).GetExit()
+	took := time.Since(began)
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "certificate") {
+		t.Fatalf("start on an untrusted store: %v", exit)
+	}
+	// GeeseFS retries every failed request; the start ends at the first
+	// certificate failure it prints, not when the mount's wait runs out.
+	if took > 10*time.Second {
+		t.Fatalf("start on an untrusted store failed after %s", took)
+	}
+	e.eventually("the mount that never mounted is removed", func() bool {
+		return len(e.mounters(true, untrusted.GetStart().GetContainerId())) == 0
+	})
+
+	if err := os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trusted := cloudBucketStart(e, store.bucketMount("/bucket", prefix))
+	s.send(t, trusted)
+	s.phase(t, trusted.GetStart().GetContainerId(), ready)
+	if got := e.read(trusted.GetStart().GetContainerId(), "/bucket/hello.txt"); got != `"over https"` {
+		t.Fatalf("read: %s", got)
+	}
+}
+
+// TestVolumeMountsSurviveAnAgentUpgrade: an agent restarted with another
+// GeeseFS and trust bundle keeps the old mount for the workload on it, which
+// reads and writes on, and mounts a new start with its own. The old mount
+// stops with its workload; the new one's runs on.
+func TestVolumeMountsSurviveAnAgentUpgrade(t *testing.T) {
+	t.Parallel()
+	var before string
+	e, s, store := volumeEnv(t, func(c *Config) {
+		before = copyFile(t, c.GeeseFSPath, "")
+		c.GeeseFSPath, c.TrustBundle = before, copyFile(t, HostTrustBundle(), "")
+	})
+	first, after := e.running, copyFile(t, e.geesefs, "")
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	old := e.startVolume(s, source, workspace, volume)
+	e.write(old, "/volumes/data/before.txt", "before")
+	first.stop()
+
+	e.startAgent(func(c *Config) {
+		c.GeeseFSPath, c.TrustBundle = after, copyFile(t, HostTrustBundle(), "\n")
+	})
+	s = e.session()
+	s.adoptedReady(t, old)
+	e.write(old, "/volumes/data/after.txt", "after")
+	if got := e.read(old, "/volumes/data/before.txt"); got != `"before"` {
+		t.Fatalf("the old workload reads %s", got)
+	}
+	current := e.startVolume(s, source, workspace, volume)
+	if got := e.read(current, "/volumes/data/after.txt"); got != `"after"` {
+		t.Fatalf("the new workload reads %s", got)
+	}
+	binds := func(id, path string) bool {
+		return slices.ContainsFunc(e.mounter(id).Mounts, func(m containertypes.MountPoint) bool { return m.Source == path })
+	}
+	if !binds(old, before) || !binds(current, after) {
+		t.Fatal("a mount does not run the GeeseFS of the agent that started it")
+	}
+
+	s.send(t, stopCommand(old, 1))
+	s.phase(t, old, exited)
+	e.eventually("the old mount stops with its workload", func() bool { return len(e.mounters(true, old)) == 0 })
+	e.write(current, "/volumes/data/later.txt", "later")
+	if got := e.read(current, "/volumes/data/before.txt"); got != `"before"` {
+		t.Fatalf("the new workload reads %s after the old mount stopped", got)
+	}
+}
+
+// bucketMount mounts prefix of the store's bucket read-only at path.
+func (s testStore) bucketMount(path, prefix string) *hostproto.VolumeMount {
+	return &hostproto.VolumeMount{
+		MountPath: path, ReadOnly: true,
 		Source: &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-			Bucket: cfg.Bucket, Prefix: prefix, Region: cfg.Region, Endpoint: cfg.Endpoint, ForcePathStyle: true,
-			AccessKeyId: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey,
+			Bucket: s.bucket, Prefix: prefix, Region: s.region, Endpoint: s.endpoint, ForcePathStyle: true,
+			AccessKeyId: s.accessKey, SecretAccessKey: s.secretKey,
 		}},
-	}}
+	}
+}
+
+// cloudBucketStart starts a container on mounts of one bucket.
+func cloudBucketStart(e *env, mounts ...*hostproto.VolumeMount) *hostproto.ServerMessage {
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(e.t, "testdata/volumes")
+	start.GetStart().Volumes = mounts
+	reserveMounters(start, 1)
+	return start
+}
+
+// settle waits until container is ready or has exited.
+func (s *serverSession) settle(t *testing.T, container string) *hostproto.ContainerReport {
+	t.Helper()
+	return s.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
+		r := m.GetContainer()
+		return r.GetContainerId() == container && (r.GetPhase() == ready || r.GetPhase() == exited)
+	}).GetContainer()
+}
+
+// TestABucketPrefixStaysInsideItsMount: a container's mounts of one bucket
+// share a mounter, and each binds its own directory of the mount. A prefix
+// that climbs out of the mount, or runs through an object GeeseFS shows as
+// a link to the host's root, fails the start instead of binding the host.
+func TestABucketPrefixStaysInsideItsMount(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	prefix := "test-buckets/" + uuid.NewString() + "/"
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String(prefix + "link"), Body: strings.NewReader(""),
+		Metadata: map[string]string{"--symlink-target": "/"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, escape := range []struct{ inside, outside, failure string }{
+		{"a/", "a/../../", `open ".." beneath the mount`},
+		{prefix + "inside/", prefix + "link/", `open "link" beneath the mount: too many levels of symbolic links`},
+	} {
+		start := cloudBucketStart(e, store.bucketMount("/inside", escape.inside), store.bucketMount("/outside", escape.outside))
+		s.send(t, start)
+		r := s.settle(t, start.GetStart().GetContainerId())
+		if r.GetPhase() != exited || r.GetExit().GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED ||
+			!strings.Contains(r.GetExit().GetMessage(), escape.failure) {
+			t.Fatalf("a start with prefix %s: %v", escape.outside, r)
+		}
+	}
+}
+
+// TestAdoptKeepsLiveMountsAndRemovesOrphans: a restarted agent keeps a
+// running container's mount, fails a container whose mount died while it
+// was away, and removes the mount, keys and slice of a container that went,
+// a slice that names no container and a mount directory without a mounter,
+// the mounts after the start.
+func TestAdoptKeepsLiveMountsAndRemovesOrphans(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	first := e.running
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	kept := e.startVolume(s, source, workspace, volume)
+	e.write(kept, "/volumes/data/kept.txt", "kept")
+	lost := e.startVolume(s, source, workspace, volume)
+	bucket := cloudBucketStart(e, store.bucketMount("/models", "test-buckets/"+uuid.NewString()+"/"))
+	gone := bucket.GetStart().GetContainerId()
+	s.send(t, bucket)
+	s.phase(t, gone, ready)
+	keys := filepath.Join(e.stateDir, "storage", "buckets", mounterName(gone, 0))
+	if _, err := os.Stat(keys); err != nil {
+		t.Fatalf("the bucket's keys: %v", err)
+	}
+	first.stop()
+	e.killGeeseFS(e.mounter(lost).ID)
+	if _, err := e.docker.ContainerRemove(t.Context(), "lazycloud-"+gone, client.ContainerRemoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(e.stateDir, "mounts", "stray")
+	if err := os.Mkdir(stray, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	planted := e.plantSlice()
+
+	// The agent comes back without GeeseFS, which adopting needs no more
+	// than removing does.
+	e.geesefs = ""
+	e.startAgent()
+	s = e.session()
+	s.adoptedReady(t, kept)
+	e.write(kept, "/volumes/data/again.txt", "again")
+	if got := e.read(kept, "/volumes/data/kept.txt"); got != `"kept"` {
+		t.Fatalf("the adopted container reads %s", got)
+	}
+	if exit := s.adoptedExit(t, lost); !strings.Contains(exit.GetMessage(), "volume mount") {
+		t.Fatalf("exit of a container whose mount died while the agent was away: %v", exit)
+	}
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Fatalf("%s was left: %v", stray, err)
+	}
+	// Mounts the agent did not adopt stop after the start, once they have
+	// stored what they hold, and their slices after them.
+	e.eventually("the orphaned mount, its keys, binds and slice and the planted slice go", func() bool {
+		for _, left := range []string{keys, e.sliceDir(gone), filepath.Join(e.stateDir, "binds", mounterName(gone, 0)), planted} {
+			if _, err := os.Stat(left); !os.IsNotExist(err) {
+				return false
+			}
+		}
+		return len(e.mounters(true, gone)) == 0
+	})
+	e.eventually("the dead mount goes with its container", func() bool { return len(e.mounters(true, lost)) == 0 })
+}
+
+// TestCloudBucketMountsWithItsKeys mounts two prefixes of a user's bucket
+// through one mounter with keys from the start, one of them empty, where a
+// link resolves in the container, and removes the mount, its binds and its
+// keys when the container goes.
+func TestCloudBucketMountsWithItsKeys(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	prefix := "test-buckets/" + uuid.NewString() + "/"
+	for key, link := range map[string]string{"weights.txt": "", "latest": "weights.txt"} {
+		input := &s3.PutObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(prefix + key), Body: strings.NewReader("from the bucket")}
+		if link != "" {
+			input.Body, input.Metadata = strings.NewReader(""), map[string]string{"--symlink-target": link}
+		}
+		if _, err := storagetest.Client().PutObject(t.Context(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := cloudBucketStart(e, store.bucketMount("/models", prefix), store.bucketMount("/empty", prefix+"nothing/"))
 	id := start.GetStart().GetContainerId()
 	s.send(t, start)
 	s.phase(t, id, ready)
-	attempt := e.task(id, `{"args": ["read", "/models/weights.txt"]}`)
-	if got := result(t, e.completion(attempt)); got != `"from the bucket"` {
-		t.Fatalf("read: %s", got)
+	e.mounter(id)
+	// A link inside a volume resolves in the container, as caches' links do.
+	for _, path := range []string{"/models/weights.txt", "/models/latest"} {
+		if got := e.read(id, path); got != `"from the bucket"` {
+			t.Fatalf("read %s: %s", path, got)
+		}
 	}
-	attempt = e.task(id, `{"args": ["env", ""]}`)
-	if got := result(t, e.completion(attempt)); got != "[]" {
-		t.Fatalf("the container sees credentials: %s", got)
+	if got := e.list(id, "/empty"); len(got) != 0 {
+		t.Fatalf("the empty prefix holds %v", got)
 	}
 
 	s.send(t, stopCommand(id, 1))
 	s.phase(t, id, exited)
-	keys := filepath.Join(e.stateDir, "storage", "buckets", bucketMountName(id, 0))
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(keys); os.IsNotExist(err) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("the bucket's keys outlived its container")
+	keys, binds := filepath.Join(e.stateDir, "storage", "buckets", mounterName(id, 0)), filepath.Join(e.stateDir, "binds", mounterName(id, 0))
+	e.eventually("the bucket's mount, binds and keys go with its container", func() bool {
+		_, err := os.Stat(keys)
+		_, bindsErr := os.Stat(binds)
+		return os.IsNotExist(err) && os.IsNotExist(bindsErr) && len(e.mounters(true, id)) == 0
+	})
 }
 
-// stopMounts stops this test's mount containers so GeeseFS unmounts before
-// the state directory is removed.
+// TestAStorageGrantTheHostCannotStoreIsNotAcknowledged: the server sends a
+// grant until the host acknowledges it, so only a stored grant is.
+func TestAStorageGrantTheHostCannotStoreIsNotAcknowledged(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.startAgent()
+	s := e.session()
+	store := testStore{endpoint: "http://127.0.0.1:1", region: "us-east-1", bucket: "bucket", accessKey: "key", secretKey: "secret"}
+	refused := store.grant("not-a-workspace")
+	stored := store.grant(uuid.NewString())
+	s.send(t, refused)
+	s.send(t, stored)
+	// Commands are acknowledged in the order they arrive.
+	s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool {
+		if acked(refused.GetCommandId())(m) {
+			t.Fatal("the host acknowledged a grant it could not store")
+		}
+		return acked(stored.GetCommandId())(m)
+	})
+}
+
+// stopMounts removes this test's binds and its other containers, then
+// stops its mount containers so GeeseFS unmounts before the state
+// directory is removed, then its slices. The other containers go first: a
+// mount whose copy a workload still holds keeps serving after its stop
+// signal, and Docker waits out the stop timeout before killing it.
 func (e *env) stopMounts() {
 	ctx := context.Background()
-	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
-		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind)})
+	binds, _ := os.ReadDir(filepath.Join(e.stateDir, "binds"))
+	for _, entry := range binds {
+		if err := unbind(filepath.Join(e.stateDir, "binds", entry.Name())); err != nil {
+			e.t.Errorf("remove binds: %v", err)
+		}
+	}
+	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", "lazycloud.agent="+e.id)})
 	if err != nil {
-		e.t.Errorf("list mount containers: %v", err)
+		e.t.Errorf("list containers: %v", err)
 		return
 	}
-	timeout := 10
+	var mounts []string
 	for _, c := range list.Items {
-		if _, err := e.docker.ContainerStop(ctx, c.ID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if c.Labels[labelKind] == kindMount {
+			mounts = append(mounts, c.ID)
+			continue
+		}
+		// The agent may be removing a container it saw exit.
+		if _, err := e.docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
+			e.t.Errorf("remove test container: %v", err)
+		}
+	}
+	timeout := 10
+	for _, id := range mounts {
+		if _, err := e.docker.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 			e.t.Errorf("stop mount container: %v", err)
 		}
+	}
+	v := newVolumes(&Agent{identity: identity{HostID: e.server.hostID}})
+	defer v.close()
+	sliced, err := v.hostSlices(ctx)
+	if err != nil {
+		e.t.Errorf("list slices: %v", err)
+		return
+	}
+	if err := v.stopSlices(ctx, sliced...); err != nil {
+		e.t.Errorf("stop slices: %v", err)
+	}
+}
+
+// TestAMountThatDiesDuringItsStartFailsIt: a mount that dies while the start
+// waits for another fails the start, so the workload never runs on its dead
+// bind.
+func TestAMountThatDiesDuringItsStartFailsIt(t *testing.T) {
+	t.Parallel()
+	e, s, store := volumeEnv(t)
+	// The bucket mounts; the volume waits for a grant that never comes.
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(t, "testdata/volumes")
+	start.GetStart().Volumes = []*hostproto.VolumeMount{
+		store.bucketMount("/models", "test-buckets/"+uuid.NewString()+"/"),
+		platformVolume(uuid.NewString(), uuid.NewString(), "/volumes/data", false),
+	}
+	reserveMounters(start, 2)
+	id := start.GetStart().GetContainerId()
+	s.send(t, start)
+	bucket := filepath.Join(e.stateDir, "mounts", mounterName(id, 0))
+	e.eventually("the bucket mounts", func() bool { return mounted(bucket) })
+	// The start sees the mount within a poll; a mount that dies sooner fails
+	// it as one that never came up.
+	time.Sleep(3 * mountPoll)
+
+	e.killGeeseFS(e.mounter(id).ID)
+	if r := s.settle(t, id); r.GetPhase() != exited || !strings.Contains(r.GetExit().GetMessage(), "volume mount "+mounterName(id, 0)+" exited") {
+		t.Fatalf("a start whose mount died: %v", r)
+	}
+}
+
+// TestSlicesOutliveADroppedSystemdConnection: the agent connects to systemd
+// again once its connection drops.
+func TestSlicesOutliveADroppedSystemdConnection(t *testing.T) {
+	t.Parallel()
+	v := newVolumes(&Agent{identity: identity{HostID: uuid.NewString()}})
+	defer v.close()
+	conn, err := v.systemd(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if _, err := v.hostSlices(t.Context()); err != nil {
+		t.Fatalf("list slices after the connection dropped: %v", err)
+	}
+}
+
+// testVolumeCacheLib builds the preload library workloads open cached
+// volume objects through.
+func testVolumeCacheLib(t *testing.T) string {
+	t.Helper()
+	src, err := filepath.Abs("../../deploy/agent/volume-cache/volume_cache.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := filepath.Join(t.TempDir(), "volume-cache.so")
+	if out, err := exec.CommandContext(t.Context(), "cc", "-shared", "-fPIC", "-O2", "-o", lib, src, "-ldl").CombinedOutput(); err != nil {
+		t.Fatalf("build the volume cache library: %v: %s", err, out)
+	}
+	return lib
+}
+
+// TestPlatformVolumesMountThroughTheSnapshotter: the mount container of a
+// container's platform volumes reaches only the snapshotter's loopback
+// endpoint and holds only its container's key, no store credential. What
+// one container writes, another container's mount reads, symlinks
+// included; a file read whole is linked for the workload, which opens the
+// host's copy in place of the mount's; and a file overwritten in the
+// bucket reads anew once listed again.
+func TestPlatformVolumesMountThroughTheSnapshotter(t *testing.T) {
+	e, s, store := volumeEnv(t, func(c *Config) { c.VolumeCacheLib = testVolumeCacheLib(t) })
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	writer := e.startVolume(s, source, workspace, volume)
+	inspect, err := e.docker.ContainerInspect(t.Context(), e.mounter(writer).ID, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script := strings.Join(inspect.Container.Config.Entrypoint, " "); !strings.Contains(script, "'--endpoint' 'http://"+layersource.VolumeEndpoint+"'") {
+		t.Fatalf("the mount reaches another endpoint: %s", script)
+	}
+	keys := 0
+	for _, m := range inspect.Container.Mounts {
+		if m.Destination != "/creds" {
+			continue
+		}
+		entries, err := os.ReadDir(m.Source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			body, err := os.ReadFile(filepath.Join(m.Source, entry.Name())) //nolint:gosec // The test's own state.
+			if err != nil || strings.Contains(string(body), store.accessKey) || strings.Contains(string(body), store.secretKey) {
+				t.Fatalf("the mount container holds %s: %s (%v)", entry.Name(), body, err)
+			}
+		}
+		keys++
+	}
+	if keys != 1 {
+		t.Fatalf("the mount container has %d key directories", keys)
+	}
+
+	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "4"]}`)))
+	if got := result(t, e.completion(e.task(writer, `{"args": ["symlink", "/volumes/data/link", "model.bin"]}`))); got != `"model.bin"` {
+		t.Fatalf("symlink: %s", got)
+	}
+	reader := e.startVolume(s, source, workspace, volume)
+	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != sum {
+		t.Fatalf("the other container reads %s, written %s", got, sum)
+	}
+	if got := result(t, e.completion(e.task(reader, `{"args": ["readlink", "/volumes/data/link"]}`))); got != `"model.bin"` {
+		t.Fatalf("readlink: %s", got)
+	}
+	linked := filepath.Join(layersource.VolumeLinkDir, workspace, volume, "model.bin")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if body, err := os.ReadFile(linked); err == nil { //nolint:gosec // The test's own volume.
+			if got := sha256.Sum256(body); `"`+hex.EncodeToString(got[:])+`"` != sum {
+				t.Fatal("the linked file differs from the volume's")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s is not linked 30 s after it was read whole", linked)
+		}
+	}
+	if got := result(t, e.completion(e.task(reader, `{"args": ["opened", "/volumes/data/model.bin"]}`))); got != "true" {
+		t.Fatalf("a read of the linked file opens the mount's copy: %s", got)
+	}
+
+	rewritten := make([]byte, 3<<20)
+	_, _ = rand.NewChaCha8([32]byte{9}).Read(rewritten)
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + volume + "/model.bin"), Body: bytes.NewReader(rewritten),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The reader reads at once, while its mount's stat cache may still hold
+	// the old version, and reads the new bytes once its mount has seen them,
+	// within the stat cache's TTL.
+	want := sha256.Sum256(rewritten)
+	sum = `"` + hex.EncodeToString(want[:]) + `"`
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if names := e.list(reader, "/volumes/data"); !slices.Contains(names, "model.bin") {
+			t.Fatalf("the volume lists %v", names)
+		}
+		got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`)))
+		if got == sum {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("5 s after the overwrite the container reads %s, want %s", got, sum)
+		}
+	}
+}
+
+// mountStops waits until container's mounts stopped, within their flush
+// window.
+func (e *env) mountStops(container string) {
+	e.t.Helper()
+	for deadline := time.Now().Add(mounterFlushSeconds * time.Second); len(e.mounters(true, container)) > 0; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			e.dumpMounts()
+			e.t.Fatal("the mount did not stop within its flush window")
+		}
+	}
+}
+
+// dumpMounts logs, for a test that mounts volumes and timed out, what
+// names the cause: each mount container's output and processes, with
+// their states, and the agent's goroutines.
+func (e *env) dumpMounts() {
+	if e.geesefs == "" {
+		return
+	}
+	ctx := context.Background()
+	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
+		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kindMount)})
+	if err != nil {
+		e.t.Log(err)
+		return
+	}
+	for _, c := range list.Items {
+		e.t.Logf("mount container %s: %s", c.Names, c.Status)
+		if top, err := e.docker.ContainerTop(ctx, c.ID, client.ContainerTopOptions{Arguments: []string{"-o", "pid,stat,wchan:32,args"}}); err == nil {
+			for _, process := range top.Processes {
+				e.t.Log(strings.Join(process, " "))
+			}
+		}
+		logs, err := e.docker.ContainerLogs(ctx, c.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "50"})
+		if err != nil {
+			continue
+		}
+		var out bytes.Buffer
+		_, _ = stdcopy.StdCopy(&out, &out, logs)
+		_ = logs.Close()
+		e.t.Log(out.String())
+	}
+	_ = pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
+}
+
+// TestWritesJustBeforeAStopAreStored: a container that writes many small
+// files and renames a large one, then stops at once, leaves every file in
+// the bucket under its name once its mount stopped, on a platform volume
+// through the snapshotter and on a cloud bucket its mount reaches itself,
+// though storing them takes a while.
+func TestWritesJustBeforeAStopAreStored(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		mount func(store testStore, workspace, prefix string) *hostproto.VolumeMount
+	}{
+		{"platform volume", func(_ testStore, workspace, prefix string) *hostproto.VolumeMount {
+			volume := strings.TrimSuffix(strings.TrimPrefix(prefix, "volumes/"), "/")
+			return platformVolume(workspace, volume, "/volumes/data", false)
+		}},
+		{"cloud bucket", func(store testStore, _, prefix string) *hostproto.VolumeMount {
+			m := store.bucketMount("/volumes/data", prefix)
+			m.ReadOnly = false
+			return m
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, s, store := volumeEnv(t)
+			target, err := url.Parse(store.endpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forward := httputil.NewSingleHostReverseProxy(target)
+			// Uploads take as long as from another region; the writes do not
+			// wait for them.
+			distant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					time.Sleep(200 * time.Millisecond)
+				}
+				forward.ServeHTTP(w, r)
+			}))
+			t.Cleanup(distant.Close)
+			store.endpoint = distant.URL
+			workspace := uuid.NewString()
+			s.send(t, store.grant(workspace))
+			prefix := "volumes/" + uuid.NewString() + "/"
+			start := cloudBucketStart(e, c.mount(store, workspace, prefix))
+			id := start.GetStart().GetContainerId()
+			s.send(t, start)
+			s.phase(t, id, ready)
+			const files = 200
+			if got := result(t, e.completion(e.task(id, `{"args": ["many", "/volumes/data/shards", "200"]}`))); got != strconv.Itoa(files) {
+				t.Fatalf("wrote %s files", got)
+			}
+			sum := result(t, e.completion(e.task(id, `{"args": ["large", "/volumes/data/model.bin", "64"]}`)))
+			s.send(t, stopCommand(id, 1))
+			s.phase(t, id, exited)
+			e.mountStops(id)
+			stored := 0
+			pages := s3.NewListObjectsV2Paginator(storagetest.Client(), &s3.ListObjectsV2Input{
+				Bucket: aws.String(store.bucket), Prefix: aws.String(prefix + "shards/f"),
+			})
+			for pages.HasMorePages() {
+				page, err := pages.NextPage(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				stored += len(page.Contents)
+			}
+			if stored != files {
+				t.Fatalf("%d of %d files written before the stop are in the bucket", stored, files)
+			}
+			object, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(prefix + "model.bin")})
+			if err != nil {
+				t.Fatalf("the renamed file is not in the bucket: %v", err)
+			}
+			defer func() { _ = object.Body.Close() }()
+			digest := sha256.New()
+			if _, err := io.Copy(digest, object.Body); err != nil {
+				t.Fatal(err)
+			}
+			if got := `"` + hex.EncodeToString(digest.Sum(nil)) + `"`; got != sum {
+				t.Fatalf("the bucket holds %s, written %s", got, sum)
+			}
+		})
+	}
+}
+
+// TestAStartReportsTheVolumeObjectsItRead: a start asked to record its
+// volume reads reports, once its first task ends, the objects that task
+// read.
+func TestAStartReportsTheVolumeObjectsItRead(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	writer := e.startVolume(s, source, workspace, volume)
+	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "3"]}`)))
+
+	start := volumeStart(e, source, workspace, volume, true)
+	start.GetStart().VolumeTrace = &hostproto.VolumeTrace{Record: true}
+	reader := start.GetStart().GetContainerId()
+	s.send(t, start)
+	s.phase(t, reader, ready)
+	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != sum {
+		t.Fatalf("the reader sums %s, written %s", got, sum)
+	}
+	report := s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool {
+		return m.GetVolumeTrace().GetContainerId() == reader
+	}).GetVolumeTrace()
+	if reads := report.GetReads(); len(reads) != 1 || reads[0].GetVolumeId() != volume || reads[0].GetPath() != "model.bin" {
+		t.Fatalf("the start reported %v", reads)
 	}
 }

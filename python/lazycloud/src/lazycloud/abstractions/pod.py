@@ -355,24 +355,11 @@ class Pod:
         """A pod runs its command, not a handler."""
         return None
 
-    def unsupported_options(self) -> list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        return container_unsupported_options(self.volumes)
-
-    def require_supported(self) -> None:
-        from lazycloud.exceptions import UnsupportedFeatureError
-
-        unsupported = self.unsupported_options()
-        if unsupported:
-            label = "devbox" if self.is_devbox else "pod"
-            raise UnsupportedFeatureError(f"{label} {self.name}", unsupported)
-
     def workload_spec(
         self, *, handler: object = None, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
         """The API definition of this pod for an uploaded source and a ready image."""
         del handler
-        self.require_supported()
         # Only the options set are sent, so the server's defaults apply.
         pod = PodSpec(kind=PodKind.devbox if self.is_devbox else PodKind.pod)
         if self.command:
@@ -567,18 +554,6 @@ class Pod:
         if self.client is None or (selected is not None and selected != self.client.workspace):
             self.client = workloads_client(resolve_control_client_config(workspace=selected))
         return self.client
-
-
-def container_unsupported_options(volumes: list[VolumeMount]) -> list[str]:
-    """Declared pod or sandbox options the platform cannot run yet, by name."""
-    declared = {
-        # Hosts have no credentials of their own for a user's bucket.
-        "cloud bucket without key secrets": any(
-            volume.config is not None and volume.config.get("auth_mode") != "secret_references"
-            for volume in volumes
-        ),
-    }
-    return [name for name, present in declared.items() if present]
 
 
 def container_workload_spec(

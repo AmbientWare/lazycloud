@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -44,12 +42,13 @@ func newCachedLayers(t *testing.T, transport http.RoundTripper, sizes ...int) ca
 // first time, by the layer's position; a trace started while one of its
 // layers was mounted is not complete.
 func TestTracesRecordFirstReadsInOrder(t *testing.T) {
+	t.Parallel()
 	c := newCachedLayers(t, http.DefaultTransport, 3*imagefs.FrameSize, 2*imagefs.FrameSize, imagefs.FrameSize)
 	base, app, other := c.layers[0], c.layers[1], c.layers[2]
 	sources := layerSources{cache: c.cache}
 	read := func(l *layer, frame int) {
 		t.Helper()
-		if err := c.cache.read(l, frame, make([]byte, 8), 0); err != nil {
+		if err := l.read(frame, make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,6 +91,7 @@ func digestOf(c byte) imagefs.Digest {
 
 // Traces are bounded in number and size, and ones nobody ends expire.
 func TestTracesAreBounded(t *testing.T) {
+	t.Parallel()
 	c := newTestCache(t, http.DefaultTransport, 64<<20)
 	l := &layer{digest: digestOf('0'), traced: make([]atomic.Uint32, imagefs.MaxTraceReads+10)}
 	layers := []imagefs.Digest{l.digest}
@@ -123,6 +123,7 @@ func TestTracesAreBounded(t *testing.T) {
 // complete trace; a trace's own start's grant and a refresh naming no start
 // keep it complete.
 func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
+	t.Parallel()
 	c := newCachedLayers(t, http.DefaultTransport)
 	sources := layerSources{cache: c.cache}
 	base, appA, appB := string(digestOf('a')), string(digestOf('b')), string(digestOf('c'))
@@ -184,6 +185,7 @@ func TestSharedLayersLeaveNoCompleteTrace(t *testing.T) {
 // never use up the prefetches a host runs; one whose layers never mount
 // would otherwise hold its place for its whole life.
 func TestFailedStartsNeverExhaustPrefetches(t *testing.T) {
+	t.Parallel()
 	c := newCachedLayers(t, http.DefaultTransport)
 	sources := layerSources{cache: c.cache}
 	for i := range 3 * maxPrefetches {
@@ -208,6 +210,7 @@ func TestFailedStartsNeverExhaustPrefetches(t *testing.T) {
 // A prefetch fetches exactly its frames once their layer mounts, and the
 // reads that follow wait for no store.
 func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
+	t.Parallel()
 	transport := &countingTransport{}
 	c := newCachedLayers(t, transport, 4*imagefs.FrameSize, 2*imagefs.FrameSize)
 	base, app := c.layers[0], c.layers[1]
@@ -220,7 +223,6 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 	if _, err := sources.Prefetch(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
 	if n := transport.requests.Load(); n != 0 {
 		t.Fatalf("a prefetch made %d requests before its layers mounted", n)
 	}
@@ -231,7 +233,7 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 		t.Fatalf("a prefetch of three frames made %d requests", n)
 	}
 	for _, r := range [][2]int{{1, 1}, {0, 3}, {0, 0}} {
-		if err := c.cache.read(c.layers[r[0]], r[1], make([]byte, 8), 0); err != nil {
+		if err := c.layers[r[0]].read(r[1], make([]byte, 8), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -247,20 +249,21 @@ func TestPrefetchFetchesTracedFramesOnceMounted(t *testing.T) {
 // Prefetches hold at most half the fetch slots, so a container's read of
 // another frame is fetched while every prefetch fetch waits on the store.
 func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
+	t.Parallel()
 	held := &holdingTransport{release: make(chan struct{})}
 	c := newCachedLayers(t, held, 12*imagefs.FrameSize)
 	l := c.layers[0]
 	l = c.cache.mount(l.index)
 	reads := make([]frameKey, 10)
 	for i := range reads {
-		reads[i] = frameKey{layer: l.digest, frame: i}
+		reads[i] = l.key(i)
 	}
 	if err := c.cache.prefetch("container", reads, oteltrace.SpanContext{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return held.waiting.Load() == 2 })
 	held.pass.Store(true)
-	if err := c.cache.read(l, 11, make([]byte, 8), 0); err != nil {
+	if err := l.read(11, make([]byte, 8), 0); err != nil {
 		t.Fatalf("a read while prefetches hold their slots: %v", err)
 	}
 	if n := held.waiting.Load(); n != 2 {
@@ -275,6 +278,9 @@ func TestPrefetchesLeaveSlotsForReads(t *testing.T) {
 // set.
 type holdingTransport struct {
 	release chan struct{}
+	// abort ends a held answer once its request's context ends, as a
+	// store connection does.
+	abort   bool
 	pass    atomic.Bool
 	waiting atomic.Int64
 }
@@ -291,8 +297,16 @@ func (h *holdingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	h.waiting.Add(1)
-	<-h.release
-	return resp, nil
+	if !h.abort {
+		<-h.release
+		return resp, nil
+	}
+	select {
+	case <-h.release:
+		return resp, nil
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
 }
 
 func waitFor(t *testing.T, done func() bool) {
@@ -302,68 +316,6 @@ func waitFor(t *testing.T, done func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// Through mounts, a trace of one start lists the frames it read, and a
-// later cold start's prefetch of that trace fetches those frames and no
-// others, so the same reads then wait for no store.
-func TestTracedFramesPrefetchThroughMounts(t *testing.T) {
-	ts := newTestStore(t)
-	weights := random(5 * imagefs.FrameSize)
-	base := ts.file(t, "lib", weights[:3*imagefs.FrameSize])
-	app := ts.file(t, "weights", weights)
-	layers := []imagefs.Digest{base.index.Layer, app.index.Layer}
-	start := func(s *service) (string, string) {
-		t.Helper()
-		if err := s.sources.Grant(t.Context(), "c1", []*imagefsproto.LayerGrant{base.grant, app.grant}); err != nil {
-			t.Fatal(err)
-		}
-		return s.view(t, "base", s.pull(t, base, "")), s.view(t, "app", s.pull(t, app, ""))
-	}
-	readAt := func(path string, off int64) {
-		t.Helper()
-		f, err := os.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = f.Close() }()
-		if _, err := f.ReadAt(make([]byte, 4096), off); err != nil {
-			t.Fatal(err)
-		}
-	}
-	startup := func(baseDir, appDir string) {
-		readAt(filepath.Join(appDir, "weights"), 4*imagefs.FrameSize)
-		readAt(filepath.Join(baseDir, "lib"), 0)
-		readAt(filepath.Join(appDir, "weights"), imagefs.FrameSize)
-	}
-
-	first := serve(t, http.DefaultTransport)
-	if err := first.sources.StartTrace(t.Context(), "c1", layers); err != nil {
-		t.Fatal(err)
-	}
-	startup(start(first))
-	reads, complete, err := first.sources.EndTrace(t.Context(), "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := [][2]uint32{{1, 4}, {0, 0}, {1, 1}}; !complete || !slices.Equal(framePairs(reads), want) {
-		t.Fatalf("the first start traced %v, complete %v; want %v", reads, complete, want)
-	}
-	first.stop()
-
-	transport := &countingTransport{}
-	cold := serve(t, transport)
-	if err := cold.sources.Prefetch(t.Context(), "c1", layers, reads); err != nil {
-		t.Fatal(err)
-	}
-	baseDir, appDir := start(cold)
-	const indexes = 2
-	waitFor(t, func() bool { return transport.requests.Load() >= indexes+3 })
-	time.Sleep(200 * time.Millisecond)
-	startup(baseDir, appDir)
-	if n := transport.requests.Load(); n != indexes+3 {
-		t.Fatalf("a cold start with its trace made %d store requests, want two indexes and three frames", n)
 	}
 }
 

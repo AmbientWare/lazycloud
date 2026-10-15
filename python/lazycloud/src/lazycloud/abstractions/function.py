@@ -72,10 +72,10 @@ from lazycloud.exceptions import (
     FunctionNotDeployedError,
     MapSubmissionError,
     SdkError,
-    UnsupportedFeatureError,
 )
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
+from lazycloud.session.interrupts import cancel_tasks, uninterrupted
 
 # Every container start declares functions; the API client, task session and
 # terminal load only when a call needs them.
@@ -105,7 +105,6 @@ QUEUED_POLL_SECONDS = 1.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
-T = TypeVar("T")
 
 
 class FunctionOperationError(SdkError):
@@ -319,25 +318,9 @@ class Function(Generic[P, R]):
             client_contract=client_contract,
         )
 
-    def unsupported_options(self) -> list[str]:
-        """Declared options the platform cannot run yet, by name."""
-        declared = {
-            # Hosts have no credentials of their own for a user's bucket.
-            "cloud bucket without key secrets": any(
-                volume.config is not None and volume.config.get("auth_mode") != "secret_references"
-                for volume in self.volumes
-            ),
-        }
-        return [name for name, present in declared.items() if present]
-
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
         return dotted_reference(self.func)
-
-    def require_supported(self) -> None:
-        unsupported = self.unsupported_options()
-        if unsupported:
-            raise UnsupportedFeatureError(f"function {self.resource_name}", unsupported)
 
     def workload_spec(
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
@@ -345,7 +328,6 @@ class Function(Generic[P, R]):
         """The API definition of this function for an uploaded source and a ready image."""
         from lazycloud.contracts.api import WorkloadSpec
 
-        self.require_supported()
         policy = self._retry_policy()
         spec: dict[str, Any] = {
             "kind": "function",
@@ -557,7 +539,7 @@ class Function(Generic[P, R]):
             try:
                 result = next(finished)
             except KeyboardInterrupt:
-                _cancel_tasks(tasks[n:])
+                cancel_tasks(tasks[n:])
                 raise
             if isinstance(result, Exception):
                 raise result
@@ -599,7 +581,7 @@ class Function(Generic[P, R]):
             events = client.run_task(workspace, self._app_slug, self.resource_name, request)
             try:
                 # Ctrl-C waits for admission so the admitted task can be cancelled.
-                admitted, interrupted = _uninterrupted(lambda: next(events, None))
+                admitted, interrupted = uninterrupted(lambda: next(events, None))
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if error is exc:
@@ -612,7 +594,7 @@ class Function(Generic[P, R]):
             task = Task(str(admitted.task.id), workspace, client)
             if interrupted is not None:
                 events.close()
-                _cancel_tasks([task])
+                cancel_tasks([task])
                 raise interrupted
             step.update(f"{short_id(task.task_id)} {admitted.task.status.value}")
             return cast(R, self._follow(task, step, events))
@@ -653,7 +635,7 @@ class Function(Generic[P, R]):
             if view is None or view.status not in TERMINAL_STATUSES:
                 view = task.wait_view()
         except BaseException as exc:
-            failures = _cancel_tasks([task])
+            failures = cancel_tasks([task])
             if failures and not isinstance(exc, KeyboardInterrupt):
                 msg = (
                     f"Connection ended; cancellation of task {task.task_id} "
@@ -700,7 +682,6 @@ class Function(Generic[P, R]):
         if called_on_import():
             msg = "remote function invocation is unavailable while importing user code"
             raise FunctionOperationError(msg)
-        self.require_supported()
         client, workspace = self._session()
         if is_local():
             # A preview that stopped since its record was written is
@@ -739,11 +720,14 @@ class Function(Generic[P, R]):
             try:
                 # Ctrl-C waits for the request, so the tasks it admitted are
                 # known and cancelled rather than left running.
-                response, interrupted = _uninterrupted(
+                response, interrupted = uninterrupted(
                     lambda request=request: client.submit_tasks(
                         workspace, self._app_slug, self.resource_name, request
                     )
                 )
+            except KeyboardInterrupt:
+                cancel_tasks(tasks)
+                raise
             except SdkError as exc:
                 error = self._admission_error(exc, workspace)
                 if not tasks:
@@ -753,7 +737,7 @@ class Function(Generic[P, R]):
                 ) from exc
             tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
             if interrupted is not None:
-                _cancel_tasks(tasks)
+                cancel_tasks(tasks)
                 raise interrupted
         return tasks
 
@@ -895,56 +879,6 @@ class _QueuedTaskWatcher:
                     return
 
 
-def _uninterrupted(call: Callable[[], T]) -> tuple[T, KeyboardInterrupt | None]:
-    """Run call to completion even through Ctrl-C, returning the interrupt."""
-    outcome: dict[str, Any] = {}
-    done = threading.Event()
-
-    def run() -> None:
-        try:
-            outcome["value"] = call()
-        except BaseException as exc:
-            outcome["error"] = exc
-        finally:
-            done.set()
-
-    threading.Thread(target=copy_context().run, args=(run,), daemon=True).start()
-    interrupted: KeyboardInterrupt | None = None
-    while True:
-        try:
-            # An interrupted Event.wait leaves the event usable, unlike an
-            # interrupted Thread.join.
-            if done.wait(0.1):
-                break
-        except KeyboardInterrupt as exc:
-            interrupted = exc
-    if "error" in outcome:
-        raise outcome["error"]
-    return cast(T, outcome["value"]), interrupted
-
-
-def _cancel_tasks(tasks: Sequence[Task]) -> list[Exception]:
-    """Cancel each task, finishing even through repeated Ctrl-C.
-
-    Returns the failures to cancel; an interrupt during cancellation is
-    re-raised once every cancel has been attempted.
-    """
-    failures: list[Exception] = []
-    interrupted: KeyboardInterrupt | None = None
-    for task in tasks:
-        try:
-            _, again = _uninterrupted(
-                lambda task=task: task.client.cancel_task(task.workspace, UUID(task.task_id))
-            )
-        except Exception as exc:
-            failures.append(exc)
-            continue
-        interrupted = interrupted or again
-    if interrupted is not None:
-        raise interrupted
-    return failures
-
-
 # The failures each retryable status names: a failed task raised or lost
 # its container, a timed-out one ran past its timeout. No other status ends
 # an attempt.
@@ -986,19 +920,8 @@ def _volume_spec(volume: VolumeMount) -> dict[str, Any]:
         "mount_path": volume.mount_path,
         "read_only": volume.read_only,
     }
-    config = volume.config
-    if config is not None:
-        bucket: dict[str, Any] = {
-            "bucket": config["bucket_name"],
-            "prefix": config.get("prefix") or "",
-            "force_path_style": bool(config.get("force_path_style")),
-            "access_key_secret": config["access_key"],
-            "secret_key_secret": config["secret_key"],
-        }
-        for field_name, key in (("region", "region"), ("endpoint", "endpoint_url")):
-            if config.get(key):
-                bucket[field_name] = config[key]
-        spec["cloud_bucket"] = bucket
+    if volume.config is not None:
+        spec["cloud_bucket"] = volume.config
     return spec
 
 

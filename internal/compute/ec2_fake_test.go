@@ -11,10 +11,11 @@ import (
 	"time"
 )
 
-// fakeEC2 is a small EC2 region on the emulator: instances and Spot
+// fakeEC2 is a small EC2 region, us-east-2, on the emulator: instances and Spot
 // requests that StopInstances, StartInstances, TerminateInstances,
 // CancelSpotInstanceRequests and RunInstances change, and the describe
-// calls with the filters compute sends. A refuse hook answers a call with
+// calls with the filters compute sends. Each error it answers is one EC2
+// gave, named beside it with its record. A refuse hook answers a call with
 // an error instead.
 type fakeEC2 struct {
 	mu        sync.Mutex
@@ -22,6 +23,9 @@ type fakeEC2 struct {
 	requests  map[string]*fakeSpotRequest
 	refuse    func(call awsCall) (awsReply, bool)
 	launched  int
+	// lag is how long DescribeInstances keeps reporting an instance's state
+	// from before its last change, as EC2's eventually consistent reads do.
+	lag time.Duration
 }
 
 type fakeInstance struct {
@@ -33,6 +37,29 @@ type fakeInstance struct {
 	SpotRequest string
 	StateReason string
 	Tags        map[string]string
+	// Was is the state before the last change, at Changed.
+	Was     string
+	Changed time.Time
+}
+
+// empty answers a call to a region the fake does not hold: describe calls
+// list nothing.
+func (f *fakeEC2) empty(call awsCall) awsReply {
+	switch call.Action {
+	case "DescribeInstances":
+		return describeInstancesReply()
+	case "DescribeSpotInstanceRequests":
+		return ok(`<DescribeSpotInstanceRequestsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><spotInstanceRequestSet/></DescribeSpotInstanceRequestsResponse>`)
+	}
+	return ec2Error(http.StatusBadRequest, "InvalidInstanceID.NotFound", "no such instance in the region")
+}
+
+// shown is the state DescribeInstances reports for i.
+func (f *fakeEC2) shown(i *fakeInstance) string {
+	if f.lag > 0 && i.Was != "" && time.Since(i.Changed) < f.lag {
+		return i.Was
+	}
+	return i.State
 }
 
 type fakeSpotRequest struct {
@@ -56,6 +83,10 @@ func newFakeEC2(e *awsEmulator) *fakeEC2 {
 		e.on(action, func(call awsCall) awsReply {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+				// Another region holds none of the fake's instances.
+				return f.empty(call)
+			}
 			if f.refuse != nil {
 				if reply, refused := f.refuse(call); refused {
 					return reply
@@ -158,7 +189,7 @@ func (f *fakeEC2) describeInstances(call awsCall) awsReply {
 		fmt.Fprintf(&b, `<item><reservationId>r-%s</reservationId><ownerId>111122223333</ownerId><instancesSet><item>`+
 			`<instanceId>%s</instanceId><instanceType>%s</instanceType><instanceState><code>%d</code><name>%s</name></instanceState>`+
 			`<launchTime>%s</launchTime><hibernationOptions><configured>%t</configured></hibernationOptions>`,
-			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(i.State), esc(i.State),
+			esc(strings.TrimPrefix(i.ID, "i-")), esc(i.ID), esc(i.Type), instanceStateCode(f.shown(i)), esc(f.shown(i)),
 			i.Launched.UTC().Format(time.RFC3339), i.Hibernation)
 		if i.SpotRequest != "" {
 			fmt.Fprintf(&b, `<spotInstanceRequestId>%s</spotInstanceRequestId><instanceLifecycle>spot</instanceLifecycle>`, esc(i.SpotRequest))
@@ -191,12 +222,12 @@ func (f *fakeEC2) stateChanges(call awsCall, response string, move func(*fakeIns
 	var b strings.Builder
 	fmt.Fprintf(&b, `<?xml version="1.0" encoding="UTF-8"?><%s xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><instancesSet>`, response)
 	for _, id := range list(call.Form, "InstanceId") {
-		i, found := f.instances[id]
-		if !found {
-			return ec2Error(http.StatusBadRequest, "InvalidInstanceID.NotFound", "The instance ID '"+id+"' does not exist")
-		}
+		i := f.instances[id]
 		before := i.State
 		move(i)
+		if i.State != before {
+			i.Was, i.Changed = before, time.Now()
+		}
 		fmt.Fprintf(&b, `<item><instanceId>%s</instanceId><currentState><code>%d</code><name>%s</name></currentState>`+
 			`<previousState><code>%d</code><name>%s</name></previousState></item>`,
 			esc(id), instanceStateCode(i.State), esc(i.State), instanceStateCode(before), esc(before))
@@ -205,6 +236,8 @@ func (f *fakeEC2) stateChanges(call awsCall, response string, move func(*fakeIns
 	return ok(b.String())
 }
 
+// stop stops running instances, with the state reasons TestRealEC2Fleet
+// reads from EC2 after a plain stop and a hibernation.
 func (f *fakeEC2) stop(call awsCall) awsReply {
 	return f.stateChanges(call, "StopInstancesResponse", func(i *fakeInstance) {
 		if i.State != "running" && i.State != "stopping" {
@@ -218,6 +251,11 @@ func (f *fakeEC2) stop(call awsCall) awsReply {
 	})
 }
 
+// start starts stopped instances. The actuator starts a stopped Spot
+// reserve only once DescribeSpotInstanceRequests no longer lists its
+// request active, so it never meets EC2's refusal to start one whose
+// request is still active; TestASpotReserveStartsOnlyOnceEC2DisablesItsRequest
+// holds it to that order.
 func (f *fakeEC2) start(call awsCall) awsReply {
 	return f.stateChanges(call, "StartInstancesResponse", func(i *fakeInstance) {
 		if i.State == "stopped" {
@@ -231,7 +269,9 @@ func (f *fakeEC2) terminate(call awsCall) awsReply {
 		if i.State != "terminated" {
 			i.State = "shutting-down"
 		}
-		// A live persistent request relaunches its instance.
+		// A live persistent request relaunches its instance, which is why
+		// the platform role may cancel its tagged requests
+		// (CancelTaggedSpotRequests in the platform deployment's iam.tf).
 		if r, ok := f.requests[i.SpotRequest]; ok && r.State == "active" {
 			f.launched++
 			id := fmt.Sprintf("i-%017x", 0xf0000+f.launched)
@@ -252,17 +292,15 @@ func (f *fakeEC2) describeRequests(call awsCall) awsReply {
 		keys = append(keys, id)
 	}
 	sort.Strings(keys)
-	for _, id := range ids {
-		if _, found := f.requests[id]; !found {
-			return ec2Error(http.StatusBadRequest, "InvalidSpotInstanceRequestID.NotFound", "The spot instance request ID '"+id+"' does not exist")
-		}
-	}
 	for _, id := range keys {
 		r := f.requests[id]
 		if len(ids) > 0 && !slices.Contains(ids, id) {
 			continue
 		}
 		if v, ok := want["state"]; ok && !slices.Contains(v, r.State) {
+			continue
+		}
+		if v, ok := want["spot-instance-request-id"]; ok && !slices.Contains(v, r.ID) {
 			continue
 		}
 		if !matches(r.Tags, want) {
@@ -284,7 +322,8 @@ func (f *fakeEC2) cancel(call awsCall) awsReply {
 	for _, id := range list(call.Form, "SpotInstanceRequestId") {
 		r, ok := f.requests[id]
 		if ok && r.Tags["lazycloud:fleet"] == "" {
-			// The platform role cancels only tagged requests.
+			// The platform role cancels only tagged requests
+			// (CancelTaggedSpotRequests in the platform deployment's iam.tf).
 			return ec2Error(http.StatusForbidden, "UnauthorizedOperation", "You are not authorized to perform this operation.")
 		}
 		if ok {
@@ -298,29 +337,17 @@ func (f *fakeEC2) cancel(call awsCall) awsReply {
 
 // run launches one instance, on a persistent Spot request when asked.
 func (f *fakeEC2) run(call awsCall) awsReply {
-	if call.Form.Get("InstanceInitiatedShutdownBehavior") == "terminate" &&
-		call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
-		// EC2's answer on 2026-10-02: a persistent request's instance
-		// cannot terminate itself.
-		return ec2Error(http.StatusBadRequest, "InvalidParameterCombination", "The request with instanceInitiatedShutdownBehavior "+
-			"'terminate' is not supported when instanceInterruptionBehavior is set to '"+
-			call.Form.Get("InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior")+"'.")
-	}
 	f.launched++
 	id := fmt.Sprintf("i-%017x", 0xa0000+f.launched)
 	i := &fakeInstance{
 		ID: id, State: "pending", Type: call.Form.Get("InstanceType"), Launched: time.Now(),
 		Hibernation: call.Form.Get("HibernationOptions.Configured") == "true", Tags: instanceTags(call.Form),
 	}
-	// Every Spot launch has a request; only a persistent one is tagged.
+	// Every Spot launch has a request, tagged as the call specifies.
 	request := ""
 	if call.Form.Get("InstanceMarketOptions.MarketType") == "spot" {
 		request = fmt.Sprintf("sir-%08d", f.launched)
-		r := &fakeSpotRequest{ID: request, State: "active", Instance: id, Tags: map[string]string{}}
-		if call.Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") == "persistent" {
-			r.Tags = map[string]string{"lazycloud:fleet": i.Tags["lazycloud:fleet"], "lazycloud:host-id": i.Tags["lazycloud:host-id"]}
-		}
-		f.requests[request] = r
+		f.requests[request] = &fakeSpotRequest{ID: request, State: "active", Instance: id, Tags: specTags(call.Form, "spot-instances-request")}
 		i.SpotRequest = request
 	}
 	f.instances[id] = i

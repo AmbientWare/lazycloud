@@ -81,8 +81,6 @@ class WorkloadDefinition(Protocol):
     @property
     def resource_name(self) -> str: ...
 
-    def require_supported(self) -> None: ...
-
     def handler_reference(self) -> str | None:
         """The `module:qualname` the runner imports; None for a pod or sandbox."""
         ...
@@ -538,8 +536,6 @@ def _workload_specs(
     root = Path(source_root or ".").expanduser().resolve()
     if not root.is_dir():
         raise DeploymentOperationError(f"deployment source root is not a directory: {root}")
-    for function in functions:
-        function.require_supported()
     placements = {id(function): _source_placement(function, root) for function in functions}
     images = _prepare_images(functions, client=client, workspace=workspace, terminal=terminal)
     prefixes = list(dict.fromkeys(prefix for _, prefix in placements.values()))

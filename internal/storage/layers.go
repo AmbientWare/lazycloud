@@ -47,15 +47,15 @@ type LayerUpload struct {
 // upload id is "".
 func (s *Storage) CreateLayerUpload(ctx context.Context, id uuid.UUID, dataBytes int64) (string, error) {
 	if dataBytes == 0 {
-		if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, LayerData)), Body: bytes.NewReader(nil), ContentLength: aws.Int64(0),
+		if _, err := s.layers.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(s.layers.name), Key: aws.String(layerKey(id, LayerData)), Body: bytes.NewReader(nil), ContentLength: aws.Int64(0),
 		}); err != nil {
 			return "", fmt.Errorf("store empty layer data: %w", err)
 		}
 		return "", nil
 	}
-	out, err := s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, LayerData)),
+	out, err := s.layers.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(s.layers.name), Key: aws.String(layerKey(id, LayerData)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create layer upload: %w", err)
@@ -74,12 +74,12 @@ func (s *Storage) PresignLayerUpload(ctx context.Context, id uuid.UUID, uploadID
 	if parts > maxParts {
 		return LayerUpload{}, invalid("a %d byte layer needs more than %d parts", dataBytes, maxParts)
 	}
-	lifetime, err := s.signedLifetime(ctx, lifetime)
+	lifetime, err := s.signedLifetime(ctx, s.layers.client, lifetime)
 	if err != nil {
 		return LayerUpload{}, err
 	}
-	index, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, LayerIndex)), ContentLength: aws.Int64(indexBytes),
+	index, err := s.layers.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.layers.name), Key: aws.String(layerKey(id, LayerIndex)), ContentLength: aws.Int64(indexBytes),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return LayerUpload{}, fmt.Errorf("presign layer index upload: %w", err)
@@ -117,13 +117,6 @@ func (s *Storage) AbortLayerUpload(ctx context.Context, id uuid.UUID, uploadID s
 	return s.abortMultipart(ctx, s.layers, layerKey(id, LayerData), uploadID)
 }
 
-// layerReplica is the copy of the layer bucket in one region.
-type layerReplica struct {
-	bucket  string
-	client  *s3.Client
-	presign *s3.PresignClient
-}
-
 // HasLayerReplica reports whether region has a copy of the layer bucket.
 func (s *Storage) HasLayerReplica(region string) bool {
 	_, ok := s.replicas[region]
@@ -139,7 +132,7 @@ func (s *Storage) LayerReplicated(ctx context.Context, id uuid.UUID, region stri
 		return false, fmt.Errorf("no layer replica in region %q", region)
 	}
 	for _, object := range []LayerObject{LayerIndex, LayerData} {
-		_, err := head(ctx, replica.client, replica.bucket, layerKey(id, object))
+		_, err := head(ctx, replica, layerKey(id, object))
 		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
@@ -154,20 +147,20 @@ func (s *Storage) LayerReplicated(ctx context.Context, id uuid.UUID, region stri
 // up to lifetime, from region's copy of the layer bucket, or from the layer
 // bucket itself when region is "". Range requests read parts of it.
 func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerObject, region string, lifetime time.Duration) (string, time.Time, error) {
-	bucket, presign := s.layers, s.presign
+	bucket := s.layers
 	if region != "" {
 		replica, ok := s.replicas[region]
 		if !ok {
 			return "", time.Time{}, fmt.Errorf("no layer replica in region %q", region)
 		}
-		bucket, presign = replica.bucket, replica.presign
+		bucket = replica
 	}
-	lifetime, err := s.signedLifetime(ctx, min(lifetime, maxPresignLifetime))
+	lifetime, err := s.signedLifetime(ctx, bucket.client, min(lifetime, maxPresignLifetime))
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	req, err := presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket), Key: aws.String(layerKey(id, object)),
+	req, err := bucket.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket.name), Key: aws.String(layerKey(id, object)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign layer read: %w", err)
@@ -177,7 +170,7 @@ func (s *Storage) LayerReadURL(ctx context.Context, id uuid.UUID, object LayerOb
 
 // LayerSize is the size of one object of layer pair id, or ErrNotFound.
 func (s *Storage) LayerSize(ctx context.Context, id uuid.UUID, object LayerObject) (int64, error) {
-	info, err := head(ctx, s.client, s.layers, layerKey(id, object))
+	info, err := head(ctx, s.layers, layerKey(id, object))
 	if err != nil {
 		return 0, err
 	}
@@ -187,7 +180,7 @@ func (s *Storage) LayerSize(ctx context.Context, id uuid.UUID, object LayerObjec
 // ReadLayer returns one object of layer pair id, or ErrNotFound. An object
 // larger than limit bytes is an error.
 func (s *Storage) ReadLayer(ctx context.Context, id uuid.UUID, object LayerObject, limit int64) ([]byte, error) {
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.layers), Key: aws.String(layerKey(id, object))})
+	out, err := s.layers.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.layers.name), Key: aws.String(layerKey(id, object))})
 	if isNotFound(err) {
 		return nil, ErrNotFound
 	}

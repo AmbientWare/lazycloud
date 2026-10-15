@@ -30,9 +30,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
-func (f fixture) replica() *images.Images {
-	return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{
-		Registry: f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
+func (f fixture) replica(t *testing.T) *images.Images {
+	return newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+		PlatformTransferBackoff: images.PlatformTransferBackoff,
+		Registry:                f.registry, Repository: "lazycloud", Insecure: true, ManagedBase: f.registry + "/library/python:{version}-slim",
 	})
 }
 
@@ -41,6 +42,7 @@ func (f fixture) replica() *images.Images {
 // then pulled from its copy in the platform registry with every layer
 // readable. A later image on its base converts only its own layer.
 func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	host := f.host(t)
@@ -71,7 +73,7 @@ func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
 	if _, err := f.pool.Exec(ctx, "update platform_images set leased_until = now() - interval '1 second'"); err != nil {
 		t.Fatal(err)
 	}
-	replicas := []*images.Images{f.images, f.replica()}
+	replicas := []*images.Images{f.images, f.replica(t)}
 	var wg sync.WaitGroup
 	for n := range 6 {
 		wg.Go(func() {
@@ -128,6 +130,7 @@ func TestPlatformImagesConvertOnceAcrossReplicas(t *testing.T) {
 // the conversion runs again after a short delay. A reference that is not
 // a public image by digest is refused outright.
 func TestPlatformImageFailuresAreTypedAndRetried(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	host := f.host(t)
@@ -172,7 +175,7 @@ func TestPlatformImageFailuresAreTypedAndRetried(t *testing.T) {
 		t.Fatalf("past its retry period the image is tried again: %v", err)
 	}
 
-	dead := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud", Insecure: true})
+	dead := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: "127.0.0.1:1", Repository: "lazycloud", Insecure: true})
 	unreachable := "127.0.0.1:1/tools/builder@sha256:" + strings.Repeat("e", 64)
 	if err := dead.ConvertPlatformImage(ctx, unreachable, "amd64"); errors.As(err, &unconvertible) || !errors.Is(err, images.ErrRegistryUnavailable) {
 		t.Fatalf("an unreachable registry is a transient failure: %v", err)
@@ -336,7 +339,7 @@ func TestADataFileTheServerCannotWriteIsItsDiskFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	registry := strings.TrimPrefix(server.URL, "http://")
-	im := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	im := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: registry, Repository: "lazycloud", Insecure: true})
 	reference := registry + "/tools/disk:1@" + pushImage(t, f.registry+"/tools/disk:1", img)
 	err = im.ConvertPlatformImage(ctx, reference, "amd64")
 	var unconvertible *images.ConversionError
@@ -369,19 +372,20 @@ func hangingRegistry(t *testing.T) string {
 // over; the owner whose lease another took stops. A lease its owner no
 // longer renews, as when its server died, is taken over once it lapses.
 func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	registry := hangingRegistry(t)
 	replica := func() *images.Images {
-		return images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+		return newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{PlatformTransferBackoff: images.PlatformTransferBackoff, Registry: registry, Repository: "lazycloud", Insecure: true})
 	}
 	owner, other := replica(), replica()
-	const lease = 2 * time.Second
+	const lease = 600 * time.Millisecond
 	reference := registry + "/tools/builder@sha256:" + strings.Repeat("c", 64)
 	// A replica that claims the lease converts until its attempt ends, and
 	// fails; one that finds the lease held returns at once.
 	try := func() error {
-		attempt, cancel := context.WithTimeout(ctx, time.Second)
+		attempt, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		defer cancel()
 		return images.ConvertPlatformImageLeased(attempt, other, reference, "amd64", lease)
 	}
@@ -399,21 +403,19 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 
 	ended := make(chan error, 1)
 	go func() { ended <- images.ConvertPlatformImageLeased(ctx, owner, reference, "amd64", lease) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for token() == "" {
-		if time.Now().After(deadline) {
-			t.Fatal("the conversion took no lease")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFor(t, "the conversion takes its lease", func() bool { return token() != "" })
 	held := token()
-	time.Sleep(5 * time.Second)
+	var firstUntil time.Time
+	if err := f.pool.QueryRow(ctx, "select leased_until from platform_images where reference = $1", reference).Scan(&firstUntil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the first lease ends", func() bool { return f.count(t, "select (now() > $1)::int", firstUntil) == 1 })
 	if err := try(); err != nil || token() != held {
 		t.Fatalf("a running conversion's lease passed to another replica past its length: %v", err)
 	}
 
-	// Another owner takes the lease, then dies without renewing it.
-	if _, err := f.pool.Exec(ctx, "update platform_images set lease_token = gen_random_uuid(), leased_until = now() + interval '2 seconds' where reference = $1", reference); err != nil {
+	// Another owner takes the lease.
+	if _, err := f.pool.Exec(ctx, "update platform_images set lease_token = gen_random_uuid(), leased_until = now() + interval '1 hour' where reference = $1", reference); err != nil {
 		t.Fatal(err)
 	}
 	crashed := token()
@@ -422,18 +424,31 @@ func TestPlatformLeasesAreRenewedAndTakenOverFromACrashedOwner(t *testing.T) {
 		if err == nil {
 			t.Fatal("the owner that lost its lease converted")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the owner kept converting after another took its lease")
 	}
 	if err := try(); err != nil || token() != crashed {
 		t.Fatalf("a live lease was taken: %v", err)
 	}
-	time.Sleep(2500 * time.Millisecond)
+	// That owner dies: its lease lapses unrenewed.
+	if _, err := f.pool.Exec(ctx, "update platform_images set leased_until = now() - interval '1 second' where reference = $1", reference); err != nil {
+		t.Fatal(err)
+	}
 	if err := try(); err == nil {
 		t.Fatal("the replica that took the lapsed lease did not convert")
 	}
 	if n := f.count(t, "select count(*) from platform_images where reference = $1 and lease_token is null and failure_transient", reference); n != 1 {
 		t.Fatal("the lapsed lease was not taken over")
+	}
+}
+
+// waitFor polls until done holds.
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting until %s", what)
+		}
 	}
 }
 
@@ -475,17 +490,20 @@ func cuttingRegistry(t *testing.T, registry string) string {
 func TestCutDownloadsAreTransientAndTruncatedLayersAreContent(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	leftovers := func() int {
-		dirs, err := filepath.Glob(filepath.Join(os.TempDir(), "lazycloud-platform-*"))
+		dirs, err := filepath.Glob(filepath.Join(tmp, "lazycloud-platform-*"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return len(dirs)
 	}
-	before := leftovers()
 
 	registry := cuttingRegistry(t, f.registry)
-	cut := images.NewImages(f.pool, f.execution, f.secrets, f.storage, images.Config{Registry: registry, Repository: "lazycloud", Insecure: true})
+	cut := newImages(t, f.pool, f.execution, f.secrets, f.storage, images.Config{
+		Registry: registry, Repository: "lazycloud", Insecure: true, PlatformTransferBackoff: time.Millisecond,
+	})
 	img, err := random.Image(64<<10, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -516,7 +534,7 @@ func TestCutDownloadsAreTransientAndTruncatedLayersAreContent(t *testing.T) {
 	if err := f.images.ConvertPlatformImage(ctx, broken, "amd64"); !errors.As(err, &unconvertible) {
 		t.Fatalf("a truncated layer fails the image: %v", err)
 	}
-	if n := leftovers(); n != before {
-		t.Fatalf("%d conversion directories stayed", n-before)
+	if n := leftovers(); n != 0 {
+		t.Fatalf("%d conversion directories stayed", n)
 	}
 }

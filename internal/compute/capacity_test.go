@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -40,9 +41,9 @@ with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::
      app as (insert into apps (workspace_id, name, state) select id, 'app', 'active' from ws returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id)
-insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
-select ws.id, rel.id, s.state, $1, 1, 1000, 1::bigint << 30
+             select id, 1, '{}', sha256('spec'), sha256('src') from wl returning id, workload_id)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+select ws.id, rel.id, rel.workload_id, s.state, $1, 1, 1000, 1::bigint << 30
 from ws, rel, (select unnest($2::text[]) as state union all select 'stopped' from generate_series(1, $3)) s`,
 		uuid.UUID(host), states, history)
 	exec(t, pool, "analyze")
@@ -63,6 +64,7 @@ func capacity(t *testing.T, pool *pgxpool.Pool) []HostCapacity {
 }
 
 func TestAvailableCapacitySubtractsLiveContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	host := newHost(t, pool, "now()")
 	newHost(t, pool, "now() - interval '1 minute'")
@@ -92,6 +94,7 @@ func TestAvailableCapacitySubtractsLiveContainers(t *testing.T) {
 }
 
 func TestMarkLostKeepsAHostThatReportedAfterTheScan(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	host := newHost(t, pool, "now() - interval '1 minute'")
 	stale, err := StaleHosts(t.Context(), pool, nil, 10)
@@ -120,6 +123,7 @@ func TestMarkLostKeepsAHostThatReportedAfterTheScan(t *testing.T) {
 // resuming is waking until its agent reconnects: neither silence is a loss,
 // whether it began before the scan or after.
 func TestASleepingReserveIsNotLost(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	silent := newHost(t, pool, "now() - interval '1 minute'")
 	stopping := newHost(t, pool, "now() - interval '1 minute'")
@@ -150,5 +154,28 @@ func TestASleepingReserveIsNotLost(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// GPU work takes a fleet GPU host with room of its own before one where it
+// would evict packed CPU work, so CPU work evicted once and retried onto
+// another GPU host is not evicted again while room elsewhere fits the GPU
+// work, though evicting there would leave the tighter fit.
+func TestGPUWorkEvictsPackedWorkOnlyWhereNoHostHasRoom(t *testing.T) {
+	t.Parallel()
+	gpuHost := func(id byte, freeCPU cpu.Millis, packed FleetCapacity) HostCapacity {
+		return HostCapacity{
+			Host: HostID{id}, Kind: KindPlatform, Provider: ProviderAWS, Market: MarketSpot, GPUType: "T4", GPUCount: 2,
+			CPUMillis: 8000, MemoryBytes: 32 * gib, FreeCPUMillis: freeCPU, FreeMemoryBytes: 16 * gib, FreeGPUs: 1, Packed: packed,
+		}
+	}
+	retried := gpuHost(1, 500, cpuGiB(2000, 2))
+	roomy := gpuHost(2, 6000, FleetCapacity{})
+	gpu := Requirement{Preemptible: true, GPUs: []string{"T4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 4 * gib}
+	if i := ChooseHost([]HostCapacity{retried, roomy}, gpu, FleetCapacity{}); i != 1 {
+		t.Fatalf("GPU work went to host %d, want the host it need not evict from", i)
+	}
+	if i := ChooseHost([]HostCapacity{retried}, gpu, FleetCapacity{}); i != 0 {
+		t.Fatalf("GPU work went to host %d, want the packed host, evicting, when no other fits", i)
 	}
 }

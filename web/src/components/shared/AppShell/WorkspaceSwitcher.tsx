@@ -57,8 +57,8 @@ export function WorkspaceSwitcher({
             aria-label="Workspace"
             className={cn(
               // A surface rather than a ghost: this is what every row beneath it
-              // is scoped to, and at the same weight as those rows it read as
-              // one of them.
+              // is scoped to, and at the same weight as those rows it would read
+              // as one of them.
               "h-10 w-full justify-between rounded-md border border-sidebar-border bg-sidebar-accent/50 px-2.5 text-sm font-medium text-foreground shadow-none hover:bg-sidebar-accent",
               compact && "h-9 max-w-44 text-xs",
               className,
@@ -66,9 +66,8 @@ export function WorkspaceSwitcher({
           >
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate">{workspace.name}</span>
-              {/* Named rather than shaded. Four statuses collapsed into two dot
-                  colours, so a workspace mid-delete looked like a disabled one,
-                  and the dot carried it for sighted readers alone. */}
+              {/* Named rather than shaded: two dot colours cannot tell four
+                  statuses apart, and a dot reaches sighted readers alone. */}
               {workspace.state === "active" ? null : (
                 <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
                   {workspace.state}

@@ -16,6 +16,7 @@ import (
 // Samples and start stages a host sends over its session are stored for its
 // own containers only, and never hold up the session's commands.
 func TestSessionStoresMetricsAndStartStagesOfTheHostsContainers(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)

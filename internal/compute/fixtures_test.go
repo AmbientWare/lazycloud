@@ -34,7 +34,7 @@ func newOwners(t *testing.T, config compute.Config) owners {
 	e := execution.NewExecution(pool)
 	return owners{
 		pool: pool, compute: compute.NewCompute(pool, e, config), execution: e,
-		scheduling: scheduling.NewScheduling(pool, discard()),
+		scheduling: scheduling.NewScheduling(pool, e, discard()),
 	}
 }
 
@@ -94,8 +94,8 @@ select id from rel`, workspace, app, spec)
 func pendingContainer(t *testing.T, pool *pgxpool.Pool, workspace, release uuid.UUID, cpu, memory int64) uuid.UUID {
 	t.Helper()
 	return scan[uuid.UUID](t, pool, `
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-values ($1, $2, 'pending', 1, $3, $4) returning id`, workspace, release, cpu, memory)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, $3, $4) returning id`, workspace, release, cpu, memory)
 }
 
 // hostSpec is a host row; zero fields take the column defaults of an online,
@@ -163,8 +163,8 @@ func runningAttempt(t *testing.T, pool *pgxpool.Pool, workspace, release uuid.UU
 	t.Helper()
 	var w work
 	err := pool.QueryRow(t.Context(), `
-with ctr as (insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-             values ($1, $2, 'ready', $3, 1, 1000, 1 << 28, now(), now()) returning id),
+with ctr as (insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+             values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 1000, 1 << 28, now(), now()) returning id),
      task as (insert into tasks (workspace_id, workload_id, release_id, status, attempt_count, max_attempts, started_at)
               select $1, r.workload_id, r.id, 'running', 1, 2, now() from releases r where r.id = $2 returning id),
      att as (insert into attempts (task_id, number, container_id, state, deadline_at)
@@ -178,19 +178,22 @@ select ctr.id, task.id, att.id from ctr, task, att`, workspace, release, uuid.UU
 }
 
 // assertRetried checks that w's container stopped as host_lost and its
-// attempt was lost and queued for a retry.
+// attempt was lost to preemption, which bills nothing, and queued for a
+// retry.
 func assertRetried(t *testing.T, pool *pgxpool.Pool, w work) {
 	t.Helper()
 	var container, reason, attempt, task string
+	var preempted bool
 	err := pool.QueryRow(t.Context(), `
-select c.state, coalesce(c.stop_reason, ''), a.state, t.status
+select c.state, coalesce(c.stop_reason, ''), a.state, t.status, a.preempted
 from attempts a join containers c on c.id = a.container_id join tasks t on t.id = a.task_id
-where a.id = $1`, w.attempt).Scan(&container, &reason, &attempt, &task)
+where a.id = $1`, w.attempt).Scan(&container, &reason, &attempt, &task, &preempted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if container != "stopped" || reason != "host_lost" || attempt != "lost" || task != "queued" {
-		t.Fatalf("container %s (%s), attempt %s, task %s; want stopped (host_lost), lost, queued for a retry", container, reason, attempt, task)
+	if container != "stopped" || reason != "host_lost" || attempt != "lost" || !preempted || task != "queued" {
+		t.Fatalf("container %s (%s), attempt %s (preempted %v), task %s; want stopped (host_lost), lost to preemption, queued for a retry",
+			container, reason, attempt, preempted, task)
 	}
 }
 

@@ -8,6 +8,8 @@ rpc_public_addr = "127.0.0.1:3901"
 [s3_api]
 api_bind_addr = "0.0.0.0:3900"
 s3_region = "garage"
+# compose.test.yaml's HTTPS proxy serves buckets as <bucket>.s3.localhost.
+root_domain = ".s3.localhost"
 
 [admin]
 api_bind_addr = "0.0.0.0:3903"

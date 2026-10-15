@@ -44,8 +44,8 @@ type session struct {
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
-	// grants holds the expiry of the storage grant sent per workspace.
-	grants map[identity.WorkspaceID]time.Time
+	// grants holds the storage grant sent per workspace.
+	grants map[identity.WorkspaceID]*hostGrant
 	// layers holds the layer grants sent per image reference, and
 	// layersListed whether the host's live references were listed yet.
 	layers       map[string]layerGrant
@@ -57,10 +57,8 @@ type session struct {
 	// networks holds the newest policy version recorded per container, so
 	// a report restating it writes nothing.
 	networks map[execution.ContainerID]int32
-	// reserve is the PrepareReserve awaiting its answer, and agent the
-	// release the Hello stated.
+	// reserve is the PrepareReserve awaiting its answer.
 	reserve *reserveAttempt
-	agent   compute.AgentState
 	// builds wakes the session when an image build a start waits for, or
 	// a platform image conversion, changes.
 	builds watch
@@ -160,7 +158,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	sess := &session{server: s, stream: stream, host: host, opened: time.Now(), again: make(chan struct{}, 1), sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
-		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]time.Time{}, layers: map[string]layerGrant{}, agent: agentStateIn(hello),
+		networks: map[execution.ContainerID]int32{}, grants: map[identity.WorkspaceID]*hostGrant{}, layers: map[string]layerGrant{},
 		platform: platformState{
 			named:   slices.Compact(slices.Sorted(slices.Values(hello.GetPlatformImages()))),
 			running: slices.Compact(slices.Sorted(slices.Values(hello.GetRunningPlatformImages()))),
@@ -178,7 +176,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	for _, r := range reports {
 		sess.observe(r)
 	}
-	update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+	update, err := s.compute.UpdateFor(ctx, host)
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
@@ -266,7 +264,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			// A release published while the session is open, or widened
 			// to this host, reaches it here.
-			update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+			update, err := s.compute.UpdateFor(ctx, host)
 			if err != nil {
 				return s.grpcError(ctx, err)
 			}
@@ -323,12 +321,16 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 	case *hostproto.HostMessage_StartupTrace:
 		sess.recordTrace(ctx, body.StartupTrace)
 		return nil
+	case *hostproto.HostMessage_VolumeTrace:
+		sess.recordVolumeTrace(ctx, body.VolumeTrace)
+		return nil
 	case *hostproto.HostMessage_Traces:
 		sess.server.config.Traces.Offer(sess.host.String(), body.Traces.GetOtlp())
 		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
-		// outcome.
+		// outcome. A storage grant counts as held once acknowledged.
+		sess.grantAcked(body.Ack.GetCommandId())
 		return nil
 	case *hostproto.HostMessage_Hello:
 		return status.Error(codes.InvalidArgument, "Hello is only the first message")
@@ -340,21 +342,34 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 // of one image cost one read and one signing, the images of the starts it
 // sent, and the ChannelImageBuild keys of the waits it found.
 type syncCache struct {
-	pulls   map[pullKey]pulled
-	layers  map[string]issuedLayers
-	traces  map[traceKey]startTrace
-	started []string
-	waits   map[string]bool
+	pulls  map[pullKey]pulled
+	layers map[string]issuedLayers
+	traces map[traceKey]startTrace
+	// volumeTraces holds the volume traces read, by workload, and
+	// volumePeers the hosts read, by workspace.
+	volumeTraces map[uuid.UUID]*hostproto.VolumeTrace
+	volumePeers  map[identity.WorkspaceID][]*hostproto.VolumePeer
+	started      []string
+	waits        map[string]bool
 }
 
-// sync derives the host's commands and sends those not yet sent.
+// sync derives the host's commands and sends those not yet sent, as one
+// span of the session's trace.
 func (sess *session) sync(ctx context.Context) error {
+	return telemetry.Step(ctx, "hostsession.sync", sess.syncCommands, telemetry.Host(sess.host.String()))
+}
+
+func (sess *session) syncCommands(ctx context.Context) error {
 	commands, err := sess.server.execution.HostCommands(ctx, sess.host)
 	if err != nil {
 		return sess.server.grpcError(ctx, err)
 	}
 	derived := map[string]bool{}
-	cache := &syncCache{pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{}, waits: map[string]bool{}}
+	cache := &syncCache{
+		pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{},
+		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, volumePeers: map[identity.WorkspaceID][]*hostproto.VolumePeer{},
+		waits: map[string]bool{},
+	}
 	// Builds, volume mounts and network holders run the platform images,
 	// so they go first.
 	if err := sess.syncPlatform(ctx, cache); err != nil {
@@ -467,7 +482,13 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 		sess.waiting(ctx, start.Container, "image", "")
 		return true, nil
 	}
-	if reason, permanent := permanentStartFailure(err); permanent {
+	if err == nil && usesWorkspaceBucket(msg.GetStart()) {
+		var refused *storageRefusal
+		if err = sess.ensureGrant(ctx, start.Workspace); err != nil && !errors.As(err, &refused) {
+			return false, err
+		}
+	}
+	if reason, failed := startFailure(err); failed {
 		// The container fails like a failed preparation and stops being
 		// derived; the host's other containers are unaffected.
 		sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(), "container", start.Container.String(), "error", err)
@@ -486,11 +507,6 @@ func (sess *session) sendStart(ctx context.Context, cache *syncCache, id string,
 	if !recorded {
 		sess.endStart(ctx, start.Container, "", startDropped)
 		return false, nil
-	}
-	if usesWorkspaceBucket(msg.GetStart()) {
-		if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
-			return false, err
-		}
 	}
 	msg.GetStart().Traceparent = telemetry.TraceParentOf(ctx)
 	if err := sess.send(msg); err != nil {
@@ -581,21 +597,27 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 	if start.Spec.Environment != nil {
 		env = *start.Spec.Environment
 	}
-	volumes, err := s.volumeMounts(ctx, start)
+	// One read resolves the release's secrets and its cloud buckets' keys;
+	// a missing one fails the start.
+	var names []string
+	if start.Spec.Secrets != nil {
+		names = *start.Spec.Secrets
+	}
+	resolved, err := s.config.Secrets.Resolve(ctx, start.Workspace, append(slices.Clone(names), bucketKeys(start.Spec)...))
+	if err != nil {
+		return nil, layerGrant{}, err
+	}
+	secretValues := make(map[string]string, len(names))
+	for _, name := range names {
+		secretValues[name] = resolved[name]
+	}
+	volumes, err := s.volumeMounts(ctx, start, resolved)
 	if err != nil {
 		return nil, layerGrant{}, err
 	}
 	var diskLimit int64
 	if start.Spec.Resources.DiskMib != nil {
 		diskLimit = int64(*start.Spec.Resources.DiskMib) << 20
-	}
-	var names []string
-	if start.Spec.Secrets != nil {
-		names = *start.Spec.Secrets
-	}
-	secretValues, err := s.config.Secrets.Resolve(ctx, start.Workspace, names)
-	if err != nil {
-		return nil, layerGrant{}, err
 	}
 	trace := s.startTrace(ctx, cache, start.Workspace, image.Reference)
 	restore, err := s.restoreOut(ctx, start.Container)
@@ -627,7 +649,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		PythonVersion: version,
 		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
 		Resources: &hostproto.Resources{
-			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes,
+			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes, MountReserveBytes: start.MountReserveBytes,
 			CpuLimitMillis: int64(start.CPULimitMillis), MemoryLimitBytes: start.MemoryLimitBytes,
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),
@@ -646,6 +668,8 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		Layers:         layers,
 		Prefetch:       trace.prefetch,
 		RecordTrace:    trace.record,
+		VolumeTrace:    s.volumeTrace(ctx, cache, start, volumes),
+		VolumePeers:    sess.volumePeers(ctx, cache, start, volumes),
 	}}}, grant, nil
 }
 
@@ -784,12 +808,15 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 	return sess.send(updateMessage(update))
 }
 
-// permanentStartFailure says whether err means the start can never be
-// built, and the reason the container's owner is shown.
-func permanentStartFailure(err error) (string, bool) {
+// startFailure says whether err fails the start's container rather than
+// the session: the start can never be built as asked, or the storage owner
+// refused storage it needs. It returns the reason the container's owner is
+// shown.
+func startFailure(err error) (string, bool) {
 	var missing *secrets.NotFoundError
 	var unreadable *secrets.UnreadableError
 	var unconvertible *images.ConversionError
+	var refused *storageRefusal
 	switch {
 	case err == nil:
 		return "", false
@@ -801,6 +828,8 @@ func permanentStartFailure(err error) (string, bool) {
 		return "the release's image has no pinned reference; deploy it again", true
 	case errors.As(err, &unconvertible):
 		return unconvertible.Error(), true
+	case errors.As(err, &refused):
+		return refused.reason, true
 	}
 	return "", false
 }

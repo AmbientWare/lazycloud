@@ -1,12 +1,15 @@
 // Package storagetest gives tests buckets of their own in the test Garage
 // from compose.test.yaml and deletes them, with every object in them and
-// every key granted on them, when the tests end.
+// every key granted on them, when the tests end. The same Garage serves
+// over HTTPS with a private CA.
 package storagetest
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,7 +18,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,11 +43,21 @@ const (
 	adminToken      = "local-garage-admin"                                               //nolint:gosec // Development token.
 	// namePrefix starts every test bucket's name.
 	namePrefix = "lazycloud-test-"
-	// staleAfter outlasts any test binary. Open removes test buckets older
-	// than that, left by a binary that panicked or timed out before its
-	// cleanup ran.
+	// platformAccount is the account id the platform's workspace buckets
+	// are named with.
+	platformAccount = "100000000000"
+	// staleAfter outlasts any test binary. A binary's first Open removes
+	// test buckets older than that, left by a binary that panicked or timed
+	// out before its cleanup ran.
 	staleAfter = 24 * time.Hour
 )
+
+// swept is the removal of stale test buckets, which the first Open of a
+// binary runs.
+var swept struct { //nolint:gochecknoglobals // One sweep per test binary.
+	sync.Once
+	err error
+}
 
 // Config returns buckets made for t alone: a platform bucket, a layer bucket
 // and a workspace bucket prefix, all named after one random prefix.
@@ -66,14 +82,20 @@ func Config(t testing.TB) storage.Config {
 func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context) error, err error) {
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
-	// Workspace buckets append a dash and 32 hex digits, within S3's 63.
+	// 23 characters: workspace bucket names append an account id and a
+	// workspace id within S3's 63.
 	prefix := namePrefix + hex.EncodeToString(suffix)
 	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
-	stale := time.Now().Add(-staleAfter)
-	if err := admin.removeBuckets(ctx, func(alias string, created time.Time) bool {
-		return strings.HasPrefix(alias, namePrefix) && created.Before(stale)
-	}); err != nil {
-		return storage.Config{}, nil, fmt.Errorf("test object store (docker compose -f compose.test.yaml up -d --wait): %w", err)
+	swept.Do(func() {
+		stale := time.Now().Add(-staleAfter)
+		// A bucket without an alias is out of every key's reach: a
+		// connected account's whose key a test deleted.
+		swept.err = admin.removeBuckets(ctx, func(alias string, created time.Time) bool {
+			return (alias == "" || strings.HasPrefix(alias, namePrefix)) && created.Before(stale)
+		})
+	})
+	if swept.err != nil {
+		return storage.Config{}, nil, fmt.Errorf("test object store (docker compose -f compose.test.yaml up -d --wait): %w", swept.err)
 	}
 	cfg = storage.Config{
 		Endpoint:        endpoint(),
@@ -82,9 +104,11 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 		LayerBucket:     prefix + "-layers",
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: secretAccessKey,
+		DeleteChunk:     storage.DefaultDeleteChunk,
 		Workspaces: storage.WorkspaceBuckets{
 			Provider:         storage.ProviderGarage,
 			Prefix:           prefix,
+			AccountID:        platformAccount,
 			GarageAdminURL:   admin.url,
 			GarageAdminToken: adminToken,
 		},
@@ -104,11 +128,109 @@ func Open(ctx context.Context) (cfg storage.Config, remove func(context.Context)
 	return cfg, remove, nil
 }
 
+// Account is a key of the test Garage that stands in for a connected AWS
+// account's role: it creates buckets through the S3 API and reaches only
+// the buckets it created, so the platform's key cannot reach them.
+type Account struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	// Region is the test Garage's, where the account's buckets go.
+	Region string
+}
+
+// ConnectedAccount creates a key standing in for a connected account and
+// deletes it when t ends. Buckets the key creates under Config's prefix go
+// with Config's.
+func ConnectedAccount(t testing.TB) Account {
+	t.Helper()
+	admin := garage{url: strings.TrimRight(adminURL(), "/"), http: &http.Client{Timeout: 30 * time.Second}}
+	var key struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		SecretAccessKey string `json:"secretAccessKey"`
+	}
+	if err := admin.call(t.Context(), http.MethodPost, "CreateKey", nil, map[string]any{
+		"name": "lazycloud-test-connected", "allow": map[string]bool{"createBucket": true},
+	}, &key); err != nil {
+		t.Fatalf("test object store (docker compose -f compose.test.yaml up -d --wait): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := admin.call(context.Background(), http.MethodPost, "DeleteKey", url.Values{"id": {key.AccessKeyID}}, nil, nil); present(err) != nil {
+			t.Errorf("delete the connected account's key: %v", err)
+		}
+	})
+	return Account{AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey, Region: region}
+}
+
 // Client is an S3 client on the test Garage with the development key.
 func Client() *s3.Client {
 	return s3.New(s3.Options{
 		Region: region, BaseEndpoint: aws.String(endpoint()), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+	})
+}
+
+// HTTPS is the test Garage behind TLS with a private CA, as hosts reach a
+// store in production: path-style at Endpoint and virtual-hosted at
+// https://<bucket>.s3.localhost:<port>. Its buckets are the plain
+// endpoint's, under the same development key.
+type HTTPS struct {
+	Endpoint string
+	// CA is a PEM file holding the store's root certificate.
+	CA string
+	// pool holds CA's certificate.
+	pool *x509.CertPool
+}
+
+// OpenTLS reads the HTTPS store's root certificate from its TLS proxy and
+// writes it to dir/ca.pem. LAZYCLOUD_TEST_OBJECT_STORE_HTTPS and
+// LAZYCLOUD_TEST_OBJECT_STORE_CA_URL name another such proxy.
+func OpenTLS(ctx context.Context, dir string) (HTTPS, error) {
+	caURL := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_CA_URL")
+	if caURL == "" {
+		caURL = "http://127.0.0.1:15919/pki/ca/local"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, caURL, nil) //nolint:gosec // The test stack's proxy, or one the developer names.
+	if err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA: %w", err)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req) //nolint:gosec // As above.
+	if err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA (docker compose -f compose.test.yaml up -d --wait): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var authority struct {
+		Root string `json:"root_certificate"`
+	}
+	if resp.StatusCode != http.StatusOK {
+		return HTTPS{}, fmt.Errorf("test object store CA: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&authority); err != nil {
+		return HTTPS{}, fmt.Errorf("test object store CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(authority.Root)) {
+		return HTTPS{}, errors.New("test object store CA: no certificate in its root")
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, []byte(authority.Root), 0o644); err != nil { //nolint:gosec // A public certificate hosts' mounts read.
+		return HTTPS{}, fmt.Errorf("write the test object store CA: %w", err)
+	}
+	endpoint := os.Getenv("LAZYCLOUD_TEST_OBJECT_STORE_HTTPS")
+	if endpoint == "" {
+		endpoint = "https://s3.localhost:15901"
+	}
+	return HTTPS{Endpoint: endpoint, CA: ca, pool: pool}, nil
+}
+
+// Client is an S3 client on the HTTPS store with the development key that
+// trusts only its CA, path-style or virtual-hosted.
+func (h HTTPS) Client(pathStyle bool) *s3.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // The standard library's default.
+	transport.TLSClientConfig = &tls.Config{RootCAs: h.pool, MinVersion: tls.VersionTLS12}
+	return s3.New(s3.Options{
+		Region: region, BaseEndpoint: aws.String(h.Endpoint), UsePathStyle: pathStyle,
+		Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+		HTTPClient:  &http.Client{Transport: transport},
 	})
 }
 
@@ -192,12 +314,17 @@ func (g garage) createBucket(ctx context.Context, bucket string) error {
 }
 
 // removeBuckets removes every bucket whose alias and creation time match,
-// reporting every failure.
+// reporting every failure. A bucket a key created through the S3 API has
+// only that key's local alias, and none once the key is gone, which match
+// sees as "".
 func (g garage) removeBuckets(ctx context.Context, match func(alias string, created time.Time) bool) error {
 	var buckets []struct {
 		ID            string    `json:"id"`
 		Created       time.Time `json:"created"`
 		GlobalAliases []string  `json:"globalAliases"`
+		LocalAliases  []struct {
+			Alias string `json:"alias"`
+		} `json:"localAliases"`
 	}
 	if err := g.call(ctx, http.MethodGet, "ListBuckets", nil, nil, &buckets); err != nil {
 		return err
@@ -205,10 +332,17 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 	objects := Client()
 	var errs []error
 	for _, bucket := range buckets {
-		for _, alias := range bucket.GlobalAliases {
+		aliases := slices.Clone(bucket.GlobalAliases)
+		for _, local := range bucket.LocalAliases {
+			aliases = append(aliases, local.Alias)
+		}
+		if len(aliases) == 0 {
+			aliases = []string{""}
+		}
+		for _, alias := range aliases {
 			if match(alias, bucket.Created) {
-				if err := g.removeBucket(ctx, objects, bucket.ID, alias); err != nil {
-					errs = append(errs, fmt.Errorf("remove bucket %s: %w", alias, err))
+				if err := g.removeBucket(ctx, objects, bucket.ID, alias, len(bucket.GlobalAliases) > 0); err != nil {
+					errs = append(errs, fmt.Errorf("remove bucket %s %s: %w", bucket.ID, alias, err))
 				}
 				break
 			}
@@ -219,12 +353,15 @@ func (g garage) removeBuckets(ctx context.Context, match func(alias string, crea
 
 // removeBucket deletes the keys granted on a bucket other than the
 // development key, then its objects and the bucket. What another caller
-// removed first counts as removed.
-func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string) error {
+// removed first counts as removed. A bucket without a global alias gets
+// one, so that the development key can empty it.
+func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias string, global bool) error {
 	var info struct {
 		Keys []struct {
 			AccessKeyID string `json:"accessKeyId"`
 		} `json:"keys"`
+		Objects           int64 `json:"objects"`
+		UnfinishedUploads int64 `json:"unfinishedUploads"`
 	}
 	if err := g.call(ctx, http.MethodGet, "GetBucketInfo", url.Values{"id": {id}}, nil, &info); err != nil {
 		return present(err)
@@ -237,6 +374,28 @@ func (g garage) removeBucket(ctx context.Context, objects *s3.Client, id, alias 
 		if err := g.call(ctx, http.MethodPost, "DeleteKey", url.Values{"id": {key.AccessKeyID}}, nil, nil); present(err) != nil {
 			errs = append(errs, err)
 		}
+	}
+	// Garage refuses to delete a bucket that holds objects or uploads, so
+	// a bucket its counters show empty is deleted at once, and emptied
+	// first when they lag.
+	if info.Objects == 0 && info.UnfinishedUploads == 0 &&
+		present(g.call(ctx, http.MethodPost, "DeleteBucket", url.Values{"id": {id}}, nil, nil)) == nil {
+		return errors.Join(errs...)
+	}
+	if !global {
+		if alias == "" {
+			alias = namePrefix + "orphan-" + id[:20]
+		}
+		if err := g.call(ctx, http.MethodPost, "AddBucketAlias", nil, map[string]string{"bucketId": id, "globalAlias": alias}, nil); err != nil {
+			return errors.Join(append(errs, present(err))...)
+		}
+	}
+	// A bucket another key created through the S3 API admits the
+	// development key only once allowed.
+	if err := g.call(ctx, http.MethodPost, "AllowBucketKey", nil, map[string]any{
+		"bucketId": id, "accessKeyId": accessKeyID, "permissions": map[string]bool{"read": true, "write": true, "owner": true},
+	}, nil); err != nil {
+		return errors.Join(append(errs, present(err))...)
 	}
 	if err := empty(ctx, objects, alias); present(err) != nil {
 		return errors.Join(append(errs, err)...)

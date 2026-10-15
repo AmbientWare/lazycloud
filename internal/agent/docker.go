@@ -39,6 +39,14 @@ const (
 	labelRuntime = "lazycloud.runtime"
 )
 
+// hostLabels are the configured labels with this host's.
+func (a *Agent) hostLabels() map[string]string {
+	labels := map[string]string{}
+	maps.Copy(labels, a.cfg.Labels)
+	labels[labelHost] = a.identity.HostID
+	return labels
+}
+
 // httpLabels records an HTTP workload's serving configuration.
 func httpLabels(labels map[string]string, h *hostproto.HttpServing) {
 	if h == nil {
@@ -69,7 +77,7 @@ const pidsLimit = 4096
 // its sandbox kernel.
 const runtimeRunsc = "runsc"
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime, slice string, binds []mount.Mount, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -91,24 +99,19 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		"WORKSPACE_NAME="+spec.GetWorkspace(),
 		"CONTAINER_ID="+c.id,
 	)
+	cacheMounts, cacheEnv := a.volumes.cacheLibrary(spec)
+	env = append(env, cacheEnv...)
 	runtimeLabel, err := json.Marshal(c.runtime)
 	if err != nil {
 		return fmt.Errorf("encode runtime label: %w", err)
 	}
-	labels := maps.Clone(a.cfg.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
+	labels := a.hostLabels()
 	labels[labelContainer] = c.id
-	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
 	httpLabels(labels, c.http)
 	if err := c.podLabels(labels); err != nil {
 		return err
-	}
-	if len(workspaces) > 0 {
-		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
 	labels[labelRuntime] = string(runtimeLabel)
 	if len(gpus) > 0 {
@@ -124,7 +127,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	if runtime != "" {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true})
 	}
-	workingDir, user := containerWorkspace, containerUser()
+	mounts = append(mounts, cacheMounts...)
+	// Workloads run as the image's user.
+	workingDir, user := containerWorkspace, ""
 	var capAdd, securityOpt []string
 	if spec.GetPod().GetDevbox() {
 		// The supervisor binds the system directories into the root disk
@@ -151,8 +156,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			privileged = true
 		}
 	}
-	limit := int64(pidsLimit)
-	resources := spec.GetResources()
+	resources := containerResources(spec.GetResources(), a.capacity, a.topology, pidsLimit, gpus)
+	resources.CgroupParent = slice
 	options := client.ContainerCreateOptions{
 		Name: c.dockerName(),
 		Config: &containertypes.Config{
@@ -171,8 +176,8 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			CapAdd:      capAdd,
 			SecurityOpt: securityOpt,
 			Mounts:      append(mounts, binds...),
-			Resources:   containerResources(resources, a.capacity, a.topology, limit, gpus),
-			StorageOpt:  a.diskLimit(resources),
+			Resources:   resources,
+			StorageOpt:  a.diskLimit(spec.GetResources()),
 		},
 	}
 	id, err := a.createContainer(ctx, c.dockerName(), options)
@@ -276,11 +281,10 @@ func (a *Agent) adopt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
-	a.volumes.adopt(list.Items)
 	var holders []containertypes.Summary
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
-		case kindMount, kindBucket:
+		case kindMount:
 			continue
 		case kindHolder:
 			holders = append(holders, summary)
@@ -350,6 +354,11 @@ func (a *Agent) adopt(ctx context.Context) error {
 			}
 		}
 	}
+	// Mounts are adopted once their users are tracked, so the users of a
+	// mount that died can fail.
+	if err := a.volumes.adopt(ctx, list.Items); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(filepath.Join(a.cfg.StateDir, "containers"))
 	if err != nil {
 		return fmt.Errorf("list container directories: %w", err)
@@ -371,16 +380,6 @@ func networkMode(c *container) containertypes.NetworkMode {
 	return ""
 }
 
-// containerUser runs workloads as the agent's own user when the agent is not
-// root, so it can remove the files they leave in the workspace. A root agent
-// runs them as the image's user.
-func containerUser() string {
-	if uid := os.Geteuid(); uid != 0 {
-		return fmt.Sprintf("%d:%d", uid, os.Getegid())
-	}
-	return ""
-}
-
 // containerResources turns reservations into cgroup settings, which count
 // hardware threads. CPU shares are proportional to the reservation, so under
 // contention a container keeps what it reserved; the CPU quota is the burst
@@ -394,13 +393,15 @@ func containerResources(r *hostproto.Resources, host *hostproto.Capacity, topolo
 	}
 	reservation := cpu.Millis(r.GetCpuMillis())
 	reserved, ceiling := topology.VCPUs(reservation), topology.VCPUs(max(cpuLimit, reservation))
-	memoryLimit := max(r.GetMemoryLimitBytes(), r.GetMemoryBytes())
+	// The container's volume mounters take the reserve of its memory.
+	memory := r.GetMemoryBytes() - r.GetMountReserveBytes()
+	memoryLimit := max(r.GetMemoryLimitBytes(), memory)
 	return containertypes.Resources{
 		CPUShares:         max(int64(reserved)*1024/1000, 2),
 		NanoCPUs:          int64(ceiling) * 1_000_000,
-		MemoryReservation: r.GetMemoryBytes(),
+		MemoryReservation: memory,
 		Memory:            memoryLimit,
-		MemorySwap:        memoryLimit + r.GetMemoryBytes(),
+		MemorySwap:        memoryLimit + memory,
 		PidsLimit:         &pids,
 		DeviceRequests:    gpuRequest(gpus),
 	}

@@ -35,6 +35,9 @@ func fleetConfig(f compute.Fleet) compute.Config {
 	if f.Name == "" {
 		f.Name = "lazycloud-test"
 	}
+	if f.StorageRegion == "" {
+		f.StorageRegion = "us-east-1"
+	}
 	f.AccountID = "111122223333"
 	f.NodeRoleARN = "arn:aws:iam::111122223333:role/lazycloud-node"
 	f.InstanceProfile = "lazycloud-node"
@@ -129,6 +132,7 @@ func capacityWait(t *testing.T, o owners, container uuid.UUID) string {
 }
 
 func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -162,8 +166,8 @@ func TestCapacityBuysTheCheapestOfferEachContainerAccepts(t *testing.T) {
 			t.Errorf("container %s waits %q, want provisioning", c, w)
 		}
 	}
-	if w := capacityWait(t, o, containers[5]); w != "" {
-		t.Errorf("a container no fleet region serves waits %q, want nothing", w)
+	if w := capacityWait(t, o, containers[5]); w != string(compute.WaitNoOffer) {
+		t.Errorf("a container no fleet region serves waits %q, want %q", w, compute.WaitNoOffer)
 	}
 }
 
@@ -179,6 +183,7 @@ func equal(a, b []string) bool {
 }
 
 func TestCapacityPacksDemandOntoOneHostAndCountsHostsInFlight(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -205,6 +210,7 @@ func TestCapacityPacksDemandOntoOneHostAndCountsHostsInFlight(t *testing.T) {
 }
 
 func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
@@ -241,6 +247,10 @@ func TestConcurrentCapacityPassesBuyEachHostOnce(t *testing.T) {
 join hosts h on h.id = c.capacity_host_id and h.phase = 'requested'`); n != 3 {
 		t.Fatalf("concurrent passes bought %d hosts for the containers, want 3, one per container", n)
 	}
+	// Hosts bought together, of one type, still go by names of their own.
+	if same := scan[int](t, o.pool, "select count(*) - count(distinct name) from hosts where phase = 'requested'"); same != 0 {
+		t.Fatalf("%d hosts bought share a name", same)
+	}
 	if result := plan(t, o); result.Requested != 0 {
 		t.Fatalf("a pass after the concurrent ones %+v, want nothing more bought", result)
 	}
@@ -259,6 +269,7 @@ func submitOne(t *testing.T, o owners, workspace uuid.UUID, app string) executio
 }
 
 func TestFleetLimitAndPurchasesExplainPendingTasks(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	o := newOwners(t, fleetConfig(compute.Fleet{MaxHosts: 1}))
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -294,13 +305,18 @@ func TestFleetLimitAndPurchasesExplainPendingTasks(t *testing.T) {
 // buys once it closes. A stream that may have begun before the pass looks
 // back has run its five seconds and holds nothing.
 func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
+	t.Parallel()
 	stream := func(from time.Duration) []time.Duration {
 		var ages []time.Duration
-		for age := from; age > 0; age -= 500 * time.Millisecond {
+		for age := from; age >= 0; age -= 500 * time.Millisecond {
 			ages = append(ages, age)
 		}
 		return ages
 	}
+	// The policy's batch closes a second after the newest arrival or five
+	// after the first, so a held batch's newest arrival is at most a second
+	// old by the time the pass reads it: each held case arrives just now and
+	// the pass follows the arrivals' one statement at once.
 	for _, c := range []struct {
 		name string
 		// ages are how long ago each container arrived.
@@ -311,7 +327,7 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 	}{
 		{"one just arrived", []time.Duration{0}, time.Second},
 		{"settled", []time.Duration{2 * time.Second}, 0},
-		{"a stream four and a half seconds long", stream(4600 * time.Millisecond), 500 * time.Millisecond},
+		{"a stream four seconds long", stream(4 * time.Second), time.Second},
 		{"a stream that began before the lookback", stream(6600 * time.Millisecond), 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -320,10 +336,12 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 			alice := newUser(t, o.pool, "alice@example.com")
 			dev := newWorkspace(t, o.pool, "dev", alice)
 			release := newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`)
-			for _, age := range c.ages {
-				id := pendingContainer(t, o.pool, dev, release, 1000, gib)
-				run(t, o.pool, "update containers set created_at = now() - $2::interval where id = $1", id, age)
+			ids := make([]uuid.UUID, len(c.ages))
+			for n := range c.ages {
+				ids[n] = pendingContainer(t, o.pool, dev, release, 1000, gib)
 			}
+			run(t, o.pool, `update containers c set created_at = now() - a.age
+from unnest($1::uuid[], $2::interval[]) as a(id, age) where c.id = a.id`, ids, c.ages)
 			r, err := o.compute.Plan(t.Context(), discard())
 			if err != nil {
 				t.Fatal(err)
@@ -340,6 +358,7 @@ func TestTheArrivalBatchHoldsPurchasesUntilArrivalsSettle(t *testing.T) {
 // ready room took at once leave a settled platform container's purchase
 // alone.
 func TestArrivalsElsewhereDoNotHoldAPlatformPurchase(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		arrive func(t *testing.T, o owners, owner identity.UserID)
@@ -358,8 +377,8 @@ update workspaces set connection_id = (select id from conn) where id = $2`, uuid
 		{"ready room", func(t *testing.T, o owners, owner identity.UserID) {
 			ws := newWorkspace(t, o.pool, "warm", owner)
 			host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Region: "us-east-2", CPU: 4000, Memory: 16 * gib})
-			run(t, o.pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
-values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t, o.pool, ws, `{}`), uuid.UUID(host))
+			run(t, o.pool, `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t, o.pool, ws, `{}`), uuid.UUID(host))
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -385,6 +404,7 @@ values ($1, $2, 'ready', $3, 1, 4000, 1 << 30, now(), now())`, ws, newRelease(t,
 // disks and public addresses cost. Expected transfer is an estimate, so it
 // ranks the regions but stays out of the price a host records.
 func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.T) {
+	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	ws := newWorkspace(t, o.pool, "connected", alice)
@@ -398,8 +418,8 @@ auth as (
     from conn
 )
 update workspaces set connection_id = (select id from conn) where id = $2`, uuid.UUID(alice), ws, networks)
-	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its root
-	// costs 2,222 more there and its expected transfer 5,000 more.
+	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its
+	// volumes cost 3,111 more there and its expected transfer 5,000 more.
 	run(t, o.pool, `
 insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
 values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-west-1', 'usw1-az3', 'm7i.large', 36000, now(), now())`)
@@ -409,9 +429,9 @@ values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-west-1'
 	host := scan[string](t, o.pool, `
 select h.region || ' ' || h.instance_type || ' ' || h.market || ' ' || h.hourly_micros
 from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and h.kind = 'connection'`, container)
-	// Spot compute, a 100 GiB gp3 root over a 720-hour month and one public
-	// IPv4 address.
-	want := 40_000 + (100*80_000+719)/720 + 5_000
+	// Spot compute, a 100 GiB gp3 root and a 40 GiB data volume over a
+	// 720-hour month, and one public IPv4 address.
+	want := 40_000 + (140*80_000+719)/720 + 5_000
 	if host != "us-east-2 m7i.large spot "+strconv.Itoa(want) {
 		t.Fatalf("connected host %q, want us-east-2 m7i.large spot %d", host, want)
 	}
@@ -421,5 +441,38 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 	}
 	if summary.HourlyMicros == nil || *summary.HourlyMicros != int64(want) {
 		t.Fatalf("connection estimate %v µ$/h, want %d", summary.HourlyMicros, want)
+	}
+}
+
+// CPU work never keeps a fleet GPU host up: once its GPU work ends, the
+// host leaves on its keep window, evicting what still runs there, whose
+// task is preempted and queued again.
+func TestCPUWorkNeverKeepsAGPUHostUp(t *testing.T) {
+	t.Parallel()
+	o := newOwners(t, fleetConfig(compute.Fleet{}))
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	host := newHost(t, o.pool, hostSpec{
+		Provider: compute.ProviderAWS, Market: compute.MarketSpot, CPU: 4000, Memory: 28 * gib, GPUType: "T4", GPUCount: 1,
+		Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", InstanceID: "i-gpu",
+	})
+	run(t, o.pool, "update hosts set instance_type = 'g4dn.2xlarge', phase_at = now() - interval '1 hour' where id = $1", uuid.UUID(host))
+	w := runningAttempt(t, o.pool, dev, newRelease(t, o.pool, dev, `{"kind": "function"}`), host)
+
+	plan(t, o)
+	var phase, container, attempt, task string
+	var preemptions int
+	if err := o.pool.QueryRow(t.Context(), `
+select h.phase, c.state, a.state, t.status, t.preemptions
+from attempts a
+join containers c on c.id = a.container_id
+join hosts h on h.id = c.host_id
+join tasks t on t.id = a.task_id
+where a.id = $1`, w.attempt).Scan(&phase, &container, &attempt, &task, &preemptions); err != nil {
+		t.Fatal(err)
+	}
+	if phase != string(compute.PhaseDraining) || container != "stopped" || attempt != "lost" || task != "queued" || preemptions != 1 {
+		t.Errorf("host %s, container %s, attempt %s, task %s after %d preemptions; want draining, stopped, lost, queued after one",
+			phase, container, attempt, task, preemptions)
 	}
 }

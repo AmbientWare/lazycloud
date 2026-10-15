@@ -40,6 +40,7 @@ func (f *fixture) grant(g creditGrant) uuid.UUID {
 }
 
 func TestTrialCoversUsageAndNewCreditPaysDebtFirst(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	start := time.Now().UTC().Truncate(time.Hour).Add(-5 * time.Hour)
@@ -78,6 +79,7 @@ func TestTrialCoversUsageAndNewCreditPaysDebtFirst(t *testing.T) {
 }
 
 func TestExpiredCreditCoversOnlyUsageBeforeItsExpiry(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	early := time.Now().UTC().Truncate(time.Hour).Add(-6 * time.Hour)
@@ -93,6 +95,7 @@ func TestExpiredCreditCoversOnlyUsageBeforeItsExpiry(t *testing.T) {
 }
 
 func TestSubscriptionCreditIsSpentBeforePurchasedCredit(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.account(owner)
@@ -122,6 +125,7 @@ from credit_lots where user_id = $1`, owner).Scan(&subscription, &purchased); er
 }
 
 func TestComplimentaryUsageIsPricedAndWaived(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	start := time.Now().UTC().Truncate(time.Hour).Add(-4 * time.Hour)
@@ -139,6 +143,7 @@ func TestComplimentaryUsageIsPricedAndWaived(t *testing.T) {
 }
 
 func TestReversalPastSpentCreditIsPaidFromOtherCredit(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	owner := f.user()
 	f.account(owner)

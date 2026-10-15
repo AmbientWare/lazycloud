@@ -1,16 +1,25 @@
 // Package layersource is the agent's side of the host's snapshotter: the
 // client of its LayerSources service, which hands it the presigned read URLs
-// of the layers the host may mount, and the names a lazy pull uses.
+// of the layers the host may mount, and of its DiskSources service, which
+// serves disks' published generations, and of its VolumeSources service,
+// which serves platform volumes; the names a lazy pull uses; and where the
+// snapshotter, its cache and disks are.
 package layersource
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -20,12 +29,31 @@ const (
 	// Socket is where the snapshotter serves containerd's snapshotter API
 	// and LayerSources on a host.
 	Socket = "/run/lazycloud-snapshotter/snapshotter.sock"
-	// Root holds the snapshotter's metadata, snapshots and frame cache on a
-	// host. containerd mounts the snapshots below it.
+	// Root holds the snapshotter's metadata and snapshots on a host, and
+	// the directory it serves disk generations in. containerd mounts the
+	// snapshots below it.
 	Root = "/var/lib/lazycloud-snapshotter"
+	// CacheDir holds the frame cache and DiskRoot the disk engine's disks,
+	// both on the host's data volume.
+	CacheDir = hostproto.DataRoot + "/cache"
+	DiskRoot = hostproto.DataRoot + "/disks"
 	// Snapshotter is the snapshotter's name in containerd's proxy plugins
 	// and Docker's storage driver.
 	Snapshotter = "lazycloud"
+	// Binary is the snapshotter the host runs, a copy of the Executable of
+	// an agent release outside the releases, which updates prune; Unit is
+	// its systemd unit.
+	Executable = "lazycloud-snapshotter"
+	Binary     = "/usr/local/lib/lazycloud/" + Executable
+	Unit       = "lazycloud-snapshotter.service"
+	// VolumeEndpoint is the loopback address of the snapshotter's S3
+	// endpoint for platform volumes, VolumePeerPort the port its volume
+	// cache serves other hosts of the region on, and VolumeLinkDir the tree
+	// of complete volume objects, <workspace>/<volume>/<path>, that
+	// workloads open in place of their mounts' files.
+	VolumeEndpoint = "127.0.0.1:12121"
+	VolumePeerPort = 12122
+	VolumeLinkDir  = hostproto.DataRoot + "/volume-cache"
 	// LazyLabel marks a layer pulled lazily. The pull sets it on each layer
 	// descriptor; containerd passes it to the snapshotter's Prepare, which
 	// then mounts the layer from its grant and reports it present, so the
@@ -33,10 +61,47 @@ const (
 	LazyLabel = "containerd.io/snapshot/lazycloud.lazy"
 )
 
+// Install copies the snapshotter of the agent release executable is in to
+// Binary unless Binary holds it, and reports whether it changed. An
+// executable with no snapshotter beside it installs nothing.
+func Install(executable string) (bool, error) {
+	exe, err := filepath.EvalSymlinks(executable)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("resolve the agent executable: %w", err)
+	}
+	release, err := os.ReadFile(filepath.Join(filepath.Dir(exe), Executable)) //nolint:gosec // The agent's own release.
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the release's snapshotter: %w", err)
+	}
+	if current, err := os.ReadFile(Binary); err == nil && bytes.Equal(current, release) {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(Binary), 0o755); err != nil { //nolint:gosec // Executables are world-readable.
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	if err := os.WriteFile(Binary+".new", release, 0o755); err != nil { //nolint:gosec // An executable.
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	if err := os.Rename(Binary+".new", Binary); err != nil {
+		return false, fmt.Errorf("install the snapshotter: %w", err)
+	}
+	return true, nil
+}
+
 // Client calls one snapshotter.
 type Client struct {
 	conn    *grpc.ClientConn
 	sources imagefsproto.LayerSourcesClient
+	// Disks serves disks' published generations, and Volumes platform
+	// volumes.
+	Disks   imagefsproto.DiskSourcesClient
+	Volumes imagefsproto.VolumeSourcesClient
 }
 
 // Dial returns a client of the snapshotter at socket. It connects on first
@@ -46,7 +111,10 @@ func Dial(socket string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshotter client: %w", err)
 	}
-	return &Client{conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn)}, nil
+	return &Client{
+		conn: conn, sources: imagefsproto.NewLayerSourcesClient(conn), Disks: imagefsproto.NewDiskSourcesClient(conn),
+		Volumes: imagefsproto.NewVolumeSourcesClient(conn),
+	}, nil
 }
 
 // Grant gives the snapshotter grants. Each replaces its layer's current

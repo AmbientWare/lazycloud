@@ -313,3 +313,507 @@ var LayerSources_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "imagefs/v1/source.proto",
 }
+
+const (
+	DiskSources_GrantDisk_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/GrantDisk"
+	DiskSources_ServeDisk_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/ServeDisk"
+	DiskSources_ReleaseDisk_FullMethodName = "/lazycloud.imagefs.v1.DiskSources/ReleaseDisk"
+	DiskSources_DiskReads_FullMethodName   = "/lazycloud.imagefs.v1.DiskSources/DiskReads"
+)
+
+// DiskSourcesClient is the client API for DiskSources service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+type DiskSourcesClient interface {
+	// GrantDisk records the credential the disk's frames are read with,
+	// replacing the disk's current one unless that expires later.
+	GrantDisk(ctx context.Context, in *GrantDiskRequest, opts ...grpc.CallOption) (*GrantDiskResponse, error)
+	// ServeDisk serves a generation and returns its file. Serving a served
+	// generation again returns the same file.
+	ServeDisk(ctx context.Context, in *ServeDiskRequest, opts ...grpc.CallOption) (*ServeDiskResponse, error)
+	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
+	// none. A file still open keeps reading.
+	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
+	// DiskReads returns the frames the disk read: its start trace and those
+	// the cache holds now.
+	DiskReads(ctx context.Context, in *DiskReadsRequest, opts ...grpc.CallOption) (*DiskReadsResponse, error)
+}
+
+type diskSourcesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDiskSourcesClient(cc grpc.ClientConnInterface) DiskSourcesClient {
+	return &diskSourcesClient{cc}
+}
+
+func (c *diskSourcesClient) GrantDisk(ctx context.Context, in *GrantDiskRequest, opts ...grpc.CallOption) (*GrantDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_GrantDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) ServeDisk(ctx context.Context, in *ServeDiskRequest, opts ...grpc.CallOption) (*ServeDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServeDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_ServeDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseDiskResponse)
+	err := c.cc.Invoke(ctx, DiskSources_ReleaseDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *diskSourcesClient) DiskReads(ctx context.Context, in *DiskReadsRequest, opts ...grpc.CallOption) (*DiskReadsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiskReadsResponse)
+	err := c.cc.Invoke(ctx, DiskSources_DiskReads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DiskSourcesServer is the server API for DiskSources service.
+// All implementations must embed UnimplementedDiskSourcesServer
+// for forward compatibility.
+//
+// DiskSources serves the published generations of a host's durable disks as
+// read-only files. Each frame is read from the disk's store on first use,
+// checked against its digest and kept in the frame cache image layers use.
+// The disk engine stacks the disk's local writes on such a file.
+type DiskSourcesServer interface {
+	// GrantDisk records the credential the disk's frames are read with,
+	// replacing the disk's current one unless that expires later.
+	GrantDisk(context.Context, *GrantDiskRequest) (*GrantDiskResponse, error)
+	// ServeDisk serves a generation and returns its file. Serving a served
+	// generation again returns the same file.
+	ServeDisk(context.Context, *ServeDiskRequest) (*ServeDiskResponse, error)
+	// ReleaseDisk stops serving every generation of the disk but keep, 0 for
+	// none. A file still open keeps reading.
+	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
+	// DiskReads returns the frames the disk read: its start trace and those
+	// the cache holds now.
+	DiskReads(context.Context, *DiskReadsRequest) (*DiskReadsResponse, error)
+	mustEmbedUnimplementedDiskSourcesServer()
+}
+
+// UnimplementedDiskSourcesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedDiskSourcesServer struct{}
+
+func (UnimplementedDiskSourcesServer) GrantDisk(context.Context, *GrantDiskRequest) (*GrantDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) ServeDisk(context.Context, *ServeDiskRequest) (*ServeDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ServeDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
+}
+func (UnimplementedDiskSourcesServer) DiskReads(context.Context, *DiskReadsRequest) (*DiskReadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiskReads not implemented")
+}
+func (UnimplementedDiskSourcesServer) mustEmbedUnimplementedDiskSourcesServer() {}
+func (UnimplementedDiskSourcesServer) testEmbeddedByValue()                     {}
+
+// UnsafeDiskSourcesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DiskSourcesServer will
+// result in compilation errors.
+type UnsafeDiskSourcesServer interface {
+	mustEmbedUnimplementedDiskSourcesServer()
+}
+
+func RegisterDiskSourcesServer(s grpc.ServiceRegistrar, srv DiskSourcesServer) {
+	// If the following call panics, it indicates UnimplementedDiskSourcesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&DiskSources_ServiceDesc, srv)
+}
+
+func _DiskSources_GrantDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).GrantDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_GrantDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).GrantDisk(ctx, req.(*GrantDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_ServeDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServeDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).ServeDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_ServeDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).ServeDisk(ctx, req.(*ServeDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).ReleaseDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_ReleaseDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).ReleaseDisk(ctx, req.(*ReleaseDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DiskSources_DiskReads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiskReadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DiskSourcesServer).DiskReads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DiskSources_DiskReads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DiskSourcesServer).DiskReads(ctx, req.(*DiskReadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// DiskSources_ServiceDesc is the grpc.ServiceDesc for DiskSources service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var DiskSources_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lazycloud.imagefs.v1.DiskSources",
+	HandlerType: (*DiskSourcesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GrantDisk",
+			Handler:    _DiskSources_GrantDisk_Handler,
+		},
+		{
+			MethodName: "ServeDisk",
+			Handler:    _DiskSources_ServeDisk_Handler,
+		},
+		{
+			MethodName: "ReleaseDisk",
+			Handler:    _DiskSources_ReleaseDisk_Handler,
+		},
+		{
+			MethodName: "DiskReads",
+			Handler:    _DiskSources_DiskReads_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "imagefs/v1/source.proto",
+}
+
+const (
+	VolumeSources_GrantVolumes_FullMethodName   = "/lazycloud.imagefs.v1.VolumeSources/GrantVolumes"
+	VolumeSources_VolumeReads_FullMethodName    = "/lazycloud.imagefs.v1.VolumeSources/VolumeReads"
+	VolumeSources_ReleaseVolumes_FullMethodName = "/lazycloud.imagefs.v1.VolumeSources/ReleaseVolumes"
+	VolumeSources_WarmVolumes_FullMethodName    = "/lazycloud.imagefs.v1.VolumeSources/WarmVolumes"
+)
+
+// VolumeSourcesClient is the client API for VolumeSources service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// VolumeSources serves workspaces' platform volumes through the frame
+// cache. The snapshotter answers path-style S3 requests on loopback for
+// keys under volumes/ of the granted buckets, each signed with the key of
+// the container whose mount sends it as access key, and forwards them to
+// the store signed with the bucket's grant. A plain GET of an object of 1
+// MiB or more is served from the cache by the ETag a HEAD reported at most
+// a second earlier, every frame fetched with If-Match on it; a write of an
+// object makes its next read ask the store again.
+type VolumeSourcesClient interface {
+	// GrantVolumes records a workspace bucket's read-write grant, unless the
+	// current one expires later, and with a container the key its mount
+	// signs with. A request naming no container refreshes the grant.
+	GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error)
+	// VolumeReads returns the objects of 1 MiB or more the container's mount
+	// read since its key was granted, each once in first-read order,
+	// at most 256, and stops recording them. An unknown container is
+	// NOT_FOUND.
+	VolumeReads(ctx context.Context, in *VolumeReadsRequest, opts ...grpc.CallOption) (*VolumeReadsResponse, error)
+	// ReleaseVolumes forgets the container's key and its reads.
+	ReleaseVolumes(ctx context.Context, in *ReleaseVolumesRequest, opts ...grpc.CallOption) (*ReleaseVolumesResponse, error)
+	// WarmVolumes fills the objects the reads name, of the workspace's
+	// granted bucket, in the background, behind reads, in order and at their
+	// current versions. Each object fits a quarter of the cache, all the
+	// host's warms half of it, and a warm ends after five minutes. A host
+	// whose disk reads slower than the stores keeps volume frames in memory
+	// only and warms nothing.
+	WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error)
+}
+
+type volumeSourcesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewVolumeSourcesClient(cc grpc.ClientConnInterface) VolumeSourcesClient {
+	return &volumeSourcesClient{cc}
+}
+
+func (c *volumeSourcesClient) GrantVolumes(ctx context.Context, in *GrantVolumesRequest, opts ...grpc.CallOption) (*GrantVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_GrantVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) VolumeReads(ctx context.Context, in *VolumeReadsRequest, opts ...grpc.CallOption) (*VolumeReadsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeReadsResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_VolumeReads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) ReleaseVolumes(ctx context.Context, in *ReleaseVolumesRequest, opts ...grpc.CallOption) (*ReleaseVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_ReleaseVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeSourcesClient) WarmVolumes(ctx context.Context, in *WarmVolumesRequest, opts ...grpc.CallOption) (*WarmVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmVolumesResponse)
+	err := c.cc.Invoke(ctx, VolumeSources_WarmVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VolumeSourcesServer is the server API for VolumeSources service.
+// All implementations must embed UnimplementedVolumeSourcesServer
+// for forward compatibility.
+//
+// VolumeSources serves workspaces' platform volumes through the frame
+// cache. The snapshotter answers path-style S3 requests on loopback for
+// keys under volumes/ of the granted buckets, each signed with the key of
+// the container whose mount sends it as access key, and forwards them to
+// the store signed with the bucket's grant. A plain GET of an object of 1
+// MiB or more is served from the cache by the ETag a HEAD reported at most
+// a second earlier, every frame fetched with If-Match on it; a write of an
+// object makes its next read ask the store again.
+type VolumeSourcesServer interface {
+	// GrantVolumes records a workspace bucket's read-write grant, unless the
+	// current one expires later, and with a container the key its mount
+	// signs with. A request naming no container refreshes the grant.
+	GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error)
+	// VolumeReads returns the objects of 1 MiB or more the container's mount
+	// read since its key was granted, each once in first-read order,
+	// at most 256, and stops recording them. An unknown container is
+	// NOT_FOUND.
+	VolumeReads(context.Context, *VolumeReadsRequest) (*VolumeReadsResponse, error)
+	// ReleaseVolumes forgets the container's key and its reads.
+	ReleaseVolumes(context.Context, *ReleaseVolumesRequest) (*ReleaseVolumesResponse, error)
+	// WarmVolumes fills the objects the reads name, of the workspace's
+	// granted bucket, in the background, behind reads, in order and at their
+	// current versions. Each object fits a quarter of the cache, all the
+	// host's warms half of it, and a warm ends after five minutes. A host
+	// whose disk reads slower than the stores keeps volume frames in memory
+	// only and warms nothing.
+	WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error)
+	mustEmbedUnimplementedVolumeSourcesServer()
+}
+
+// UnimplementedVolumeSourcesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedVolumeSourcesServer struct{}
+
+func (UnimplementedVolumeSourcesServer) GrantVolumes(context.Context, *GrantVolumesRequest) (*GrantVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) VolumeReads(context.Context, *VolumeReadsRequest) (*VolumeReadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VolumeReads not implemented")
+}
+func (UnimplementedVolumeSourcesServer) ReleaseVolumes(context.Context, *ReleaseVolumesRequest) (*ReleaseVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) WarmVolumes(context.Context, *WarmVolumesRequest) (*WarmVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmVolumes not implemented")
+}
+func (UnimplementedVolumeSourcesServer) mustEmbedUnimplementedVolumeSourcesServer() {}
+func (UnimplementedVolumeSourcesServer) testEmbeddedByValue()                       {}
+
+// UnsafeVolumeSourcesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to VolumeSourcesServer will
+// result in compilation errors.
+type UnsafeVolumeSourcesServer interface {
+	mustEmbedUnimplementedVolumeSourcesServer()
+}
+
+func RegisterVolumeSourcesServer(s grpc.ServiceRegistrar, srv VolumeSourcesServer) {
+	// If the following call panics, it indicates UnimplementedVolumeSourcesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&VolumeSources_ServiceDesc, srv)
+}
+
+func _VolumeSources_GrantVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).GrantVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_GrantVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).GrantVolumes(ctx, req.(*GrantVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_VolumeReads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumeReadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).VolumeReads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_VolumeReads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).VolumeReads(ctx, req.(*VolumeReadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_ReleaseVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).ReleaseVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_ReleaseVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).ReleaseVolumes(ctx, req.(*ReleaseVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeSources_WarmVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeSources_WarmVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeSourcesServer).WarmVolumes(ctx, req.(*WarmVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// VolumeSources_ServiceDesc is the grpc.ServiceDesc for VolumeSources service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var VolumeSources_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lazycloud.imagefs.v1.VolumeSources",
+	HandlerType: (*VolumeSourcesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GrantVolumes",
+			Handler:    _VolumeSources_GrantVolumes_Handler,
+		},
+		{
+			MethodName: "VolumeReads",
+			Handler:    _VolumeSources_VolumeReads_Handler,
+		},
+		{
+			MethodName: "ReleaseVolumes",
+			Handler:    _VolumeSources_ReleaseVolumes_Handler,
+		},
+		{
+			MethodName: "WarmVolumes",
+			Handler:    _VolumeSources_WarmVolumes_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "imagefs/v1/source.proto",
+}

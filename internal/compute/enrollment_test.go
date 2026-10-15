@@ -9,6 +9,7 @@ import (
 )
 
 func TestEnrollmentAndSessionEpochs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	c := NewCompute(pool, nil, Config{})

@@ -134,7 +134,9 @@ func (a *Agent) runSession(ctx context.Context) error {
 				errs <- fmt.Errorf("receive command: %w", err)
 				return
 			}
-			a.handle(command)
+			if !a.handle(command) {
+				continue
+			}
 			ack := &hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}}
 			select {
 			case out.ch <- ack:
@@ -194,6 +196,7 @@ func (a *Agent) hello(running []string) (*hostproto.HostMessage, []*container) {
 		RejectedVersion:       readMarker(a.cfg.StateDir, RejectedFile),
 		SleptSeconds:          sleptSince(a.sleep, a.bootID, a.clock.gap()).Seconds(),
 		SleepAttemptId:        a.sleep.ID,
+		PeerAddress:           a.peerAddress,
 		PlatformImages:        a.platform.named,
 		RunningPlatformImages: running,
 	}}}, exited
@@ -232,8 +235,10 @@ func (a *Agent) reportIfRoom(m *hostproto.HostMessage) {
 }
 
 // handle dispatches a command without waiting on containers, so commands
-// are never delayed by container work.
-func (a *Agent) handle(command *hostproto.ServerMessage) {
+// are never delayed by container work. It reports whether to acknowledge
+// the command: one the host failed to take is left for the server to send
+// again.
+func (a *Agent) handle(command *hostproto.ServerMessage) bool {
 	switch body := command.GetBody().(type) {
 	case *hostproto.ServerMessage_Start:
 		a.start(body.Start)
@@ -264,12 +269,25 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		}
 		a.platform.update(body.PlatformImages.GetImages())
 	case *hostproto.ServerMessage_StorageGrant:
+		workspace := body.StorageGrant.GetWorkspaceId()
 		if err := a.volumes.grant(body.StorageGrant); err != nil {
-			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
+			a.log.Error("storing a storage grant failed", "workspace_id", workspace, "error", err)
+			return false
 		}
+		// The snapshotter takes the grant off the receive loop, which
+		// acknowledges it once it holds it.
+		a.goOwned(func(ctx context.Context) {
+			if err := a.volumes.refreshGrant(ctx, workspace); err != nil {
+				a.log.Error("handing a storage grant to the snapshotter failed", "workspace_id", workspace, "error", err)
+				return
+			}
+			a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_Ack{Ack: &hostproto.Ack{CommandId: command.GetCommandId()}}})
+		})
+		return false
 	default:
 		a.log.Warn("ignoring unknown command", "command_id", command.GetCommandId())
 	}
+	return true
 }
 
 // start is idempotent by container id: a known container restates its state.

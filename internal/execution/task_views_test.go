@@ -23,6 +23,7 @@ func pendingReason(t *testing.T, e *Execution, f functionFixture, id TaskID) Pen
 }
 
 func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -31,8 +32,8 @@ func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
 		t.Fatalf("without containers %s, want queued", got)
 	}
 
-	exec(t, pool, `insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-	               values ($1, $2, 'pending', 1, 1000, 1 << 28)`, uuid.UUID(f.workspace), f.release)
+	exec(t, pool, `insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+	               values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 28)`, uuid.UUID(f.workspace), f.release)
 	if got := pendingReason(t, e, f, task.ID); got != PendingCapacityUnavailable {
 		t.Fatalf("with an unplaced container %s, want capacity_unavailable", got)
 	}
@@ -67,6 +68,7 @@ func TestPendingReasonFollowsTheReleaseContainers(t *testing.T) {
 }
 
 func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -158,7 +160,28 @@ func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
 	}
 }
 
+// A version's page holds its own tasks, however many a newer version ran
+// since.
+func TestListTasksOfAVersionBeneathNewerOnes(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	older := submit(t, e, f, 2)
+	exec(t, pool, `
+with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select workload_id, 2, spec, spec_digest, source_sha256 from releases where id = $1 returning id, workload_id)
+insert into tasks (workspace_id, workload_id, release_id, status, max_attempts)
+select $2, rel.workload_id, rel.id, 'queued', 1 from rel, generate_series(1, 3)`, f.release, uuid.UUID(f.workspace))
+	app, fn, one := "reports", "summarize", 1
+	page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{App: &app, Function: &fn, Version: &one}, 2, "")
+	if err != nil || len(page.Tasks) != 2 || page.Tasks[0].ID != older[1].ID || page.Tasks[1].ID != older[0].ID {
+		t.Fatalf("version 1 tasks %+v %v, want both of its tasks", page.Tasks, err)
+	}
+}
+
 func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -187,6 +210,7 @@ func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
 }
 
 func TestRerunSubmitsTheSameInputToTheSameRelease(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -211,6 +235,7 @@ func TestRerunSubmitsTheSameInputToTheSameRelease(t *testing.T) {
 
 // Lineage itself is proven in workload_runtime_test.go.
 func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
@@ -225,6 +250,7 @@ func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
 }
 
 func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -282,6 +308,7 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 }
 
 func TestDeletedWorkloadCancelsRunningAndQueuedTasks(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -315,6 +342,7 @@ func TestDeletedWorkloadCancelsRunningAndQueuedTasks(t *testing.T) {
 }
 
 func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "autoscaler": {"max_containers": 1}, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
@@ -358,6 +386,7 @@ func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
 // A line whose transaction commits after a later line is still delivered:
 // readers hold back lines that an older running transaction may precede.
 func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -370,6 +399,7 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	}
 	source := LogSource{Kind: LogsOfContainer, ID: uuid.UUID(container)}
 	read := func(after int64) []LogEntry {
+		t.Helper()
 		var out []LogEntry
 		err := e.StreamLogs(t.Context(), l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
 			out = append(out, batch...)
@@ -399,9 +429,15 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 	if err := e.AppendLogs(t.Context(), host, container, line(1, "second")); err != nil {
 		t.Fatal(err)
 	}
+	// A read while the older writer runs holds the later line back until
+	// its settle wait ends. Any transaction on the server holds lines back,
+	// other tests' too, so the reads that expect lines wait longer; they
+	// return once their lines settle.
+	e.LogSettle = 100 * time.Millisecond
 	if got := read(0); len(got) != 0 {
 		t.Fatalf("read while an older writer runs returned %+v", got)
 	}
+	e.LogSettle = time.Minute
 	if err := slow.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -420,8 +456,12 @@ func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
 }
 
 func TestLogsByWorkloadAndContainerWithTail(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
+	// Any transaction on the server, other tests' too, holds lines back;
+	// reads return once their lines settle.
+	e.LogSettle = time.Minute
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
 	host, container := placedContainer(t, pool, f, ContainerReady, 2)

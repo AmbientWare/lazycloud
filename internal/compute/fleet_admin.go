@@ -88,14 +88,6 @@ type FleetSummary struct {
 // FleetNodes lists live platform hosts with an instance, by id after the
 // cursor.
 func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([]FleetNode, error) {
-	release, err := c.TargetRelease(ctx)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-	var target *AgentRelease
-	if err == nil {
-		target = &release
-	}
 	rows, err := c.queries.PlatformHosts(ctx, PlatformHostsParams{AfterID: after, MaxRows: int32(limit)}) //nolint:gosec // The API bounds the page.
 	if err != nil {
 		return nil, fmt.Errorf("list platform hosts: %w", err)
@@ -116,9 +108,9 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 		}
 		switch n.State {
 		case FleetServing:
-			n.Ready = onRelease(n.ID, &r.AgentVersion, target)
+			n.Ready = r.AgentCurrent
 		case FleetStopped, FleetHibernateUnverified, FleetImageSaved:
-			n.Ready = onRelease(n.ID, r.PreparedAgentVersion, target)
+			n.Ready = r.PreparedCurrent
 		case FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable, FleetTerminating:
 		}
 		out = append(out, n)
@@ -167,9 +159,7 @@ func (c *Compute) Fleet(ctx context.Context) (FleetSummary, error) {
 	if err != nil {
 		return FleetSummary{}, err
 	}
-	rows, err := c.queries.FleetRollout(ctx, FleetRolloutParams{
-		LiveAfter: summary.ObservedAt.Add(-LivenessTimeout), Version: release.Version,
-	})
+	rows, err := c.queries.FleetRollout(ctx, summary.ObservedAt.Add(-LivenessTimeout))
 	if err != nil {
 		return FleetSummary{}, fmt.Errorf("count the agent rollout: %w", err)
 	}

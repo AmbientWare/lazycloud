@@ -272,34 +272,30 @@ func (s *Server) GetTaskActivity(ctx context.Context, req GetTaskActivityRequest
 
 // memberWorkspaces are the workspaces account metrics cover: the caller's
 // memberships, or only its token's workspace.
-func (s *Server) memberWorkspaces(ctx context.Context) (identity.Principal, []identity.Workspace, error) {
+func (s *Server) memberWorkspaces(ctx context.Context) ([]identity.Workspace, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
-		return identity.Principal{}, nil, err
+		return nil, err
 	}
-	workspaces, err := s.owners.Identity.Workspaces(ctx, p)
-	if err != nil {
-		return identity.Principal{}, nil, err
-	}
-	return p, workspaces, nil
+	return s.owners.Identity.Workspaces(ctx, p)
 }
 
-// GetAccountMetrics returns live containers and concurrency for the caller.
+// GetAccountMetrics returns the caller's live containers.
 func (s *Server) GetAccountMetrics(ctx context.Context, _ GetAccountMetricsRequestObject) (GetAccountMetricsResponseObject, error) {
-	p, workspaces, err := s.memberWorkspaces(ctx)
+	workspaces, err := s.memberWorkspaces(ctx)
 	if err != nil {
 		return nil, err
 	}
-	metrics, err := s.owners.Observability.AccountMetrics(ctx, p.User, workspaces)
+	containers, err := s.owners.Observability.ContainerCounts(ctx, workspaces)
 	if err != nil {
 		return nil, err
 	}
-	return GetAccountMetrics200JSONResponse(metrics), nil
+	return GetAccountMetrics200JSONResponse{Containers: containers}, nil
 }
 
 // GetAccountActivity measures the caller's workspaces per app over time.
 func (s *Server) GetAccountActivity(ctx context.Context, req GetAccountActivityRequestObject) (GetAccountActivityResponseObject, error) {
-	_, workspaces, err := s.memberWorkspaces(ctx)
+	workspaces, err := s.memberWorkspaces(ctx)
 	if err != nil {
 		return nil, err
 	}

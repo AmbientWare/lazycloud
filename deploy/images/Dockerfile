@@ -2,9 +2,10 @@
 
 # Platform images: server, scheduler, web and agent. Build them with
 # `docker buildx bake -f deploy/images/docker-bake.hcl` from the repository
-# root. Every base is pinned by digest; VERSION is stamped into the binaries
-# and SOURCE_DATE_EPOCH fixes file and image timestamps, so one commit builds
-# the same bytes.
+# root. Every base is pinned by digest; VERSION is stamped into the server
+# and scheduler and written beside the host binaries, and SOURCE_DATE_EPOCH
+# fixes file and image timestamps, so one commit builds the same bytes and
+# host binaries stay the same across releases that do not change them.
 
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS go
 WORKDIR /src
@@ -19,9 +20,17 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     for binary in server scheduler agent supervisor snapshotter; do \
+      stamp="-X main.version=${VERSION}"; \
+      case $binary in agent|supervisor|snapshotter) stamp="" ;; esac; \
       GOOS=$TARGETOS GOARCH=$TARGETARCH go build -buildvcs=false \
-        -ldflags "-s -w -X main.version=${VERSION}" -o /out/$binary ./cmd/$binary || exit 1; \
-    done
+        -ldflags "-s -w $stamp" -o /out/$binary ./cmd/$binary || exit 1; \
+    done && printf '%s\n' "${VERSION}" >/out/VERSION
+
+# The preload library workloads open cached volume objects through, built
+# against glibc 2.17 so every image from CentOS 7 on loads it.
+FROM --platform=$BUILDPLATFORM quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5 AS volume-cache
+COPY deploy/agent/volume-cache/volume_cache.c /src/volume_cache.c
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -fvisibility=hidden -o /out-volume-cache.so /src/volume_cache.c -ldl
 
 # GeeseFS mounts volumes on hosts; the script pins its release and digest.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS geesefs
@@ -56,10 +65,12 @@ COPY --from=go /out/supervisor /stage/supervisor
 COPY --from=go /out/snapshotter /stage/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /stage/geesefs
 COPY --from=runtimes /out/runtimes /stage/runtime
+COPY --from=go /out/VERSION /stage/VERSION
+COPY --from=volume-cache /out-volume-cache.so /stage/volume-cache.so
 RUN mkdir -p /out/${VERSION} && \
     tar -C /stage --sort=name --mtime=@${SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner \
       --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
-      -cf - lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
+      -cf - VERSION lazycloud-agent lazycloud-snapshotter supervisor runtime geesefs volume-cache.so | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
 
 # The server serves the agent archive of its own version at /install/agent;
 # the chart's post-sync Job publishes it as the hosts' target release.
@@ -106,7 +117,7 @@ EXPOSE 8080
 FROM gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0 AS agent
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-agent" org.opencontainers.image.version="${VERSION}"
-COPY --from=go /out/agent /out/supervisor /opt/lazycloud/bin/
+COPY --from=go /out/agent /out/supervisor /out/VERSION /opt/lazycloud/bin/
 COPY --from=go /out/snapshotter /opt/lazycloud/bin/lazycloud-snapshotter
 COPY --from=geesefs /src/bin/geesefs /opt/lazycloud/bin/geesefs
 COPY --from=runtimes /out/runtimes /opt/lazycloud/runtimes

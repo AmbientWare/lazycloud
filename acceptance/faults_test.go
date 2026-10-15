@@ -1,3 +1,5 @@
+//go:build hostruntime
+
 package acceptance
 
 import (
@@ -83,13 +85,18 @@ func expectOK(t *testing.T, p *platform, url, why string) {
 	}
 }
 
-// A response that breaks off mid-body releases its container capacity.
-func TestBrokenResponseReleasesItsCapacity(t *testing.T) {
+// Requests that end badly free the container capacity they held: a
+// response that breaks off mid-body, a client that leaves, which cancels
+// the request in the container, and a client that stalls its body after
+// the app answered.
+func TestRequestsThatEndBadlyReleaseTheirCapacity(t *testing.T) {
+	t.Parallel()
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": faultApp})
 	p.deploy("faults", faultSpec(source))
 	base := p.describe("faults", apitypes.WorkloadKindAsgi, "faults").Url
 	expectOK(t, p, base+"/ok", "warm-up")
+
 	for range 3 {
 		resp, err := p.request(http.MethodGet, base+"/broken", p.token, nil)
 		if err == nil {
@@ -101,14 +108,7 @@ func TestBrokenResponseReleasesItsCapacity(t *testing.T) {
 		}
 	}
 	expectOK(t, p, base+"/ok", "after broken responses")
-}
 
-// A client that leaves cancels its request in the container.
-func TestClientThatLeavesCancelsTheRequest(t *testing.T) {
-	p := startPlatform(t)
-	source := p.upload(map[string]string{"app.py": faultApp})
-	p.deploy("faults", faultSpec(source))
-	base := p.describe("faults", apitypes.WorkloadKindAsgi, "faults").Url
 	ctx, cancel := context.WithCancel(t.Context())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/stream", nil)
 	if err != nil {
@@ -125,27 +125,11 @@ func TestClientThatLeavesCancelsTheRequest(t *testing.T) {
 	cancel()
 	_ = resp.Body.Close()
 	// The status request needs the only capacity the stream held.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	waitFor(t, "the stream to end after its client left", func() bool {
 		status, _, body := p.call(http.MethodGet, base+"/status", "")
-		if status == http.StatusOK && body == "disconnected" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("status %d %q; the stream kept running after its client left", status, body)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
+		return status == http.StatusOK && body == "disconnected"
+	})
 
-// A client that stops sending its body after the app answered does not
-// hold the request, or its capacity, open.
-func TestStalledRequestBodyDoesNotHoldCapacity(t *testing.T) {
-	p := startPlatform(t)
-	source := p.upload(map[string]string{"app.py": faultApp})
-	p.deploy("faults", faultSpec(source))
-	base := p.describe("faults", apitypes.WorkloadKindAsgi, "faults").Url
-	expectOK(t, p, base+"/ok", "warm-up")
 	host := strings.TrimPrefix(strings.TrimSuffix(base, "/"), "http://")
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", p.edgeAddr)
 	if err != nil {
@@ -156,15 +140,15 @@ func TestStalledRequestBodyDoesNotHoldCapacity(t *testing.T) {
 	if _, err := fmt.Fprintf(conn, "POST /ok HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n0123456789", host, p.token, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	_ = conn.SetReadDeadline(time.Now().Add(settle))
+	early, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatalf("read the early answer: %v", err)
 	}
-	_, _ = io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("early answer %d", resp.StatusCode)
+	_, _ = io.ReadAll(early.Body)
+	_ = early.Body.Close()
+	if early.StatusCode != http.StatusOK {
+		t.Fatalf("early answer %d", early.StatusCode)
 	}
 	expectOK(t, p, base+"/ok", "while a client stalls its body")
 }

@@ -1,10 +1,9 @@
 name: Ship
 
-# Cuts the next v<version> tag on main, runs every owner check on it,
-# publishes the server, scheduler and web images, the Python base images
-# and the Python package under that version, then records the version for
-# prod through Deploy. The server image carries the agent release of the
-# same version.
+# Cuts the next v<version> tag on main, publishes the server, scheduler and
+# web images, the Python base images and the Python package under that
+# version, then records the version for prod through Deploy. The server
+# image carries the agent release of the same version.
 
 on:
   workflow_dispatch:
@@ -38,7 +37,9 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
     steps:
       # A release tags the commit it runs from, and a tag on a branch commit
-      # is a version users can install that main never contained.
+      # is a version users can install that main never contained. Main
+      # changes only through pull requests whose checks passed up to date
+      # with it (the main ruleset), so its head needs no further checks.
       - name: Refuse anything but main
         if: github.ref != 'refs/heads/main'
         run: |
@@ -94,30 +95,9 @@ jobs:
           git tag -a "v$VERSION" -m "Release $VERSION" "$COMMIT"
           git push origin "v$VERSION"
 
-  go:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/go.yml
-  python:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/python.yml
-  web:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/web.yml
-  checks:
-    needs: version
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy-checks.yml
-
   images:
     name: Publish the images
-    needs: [version, go, python, web, checks]
+    needs: version
     runs-on: ubuntu-26.04
     # The image release role trusts only this workflow, from main, in this
     # environment.
@@ -176,7 +156,7 @@ jobs:
   # reusable workflow as a publisher, so the step lives here.
   python-package:
     name: Publish the Python package
-    needs: [version, go, python, web, checks]
+    needs: version
     runs-on: ubuntu-26.04
     environment: release
     permissions:

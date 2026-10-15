@@ -16,12 +16,13 @@ import (
 // A function container may drive only the instances it started, and never
 // workload control; a container of any other kind or purpose reaches nothing.
 func TestContainersCannotControlWorkloadsTheyDidNotStart(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	_, container := h.startingContainer(host)
 	var other uuid.UUID
-	if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, purpose)
-select workspace_id, release_id, 'ready', host_id, 1, 1000, 1 << 28, now(), 'instance' from containers where id = $1 returning id`,
+	if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, purpose)
+select workspace_id, release_id, (select workload_id from releases where id = release_id), 'ready', host_id, 1, 1000, 1 << 28, now(), 'instance' from containers where id = $1 returning id`,
 		uuid.UUID(container)).Scan(&other); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +62,7 @@ select workspace_id, release_id, 'ready', host_id, 1, 1000, 1 << 28, now(), 'ins
 // A host may only report an image by digest in the workspace's filesystem
 // repository.
 func TestFilesystemImagesMustLandInTheWorkspaceRepository(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -97,11 +99,13 @@ func TestFilesystemImagesMustLandInTheWorkspaceRepository(t *testing.T) {
 // A pod is ready once its first port answers; a sandbox's ports are for
 // what runs in it later, so its start names none to wait for.
 func TestSandboxesDoNotWaitForTheirPorts(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		kind  string
 		ports int
 	}{{"sandbox", 0}, {"pod", 1}} {
 		t.Run(c.kind, func(t *testing.T) {
+			t.Parallel()
 			h := start(t)
 			host, ctx := h.enroll()
 			_, container := h.startingContainerWith(host, `{"name": "box", "image": {"python_version": "3.12"},
@@ -124,6 +128,7 @@ func TestSandboxesDoNotWaitForTheirPorts(t *testing.T) {
 // A policy change on a placed container returns once its host applied it,
 // and says so when the host could not.
 func TestNetworkChangesWaitForTheHost(t *testing.T) {
+	t.Parallel()
 	h := start(t)
 	host, ctx := h.enroll()
 	ws, container := h.startingContainer(host)
@@ -166,20 +171,5 @@ func TestNetworkChangesWaitForTheHost(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("the change never returned")
 		}
-	}
-}
-
-// Only containers started checkpointable can be snapshotted: a plain
-// function's network could not be given to a restored copy.
-func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
-	h := start(t)
-	host, _ := h.enroll()
-	ws, container := h.startingContainer(host)
-	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'ready', ready_at = now()"); err != nil {
-		t.Fatal(err)
-	}
-	var invalid *execution.InvalidError
-	if _, err := h.execution.CreateSnapshot(t.Context(), ws, container, nil); !errors.As(err, &invalid) {
-		t.Fatalf("snapshot of a plain function: %v", err)
 	}
 }

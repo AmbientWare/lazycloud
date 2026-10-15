@@ -16,21 +16,21 @@ import (
 // confirmation committed while a grant's layers were read, is reported
 // rather than lost.
 func TestReplacingAWatchKeepsItsWakeUp(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelImageBuild)
+	var w watch
+	defer w.set(listener)
+	w.set(listener, "") // every key
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(ctx) })
 	t.Cleanup(func() { cancel(); wg.Wait() })
-
-	var w watch
-	defer w.set(listener)
-	w.set(listener, "") // every key
-	// The listener wakes everyone once it starts listening.
-	time.Sleep(200 * time.Millisecond)
+	// The listener wakes everyone once it listens.
 	select {
 	case <-w.wake:
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener did not start")
 	}
 	key := images.ReplicasConfirmed("us-east-2")
 	if _, err := pool.Exec(t.Context(), "select pg_notify($1, $2)", string(database.ChannelImageBuild), key); err != nil {

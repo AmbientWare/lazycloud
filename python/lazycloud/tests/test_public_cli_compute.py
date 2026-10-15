@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from lazycloud._terminal.streams import console
-from lazycloud.cli.main import build_public_cli
+from lazycloud.cli.main import build_public_cli, start
 from typer.testing import CliRunner
 
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
@@ -283,21 +283,16 @@ def test_machine_join_runs_the_command_with_the_agent_flags(
 
 
 def test_machine_join_background_json_and_exit_codes(
-    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
+    fake_api: FakeApi, tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    _serve_join(fake_api, "curl -fsSL https://api.example.com/install/agent | sh -s -- join TOKEN")
-    calls: list[tuple[str, object]] = []
-    outcome: list[int | BaseException] = [0]
-
-    def call(command: str, *, shell: bool, stdout: object) -> int:
-        assert shell is True
-        calls.append((command, stdout))
-        result = outcome[0]
-        if isinstance(result, BaseException):
-            raise result
-        return result
-
-    monkeypatch.setattr("lazycloud.cli.resources.subprocess.call", call)
+    recorded, outcome = tmp_path / "args", tmp_path / "outcome"
+    # The server's command, standing in for the installer: it records its
+    # flags, prints, then exits with the code in `outcome` or dies of SIGINT.
+    _serve_join(
+        fake_api,
+        f'sh -c \'printf "%s\\n" "$@" > {shlex.quote(str(recorded))}; echo installing;'
+        f' c=$(cat {shlex.quote(str(outcome))}); [ "$c" = int ] && kill -INT $$; exit "$c"\' join',
+    )
     args = [
         "machine",
         "join",
@@ -312,33 +307,43 @@ def test_machine_join_background_json_and_exit_codes(
         "0,1",
     ]
 
-    joined = CliRunner().invoke(cli, ["--json", *args])
-    assert joined.exit_code == 0, joined.output
-    assert json.loads(joined.stdout) == {"status": "running"}
-    command, stdout = calls[-1]
-    assert command == (
-        "curl -fsSL https://api.example.com/install/agent | sh -s -- join TOKEN"
-        " --background --service-manager systemd --gpu-ids 0,1"
-    )
+    def join(code: str, *extra: str) -> tuple[object, str, str]:
+        outcome.write_text(code)
+        try:
+            start([*args, *extra])
+            exit_code: object = 0
+        except SystemExit as exited:
+            exit_code = exited.code
+        out, err = capfd.readouterr()
+        return exit_code, out, err
+
+    code, out, err = join("0", "--json")
+    assert code == 0, err
     # Under --json the installer's output goes to stderr so stdout stays one document.
-    assert stdout is not None
+    assert json.loads(out) == {"status": "running"}
+    assert "installing" in err
+    assert recorded.read_text().splitlines() == [
+        "--background",
+        "--service-manager",
+        "systemd",
+        "--gpu-ids",
+        "0,1",
+    ]
+    code, out, _ = join("0")
+    assert code == 0
+    assert "installing" in out and "Machine joined" in out
 
-    CliRunner().invoke(cli, args)
-    assert calls[-1][1] is None
+    for interrupted in ("130", "int"):
+        code, out, _ = join(interrupted)
+        assert code == 0, interrupted
+        assert out == "installing\n"
 
-    for interrupted in (130, -2, KeyboardInterrupt()):
-        outcome[0] = interrupted
-        result = CliRunner().invoke(cli, args)
-        assert result.exit_code == 0, result.output
-        assert result.stdout == ""
+    code, out, _ = join("3")
+    assert code == 3
+    assert "Machine joined" not in out
 
-    outcome[0] = 3
-    failed = CliRunner().invoke(cli, args)
-    assert failed.exit_code == 3
-    assert "Machine joined" not in failed.stdout
-
-    before = len(calls)
-    both = CliRunner().invoke(cli, [*args, "--max-gpus", "1"])
-    assert both.exit_code == 2
-    assert "--gpu-ids and --max-gpus cannot both be set" in both.output
-    assert len(calls) == before
+    recorded.unlink()
+    code, _, err = join("0", "--max-gpus", "1")
+    assert code == 2
+    assert "--gpu-ids and --max-gpus cannot both be set" in err
+    assert not recorded.exists()

@@ -9,6 +9,7 @@ import (
 )
 
 func TestGitHubSignIn(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	octo := gitHubAccount{ID: 101, Login: "Octo_Cat", Name: "Octo Cat", Email: "octo@example.com", Verified: true}
@@ -78,6 +79,7 @@ func TestGitHubSignIn(t *testing.T) {
 }
 
 func TestSignInRefusals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	account := gitHubAccount{ID: 7, Login: "seven", Email: "seven@example.com", Verified: true}
@@ -111,7 +113,7 @@ func TestSignInRefusals(t *testing.T) {
 		t.Fatalf("refused code: %v", err)
 	}
 	session, err := f.id.CompleteSignIn(ctx, start.Cookie, state, "c1")
-	if err != nil || session.ReturnTo != "/w/acme" || time.Until(session.ExpiresAt) < SessionTTL-time.Minute {
+	if err != nil || session.ReturnTo != "/w/acme" || time.Until(session.ExpiresAt) < SessionMaxAge-time.Minute {
 		t.Fatalf("session %+v %v", session, err)
 	}
 	unconfigured := NewIdentity(f.pool, Config{PublicURL: publicURL})
@@ -123,6 +125,7 @@ func TestSignInRefusals(t *testing.T) {
 // Concurrent first sign-ins of one GitHub account create one user and one
 // workspace.
 func TestConcurrentFirstSignIn(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	account := gitHubAccount{ID: 55, Login: "racer", Email: "racer@example.com", Verified: true}
 	const n = 6
@@ -165,6 +168,7 @@ func TestConcurrentFirstSignIn(t *testing.T) {
 }
 
 func TestSignOutEndsOnlyThatSession(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	account := gitHubAccount{ID: 9, Login: "nine", Email: "nine@example.com", Verified: true}
@@ -203,6 +207,7 @@ func TestSignOutEndsOnlyThatSession(t *testing.T) {
 }
 
 func TestDeviceLogin(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	person := f.signIn(gitHubAccount{ID: 1, Login: "dev", Email: "dev@example.com", Verified: true})
@@ -313,6 +318,7 @@ func lower(s string) string {
 }
 
 func TestAccountTokens(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	ctx := t.Context()
 	owner := f.account("owner@example.com", false)
@@ -415,5 +421,44 @@ func TestAccountTokens(t *testing.T) {
 	var accountErr *AccountError
 	if _, _, err := f.id.CreateAccountToken(ctx, restricted, "x", nil); !errors.As(err, &accountErr) {
 		t.Fatalf("restricted create: %v", err)
+	}
+}
+
+// A session expires a week after its last use: a use a day or more after
+// its last renewal renews it, a sooner one leaves it, and no renewal takes
+// it past thirty days after sign-in.
+func TestASessionRollsWithUseUpToItsMaxAge(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := t.Context()
+	token := f.sessionToken(gitHubAccount{ID: 11, Login: "eleven", Email: "eleven@example.com", Verified: true}, "browser")
+	left := func() time.Duration {
+		t.Helper()
+		var seconds float64
+		if err := f.pool.QueryRow(ctx, "select extract(epoch from expires_at - now()) from sessions").Scan(&seconds); err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(seconds * float64(time.Second))
+	}
+	use := func() {
+		t.Helper()
+		if _, err := f.id.AuthenticateSession(ctx, token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if l := left(); l < SessionIdle-time.Minute || l > SessionIdle {
+		t.Fatalf("a new session expires in %s, want %s", l, SessionIdle)
+	}
+	f.exec("update sessions set expires_at = now() + interval '5 days'")
+	if use(); left() < SessionIdle-time.Minute {
+		t.Fatalf("a session used two days after its renewal expires in %s, want %s", left(), SessionIdle)
+	}
+	f.exec("update sessions set expires_at = now() + interval '6 days 12 hours'")
+	if use(); left() > 6*24*time.Hour+12*time.Hour {
+		t.Fatalf("a session renewed half a day ago renewed again: expires in %s", left())
+	}
+	f.exec("update sessions set created_at = now() - interval '29 days 23 hours', expires_at = now() + interval '1 hour'")
+	if use(); left() > time.Hour {
+		t.Fatalf("a session near its max age expires in %s, want at most an hour", left())
 	}
 }

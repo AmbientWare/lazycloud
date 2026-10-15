@@ -20,11 +20,17 @@ type Fleet struct {
 	AccountID string
 	// PrincipalARN is the platform principal connection roles trust.
 	PrincipalARN string
+	// BucketPrefix starts the names of workspace buckets, which a connected
+	// account holds as <prefix>-<account id>-*.
+	BucketPrefix string
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string
 	// Networks are the platform's launchable regions.
 	Networks map[string]Network
+	// StorageRegion holds the platform's registry and object store; hosts in
+	// another region pay transfer on what they move to and from them.
+	StorageRegion string
 	// Images are the node images platform hosts launch from. Nil launches
 	// the stock Amazon Linux images, which carry no gVisor.
 	Images *NodeImages
@@ -47,6 +53,8 @@ type Endpoints struct {
 	STS            string
 	CloudFormation string
 	ServiceQuotas  string
+	// S3 serves connected accounts' buckets, path-style.
+	S3 string
 }
 
 // Network is where instances launch in one region.

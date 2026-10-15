@@ -58,13 +58,19 @@ func (b *Billing) chargeMeasuredUse(ctx context.Context, plans []sourcePlan) err
 	return nil
 }
 
-// applyMeasuredUse reprices p's entries from what each period measured. A
-// period's use is shared among its entries, which a rate change can split,
-// by their length.
+// applyMeasuredUse reprices p's entries from what each period measured
+// over its overlap with the entries' whole span, which the time a
+// preempted attempt voided may leave gaps in: each entry bills the
+// period's mean use over its own length.
 func (b *Billing) applyMeasuredUse(p *sourcePlan, used map[periodKey]MeasuredContainerUseRow) error {
+	if len(p.entries) == 0 {
+		return nil
+	}
+	from, to := p.entries[0].start, p.entries[len(p.entries)-1].end
 	covered := map[time.Time]time.Duration{}
 	for _, e := range p.entries {
-		covered[e.start.UTC().Truncate(MeteringPeriod)] += e.end.Sub(e.start)
+		period := e.start.UTC().Truncate(MeteringPeriod)
+		covered[period] = minTime(period.Add(MeteringPeriod), to).Sub(maxTime(period, from))
 	}
 	for n := range p.entries {
 		e := &p.entries[n]

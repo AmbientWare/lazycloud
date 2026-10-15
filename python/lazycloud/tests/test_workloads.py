@@ -13,18 +13,29 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from lazycloud.abstractions import sandbox as sandbox_module
 from lazycloud.abstractions.sandbox import (
     SandboxConnectionError,
     SandboxFileSystemError,
     SandboxInstance,
 )
 from lazycloud.cli.main import build_public_cli, start
-from lazycloud.clients.api import ApiClient
+from lazycloud.clients.api import ApiClient, ApiError
 from lazycloud.clients.workloads import WorkloadsClient
 from typer.testing import CliRunner, Result
 
 import lazycloud
-from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
+from tests.api_server import (
+    TOKEN,
+    ApiRequest,
+    FakeApi,
+    Reply,
+    error_reply,
+    json_reply,
+    press_ctrl_c,
+)
+
+cli = build_public_cli()
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -79,7 +90,7 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 
 
 def _cli(*args: str) -> Result:
-    return CliRunner().invoke(build_public_cli(), list(args))
+    return CliRunner().invoke(cli, list(args))
 
 
 def _release(spec: dict[str, Any], **extra: object) -> dict[str, object]:
@@ -389,6 +400,7 @@ def test_sandbox_create_prepares_an_empty_workspace_waits_and_exposes_its_ports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     tools = _project(tmp_path, monkeypatch)
+    monkeypatch.setattr(sandbox_module, "SANDBOX_WAIT_POLL_INTERVAL_SECONDS", 0)
     stored: set[str] = set()
     _serve_releases(fake_api, stored)
     fake_api.route("POST", f"{TEAM}/instances")(lambda request: json_reply(_instance(), 201))
@@ -448,6 +460,60 @@ def test_a_sandbox_that_stops_while_starting_is_terminated_and_reported(
     with pytest.raises(SandboxConnectionError):
         tools.scratch.create_from_memory_snapshot(SNAPSHOT)
     assert fake_api.calls("POST", f"{TEAM}/instances")[1].json() == {"snapshot_id": SNAPSHOT}
+
+
+def test_ctrl_c_while_a_sandbox_is_created_terminates_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    tools = _project(tmp_path, monkeypatch)
+    tools.scratch.stub_id = RELEASE
+
+    @fake_api.route("POST", f"{TEAM}/instances")
+    def create(request: ApiRequest) -> Reply:
+        press_ctrl_c()
+        return json_reply(_instance(), 201)
+
+    fake_api.route("POST", f"{BOX}/stop")(lambda request: json_reply(_container(state="stopped")))
+
+    with pytest.raises(KeyboardInterrupt):
+        tools.scratch.create()
+
+    assert len(fake_api.calls("POST", f"{BOX}/stop")) == 1
+    assert not fake_api.calls("POST", f"{BOX}/connect")
+
+
+@pytest.mark.parametrize("ending", ["interrupted", "failed"])
+def test_a_ctrl_c_during_sandbox_cleanup_waits_for_the_termination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi, ending: str
+) -> None:
+    tools = _project(tmp_path, monkeypatch)
+    tools.scratch.stub_id = RELEASE
+
+    @fake_api.route("POST", f"{TEAM}/instances")
+    def create(request: ApiRequest) -> Reply:
+        if ending == "interrupted":
+            press_ctrl_c()
+        return json_reply(_instance(), 201)
+
+    fake_api.route("POST", f"{BOX}/connect")(
+        lambda request: error_reply("conflict", "the container stopped: start_failed", 409)
+    )
+
+    @fake_api.route("POST", f"{BOX}/stop")
+    def stop(request: ApiRequest) -> Reply:
+        # The user presses Ctrl-C again while the termination is in flight.
+        press_ctrl_c()
+        if ending == "interrupted":
+            return error_reply("internal", "termination failed", 500)
+        return json_reply(_container(state="stopped"))
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        tools.scratch.create()
+
+    # The interrupt carries what the termination it waited for ended with.
+    expected = ApiError if ending == "interrupted" else SandboxConnectionError
+    assert isinstance(raised.value.__cause__, expected)
+    assert len(fake_api.calls("POST", f"{BOX}/stop")) == 1
 
 
 def _sandbox(fake_api: FakeApi) -> SandboxInstance:
@@ -880,6 +946,20 @@ def test_ctrl_c_while_devbox_start_waits_stops_it(
 
     monkeypatch.setattr("lazycloud.cli.devbox.time.sleep", interrupt)
     _serve_devbox(fake_api, _devbox("starting", "queued"))
+
+    result = _cli("devbox", "box", "start")
+
+    assert result.exit_code != 0
+    assert len(fake_api.calls("POST", f"{BOX_DEVBOX}/stop")) == 1
+
+
+def test_ctrl_c_while_devbox_start_is_requested_stops_it(fake_api: FakeApi) -> None:
+    _serve_devbox(fake_api, _devbox("starting", "queued"))
+
+    @fake_api.route("POST", f"{BOX_DEVBOX}/start")
+    def start(request: ApiRequest) -> Reply:
+        press_ctrl_c()
+        return json_reply(_devbox("starting", "queued"))
 
     result = _cli("devbox", "box", "start")
 

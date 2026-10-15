@@ -36,6 +36,29 @@ type Config struct {
 	// SessionPool holds the route listener's LISTEN connection
 	// (database.OpenSession); nil uses the edge's pool.
 	SessionPool *pgxpool.Pool
+	// FailureCheckInterval bounds how often waiting requests of one
+	// release ask whether it can start; FailureCheckInterval in production.
+	FailureCheckInterval time.Duration
+	// RequestFlush bounds how long a request record waits to be written
+	// with others; RequestFlush in production.
+	RequestFlush time.Duration
+}
+
+// FailureCheckInterval is Config.FailureCheckInterval in production.
+const FailureCheckInterval = time.Second
+
+// RequestFlush is Config.RequestFlush in production.
+const RequestFlush = time.Second
+
+// Validate refuses settings the edge cannot run with.
+func (c Config) Validate() error {
+	if c.FailureCheckInterval <= 0 {
+		return fmt.Errorf("edge: the failure check interval must be positive, not %s", c.FailureCheckInterval)
+	}
+	if c.RequestFlush <= 0 {
+		return fmt.Errorf("edge: the request flush must be positive, not %s", c.RequestFlush)
+	}
+	return nil
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -51,6 +74,10 @@ type Edge struct {
 	urls      URLs
 	domains   Provider
 	logger    *slog.Logger
+	// failureCheck is Config.FailureCheckInterval.
+	failureCheck time.Duration
+	// requestFlush is Config.RequestFlush.
+	requestFlush time.Duration
 
 	routes atomic.Pointer[routeTable]
 	// reloading serializes route reloads; reloadStarted is when the last
@@ -92,13 +119,16 @@ type versionKey struct {
 // NewEdge returns the edge. listener must listen on database.ChannelTask
 // for function invocations.
 func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Execution, listener *database.Listener, cfg Config, logger *slog.Logger) (*Edge, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	urls, err := ParseURLs(cfg.URL)
 	if err != nil {
 		return nil, err
 	}
 	e := &Edge{
 		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
-		urls: urls, domains: cfg.Domains, logger: logger,
+		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: cfg.FailureCheckInterval, requestFlush: cfg.RequestFlush,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},

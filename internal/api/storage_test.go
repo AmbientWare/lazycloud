@@ -9,18 +9,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // TestSchemaPatternsCompile guards against patterns Go's regexp rejects,
 // such as repeat counts above 1000, which only fail when a request uses them.
 func TestSchemaPatternsCompile(t *testing.T) {
-	spec, err := api.GetSwagger()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, schema := range spec.Components.Schemas {
+	t.Parallel()
+	for name, schema := range document.Components.Schemas {
 		if p := schema.Value.Pattern; p != "" {
 			if _, err := regexp.Compile(p); err != nil {
 				t.Errorf("schema %s: %v", name, err)
@@ -34,6 +30,7 @@ func TestSchemaPatternsCompile(t *testing.T) {
 // travel escaped, absence differs from errors, and typed errors keep their
 // codes.
 func TestStorageRoutes(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ws := "/v1/workspaces/acme"
 	var failure apitypes.Error

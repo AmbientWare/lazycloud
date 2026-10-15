@@ -75,8 +75,8 @@ export function ActivityPanel() {
   /* Six hours cut into quarter-hours, not a day cut into hours. The drawer is
      opened to ask whether the account is healthy now, and accounts on this
      platform work in bursts: a burst that fills two thirds of a six-hour window
-     occupies four hours of a day, so the wider default spent most of the plot
-     proving that nothing had happened. The day and the week are one control
+     occupies four hours of a day, so a day-wide default would spend most of the
+     plot proving that nothing had happened. The day and the week are one control
      away, and the strip above already reads the day. */
   const [range, setRange] = useState<AccountActivityRange>("6h");
   const activity = useQuery(

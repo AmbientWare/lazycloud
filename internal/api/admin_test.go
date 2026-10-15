@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccountAdministrationOverHTTP(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	ctx := t.Context()
 	if _, err := e.identity.CreateUser(ctx, "admin@example.com", true); err != nil {

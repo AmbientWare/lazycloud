@@ -2,8 +2,10 @@ package compute
 
 import (
 	"slices"
+	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 // hibernationMemoryLimit is the RAM EC2 hibernates instances under.
@@ -23,6 +25,9 @@ type CatalogType struct {
 	// Hibernates is EC2's HibernationSupported for the type in every
 	// region it is sold in; RAM is under 150 GiB.
 	Hibernates bool
+	// InstanceStore is true for a type with NVMe instance store, which holds
+	// the host's disk copies in place of an EBS data volume.
+	InstanceStore bool
 	// prices are reviewed on-demand hourly USD micros in priceRegions;
 	// zero means EC2 does not sell the type in that region.
 	prices [4]int64
@@ -69,6 +74,37 @@ func (t CatalogType) RootGiB(hibernate bool) int64 {
 	return rootVolumeGiB
 }
 
+// Data volumes. A host keeps its frame cache and its disks' unpublished
+// writes on a volume of its own (deploy/ami/node-setup.sh mounts it at
+// hostproto.DataRoot): its type's instance store, or a gp3 volume at
+// baseline throughput holding the cache and a dirty budget per disk slot.
+// A type holds a disk per diskSlotCores cores, at least minDiskSlots.
+const (
+	diskSlotCores = 1
+	minDiskSlots  = 2
+)
+
+// DiskSlots is how many disks a host of t holds at once.
+func (t CatalogType) DiskSlots() int {
+	return max(minDiskSlots, t.Topology.Cores/diskSlotCores)
+}
+
+// DataVolumeGiB is the EBS data volume a host of t launches with; none for
+// a type whose instance store serves as it.
+func (t CatalogType) DataVolumeGiB() int64 {
+	if t.InstanceStore {
+		return 0
+	}
+	return (hostproto.FrameCacheBytes + int64(t.DiskSlots())*hostproto.DiskDirtyBytes) / gib
+}
+
+// volumesMicros is an hour of a host of t's EBS volumes: the root at the
+// throughput priced for it, with room for a hibernation image when asked,
+// and the data volume at baseline.
+func (t CatalogType) volumesMicros(region string, hibernate, reserve bool) int64 {
+	return rootDiskMicros(region, t.RootGiB(hibernate)+t.DataVolumeGiB(), t.PricedMiBps(reserve))
+}
+
 // twoPerCore is the topology of vcpus hardware threads, two on each core.
 func twoPerCore(vcpus int) cpu.Topology { return cpu.Topology{Threads: vcpus, Cores: vcpus / 2} }
 
@@ -93,43 +129,56 @@ func FleetArchitectures() []string {
 	return architectures
 }
 
-// regionRates are a region's gp3, public IPv4 and transfer rates in USD
-// micros: a GiB and a MiB/s provisioned over the baseline for a month, an
-// address for an hour, and a GB moved between the region and storageRegion.
+// regionRates are a region's gp3 and public IPv4 rates in USD micros: a
+// GiB and a MiB/s provisioned over the baseline for a month, and an address
+// for an hour.
 type regionRates struct {
-	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour, transferGB int64
+	gp3GiBMonth, gp3MiBpsMonth, ipv4Hour int64
 }
 
 func ratesIn(region string) regionRates {
-	switch region {
-	case storageRegion:
-		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
-	case "us-east-2":
-		return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 10_000}
-	case "us-west-1":
-		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000, transferGB: 20_000}
+	if region == "us-west-1" {
+		return regionRates{gp3GiBMonth: 96_000, gp3MiBpsMonth: 48_000, ipv4Hour: 5_000}
 	}
-	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000, transferGB: 20_000}
+	return regionRates{gp3GiBMonth: 80_000, gp3MiBpsMonth: 40_000, ipv4Hour: 5_000}
 }
 
-// storageRegion holds the registry and the object store. A host in another
-// region pays AWS inter-region transfer on what it moves to and from them:
-// registry pulls and pushes, layer reads, and volume and disk restores.
-const storageRegion = "us-east-1"
+// transferMicrosPerGB is what AWS charges, in USD micros, for a GB moved
+// from one region to another: nothing within a region, $0.01 between
+// us-east-1 and us-east-2 and $0.02 between any other two US regions.
+func transferMicrosPerGB(from, to string) int64 {
+	switch {
+	case from == to:
+		return 0
+	case from+" "+to == "us-east-1 us-east-2" || from+" "+to == "us-east-2 us-east-1":
+		return 10_000
+	}
+	return 20_000
+}
 
 // transferMilliGBPerCoreHour is the policy estimate of what a running host
-// moves to and from storageRegion, in thousandths of a GB per core-hour. A
-// cold start reads about 2 GB of layers for a torch image and 0.1 GB for a
-// python one, a build pushes and converts about what it pulled, and volume
-// and disk restores are rarer than starts. Host caches absorb repeated
-// images, so a host averages about one torch-sized cold read per four
-// core-hours.
+// moves to and from the platform's storage region, in thousandths of a GB
+// per core-hour: registry pulls and pushes, layer reads and disk restores.
+// A cold start reads about 2 GB of layers for a torch image and 0.1 GB for
+// a python one, a build pushes and converts about what it pulled, and disk
+// restores are rarer than starts. Host caches absorb repeated images, so a
+// host averages about one torch-sized cold read per four core-hours.
+// Volume reads are priced per start (readMicros).
 const transferMilliGBPerCoreHour = 500
 
 // transferMicros is the expected hourly transfer cost of a running host of
-// t in region.
-func transferMicros(region string, t CatalogType) int64 {
-	return int64(t.Topology.Cores) * transferMilliGBPerCoreHour * ratesIn(region).transferGB / 1000
+// t in region, with the platform's storage in storageRegion.
+func transferMicros(storageRegion, region string, t CatalogType) int64 {
+	return int64(t.Topology.Cores) * transferMilliGBPerCoreHour * transferMicrosPerGB(storageRegion, region) / 1000
+}
+
+// readMicros is what a start's read costs a host in region, spread over the
+// cost horizon as an hourly cost; nothing without one.
+func readMicros(p Policy, read *VolumeRead, region string) int64 {
+	if read == nil {
+		return 0
+	}
+	return read.Bytes * transferMicrosPerGB(read.Region, region) / 1e9 * int64(time.Hour/time.Second) / int64(p.CostHorizon/time.Second)
 }
 
 // Root throughput in MiB/s. gp3 gives baselineMiBps; a type that can hold
@@ -179,7 +228,11 @@ func FleetCatalog() []CatalogType {
 		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
 	}
 	gpu := func(name string, vcpus int, memGiB int64, model string, cards int, prices [4]int64) CatalogType {
-		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards, prices: prices}
+		// Every GPU type sold here has NVMe instance store.
+		return CatalogType{
+			Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards,
+			InstanceStore: true, prices: prices,
+		}
 	}
 	return []CatalogType{
 		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),

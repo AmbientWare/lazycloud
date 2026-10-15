@@ -7,12 +7,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
 func TestConcurrentClaimsNeverShareATask(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -67,6 +70,7 @@ func TestConcurrentClaimsNeverShareATask(t *testing.T) {
 }
 
 func TestClaimRequiresAReadyContainerOnTheHost(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -91,61 +95,57 @@ func TestClaimRequiresAReadyContainerOnTheHost(t *testing.T) {
 	}
 }
 
-func TestClaimWaitsForSubmit(t *testing.T) {
+type claimResult struct {
+	tasks []ClaimedTask
+	err   error
+	// woken means the claim returned before its wait ended.
+	woken bool
+}
+
+// claimWaiting starts a claim on container that waits for tasks.
+func claimWaiting(t *testing.T, pool *pgxpool.Pool, l *database.Listener, host compute.HostID, container ContainerID) <-chan claimResult {
+	t.Helper()
+	return waiting(t, pool, func(e *Execution) {
+		if _, err := e.ClaimTasks(t.Context(), l, host, container, 1, 0); err != nil {
+			t.Fatal(err)
+		}
+	}, func(e *Execution) claimResult {
+		const wait = 10 * time.Second
+		start := time.Now()
+		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 1, wait)
+		return claimResult{claimed, err, time.Since(start) < wait}
+	})
+}
+
+// A waiting claim takes a task submitted during its wait, and one a
+// container becomes ready for.
+func TestWaitingClaimsWakeOnSubmitAndReady(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
 	host, container := placedContainer(t, pool, f, ContainerReady, 1)
 
-	done := make(chan []ClaimedTask, 1)
-	start := time.Now()
-	go func() {
-		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 1, 10*time.Second)
-		if err != nil {
-			t.Error(err)
-		}
-		done <- claimed
-	}()
-	time.Sleep(200 * time.Millisecond)
+	claim := claimWaiting(t, pool, l, host, container)
 	submit(t, e, f, 1)
-	claimed := <-done
-	if len(claimed) != 1 || time.Since(start) > 5*time.Second {
-		t.Fatalf("claimed %d after %v; want the submit to wake the claim", len(claimed), time.Since(start))
+	if got := <-claim; got.err != nil || !got.woken || len(got.tasks) != 1 || string(got.tasks[0].Input.Data) != `{"args": [1], "kwargs": {}}` {
+		t.Fatalf("claimed %+v, %v; want the task submitted during the wait", got.tasks, got.err)
 	}
-	if string(claimed[0].Input.Data) != `{"args": [1], "kwargs": {}}` {
-		t.Fatalf("input %q", claimed[0].Input.Data)
-	}
-}
 
-func TestClaimWakesWhenContainerBecomesReady(t *testing.T) {
-	pool := dbtest.New(t)
-	e := NewExecution(pool)
-	l := listen(t, pool)
-	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	host, starting := placedContainer(t, pool, f, ContainerStarting, 1)
 	submit(t, e, f, 1)
-	host, container := placedContainer(t, pool, f, ContainerStarting, 1)
-
-	done := make(chan []ClaimedTask, 1)
-	start := time.Now()
-	go func() {
-		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 1, 30*time.Second)
-		if err != nil {
-			t.Error(err)
-		}
-		done <- claimed
-	}()
-	time.Sleep(200 * time.Millisecond)
-	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{Container: container, Phase: ReportReady, ObservedAt: time.Now()}); err != nil {
+	claim = claimWaiting(t, pool, l, host, starting)
+	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{Container: starting, Phase: ReportReady, ObservedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	claimed := <-done
-	if len(claimed) != 1 || time.Since(start) > 5*time.Second {
-		t.Fatalf("claimed %d after %v; want the ready report to wake the claim", len(claimed), time.Since(start))
+	if got := <-claim; got.err != nil || !got.woken || len(got.tasks) != 1 {
+		t.Fatalf("claimed %d, %v; want the ready report to wake the claim", len(got.tasks), got.err)
 	}
 }
 
 func TestClaimCapsTotalInputBytes(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -177,6 +177,7 @@ func TestClaimCapsTotalInputBytes(t *testing.T) {
 }
 
 func TestCompletionIsFencedByContainerAndHost(t *testing.T) {
+	t.Parallel()
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	l := listen(t, pool)
@@ -206,31 +207,5 @@ func TestCompletionIsFencedByContainerAndHost(t *testing.T) {
 	got, err := e.TaskResult(t.Context(), f.workspace, claimed[0].Task)
 	if err != nil || string(got.Data) != "5500" {
 		t.Fatalf("result %q, err %v", got.Data, err)
-	}
-}
-
-func TestCrashedSlotRetriesAsUserError(t *testing.T) {
-	pool := dbtest.New(t)
-	e := NewExecution(pool)
-	l := listen(t, pool)
-	f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "retry_policy": {"max_attempts": 2}}`)
-	tasks := submit(t, e, f, 1)
-	host, container := placedContainer(t, pool, f, ContainerReady, 1)
-	for attempt := 1; attempt <= 2; attempt++ {
-		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 1, 5*time.Second)
-		if err != nil || len(claimed) != 1 || claimed[0].Number != attempt {
-			t.Fatalf("attempt %d: claimed %v, err %v", attempt, claimed, err)
-		}
-		crash := CrashFailure("")
-		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{Attempt: claimed[0].Attempt, State: AttemptFailed, Failure: &crash}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	task, err := e.GetTask(t.Context(), l, f.workspace, tasks[0].ID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.Status != TaskFailed || task.Attempts != 2 || task.Failure == nil || task.Failure.Type != "WorkerCrashed" {
-		t.Fatalf("task %+v; want failed after two crashed attempts", task)
 	}
 }

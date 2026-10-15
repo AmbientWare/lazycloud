@@ -19,6 +19,9 @@ QEMU_SHA256=baed494270c361bf69816acc84512e3efed71c7a23f76691642b80bc3de7693e
 NBD_VERSION=3.26.1
 NBD_SHA256=f0cf509fa5b20b1a07f7904eb637e9b47d3e30b6ed6f00075af5d8b701c78fef
 
+# The image the node image bake mounts FUSE in, as volume mounters do.
+FUSE_CHECK_IMAGE=docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+
 # The NVIDIA driver of GPU node images. gVisor's nvproxy accepts only driver
 # ABIs its release knows (runsc nvproxy list-supported-drivers); the bake
 # refuses an image whose driver it does not.

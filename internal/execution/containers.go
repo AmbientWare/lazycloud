@@ -14,7 +14,8 @@ import (
 )
 
 // startFailureLimit is how many consecutive containers of a release may fail
-// preparation before its queued tasks fail instead of waiting for another.
+// preparation before its queued tasks fail instead of waiting for another;
+// then only a user action, through RetryStarts, starts the release again.
 const startFailureLimit = 3
 
 // ContainerExit describes why a container stopped.
@@ -25,10 +26,14 @@ type ContainerExit struct {
 	LoadError *Failure
 	// ExitCode is how a pod's command exited, for StopExited.
 	ExitCode *int
+	// Preempted retries its running attempts as preempted, outside their
+	// policy, as a lost host's are.
+	Preempted bool
 }
 
 // containerExited stops a container in tx. Its running attempts are lost and
-// retried by policy, or preempted and retried when its host stopped serving.
+// retried by policy, or preempted and retried when its host stopped serving
+// or GPU work evicted it.
 // A load error fails the release's queued tasks with that error, as does the
 // start failure limit. Stopping a stopped container does nothing, so
 // duplicate reports are harmless. Lock order: container, then task, then
@@ -54,7 +59,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		return fmt.Errorf("list running attempts: %w", err)
 	}
 	lost := &Failure{Kind: FailureLost, Message: fmt.Sprintf("container stopped: %s", exit.Reason)}
-	if exit.Reason == StopHostLost {
+	if exit.Reason == StopHostLost || exit.Preempted {
 		lost = &Failure{Kind: FailurePreempted, Message: "lost to preemption"}
 	}
 	if exit.Message != "" {
@@ -95,6 +100,19 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 			return fmt.Errorf("record load error: %w", err)
 		}
 	case StopStartFailed:
+		// A container that never got a host found no capacity in the queue
+		// timeout, and the release's starts are not to blame. Its work fails
+		// unless another container of the release holds a host and takes it.
+		if ContainerState(row.State) == ContainerPending {
+			placed, err := q.ReleaseHasPlacedContainer(ctx, ReleaseHasPlacedContainerParams{ReleaseID: release, ID: uuid.UUID(container)})
+			if err != nil {
+				return fmt.Errorf("read the release's placed containers: %w", err)
+			}
+			if !placed {
+				failQueued = &Failure{Kind: FailureStartFailed, Message: exit.Message}
+			}
+			break
+		}
 		failures, err := q.CountStartFailure(ctx, release)
 		if err != nil {
 			return fmt.Errorf("count start failure: %w", err)

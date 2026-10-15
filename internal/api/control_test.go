@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 // validation and typed errors. Owner behavior is proven in the control and
 // execution packages; this covers what only the HTTP surface adds.
 func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	e.deploy()
 	var apiErr apitypes.Error
@@ -133,8 +135,11 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 }
 
 // A refused deploy answers with the code of the refusal its account most
-// needs to act on; a GPU model the fleet does not offer stays unsupported.
+// needs to act on and every refusal in the body; a GPU model the fleet does
+// not offer stays unsupported. The deployment plan reports the same
+// refusals without deploying.
 func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t)
 	unoffered := e.deploy().Releases[0].Spec
 	unoffered.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
@@ -144,6 +149,41 @@ func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
 	if status != http.StatusBadRequest || apiErr.Code != apitypes.Unsupported || apiErr.Refusals == nil ||
 		len(*apiErr.Refusals) != 1 || (*apiErr.Refusals)[0].Gate != apitypes.GpuUnavailable {
 		t.Fatalf("an unoffered GPU model: %d %+v", status, apiErr)
+	}
+
+	// On the Free plan, a GPU model the plan leaves out needs a payment,
+	// and a secret the workspace lacks is the definition's fault.
+	if _, err := e.pool.Exec(t.Context(), `update billing_accounts set complimentary_since = null
+		where user_id = (select id from users where email = 'owner@example.com')`); err != nil {
+		t.Fatal(err)
+	}
+	refused := unoffered
+	refused.Resources.Gpu = &[]apitypes.GpuType{apitypes.L40S}
+	refused.Secrets = &[]apitypes.SecretName{"MISSING_TOKEN"}
+	gates := func(refusals *[]apitypes.DeploymentRefusal) map[apitypes.DeploymentGate]bool {
+		out := map[apitypes.DeploymentGate]bool{}
+		if refusals != nil {
+			for _, r := range *refusals {
+				if r.Name != refused.Name || r.Message == "" || r.Remedy == "" {
+					t.Errorf("refusal %+v", r)
+				}
+				out[r.Gate] = true
+			}
+		}
+		return out
+	}
+	want := map[apitypes.DeploymentGate]bool{apitypes.GpuModel: true, apitypes.MissingSecrets: true}
+	apiErr = apitypes.Error{}
+	status = e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
+		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{refused}}, &apiErr)
+	if got := gates(apiErr.Refusals); status != http.StatusPaymentRequired || apiErr.Code != apitypes.PaymentRequired || !maps.Equal(got, want) {
+		t.Fatalf("a deploy the plan and the workspace refuse: %d %s %v, want 402 with %v", status, apiErr.Code, got, want)
+	}
+	var plan apitypes.DeploymentPlan
+	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployment-plan", e.owner, apitypes.DeploymentPlanRequest{
+		Workloads: []apitypes.DeploymentPlanWorkload{{Kind: refused.Kind, Name: refused.Name, Resources: &refused.Resources, Secrets: refused.Secrets}},
+	}, &plan); status != http.StatusOK || len(plan.Items) != 1 || !maps.Equal(gates(plan.Items[0].Refusals), want) {
+		t.Fatalf("the plan of that deploy: %d %+v, want its refusals %v", status, plan, want)
 	}
 }
 

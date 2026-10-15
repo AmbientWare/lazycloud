@@ -27,6 +27,7 @@ import (
 // Records logged with a context carry its correlation fields and the
 // active trace, whichever binary logs them.
 func TestLogsCarryCorrelationFieldsAndTrace(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	logger := telemetry.NewLogger(&out, telemetry.LogJSON, "agent")
 	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{9}, SpanID: trace.SpanID{8}, TraceFlags: trace.FlagsSampled})
@@ -70,6 +71,7 @@ func (r *receiver) Export(_ context.Context, req *collector.ExportTraceServiceRe
 // the caller's trace. Reads and the task long poll take the edge's ratio,
 // none here. /metrics reports every request.
 func TestRequestsExportSpansAndMetrics(t *testing.T) {
+	t.Parallel()
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -162,6 +164,7 @@ func TestRequestsExportSpansAndMetrics(t *testing.T) {
 // request past the edge's ratio start no trace, while a pass's step for a
 // traced container records in that container's trace.
 func TestStoredTraceparentsJoinTheirTrace(t *testing.T) {
+	t.Parallel()
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

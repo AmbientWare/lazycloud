@@ -1,10 +1,12 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -160,7 +162,7 @@ func (e *Execution) finishedTasks(ctx context.Context, workspace identity.Worksp
 	}
 	finished := make([]FinishedTask, len(rows))
 	for n, row := range rows {
-		task, err := taskFrom(TaskViewRow{
+		task, err := taskFrom(TaskViewsRow{
 			ID: row.ID, AppName: row.AppName, FunctionName: row.FunctionName, ReleaseID: row.ReleaseID,
 			Version: row.Version, Status: row.Status, AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 			Preemptions: row.Preemptions, ParentTaskID: row.ParentTaskID, RootTaskID: row.RootTaskID, AvailableAt: row.AvailableAt,
@@ -183,25 +185,36 @@ func (e *Execution) finishedTasks(ctx context.Context, workspace identity.Worksp
 }
 
 func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID, id TaskID) (Task, error) {
-	row, err := e.queries.TaskView(ctx, TaskViewParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
-	if errors.Is(err, pgx.ErrNoRows) {
+	tasks, err := e.taskViews(ctx, workspace, []uuid.UUID{uuid.UUID(id)})
+	if err != nil {
+		return Task{}, err
+	}
+	if len(tasks) == 0 {
 		return Task{}, ErrNotFound
-	}
-	if err != nil {
-		return Task{}, fmt.Errorf("read task: %w", err)
-	}
-	task, err := taskFrom(row)
-	if err != nil {
-		return Task{}, err
-	}
-	tasks := []Task{task}
-	if err := e.addPending(ctx, tasks); err != nil {
-		return Task{}, err
 	}
 	return tasks[0], nil
 }
 
-func taskFrom(row TaskViewRow) (Task, error) {
+// taskViews reads the workspace's tasks of ids, newest first, queued ones
+// with their pending progress.
+func (e *Execution) taskViews(ctx context.Context, workspace identity.WorkspaceID, ids []uuid.UUID) ([]Task, error) {
+	rows, err := e.queries.TaskViews(ctx, TaskViewsParams{Ids: ids, WorkspaceID: uuid.UUID(workspace)})
+	if err != nil {
+		return nil, fmt.Errorf("read tasks: %w", err)
+	}
+	tasks := make([]Task, len(rows))
+	for n, row := range rows {
+		if tasks[n], err = taskFrom(row); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.addPending(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func taskFrom(row TaskViewsRow) (Task, error) {
 	task := Task{
 		ID: TaskID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Version: versionOf(row.Version), Status: TaskStatus(row.Status),
@@ -266,65 +279,134 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 	if filter.Version != nil && filter.Function == nil {
 		return TaskPage{}, fmt.Errorf("%w: version needs function", ErrInvalidFilter)
 	}
-	var status *string
-	if filter.Status != nil {
-		s := string(*filter.Status)
-		status = &s
-	}
-	var search *string
-	if filter.Search != nil && *filter.Search != "" {
-		// LIKE wildcards in the search are literal characters.
-		lowered := strings.ToLower(*filter.Search)
-		search = &lowered
-	}
 	size := pageSize(limit)
-	var rows []TaskViewRow
-	if filter.App != nil {
-		app, err := e.queries.LiveAppID(ctx, LiveAppIDParams{WorkspaceID: uuid.UUID(workspace), Name: *filter.App})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return TaskPage{Tasks: []Task{}}, nil
-		}
-		if err != nil {
-			return TaskPage{}, fmt.Errorf("find app: %w", err)
-		}
-		r, err := e.queries.ListAppTasks(ctx, ListAppTasksParams{
-			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
-			RootOnly: filter.RootOnly, Search: search, Version: int32Of(filter.Version), Before: before, MaxRows: size + 1,
-		})
-		if err != nil {
-			return TaskPage{}, fmt.Errorf("list app tasks: %w", err)
-		}
-		for _, row := range r {
-			rows = append(rows, TaskViewRow(row))
-		}
-	} else {
-		r, err := e.queries.ListTasks(ctx, ListTasksParams{
-			WorkspaceID: uuid.UUID(workspace), Status: status, RootOnly: filter.RootOnly, Search: search,
-			Before: before, MaxRows: size + 1,
-		})
-		if err != nil {
-			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
-		}
-		for _, row := range r {
-			rows = append(rows, TaskViewRow(row))
-		}
+	ids, err := e.taskIDs(ctx, workspace, filter, before, size+1)
+	if err != nil {
+		return TaskPage{}, fmt.Errorf("list tasks: %w", err)
 	}
-	var page TaskPage
-	if len(rows) > int(size) {
-		rows = rows[:size]
-		page.Next = rows[len(rows)-1].ID.String()
+	page := TaskPage{Tasks: []Task{}}
+	if len(ids) > int(size) {
+		ids = ids[:size]
+		page.Next = ids[len(ids)-1].String()
 	}
-	page.Tasks = make([]Task, len(rows))
-	for n, row := range rows {
-		var err error
-		if page.Tasks[n], err = taskFrom(row); err != nil {
-			return TaskPage{}, err
-		}
+	if len(ids) == 0 {
+		return page, nil
 	}
-	if err := e.addPending(ctx, page.Tasks); err != nil {
+	if page.Tasks, err = e.taskViews(ctx, workspace, ids); err != nil {
 		return TaskPage{}, err
 	}
 	return page, nil
+}
+
+// taskIDs reads the ids of a page of the filter's tasks below before,
+// newest first, from one index range per workspace, workload or release,
+// and per status and spawned flag when the filter names a status or roots
+// only.
+func (e *Execution) taskIDs(ctx context.Context, workspace identity.WorkspaceID, filter TaskFilter, before uuid.UUID, rows int32) ([]uuid.UUID, error) {
+	byStatus := filter.Status != nil || filter.RootOnly
+	var statuses []string
+	for _, status := range taskStatuses() {
+		if filter.Status == nil || status == *filter.Status {
+			statuses = append(statuses, string(status))
+		}
+	}
+	spawned := []bool{false, true}
+	if filter.RootOnly {
+		spawned = []bool{false}
+	}
+	search := ""
+	if filter.Search != nil {
+		search = strings.ToLower(*filter.Search)
+	}
+	if filter.App == nil && search == "" {
+		if byStatus {
+			return e.queries.WorkspaceTaskIDsByStatus(ctx, WorkspaceTaskIDsByStatusParams{
+				Statuses: statuses, Spawned: spawned, WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: rows,
+			})
+		}
+		return e.queries.WorkspaceTaskIDs(ctx, WorkspaceTaskIDsParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: rows})
+	}
+	workloads, err := e.queries.ListingWorkloads(ctx, ListingWorkloadsParams{
+		Version: int32Of(filter.Version), WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find workloads: %w", err)
+	}
+	// A search reads all of a workload whose name contains it, and the ids
+	// whose text starts with it of the others.
+	var named, others, releases []uuid.UUID
+	for _, w := range workloads {
+		key := w.ID
+		if filter.Version != nil {
+			if w.ReleaseID == nil {
+				continue
+			}
+			key = *w.ReleaseID
+			releases = append(releases, key)
+		}
+		if strings.Contains(strings.ToLower(w.Name), search) {
+			named = append(named, key)
+		} else {
+			others = append(others, w.ID)
+		}
+	}
+	var ids []uuid.UUID
+	switch {
+	case len(named) == 0:
+	case filter.Version != nil:
+		ids, err = e.queries.ReleaseTaskIDs(ctx, ReleaseTaskIDsParams{
+			ReleaseIds: named, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
+		})
+	case byStatus:
+		ids, err = e.queries.WorkloadTaskIDsByStatus(ctx, WorkloadTaskIDsByStatusParams{
+			WorkloadIds: named, Statuses: statuses, Spawned: spawned, Before: before, MaxRows: rows,
+		})
+	default:
+		ids, err = e.queries.WorkloadTaskIDs(ctx, WorkloadTaskIDsParams{WorkloadIds: named, Before: before, MaxRows: rows})
+	}
+	if err != nil {
+		return nil, err
+	}
+	low, high, ok := idPrefixRange(search)
+	if len(others) == 0 || !ok {
+		return ids, nil
+	}
+	prefixed, err := e.queries.WorkloadTaskIDsInRange(ctx, WorkloadTaskIDsInRangeParams{
+		WorkloadIds: others, IDLow: low, IDHigh: high, Before: before,
+		Statuses: statuses, Spawned: spawned, ReleaseIds: releases, MaxRows: rows,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newest(append(ids, prefixed...), int(rows)), nil
+}
+
+// newest is the at most n distinct ids of ids, newest first.
+func newest(ids []uuid.UUID, n int) []uuid.UUID {
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(b[:], a[:]) })
+	ids = slices.Compact(ids)
+	return ids[:min(len(ids), n)]
+}
+
+// idPrefixRange is the range of task ids whose text form starts with
+// prefix, and false when no id's can.
+func idPrefixRange(prefix string) (uuid.UUID, uuid.UUID, bool) {
+	const zeros = "00000000-0000-0000-0000-000000000000"
+	if len(prefix) > len(zeros) {
+		return uuid.UUID{}, uuid.UUID{}, false
+	}
+	for i, c := range prefix {
+		if (zeros[i] == '-') != (c == '-') || c != '-' && !strings.ContainsRune("0123456789abcdef", c) {
+			return uuid.UUID{}, uuid.UUID{}, false
+		}
+	}
+	rest := zeros[len(prefix):]
+	low, errLow := uuid.Parse(prefix + rest)
+	high, errHigh := uuid.Parse(prefix + strings.ReplaceAll(rest, "0", "f"))
+	if errLow != nil || errHigh != nil {
+		return uuid.UUID{}, uuid.UUID{}, false
+	}
+	return low, high, true
 }
 
 // maxPage bounds every page of a listing.

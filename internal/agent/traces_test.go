@@ -22,6 +22,7 @@ import (
 // attempt's span, so the server's handling of it joins the attempt's
 // trace; one naming another task runs under none.
 func TestContainerAPICallsRunUnderTheirAttempt(t *testing.T) {
+	t.Parallel()
 	_, span := sdktrace.NewTracerProvider().Tracer("").Start(context.Background(), "attempt")
 	defer span.End()
 	c := &container{traces: map[string]attemptTrace{"attempt-1": {task: "task-1", span: span}}}
@@ -39,6 +40,7 @@ func TestContainerAPICallsRunUnderTheirAttempt(t *testing.T) {
 // An OTLP export to the host's trace socket reaches the session as the
 // batch the exporter sent.
 func TestHostSpansReachTheSession(t *testing.T) {
+	t.Parallel()
 	socket := filepath.Join(shortDir(t), "t.sock")
 	ctx, cancel := context.WithCancel(t.Context())
 	out := &sessionOut{ch: make(chan *hostproto.HostMessage, 8), cancel: func() {}}

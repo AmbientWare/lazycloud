@@ -2,7 +2,7 @@
 
 Guidance lives in AGENTS.md files, which Claude Code also loads; add no
 CLAUDE.md beside them. These files contain development standards and
-constraints. Keep task plans and progress with the task, not in the tree.
+constraints.
 
 ## Architecture
 
@@ -62,8 +62,15 @@ constraints. Keep task plans and progress with the task, not in the tree.
 - PostgreSQL owns durable state and NOTIFY wake-ups; object stores and
   filesystems own bytes. No duplicate authorities. A cache or projection
   names its durable source and how it rebuilds.
-- Use one production implementation. No fake success, weaker test backends,
-  compatibility shims or fallback implementations. Delete superseded paths.
+- Use one production implementation everywhere, local deploy included. No
+  fake success, weaker test backends, compatibility shims or fallback
+  implementations. A change that replaces a path deletes the old one: no
+  adapters, dead helpers or mixed-version code.
+- Fix a defect where the wrong decision is made, then look for the same
+  pattern elsewhere. Correct, simplify or delete the rule that makes it rather
+  than stacking defaults, guards, special cases or retries on top; guard only
+  causes outside our code. A fix leaves code and tests no larger than the
+  corrected behavior needs, with one test proving that behavior.
 - SDK and runner remain independent of backend implementations. Cross-language
   contracts are language-neutral; Python code serialization stays explicit.
 
@@ -95,7 +102,8 @@ constraints. Keep task plans and progress with the task, not in the tree.
   Use Pydantic at Python wire boundaries.
 - Use apply_patch for manual edits. Read consumers before changing contracts,
   statuses, defaults or ownership. Load unslop before writing prose. Comments
-  explain current constraints. Describe LazyCloud directly.
+  state current constraints, never why something changed or what a fix was
+  for; that belongs in the commit. Describe LazyCloud directly.
 
 ## Data and contracts
 
@@ -121,7 +129,9 @@ constraints. Keep task plans and progress with the task, not in the tree.
 
 - Define the user-visible outcome and cheapest authoritative evidence first.
   Verify material invariants at owner/public boundaries. Use real services,
-  containers and providers when those boundaries change.
+  containers and providers when those boundaries change, under prod's
+  conditions where they differ from the test stack: TLS stores with a private
+  CA, runsc, and agents updating across releases.
 - Retain tests only for unique proof of authorization, integrity, durability,
   concurrency, cleanup or public behavior. Do not test implementation shape,
   mock call order, wiring, snapshots or behavior already proven elsewhere.
@@ -130,12 +140,36 @@ constraints. Keep task plans and progress with the task, not in the tree.
   happened: that a call is gone, which queries run by name, or that an
   internal type keeps its shape. Guard costs by how they scale with
   replicas, history or backlog, not by exact counts.
+- Test an owner through its entry points: state and inputs in, decisions and
+  state out. A rewrite of the owner keeps its tests and passes them as the
+  spec of what it must still do.
+- A regression test for an incident fails on the code before the fix. Prove it
+  by reverting the fix and watching the test fail.
+- Fakes of outside systems reproduce recorded behaviour: the errors, delays
+  and orderings that CloudTrail, provider responses or prod traces show, with
+  the record named beside the fake. Never fill a fake with assumed behaviour.
+- Decide designs and tuning from prod traces and measurements. A model of our
+  own code repeats our assumptions and proves nothing about prod.
+- Tests wait on the event or state they expect, never a fixed sleep. Timed
+  behaviour runs with short intervals through the owner's settings, not a
+  test-only clock.
+- No test compares elapsed wall time: it measures the machine, not the code,
+  and fails under load. Prove ordering with locks or events, prove costs by
+  how they scale, and bound a wait only by a deadline far above any real
+  duration.
+- Tests that share no state run in parallel. Tests that need root, a VM,
+  Docker images or a cloud account stay out of the default `go test ./...`.
 - Owner tests live beside code; `acceptance/` covers cross-owner workflows
   against real PostgreSQL, Docker and the managed runtime.
 - Run focused checks with visible output. Use gofmt, go vet, golangci-lint and
   targeted `go test -race`; use pytest -x for Python. Owner tests need
   `docker compose -f compose.test.yaml up -d --wait`. Broad gates support
   releases or changes that span those owners.
+- Owner and acceptance tests that need the managed runtime run locally
+  through `deploy/local/test-vm.sh` before pushing; CI confirms.
+- Implement a whole change before testing it, then run its checks together
+  once. Do not rerun suites after each small edit; rerun only what a fix
+  touched.
 - Measure admission/placement separately from capacity wait and user execution.
   Record affected latency, queries, bytes, round trips and contention with idle,
   active and growing-backlog workloads.
@@ -161,10 +195,14 @@ constraints. Keep task plans and progress with the task, not in the tree.
   accounts to bypass a failure or copy credentials into workloads. CI uses
   OIDC.
 - Use a task branch and one PR per coherent change. Review and pass relevant
-  checks before merge or deployment.
+  checks before merge or deployment. Follow-up fixes and delegated work
+  merge into that branch locally and push to its PR; open no PR per small
+  change.
 - When delegating, agree contracts first, then assign disjoint owners and files;
   one integrator owns shared definitions and root build files. Verify returned
   work and integrated evidence.
-- Plan work that spans owners, PRs or parallel agents with PLANNING.md.
-- Finish the requested scope, then stop. No commit attribution trailers.
+- Plan work that spans owners, PRs or parallel agents in a PLANNING.md. Keep
+  plans and progress with the task, outside the tree.
+- Finish the requested scope, then stop. No commit attribution trailers, and
+  no "Generated with" lines or tool credits in commits, PRs or issues.
   Report outcomes, blockers and unverified boundaries briefly.

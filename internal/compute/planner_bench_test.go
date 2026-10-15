@@ -22,7 +22,7 @@ func BenchmarkPlan(b *testing.B) {
 		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
 	networks := map[string]Network{"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1a", "usw1-az1")}
-	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: networks}})
+	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: networks, StorageRegion: "us-east-1"}})
 	for region, n := range networks {
 		for _, typ := range FleetCatalog() {
 			if price, sold := typ.OnDemandMicros(region); sold {
@@ -38,8 +38,8 @@ with ws as (insert into workspaces (name) select 'ws-' || n from generate_series
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
              select wl.id, 1, '{"resources": {"cpu_millis": 1000, "memory_mib": 2048}}', sha256('spec'), sha256('src')
              from wl returning id, workload_id)
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select app.workspace_id, rel.id, 'pending', 1, 1000, 2::bigint << 30
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
+select app.workspace_id, rel.id, rel.workload_id, 'pending', 1, 1000, 2::bigint << 30
 from rel join wl on wl.id = rel.workload_id join app on app.id = wl.app_id, generate_series(1, 100)`)
 	exec(b, pool, "analyze")
 

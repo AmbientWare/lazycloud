@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -26,16 +28,22 @@ import (
 // considers.
 const placementBatch = 500
 
+// diskWarm is how long after a disk's release its last host's frame cache
+// is taken to still hold the disk.
+const diskWarm = time.Hour
+
 // Scheduling is the placement owner.
 type Scheduling struct {
-	pool    *pgxpool.Pool
-	queries *Queries
-	logger  *slog.Logger
+	pool      *pgxpool.Pool
+	queries   *Queries
+	execution *execution.Execution
+	logger    *slog.Logger
 }
 
-// NewScheduling returns the placement owner over pool.
-func NewScheduling(pool *pgxpool.Pool, logger *slog.Logger) *Scheduling {
-	return &Scheduling{pool: pool, queries: New(pool), logger: logger}
+// NewScheduling returns the placement owner over pool. Execution evicts
+// the CPU work whose room placed GPU work takes.
+func NewScheduling(pool *pgxpool.Pool, exec *execution.Execution, logger *slog.Logger) *Scheduling {
+	return &Scheduling{pool: pool, queries: New(pool), execution: exec, logger: logger}
 }
 
 // PlacementResult summarizes one placement pass.
@@ -49,8 +57,9 @@ type PlacementResult struct {
 // Place assigns pending containers to online hosts until nothing more fits.
 // Each batch runs in one transaction under the placement lock: it reads host
 // capacity net of every live container, best-fit packs the batch in
-// round-robin order and assigns with a conditional update. Containers that fit
-// nowhere stay pending until capacity frees up.
+// round-robin order, assigns with a conditional update and evicts the CPU
+// work whose room assigned GPU work takes. Containers that fit nowhere stay
+// pending until capacity frees up.
 func (s *Scheduling) Place(ctx context.Context) (PlacementResult, error) {
 	var result PlacementResult
 	for {
@@ -107,12 +116,17 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 		}
 		pending, err := q.PendingContainers(ctx, PendingContainersParams{
 			MaxFreeCpuMillis: maxCPU, MaxFreeMemoryBytes: maxMemory, Targets: targets(hosts), BatchSize: placementBatch,
+			DiskWarmSeconds: diskWarm.Seconds(),
 		})
 		if err != nil {
 			return fmt.Errorf("list pending containers: %w", err)
 		}
 		out.considered = len(pending)
-		ids, hostIDs := pack(hosts, pending)
+		packed, err := packedOn(ctx, q, hosts, pending)
+		if err != nil {
+			return err
+		}
+		ids, hostIDs, victims := pack(hosts, pending, packed)
 		if len(ids) == 0 {
 			return nil
 		}
@@ -121,10 +135,15 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 			return fmt.Errorf("assign containers: %w", err)
 		}
 		var notify []string
+		var evict []uuid.UUID
 		for _, a := range assigned {
 			if a.HostID != nil {
 				notify = append(notify, a.HostID.String())
 			}
+			evict = append(evict, victims[a.ID]...)
+		}
+		if err := s.execution.EvictContainers(ctx, tx, evict); err != nil {
+			return err
 		}
 		out.assigned = assigned
 		return database.NotifyAll(ctx, tx, database.ChannelHost, notify)
@@ -169,32 +188,97 @@ func requirement(c PendingContainersRow) compute.Requirement {
 	return compute.Requirement{
 		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
 		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
-		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes,
+		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes, Disks: int(c.Disks), Prefer: (*compute.HostID)(c.DiskHost),
+		Read: compute.VolumeReadOf(c.ReadRegion, c.ReadBytes), Packs: c.Packs,
 	}
 }
 
-// pack assigns containers, those that cannot run on Spot first so they
-// take on-demand room before Spot-tolerant work borrows it, each to the
-// host compute.ChooseHost picks, keeping the platform's on-demand warm
-// floor free for them. It returns parallel container and host id slices.
-func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
+// packedOn reads, by host, the CPU containers GPU work may evict on the
+// hosts that hold any, when the batch has GPU work.
+func packedOn(ctx context.Context, q *Queries, hosts []compute.HostCapacity, pending []PendingContainersRow) (map[compute.HostID][]PackedContainersRow, error) {
+	var ids []uuid.UUID
+	if slices.ContainsFunc(pending, func(c PendingContainersRow) bool { return requirement(c).GPUsNeeded() > 0 }) {
+		for _, h := range hosts {
+			if !h.Packed.Empty() {
+				ids = append(ids, uuid.UUID(h.Host))
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := q.PackedContainers(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list packed containers: %w", err)
+	}
+	out := map[compute.HostID][]PackedContainersRow{}
+	for _, r := range rows {
+		out[compute.HostID(r.HostID)] = append(out[compute.HostID(r.HostID)], r)
+	}
+	return out, nil
+}
+
+// pack assigns containers: first those whose bought host serves with room
+// for them, each to that host, so other work never takes the room bought
+// for them; then those that cannot run on Spot, so they take on-demand room
+// before Spot-tolerant work borrows it; each otherwise to
+// the host compute.ChooseHost picks, keeping the platform's on-demand warm
+// floor free for them and preferring the host whose cache still holds a
+// container's disk, then one in the region its volumes are read from. GPU
+// work that lacks room on its host evicts the host's packed CPU containers
+// in their order until it fits. It returns parallel container and host id
+// slices, and the containers each assignment evicts.
+func pack(hosts []compute.HostCapacity, pending []PendingContainersRow, packed map[compute.HostID][]PackedContainersRow) (ids, hostIDs []uuid.UUID, victims map[uuid.UUID][]uuid.UUID) {
+	victims = map[uuid.UUID][]uuid.UUID{}
 	free := slices.Clone(hosts)
-	order := slices.Clone(pending)
-	slices.SortStableFunc(order, func(a, b PendingContainersRow) int {
+	bought := func(c PendingContainersRow) int {
+		if c.Bought == nil {
+			return -1
+		}
+		return slices.IndexFunc(free, func(h compute.HostCapacity) bool { return h.Host == compute.HostID(*c.Bought) })
+	}
+	var rest []PendingContainersRow
+	order := make([]PendingContainersRow, 0, len(pending))
+	for _, c := range pending {
+		if i := bought(c); i >= 0 && free[i].Fits(requirement(c)) {
+			order = append(order, c)
+			continue
+		}
+		rest = append(rest, c)
+	}
+	slices.SortStableFunc(rest, func(a, b PendingContainersRow) int {
 		return cmp.Compare(boolRank(a.Preemptible), boolRank(b.Preemptible))
 	})
+	order = append(order, rest...)
 	floor := compute.DefaultPolicy().OnDemand.Warm.Floor
 	for _, c := range order {
 		need := requirement(c)
-		best := compute.ChooseHost(free, need, floor)
+		best := bought(c)
+		if best < 0 || !free[best].Fits(need) {
+			best = compute.ChooseHost(free, need, floor)
+		}
 		if best < 0 {
 			continue
 		}
-		free[best].Reserve(need)
+		h, rest := free[best], packed[free[best].Host]
+		var evicts []uuid.UUID
+		for ; h.Evicts(need) && len(rest) > 0; rest = rest[1:] {
+			h.Evict(compute.FleetCapacity{CPUMillis: rest[0].CpuMillis, MemoryBytes: rest[0].MemoryBytes})
+			evicts = append(evicts, rest[0].ID)
+		}
+		if h.Evicts(need) {
+			continue
+		}
+		h.Reserve(need)
+		free[best] = h
+		if len(evicts) > 0 {
+			packed[h.Host] = rest
+			victims[c.ID] = evicts
+		}
 		ids = append(ids, c.ID)
-		hostIDs = append(hostIDs, uuid.UUID(free[best].Host))
+		hostIDs = append(hostIDs, uuid.UUID(h.Host))
 	}
-	return ids, hostIDs
+	return ids, hostIDs, victims
 }
 
 // traceAssignment records the container's wait for placement, from its
