@@ -288,7 +288,7 @@ func (s *serverSession) until(t *testing.T, timeout time.Duration, match func(*h
 			if match(m) {
 				return m
 			}
-			if r := m.GetContainer(); r.GetPhase() == exited {
+			if r := m.GetContainer(); r.GetPhase() == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
 				s.exits[r.GetContainerId()] = r.GetExit()
 			}
 		case <-deadline:
