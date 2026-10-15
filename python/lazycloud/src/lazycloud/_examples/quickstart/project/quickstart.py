@@ -1,6 +1,5 @@
-from pydantic import BaseModel
-
 from lazycloud import App, Image
+from pydantic import BaseModel
 
 app = App("quickstart")
 image = Image(python_version="3.12")

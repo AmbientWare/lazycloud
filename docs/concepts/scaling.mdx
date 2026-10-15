@@ -138,7 +138,7 @@ One call per container keeps a crash or an out-of-memory kill to one input.
 MODEL = {}
 
 
-def load_model() -> None:
+def load_model(context: object) -> None:
     MODEL["embedder"] = ...  # load weights once per worker process
 
 

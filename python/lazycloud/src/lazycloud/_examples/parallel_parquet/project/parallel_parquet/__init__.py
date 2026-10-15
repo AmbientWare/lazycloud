@@ -1,1 +1,0 @@
-"""Parallel Parquet processing example."""

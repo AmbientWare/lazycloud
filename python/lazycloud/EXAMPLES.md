@@ -5,49 +5,48 @@ Users get complete projects through the public CLI:
 ```bash
 uv tool install lazycloud-client
 lazycloud example list
-lazycloud example download yolo-training
-cd yolo-training
+lazycloud example download image-studio
+cd image-studio
 uv sync
 uv run lazycloud login --token <token>
-uv run lazycloud run app:train_yolo
+uv run lazycloud deploy image_studio.app:app
 ```
 
-No repository access is required. Each project's README covers setup, expected
-results, and cleanup. The [public guides](https://docs.lazycloud.dev/examples)
-show the full workflows.
+Downloads need no repository access. Each README covers setup, results and
+cleanup, and the [public guides](https://docs.lazycloud.dev/examples) walk
+through the code.
 
 ## Maintain the catalog
 
-Canonical sources live under
-[the SDK's example assets](src/lazycloud/_examples).
-Each directory contains `example.json` and a `project/` directory.
-The CLI reads these directories through Python package resources; it has no
-per-example registry.
+Sources live in [the SDK's example assets](src/lazycloud/_examples), one
+directory per example with `example.json` and `project/`. The CLI reads them as
+package resources, so adding a directory adds an example.
 
 To add an example, create one directory with metadata:
 
 ```json
 {
   "name": "my-example",
-  "description": "Describe the result users get.",
-  "python_version": "3.12",
-  "dependencies": []
+  "description": "Describe the result users get."
 }
 ```
 
-Put all source, assets, and a README under `project/`. Declare only local
-dependencies in the metadata. Remote dependencies belong in the workload's
-image. Use relative imports within a multi-file app package so it can run from
-any downloaded directory.
+Put all source, assets, a README, `pyproject.toml` and `.python-version`
+under `project/`. List `"lazycloud-client"` once, unpinned, in the `dev`
+dependency group; the CLI pins it to the installed SDK version on download,
+and `Image.from_uv` leaves the group out of remote images. Put each
+workload's remote dependencies in its own dependency group and build its
+image with `Image.from_uv(".", groups=[...])`. Do not add credentials,
+environments or lockfiles to the asset directory. Users generate and commit
+their own `uv.lock` after downloading.
 
-The CLI generates `pyproject.toml`, `.python-version`, and `.gitignore`.
-It pins `lazycloud-client` to the installed SDK version. Do not add generated
-files, credentials, environments, or lockfiles to the asset directory.
-Users generate and commit their own `uv.lock` after downloading.
+Guides quote project files in code blocks titled with the file's path, such
+as ```` ```python image_studio/app.py ````. `tests/examples/test_example_docs.py`
+fails when a quoted block differs from the shipped file.
 
-Update an example in place. Remove its catalog directory to remove it from
-future SDK releases. No CLI code change is needed. Update the corresponding
-guide in the same change; existing user downloads are independent copies.
+Deleting a directory drops the example from the next SDK release. Change the
+guide in the same commit as its project. Downloads already made are the
+user's own copies.
 
 ## Check a change
 
@@ -57,12 +56,8 @@ From the repository root, download the real project into a temporary directory:
 uv run --group workspace lazycloud example download my-example --output /tmp/my-example
 ```
 
-Verify its imports and documented commands from that directory with the current
-client wheels installed. Build both an sdist and wheel for the client and verify
-the catalog from the wheel built from that sdist; source-checkout success alone
-does not prove that users receive the assets.
+Run its imports and guide commands from that directory. A source checkout can
+hide missing assets, so check the catalog from a wheel built from the sdist.
 
-Example behavior tests live under
-[the SDK owner tests](tests/examples).
-Run the tests for the example you changed, plus relevant SDK checks. Clean up
-temporary downloads and any resources a live run creates.
+Example tests live in [tests/examples](tests/examples). A live run leaves
+resources behind; each guide's cleanup section removes them.

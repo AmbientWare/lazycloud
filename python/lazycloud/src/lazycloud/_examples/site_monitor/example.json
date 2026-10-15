@@ -1,0 +1,4 @@
+{
+  "name": "site-monitor",
+  "description": "Check web pages in a real browser on a schedule, have an LLM judge each change and alert Slack."
+}

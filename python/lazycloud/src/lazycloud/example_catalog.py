@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from importlib.metadata import version
 from importlib.resources import files
@@ -16,8 +15,6 @@ class ExampleManifest(BaseModel):
 
     name: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
     description: str
-    python_version: str = Field(default="3.12", pattern=r"^3\.\d+$")
-    dependencies: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -43,9 +40,8 @@ def example_catalog() -> dict[str, ExampleProject]:
         if manifest.name in catalog:
             raise ValueError(f"duplicate example name: {manifest.name}")
         content = _project_files(f"_examples/{directory.name}/project")
-        content["pyproject.toml"] = _project_toml(manifest, sdk_version).encode("utf-8")
-        content[".python-version"] = f"{manifest.python_version}\n".encode()
-        content[".gitignore"] = b".venv/\n__pycache__/\n*.pyc\n.env\n"
+        content["pyproject.toml"] = _pin_sdk(manifest.name, content["pyproject.toml"], sdk_version)
+        content.setdefault(".gitignore", b".venv/\n__pycache__/\n*.pyc\n.env\n")
         catalog[manifest.name] = ExampleProject(manifest, content)
     return catalog
 
@@ -86,14 +82,10 @@ def _project_files(resource_path: str, prefix: str = "") -> dict[str, bytes]:
     return result
 
 
-def _project_toml(manifest: ExampleManifest, sdk_version: str) -> str:
-    dependencies = [f"lazycloud-client=={sdk_version}", *manifest.dependencies]
-    return (
-        "[project]\n"
-        f'name = "lazycloud-example-{manifest.name}"\n'
-        'version = "0.1.0"\n'
-        f"description = {json.dumps(manifest.description)}\n"
-        f'requires-python = ">={manifest.python_version}"\n'
-        f"dependencies = {json.dumps(dependencies)}\n\n"
-        "[tool.uv]\npackage = false\n"
-    )
+def _pin_sdk(name: str, pyproject: bytes, sdk_version: str) -> bytes:
+    # Each project lists the unpinned SDK once, in its dev group, so downloads
+    # match the installed CLI and images built with Image.from_uv omit it.
+    requirement = b'"lazycloud-client"'
+    if pyproject.count(requirement) != 1:
+        raise ValueError(f"example {name} must list {requirement.decode()} exactly once")
+    return pyproject.replace(requirement, f'"lazycloud-client=={sdk_version}"'.encode())

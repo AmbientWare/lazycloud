@@ -1,0 +1,4 @@
+{
+  "name": "image-studio",
+  "description": "A Next.js and FastAPI studio that generates images on a GPU, streams progress, and keeps a gallery."
+}

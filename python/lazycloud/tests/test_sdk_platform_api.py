@@ -341,7 +341,11 @@ from lazycloud._shared.tasks import RetryPolicy, TaskStatus
 app = lazycloud.App("reports")
 
 
-@app.function(retry_policy=RetryPolicy(max_attempts=3, retry_on_statuses=(TaskStatus.Timeout,)))
+@app.function(
+    retry_policy=RetryPolicy(
+        max_attempts=3, delay_seconds=20, retry_on_statuses=(TaskStatus.Timeout,)
+    )
+)
 def flaky() -> None:
     pass
 
@@ -363,7 +367,9 @@ def test_deploy_maps_retry_on_statuses_to_the_failures_retried(
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     flaky, never = request.json()["workloads"]
     assert flaky["retry_policy"]["retry_on"] == ["timeout"]
-    assert flaky["retry_policy"]["max_attempts"] > 1
+    # The policy is used as written, not overridden by the default retry count.
+    assert flaky["retry_policy"]["max_attempts"] == 3
+    assert flaky["retry_policy"]["delay_seconds"] == 20
     # A status no attempt ends with retries nothing.
     assert never["retry_policy"]["max_attempts"] == 1
     assert "retry_on" not in never["retry_policy"]

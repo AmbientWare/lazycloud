@@ -21,9 +21,8 @@ from html import escape
 from pathlib import Path
 from typing import Required, TypedDict
 
-from lazycloud.json_contracts import JsonValue
-
 from lazycloud import App, Artifact, Image
+from lazycloud.json_contracts import JsonValue
 
 APP_NAME_ENV = "LAZYCLOUD_ALL_WORKLOADS_APP_NAME"
 APP_NAME = os.getenv(APP_NAME_ENV, "all_workloads")

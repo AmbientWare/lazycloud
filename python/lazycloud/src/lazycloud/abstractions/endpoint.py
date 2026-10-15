@@ -116,9 +116,9 @@ class EndpointOptions(TypedDict, total=False):
     gpu: GpuInput
     gpu_count: int
     timeout_seconds: int | None
-    retries: int
+    retries: int | None
     retry_policy: RetryPolicyInput
-    retry_delay_seconds: float
+    retry_delay_seconds: float | None
     workers: int
     concurrency: int
     keep_warm: int
@@ -187,9 +187,9 @@ class Endpoint(Generic[P, R]):
     gpu: GpuInput = None
     gpu_count: int = 0
     timeout_seconds: int | None = 180
-    retries: int = 0
+    retries: int | None = None
     retry_policy: RetryPolicyInput = None
-    retry_delay_seconds: float = 0.0
+    retry_delay_seconds: float | None = None
     workers: int = 1
     concurrency: int = 1
     keep_warm: int | None = 180
@@ -478,9 +478,9 @@ def _endpoint(
     gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
-    retries: int = 0,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     workers: int = 1,
     concurrency: int = 1,
     keep_warm: int = 180,
@@ -521,9 +521,9 @@ def _endpoint(
     gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
-    retries: int = 0,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     workers: int = 1,
     concurrency: int = 1,
     keep_warm: int = 180,
@@ -563,9 +563,9 @@ def _endpoint(
     gpu: GpuInput = None,
     gpu_count: int = 0,
     timeout_seconds: int | None = 180,
-    retries: int = 0,
+    retries: int | None = None,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float = 0.0,
+    retry_delay_seconds: float | None = None,
     workers: int = 1,
     concurrency: int = 1,
     keep_warm: int = 180,

@@ -39,7 +39,7 @@ where = ["src"]
 namespaces = false
 
 [tool.setuptools.package-data]
-lazycloud = ["py.typed", "_examples/**/*"]
+lazycloud = ["py.typed", "_examples/**/*", "_examples/**/.*"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["**/__pycache__/*", "**/*.pyc"]

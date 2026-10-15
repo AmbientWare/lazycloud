@@ -92,6 +92,10 @@ service = app.asgi(
 uv run lazycloud deploy web_app:service
 ```
 
+The container imports the app by its module-level name, so assign it to a
+variable such as `api` before wrapping it. An app built inline in the
+`app.asgi(...)(...)` call fails at import.
+
 `request()` sends a full request to a route:
 
 ```python

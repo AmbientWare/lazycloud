@@ -1,51 +1,47 @@
 ---
 title: "Examples"
-description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
+description: "Five systems built on LazyCloud: an image generation app, LLM fine-tuning, a video pipeline, coding agents and a scheduled monitor."
 ---
 
-Each workflow is a standalone uv project to download. The source and assets
-ship with the SDK, so you do not need repository access.
-
-Each app defines its images, compute, and storage mounts in Python. Running or
-deploying the app applies those definitions, so mounted volumes need no
-separate CLI step to create them. Examples that need credentials include a
-Python setup step for them.
+Five working systems, each built from several workload types. A guide opens
+with the parts of its system and why each one runs where it does, then walks
+through the real files. What you read is what you download.
 
 <CardGroup cols={2}>
   <Card
-    title="OpenAI-compatible LLM service"
-    icon="messages"
-    href="/examples/openai-compatible-llm"
+    title="Image studio"
+    icon="image"
+    href="/examples/image-studio"
   >
-    Serve a language model behind an authenticated OpenAI-compatible API on a GPU.
+    A Next.js and FastAPI app that generates images on a GPU, streams progress over a WebSocket and keeps a gallery.
   </Card>
   <Card
-    title="Train a YOLO object detector"
-    icon="camera"
-    href="/examples/train-yolo-object-detector"
+    title="Fine-tune an LLM with LoRA"
+    icon="brain"
+    href="/examples/lora-fine-tune"
   >
-    Train on a GPU, keep the checkpoint in a volume, and predict from a second function.
+    Train an adapter on a GPU, score it in parallel against the base model, and serve it with vLLM.
   </Card>
   <Card
-    title="Document processing with FastAPI"
-    icon="file-magnifying-glass"
-    href="/examples/document-processing-asgi"
+    title="Video to highlight clips"
+    icon="film"
+    href="/examples/video-highlights"
   >
-    Upload a PDF or image in your browser and download the extracted text.
+    Transcribe talks from your S3 bucket, let an LLM pick the highlights and cut the clips in parallel.
   </Card>
   <Card
-    title="Sandboxed coding agent"
+    title="Coding agents"
     icon="terminal"
-    href="/examples/sandboxed-coding-agent"
+    href="/examples/coding-agents"
   >
-    Keep model credentials in a function while generated code runs in a network-blocked sandbox.
+    Work with an agent on a devbox, turn GitHub issues into pull requests in sandboxes, and score the agent nightly.
   </Card>
   <Card
-    title="Parallel Parquet processing on S3"
-    icon="table"
-    href="/examples/parallel-parquet-s3"
+    title="Website change monitor"
+    icon="bell"
+    href="/examples/site-monitor"
   >
-    Fan partition work out through a function and write the summary back to your bucket.
+    A scheduled job that checks pages in a real browser, has an LLM judge each change and alerts Slack.
   </Card>
 </CardGroup>
 
@@ -56,26 +52,25 @@ Install the CLI with uv, then choose a project:
 ```bash
 uv tool install lazycloud-client
 lazycloud example list
-lazycloud example download yolo-training
-cd yolo-training
+lazycloud example download image-studio
+cd image-studio
 uv sync
 ```
 
-Each download includes a README and dependencies pinned to the installed SDK.
-Run the guide's commands from the downloaded directory, and use `uv run` for
-Python scripts and CLI workflows. Commit the generated `uv.lock` and use
-`uv sync --locked` in CI. GPU libraries install in remote images, so you do not
-need a local GPU.
+The download pins the SDK to the CLI you installed. Run each guide's commands
+from the project directory. Commit the `uv.lock` that `uv sync` writes, since
+remote images install from it. GPU libraries install only in those images, so
+your machine needs no GPU.
 
 ```bash
 uv run lazycloud login
 ```
 
-If you use several workspaces, select one with `uv run lazycloud workspace use <name>`.
-Before running a GPU example, check your credit balance and GPU access in
-Settings, then Billing. The storage examples keep their files after a run so
-you can reuse the outputs. Follow each guide's cleanup steps when you finish.
+With several workspaces, `uv run lazycloud workspace use <name>` picks one.
+GPU examples need credit and GPU access, both under Settings, then Billing.
+Volumes and artifacts outlast a run, and each guide ends with the commands that
+remove them.
 
-The catalog also includes `quickstart`, `artifacts`, and `all-workloads`.
-Their READMEs cover run commands and cleanup. Use
-`lazycloud example download all` to write every project into its own directory.
+The catalog also has `quickstart`, `artifacts` and `all-workloads`, each with
+its own README. `lazycloud example download all` writes every project to its
+own directory.

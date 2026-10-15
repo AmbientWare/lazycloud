@@ -1,0 +1,8 @@
+# Lint each example as the standalone project users download, where the SDK
+# is a third-party dependency and the example's package is first-party.
+extend = "../../../../../pyproject.toml"
+src = ["*/project"]
+cache-dir = "../../../../../.ruff_cache"
+
+[lint.isort]
+known-third-party = ["lazycloud"]

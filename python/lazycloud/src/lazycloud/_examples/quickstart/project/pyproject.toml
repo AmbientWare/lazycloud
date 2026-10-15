@@ -1,0 +1,12 @@
+[project]
+name = "quickstart"
+version = "0.1.0"
+description = "Run a Python function on remote compute."
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.12,<3"]
+
+[dependency-groups]
+dev = ["lazycloud-client"]
+
+[tool.uv]
+package = false
