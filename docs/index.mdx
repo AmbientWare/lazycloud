@@ -29,7 +29,7 @@ def summarize(amounts: list[float]) -> Summary:
 
 ## Develop locally, test in the cloud, deploy
 
-The same file runs at every stage, without code changes:
+The same file runs at every stage:
 
 ```bash
 uv run pytest                                           # tests call summarize.local(...)
@@ -37,16 +37,15 @@ uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # run once in the cloud
 uv run lazycloud deploy reports                         # keep it running in the cloud
 ```
 
-Each step is one command with no browser or prompt. Add `--json` and the result
-arrives on stdout as one JSON document, logs go to stderr, and a failure exits
-nonzero. An agent can run the whole loop and read the outcome the same way you
-do.
+No step opens a browser or prompts. With `--json` the result is one JSON
+document on stdout, logs go to stderr, and a failure exits nonzero, so an agent
+can run the loop and read the outcome.
 
 ## What you can ship
 
 - [APIs](/concepts/endpoints): a function as an HTTPS endpoint, or a full
   FastAPI app.
-- [Jobs](/concepts/functions): tests, evals, data processing, and GPU work,
+- [Jobs](/concepts/functions): tests, evals, data processing, and GPU work
   fanned out across containers.
 - [Background work and crons](/concepts/schedules): tasks with retries,
   cancellation, and live logs.
@@ -56,9 +55,9 @@ do.
 
 ## Next steps
 
-- [Quickstart](/getting-started/quickstart): develop, test, and deploy your
+- [Quickstart](/getting-started/quickstart): develop, test, and deploy a
   first workload.
-- [Apps and workloads](/concepts/apps): the workload kinds, and how an app
+- [Apps and workloads](/concepts/apps): the workload kinds and how an app
   groups them.
 - [Examples](/examples/index): GPU inference, training, document processing,
   and a sandboxed coding agent.
