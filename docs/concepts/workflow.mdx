@@ -40,7 +40,7 @@ uv run lazycloud run page_stats:analyze_page https://example.com
 if it changed, uploads your working tree, and runs the call in a container on
 your workspace's [compute](/platform/compute), streaming logs and the result
 back. Nothing is deployed, and the container stops after its
-[`keep_warm`](/concepts/scaling#warm-containers) window. Each run uploads the
+[`keep_warm`](/concepts/cold-starts#keep-containers-warm) window. Each run uploads the
 tree as it is at that moment.
 
 ## Live preview

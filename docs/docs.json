@@ -85,6 +85,12 @@
               "concepts/tasks-and-logs",
               "platform/dashboard"
             ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "concepts/cold-starts"
+            ]
           }
         ]
       },

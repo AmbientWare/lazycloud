@@ -65,11 +65,11 @@ Other aliases are `@daily`, `@midnight`, `@weekly`, `@monthly`,
 ## Schedule options
 
 Scheduled runs use the function's timeout and
-[retry](/concepts/functions#retries-and-timeouts) settings. A run that
+[retry](/concepts/timeouts-and-retries) settings. A run that
 overlaps the previous one queues behind it unless the function has
 `concurrency` or an [autoscaler](/concepts/scaling) that lets them run side by
 side. Scheduled functions default to `keep_warm=0`, so the container stops as
-soon as a run finishes. See [Warm containers](/concepts/scaling#warm-containers).
+soon as a run finishes. See [Warm containers](/concepts/cold-starts#keep-containers-warm).
 
 ## Change or stop the schedule
 
