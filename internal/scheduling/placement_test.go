@@ -217,6 +217,27 @@ func TestPackChoosesTheTightestFit(t *testing.T) {
 	}
 }
 
+// Work the fleet bought a host for takes that host once it serves, before
+// other work takes its room; it takes another host once its own is full.
+func TestWorkTakesTheHostBoughtForIt(t *testing.T) {
+	t.Parallel()
+	bought := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
+	other := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
+	id := uuid.UUID(bought.Host)
+	waiting := PendingContainersRow{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib, Bought: &id}
+	first := PendingContainersRow{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib}
+	ids, hosts, _ := pack([]compute.HostCapacity{other, bought}, []PendingContainersRow{first, waiting}, nil)
+	if len(ids) != 2 || ids[0] != waiting.ID || hosts[0] != id || hosts[1] != uuid.UUID(other.Host) {
+		t.Fatalf("placed %v on %v; want the container its host was bought for on it first, the other elsewhere", ids, hosts)
+	}
+	full := bought
+	full.FreeCPUMillis = 1000
+	ids, hosts, _ = pack([]compute.HostCapacity{other, full}, []PendingContainersRow{waiting}, nil)
+	if len(ids) != 1 || hosts[0] != uuid.UUID(other.Host) {
+		t.Fatalf("placed %v on %v; want the other host once the bought one is full", ids, hosts)
+	}
+}
+
 // Spot-tolerant work takes a Spot host before a tighter on-demand one and
 // borrows on-demand room only while an on-demand host still keeps the
 // warm floor free; work that cannot run on Spot is placed first, so

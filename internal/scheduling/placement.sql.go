@@ -128,15 +128,15 @@ func (q *Queries) PackedContainers(ctx context.Context, hostIds []uuid.UUID) ([]
 
 const pendingContainers = `-- name: PendingContainers :many
 select q.id, q.workspace_id, q.release_id, q.cpu_millis, q.memory_bytes, q.connection_id,
-       q.machine, q.region, q.zone, q.preemptible, q.gpus, q.gpu_count, q.disks, q.disk_host,
+       q.machine, q.region, q.zone, q.preemptible, q.gpus, q.gpu_count, q.disks, q.disk_host, q.bought,
        sb.region as read_region, coalesce(vb.bytes, 0)::bigint as read_bytes, q.packs
 from (
     select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
-           p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host,
+           p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count, p.disks, p.disk_host, p.bought,
            p.volumes, p.turn, p.created_at, p.packs
     from (
         select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
-               cw.connection_id,
+               cw.connection_id, c.capacity_host_id as bought,
                jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))::int as disks,
                -- The host that last held one of the container's disks, while its
                -- frame cache likely holds the disk: the disk is still saving
@@ -201,6 +201,7 @@ type PendingContainersRow struct {
 	GpuCount     int32
 	Disks        int32
 	DiskHost     *uuid.UUID
+	Bought       *uuid.UUID
 	ReadRegion   *string
 	ReadBytes    int64
 	Packs        bool
@@ -214,8 +215,9 @@ type PendingContainersRow struct {
 // containers_pending partial index. Each container of the batch reads
 // its workspace bucket's region and the measured bytes of the platform
 // volumes its release mounts, which its start reads from there, and
-// whether it may pack into a fleet GPU host (release_packs). GPU work may
-// take room it evicts, so only CPU work must fit the largest free host.
+// whether it may pack into a fleet GPU host (release_packs), and the host
+// the fleet bought for it (bought). GPU work may take room it evicts, so
+// only CPU work must fit the largest free host.
 func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersParams) ([]PendingContainersRow, error) {
 	rows, err := q.db.Query(ctx, pendingContainers,
 		arg.DiskWarmSeconds,
@@ -246,6 +248,7 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.GpuCount,
 			&i.Disks,
 			&i.DiskHost,
+			&i.Bought,
 			&i.ReadRegion,
 			&i.ReadBytes,
 			&i.Packs,
