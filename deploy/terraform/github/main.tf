@@ -112,6 +112,9 @@ resource "github_actions_environment_secret" "prod_deploy_key" {
 # passed on a branch up to date with main, so main's head has passed every
 # check and neither main nor Ship runs them again. Each owner workflow ends
 # in a job that reports even when the pull request changes nothing it checks.
+# An administrator (repository role 5) may merge a pull request past the
+# checks, confirming the bypass on GitHub; main still changes only through
+# pull requests.
 resource "github_repository_ruleset" "main" {
   name        = "main"
   repository  = local.repository
@@ -123,6 +126,12 @@ resource "github_repository_ruleset" "main" {
       include = ["~DEFAULT_BRANCH"]
       exclude = []
     }
+  }
+
+  bypass_actors {
+    actor_id    = 5
+    actor_type  = "RepositoryRole"
+    bypass_mode = "pull_request"
   }
 
   rules {
