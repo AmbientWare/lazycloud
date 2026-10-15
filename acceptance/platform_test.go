@@ -528,7 +528,7 @@ func (p *platform) runAgent() {
 			Server: p.hosts, StateDir: stateDir, SocketDir: p.socketDir, JoinToken: p.join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: ociRuntime(),
 			GeeseFSPath: p.geesefs, TrustBundle: tlsStore.CA, ServerPlaintext: true, BuildNetwork: "host",
-			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel,
+			Labels: map[string]string{testLabel: p.t.Name()}, Version: "test", Logger: p.logger, Telemetry: tel, CommitAfter: agent.DefaultCommitAfter,
 		})
 		if err != nil && p.ctx.Err() == nil {
 			p.t.Errorf("agent: %v", err)

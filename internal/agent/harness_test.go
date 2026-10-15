@@ -196,6 +196,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		Labels:          map[string]string{"lazycloud.agent": e.id},
 		Version:         "test",
 		MetricsInterval: e.metricsInterval,
+		CommitAfter:     time.Second,
 		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	for _, fn := range configure {

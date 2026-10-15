@@ -49,9 +49,6 @@ const (
 	maxReleaseBytes   = 2 << 30
 	maxReleaseEntries = 50_000
 	smokeTimeout      = 30 * time.Second
-	// commitAfter is how long a session must stay open before the release
-	// on trial counts as working.
-	commitAfter = 10 * time.Second
 	// trialTimeout ends an agent on trial that opened no session, so the
 	// wrapper counts another start.
 	trialTimeout = 5 * time.Minute
@@ -346,10 +343,13 @@ func (a *Agent) watchTrial(ctx context.Context) {
 	}
 }
 
+// DefaultCommitAfter is Config.CommitAfter in production.
+const DefaultCommitAfter = 10 * time.Second
+
 // commitAfterSession commits the release on trial once a session has
-// stayed open for commitAfter.
+// stayed open for Config.CommitAfter.
 func (a *Agent) commitAfterSession(ctx context.Context) {
-	if !sleep(ctx, commitAfter) {
+	if !sleep(ctx, a.cfg.CommitAfter) {
 		return
 	}
 	a.mu.Lock()
