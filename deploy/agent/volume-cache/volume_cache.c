@@ -29,7 +29,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <sched.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -81,9 +80,6 @@ __asm__(".symver dlsym,dlsym@GLIBC_2.17");
 
 static struct real real;
 static bool real_resolved;
-// config_state is 0 before load_config runs, 1 while a thread runs it and
-// 2 once it is loaded.
-static int config_state;
 static struct config config;
 
 // Set while dlsym runs. dlsym may allocate, and an allocator's first call
@@ -130,9 +126,9 @@ static void debug_line(const char *decision, const char *path, const char *reaso
 	(void)written;
 }
 
-static void load_config_once(void);
-
-static void load_config(void)
+// load_config reads the settings as the library loads, before the program
+// has a second thread to race it.
+__attribute__((constructor)) static void load_config(void)
 {
 	config.debug = getenv("LAZYCLOUD_VOLUME_CACHE_DEBUG") != NULL;
 	const char *cache = getenv("LAZYCLOUD_VOLUME_CACHE");
@@ -172,22 +168,6 @@ static void load_config(void)
 	}
 }
 
-// load_config_once runs load_config in the first thread that calls it and
-// has the others wait for it; a benign race here would tear the strings.
-static void load_config_once(void)
-{
-	int state = 0;
-	if (__atomic_load_n(&config_state, __ATOMIC_ACQUIRE) == 2)
-		return;
-	if (__atomic_compare_exchange_n(&config_state, &state, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-		load_config();
-		__atomic_store_n(&config_state, 2, __ATOMIC_RELEASE);
-		return;
-	}
-	while (__atomic_load_n(&config_state, __ATOMIC_ACQUIRE) != 2)
-		sched_yield();
-}
-
 static bool under_volume(const char *path)
 {
 	if (path[0] != '/')
@@ -215,7 +195,6 @@ static const char *cache_copy(int dirfd, const char *path, int flags, char *cach
 {
 	if (dirfd != AT_FDCWD || path == NULL)
 		return NULL;
-	load_config_once();
 	if (config.volume_count == 0 || (flags & O_ACCMODE) != O_RDONLY || (flags & REFUSED_FLAGS) != 0 || !under_volume(path))
 		return NULL;
 	size_t path_len = strlen(path);
