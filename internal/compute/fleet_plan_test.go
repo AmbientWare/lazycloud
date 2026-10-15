@@ -1348,7 +1348,7 @@ func TestSpotGPUWorkAtALossBuysSpotFirst(t *testing.T) {
 }
 
 // A deploy that marks the host holding the warm floor due an agent update
-// buys nothing: the host holds its warm slots while it updates, and only
+// buys nothing: the host holds the floor while it updates, and only
 // pending work, which placement gives it no room for, buys past it.
 func TestADeployBuysNothingForAHostUpdatingItsAgent(t *testing.T) {
 	h := planHost(1, planSmall, FleetServing)

@@ -906,7 +906,7 @@ func callTypes(calls []awsCall) []string {
 }
 
 // A purchase whose container stopped before EC2 launched it is removed at
-// the next pass and never launched: an L4 host no warm slot holds either.
+// the next pass and never launched: an L4 host no headroom holds either.
 func TestAPurchaseWhoseDemandEndedIsNotLaunched(t *testing.T) {
 	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})

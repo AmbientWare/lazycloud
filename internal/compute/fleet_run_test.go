@@ -225,20 +225,22 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 // arrivals, its 20-minute jobs and the fleet's idle tail.
 const replayWindow = 65 * time.Minute
 
-// containerStart is how long a placed container takes to start its task,
-// assign to ready on prod (2.4-2.8 s); the simulation's waits end at
-// placement.
-const containerStart = 2500 * time.Millisecond
+// recordedContainerStart is how long a placed container took to start its
+// task, assign to ready, on the release cpu_mixed.json recorded (2.4 to
+// 2.8 s); the simulation's waits end at placement, so it is added to
+// compare with the starts that run recorded. Later releases start a
+// container in under a second, and gpu_refusals.json records those.
+const recordedContainerStart = 2500 * time.Millisecond
 
-// TestFleetReplayMatchesProd replays run2, which saw no reclaims, without
-// them: every container runs and nothing breaks placement. It reports
-// revenue, fleet CPU-hours, spend above the idle rate, hosts launched, Spot
-// CPU hosts that never ran a container, and each function's start p50 and
-// p95 beside what prod recorded.
-func TestFleetReplayMatchesProd(t *testing.T) {
+// TestFleetReplayOfAMixedCPURun replays cpu_mixed.json, a mixed CPU load
+// test that saw no reclaims, without them: every container runs and nothing
+// breaks placement. It reports revenue, fleet CPU-hours, spend above the
+// idle rate, hosts launched, Spot CPU hosts that never ran a container, and
+// each function's start p50 and p95 beside what prod recorded.
+func TestFleetReplayOfAMixedCPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
-	readTestJSON(t, "run2.json", &run)
+	readTestJSON(t, "cpu_mixed.json", &run)
 	s := newRunSim(t, run)
 	window := time.Duration(run.Recorded.WindowSeconds) * time.Second
 	s.until = run.Start.Add(window)
@@ -250,7 +252,7 @@ func TestFleetReplayMatchesProd(t *testing.T) {
 		revenue, rec.Revenue, fleetCPU, rec.FleetCPUHours, cost, rec.CostAboveIdle, r.launches, rec.HostsLaunched)
 	for fn, want := range rec.WaitsP50AndP95 {
 		for i, q := range []float64{0.5, 0.95} {
-			t.Logf("%s start p%.0f %.1fs (prod %.1fs)", fn, 100*q, (quantile(r.fnWaits[fn], q) + containerStart).Seconds(), want[i])
+			t.Logf("%s start p%.0f %.1fs (prod %.1fs)", fn, 100*q, (quantile(r.fnWaits[fn], q) + recordedContainerStart).Seconds(), want[i])
 		}
 	}
 	t.Logf("Spot CPU hosts that never ran a container %d", r.unusedSpotCPU)
@@ -260,7 +262,7 @@ func TestFleetReplayMatchesProd(t *testing.T) {
 	}
 }
 
-// TestFleetReplayOfAMixedGPURun replays prodcheck6 (run3), a mixed CPU load
+// TestFleetReplayOfAMixedGPURun replays gpu_refusals.json, a mixed CPU load
 // beside on-demand A10G functions while EC2 refused GPU pools: every
 // container runs and nothing breaks placement. It reports hosts launched,
 // refusals, spend, Spot CPU hosts that never ran a container, and each
@@ -268,7 +270,7 @@ func TestFleetReplayMatchesProd(t *testing.T) {
 func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 	t.Parallel()
 	var run fleetRun
-	readTestJSON(t, "run3.json", &run)
+	readTestJSON(t, "gpu_refusals.json", &run)
 	s := newRunSim(t, run)
 	s.refuses = run.refuses(t, s)
 	// Launches of on-demand g5 hosts served in about a minute (00:11:58 to
