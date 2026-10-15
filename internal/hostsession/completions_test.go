@@ -2,6 +2,7 @@ package hostsession_test
 
 import (
 	"context"
+	"crypto/rand"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -23,46 +27,70 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-// queryCounter counts the statements a pool runs, and the completion
-// transactions among them: each sets its attempts' states in one statement.
+// queryCounter records when a pool runs each statement of the sampled
+// session a test opened, and counts the completion transactions among all
+// of them: each sets its attempts' states in one statement.
 type queryCounter struct {
-	all, writes, running atomic.Int64
-	settled              int64
+	writes atomic.Int64
+	// spans records the session's spans.
+	spans *tracetest.SpanRecorder
+	mu    sync.Mutex
+	// started is when each of the session's statements started.
+	started []time.Time
 }
 
 func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	c.running.Add(1)
-	c.all.Add(1)
+	if trace.SpanContextFromContext(ctx).IsSampled() {
+		c.mu.Lock()
+		c.started = append(c.started, time.Now())
+		c.mu.Unlock()
+	}
 	if strings.Contains(data.SQL, "name: SetAttemptStates") {
 		c.writes.Add(1)
 	}
 	return ctx
 }
 
-func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
-	c.running.Add(-1)
-}
+func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func (c *queryCounter) completions() int64 { return c.writes.Load() }
 
-// settle waits until the pool runs no statement and has started none for
-// a quarter of a second, and returns the statements run since the last
-// settle.
-func (c *queryCounter) settle() int64 {
-	const quiet = 250 * time.Millisecond
-	last, since := c.all.Load(), time.Now()
-	for {
-		time.Sleep(25 * time.Millisecond)
-		if n := c.all.Load(); n != last || c.running.Load() != 0 {
-			last, since = n, time.Now()
-			continue
+// sync waits until the first sync the session began at or after since
+// ended, and returns the statements it ran.
+func (c *queryCounter) sync(t *testing.T, since time.Time) int64 {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		var first sdktrace.ReadOnlySpan
+		for _, s := range c.spans.Ended() {
+			if s.Name() == "hostsession.sync" && !s.StartTime().Before(since) && (first == nil || s.StartTime().Before(first.StartTime())) {
+				first = s
+			}
 		}
-		if time.Since(since) >= quiet {
-			out := last - c.settled
-			c.settled = last
-			return out
+		if first != nil {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			n := int64(0)
+			for _, at := range c.started {
+				if !at.Before(first.StartTime()) && !at.After(first.EndTime()) {
+					n++
+				}
+			}
+			return n
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no sync began within 5s")
 		}
 	}
+}
+
+// sampled marks ctx as part of a sampled trace, so the server records the
+// spans and queries counts the statements of a session opened with it.
+func sampled(ctx context.Context) context.Context {
+	var id trace.TraceID
+	_, _ = rand.Read(id[:])
+	return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: id, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled, Remote: true,
+	}))
 }
 
 // countedHarness serves the host service, configured by configure, over a
@@ -78,7 +106,9 @@ func countedHarness(t *testing.T, configure ...func(*hostsession.Config)) (h *ha
 		t.Fatal(err)
 	}
 	t.Cleanup(traced.Close)
-	return serveWith(t, traced, storagetest.Config(t), configure...), base, queries
+	h = serveWith(t, traced, storagetest.Config(t), configure...)
+	queries.spans = h.spans
+	return h, base, queries
 }
 
 // runningAttempts makes host's container ready with n running attempts.
