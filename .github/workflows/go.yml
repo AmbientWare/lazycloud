@@ -2,13 +2,15 @@ name: Go backend and host runtime
 
 on:
   pull_request:
-  # Dependencies and tools are what the build cache saves; a main run after
-  # they change leaves every pull request a warm cache to restore.
+  # Dependencies and tools are what the build cache saves, and a pull
+  # request restores main's entry: a main run after they change, or one
+  # started by hand to seed it, leaves every pull request a warm cache.
   push:
     branches: [main]
     paths:
       - go.mod
       - go.sum
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,6 +22,7 @@ jobs:
     runs-on: ubuntu-26.04
     outputs:
       run: ${{ steps.changed.outputs.changed }}
+      host: ${{ steps.host.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,6 +50,35 @@ jobs:
             python
             pyproject.toml
             uv.lock
+      # The host side: what runs on hosts and in containers, the protocols
+      # they speak, the server's end of the host session, and the images
+      # and scripts the host jobs install. The host jobs run only for these;
+      # owner tests cover the rest of the platform.
+      - id: host
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github/workflows/go.yml
+            .github/actions/changed
+            go.mod
+            go.sum
+            cmd/agent
+            cmd/supervisor
+            internal/agent
+            internal/imagefs
+            internal/supervisor
+            internal/diskengine
+            internal/hostsession
+            internal/hostproto
+            internal/platformimages
+            internal/rootdisk
+            contracts/host
+            contracts/runner.yaml
+            python/runner
+            migrations
+            acceptance
+            deploy/local
+            deploy/images
 
   validate:
     needs: changes
@@ -97,7 +129,7 @@ jobs:
   # as a host before anything else runs in Docker.
   host-runtime:
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: needs.changes.outputs.host == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -170,7 +202,7 @@ jobs:
   # this change replaces updates to it. A skipped test fails the job.
   acceptance:
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: needs.changes.outputs.host == 'true'
     runs-on: ubuntu-26.04
     # The tests and the snapshotter trace into Jaeger; the job keeps the
     # trace of the slowest container start.
