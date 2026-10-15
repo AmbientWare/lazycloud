@@ -223,9 +223,10 @@ type Policy struct {
 	// that recurs finds room, and the headroom at least the largest batch
 	// that arrived within it, so a burst that recurs lands on free room
 	// instead of waiting a launch; both shrink back once the window passes
-	// without them. An hour spans the gaps measured between recurring work
-	// on prod and in the recorded runs: bursts five to ten minutes apart,
-	// idle gaps of 2 min at the median and 5.5 min at p90.
+	// without them. Half an hour spans the gaps measured between recurring
+	// work on prod and in the recorded runs, bursts five to ten minutes
+	// apart and idle gaps of 2 min at the median and 5.5 min at p90, while
+	// a burst that never recurs holds its room for half an hour at most.
 	WarmWindow time.Duration
 	Batch      BatchWindow
 	// Keep is how long a market holds its running target once its load
@@ -297,7 +298,7 @@ func DefaultPolicy() Policy {
 			Window: 7 * 24 * time.Hour, Default: fits, SpotGPU: oneCard, Cap: limit.Usable(0), CapDisks: limit.DiskSlots(),
 		},
 		ArrivalWindow: 2 * time.Minute,
-		WarmWindow:    time.Hour,
+		WarmWindow:    30 * time.Minute,
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		Keep:          2 * time.Minute,
 		SpotWait:      2 * time.Minute,
