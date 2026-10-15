@@ -1084,6 +1084,39 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 // keep one idle card beside them, one job keeps none, so a lone GPU job
 // never holds a second GPU host (prod held one beside every on-demand GPU
 // job on 2026-10-15). The card is bought within the size rule.
+// Pending work does not wait on a host still booting when a ready reserve
+// of its market would serve sooner: with a Spot host just requested and a
+// stopped Spot reserve, the reserve resumes; a host about to serve is
+// waited for.
+func TestWorkResumesAReserveRatherThanWaitOnAHostJustRequested(t *testing.T) {
+	t.Parallel()
+	p := DefaultPolicy()
+	p.GPU = nil
+	reserve := planHost(1, mustType(t, "c6a.2xlarge"), FleetStopped)
+	reserve.Market, reserve.Slept = MarketSpot, true
+	work := Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: 2 * gib}
+	for _, c := range []struct {
+		booted  time.Duration
+		resumes bool
+	}{
+		{0, true},
+		{p.Starts.Launch - 3*time.Second, false},
+	} {
+		coming := planHost(2, mustType(t, "m7i.xlarge"), FleetStarting)
+		coming.Market, coming.PhaseAt = MarketSpot, offerNow.Add(-c.booted)
+		s := planSnapshot(t, reserve, coming)
+		s.Offers.Catalog = FleetCatalog()
+		g, _ := pendingOne(work, nil)
+		s.Pending = []DemandGroup{g}
+		plan := PlanFleet(p, s)
+		resumed := slices.Equal(hostsOf(actionsOf(plan, ActionResume)), []HostID{reserve.ID})
+		waits := plan.Waits[0].Host != nil && *plan.Waits[0].Host == coming.ID
+		if resumed != c.resumes || waits == c.resumes {
+			t.Errorf("host booted for %s: resumed %t, waits on it %t; want resume %t", c.booted, resumed, waits, c.resumes)
+		}
+	}
+}
+
 func TestGPUWarmShareIsWholeCards(t *testing.T) {
 	t.Parallel()
 	typ := mustType(t, "g6.xlarge")
