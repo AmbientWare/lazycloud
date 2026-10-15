@@ -412,6 +412,7 @@ func TestPlatformVolumesShareOneMounter(t *testing.T) {
 	if _, err := storagetest.Client().HeadObject(t.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(store.bucket), Key: aws.String("volumes/" + first + "/a.txt"),
 	}); err != nil {
+		e.dumpMounts()
 		t.Fatalf("the first volume's file is not under its prefix: %v", err)
 	}
 }
