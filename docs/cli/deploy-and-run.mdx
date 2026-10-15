@@ -5,7 +5,7 @@ description: "Deploy apps, call a function once, run a live preview, and open re
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-[Develop, test, deploy](/concepts/workflow) explains when each command fits and
+[Core concepts](/concepts) explains when each command fits and
 where calls go. None of these commands override a workload's configuration,
 which comes only from its decorator or constructor.
 
@@ -68,7 +68,7 @@ uv run lazycloud serve HANDLER [--timeout <seconds>] [--sync-dir <dir>]
 ```
 
 Runs a function, endpoint, or ASGI app as a
-[live preview](/concepts/workflow#live-preview) until Ctrl+C, or until
+[live preview](/concepts#develop-test-deploy) until Ctrl+C, or until
 `--timeout` seconds pass. Each edit syncs only the changed files. `--sync-dir`
 syncs a directory other than the current one. The Python form:
 

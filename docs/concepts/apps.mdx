@@ -1,30 +1,11 @@
 ---
 title: "Apps and workloads"
-description: "The kinds of workload you can run, and how an app deploys, prunes, and exports them as one unit."
+description: "How an app groups workloads and deploys, prunes, and exports them as one unit."
 ---
 
-A workspace holds apps, and an app holds workloads. A workload's decorator is
-its whole definition: image, resources, volumes, secrets, schedule, and
-scaling. Deploying makes the workspace match the code, with no dashboard
-setting or CLI flag on top, so infrastructure changes arrive as one reviewable
-diff.
-
-## Workload kinds
-
-| Kind | For | Triggered by | Scales |
-| --- | --- | --- | --- |
-| [Function](/concepts/functions) | Batch jobs, background work, GPU tasks | `.remote()`, `.map()`, `.spawn()`, `lazycloud run` | Autoscaler on queued calls |
-| [Schedule](/concepts/schedules) | Recurring work | A function's `cron` | Like a function |
-| [Endpoint](/concepts/endpoints#endpoints) | An HTTP API from one function | HTTPS requests | Autoscaler on requests in flight |
-| [ASGI app](/concepts/endpoints#asgi-applications) | A FastAPI or Starlette app | HTTPS requests | Autoscaler on requests in flight |
-| [Realtime handler](/concepts/endpoints#realtime-handlers) | A WebSocket service | WebSocket messages | Autoscaler on requests in flight |
-| [Pod](/concepts/pods) | A container command, such as a model server | Connections, or `create()` | By hand |
-| [Devbox](/concepts/dev-machines) | A machine you work in over SSH | SSH connections, or Start | One container |
-| [Sandbox](/concepts/sandboxes) | Generated code, agent workspaces | `create()` from your code | One container per `create()` |
-
-Containers start when work arrives and
-[stop when idle](/concepts/cold-starts#keep-containers-warm), and every remote call is a
-[task](/concepts/tasks-and-logs). A deploy starts every kind except sandboxes.
+An app groups [workloads](/concepts) that deploy, pause, and export together.
+Deploying makes the workspace match the code, with no dashboard setting or CLI
+flag on top, so infrastructure changes arrive as one reviewable diff.
 
 ## Define an app
 

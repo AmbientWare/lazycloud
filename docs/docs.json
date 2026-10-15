@@ -48,8 +48,8 @@
       {
         "group": "Core concepts",
         "pages": [
+          "concepts/index",
           "concepts/apps",
-          "concepts/workflow",
           {
             "group": "Workloads",
             "pages": [
