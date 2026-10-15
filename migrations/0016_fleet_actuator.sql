@@ -24,7 +24,6 @@ alter table containers add constraint containers_capacity_wait_check check (capa
 -- past its wait; its launch walk sets the margin aside as well.
 alter table hosts add column margin_waived boolean not null default false;
 
--- When an idle serving host last ran work or held a warm slot; it leaves
--- once that is the keep window ago, while idle_since, when it last ran
--- work, decides whether a cheaper type replaces it.
-alter table hosts add column free_since timestamptz;
+-- Which hosts stay is the keep order's decision each pass, from the
+-- market's held targets; no host carries an idle clock.
+alter table hosts drop column idle_since;

@@ -25,7 +25,7 @@ func cloudHost(t *testing.T, o owners, market compute.Market, instance string) c
 // idleFor makes a host idle for ago.
 func idleFor(t *testing.T, o owners, host compute.HostID, ago time.Duration) {
 	t.Helper()
-	run(t, o.pool, "update hosts set idle_since = now() - make_interval(secs => $2), free_since = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
+	run(t, o.pool, "update hosts set phase_at = now() - make_interval(secs => $2) where id = $1", uuid.UUID(host), ago.Seconds())
 }
 
 // terminated lists the instance ids every TerminateInstances call named.
@@ -38,25 +38,23 @@ func terminated(e *awsEmulator) []string {
 	return out
 }
 
-// Idle hosts leave only once idle past the keep window and while the
-// market's free room beyond its warm target covers them; a one-time Spot
-// host cannot stop, so it drains, and the actuator terminates it once.
+// Idle hosts leave while the market's free room beyond its warm target
+// covers them; a one-time Spot host cannot stop, so it drains, and the
+// actuator terminates it once.
 func TestIdleHostsLeaveOnlyBeyondTheWarmTargetAndTerminate(t *testing.T) {
 	t.Parallel()
 	o, emulator, ec2 := reserveFleet(t)
-	for n := 1; n <= 5; n++ {
+	for n := 1; n <= 4; n++ {
 		ec2.add(fakeInstance{ID: fmt.Sprintf("i-0000000000000a00%d", n), State: "running"}, "")
 	}
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	oldest := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a001")
 	idle := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a002")
-	recent := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a003")
-	busy := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a004")
-	other := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000a005")
+	busy := cloudHost(t, o, compute.MarketSpot, "i-0000000000000a003")
+	other := cloudHost(t, o, compute.MarketOnDemand, "i-0000000000000a004")
 	idleFor(t, o, oldest, 30*time.Minute)
 	idleFor(t, o, idle, 20*time.Minute)
-	idleFor(t, o, recent, compute.DefaultPolicy().Keep/2)
 	idleFor(t, o, busy, time.Hour)
 	idleFor(t, o, other, time.Hour)
 	// A container runs on it, so it is not idle.
@@ -74,8 +72,7 @@ values (uuidv7(interval '-1 hour'), $1, $2, (select workload_id from releases wh
 		t.Fatalf("terminated %v, want the hosts idle past the wait beyond the warm target", got)
 	}
 	for host, want := range map[compute.HostID]compute.Phase{
-		oldest: compute.PhaseTerminating, idle: compute.PhaseTerminating, recent: compute.PhaseReady,
-		busy: compute.PhaseReady, other: compute.PhaseReady,
+		oldest: compute.PhaseTerminating, idle: compute.PhaseTerminating, busy: compute.PhaseReady, other: compute.PhaseReady,
 	} {
 		if phase, _ := hostPhase(t, o.pool, host); phase != string(want) {
 			t.Errorf("host %s is %s, want %s", host, phase, want)

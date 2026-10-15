@@ -4,34 +4,79 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
 )
 
-// LoadPeak is the most load a market held and when it last reached it.
+// LoadPeak is a held capacity: the most a target reached, and when it last
+// reached it.
 type LoadPeak struct {
 	Load FleetCapacity `json:"load"`
 	At   time.Time     `json:"at"`
 }
 
-// after is the load peak once a pass sees load: the stored one while
-// within the horizon, raised to load, and restarted when load reaches it.
-// Its time is to the minute, so load held at its peak republishes it at
-// most once a minute.
-func (p LoadPeak) after(load FleetCapacity, now time.Time, horizon time.Duration) LoadPeak {
-	if now.Sub(p.At) >= horizon {
-		p = LoadPeak{}
-	}
+// hold is the peak once a pass computes value: the peak as it was while
+// value matches it, value itself when it rises above the peak or the window
+// has passed since the peak was last raised, else the peak, raised where
+// value exceeds it. A target so held rises at once and falls only once the
+// window has passed since the market last needed what it holds. At is when
+// it last changed.
+func (p LoadPeak) hold(value FleetCapacity, now time.Time, window time.Duration) LoadPeak {
 	switch {
-	case load.Empty():
+	case value == p.Load:
 		return p
-	case load.Covers(p.Load):
-		return LoadPeak{Load: load, At: now.Truncate(time.Minute)}
+	case value.Covers(p.Load) || now.Sub(p.At) >= window:
+		return LoadPeak{Load: value, At: now}
 	}
-	return LoadPeak{Load: p.Load.Upper(load), At: p.At}
+	return LoadPeak{Load: p.Load.Upper(value), At: p.At}
 }
 
-// views are every market the policy, a host or a pending container names,
+// MarketHolds are a market's two held targets: the running capacity its
+// serving and starting hosts keep, held for the keep window, and the
+// stopped capacity its reserves keep, held for the cost horizon; and
+// ShortSince, since when the kept hosts have fallen short of the running
+// target, zero while they cover it. The published plan carries them from
+// one pass to the next.
+type MarketHolds struct {
+	Running    LoadPeak  `json:"running"`
+	Stopped    LoadPeak  `json:"stopped"`
+	ShortSince time.Time `json:"short_since"`
+}
+
+// marketTarget is what one market holds in a pass, from the snapshot alone.
+type marketTarget struct {
+	m ReserveMarket
+	// load is what runs on the market's hosts, CPU work packed into GPU
+	// hosts aside, which is the CPU Spot market's, and what the market's
+	// pending containers ask for.
+	load FleetCapacity
+	// want is the running target this pass's load and headroom ask for;
+	// holds.Running is want held for the keep window. arriving is set in
+	// the CPU Spot market while arrivals within the arrival window set its
+	// headroom: the next arrivals land on it, so it is bought at once.
+	want     FleetCapacity
+	arriving bool
+	holds    MarketHolds
+	// headroom is what want holds beyond the load, and floor the least of
+	// it; empty in a market without a floor. Headroom is held in parts of
+	// part, the largest shape where the market keeps one, else the floor:
+	// each part fits one start of that shape, so free room split across
+	// hosts in fragments smaller than a start is not headroom. heldParts
+	// split the held running target's headroom, wantParts this pass's.
+	headroom, floor, part FleetCapacity
+	heldParts, wantParts  []FleetCapacity
+	// largest is the shape one of the market's reserves fits, with a disk
+	// slot for each of largestDisks; empty for none. loaded is set while
+	// the share of load, not the floor beside the largest shape, sets the
+	// stopped target.
+	largest      FleetCapacity
+	largestDisks int
+	loaded       bool
+}
+
+// targets are every market the policy, a host or a pending container names,
 // each with its target.
-func (ps *pass) views(items []coverItem) []*marketView {
+func (ps *pass) targets(items []coverItem) []*marketView {
 	markets := ps.p.Markets()
 	known := len(markets)
 	add := func(m ReserveMarket) {
@@ -55,33 +100,13 @@ func (ps *pass) views(items []coverItem) []*marketView {
 	return views
 }
 
-// marketTarget is what one market holds in a pass, from the snapshot alone.
-type marketTarget struct {
-	m     ReserveMarket
-	load  FleetCapacity
-	slots []warmSlot
-	// warm is the warm target the slots hold.
-	warm FleetCapacity
-	// stopped is the reserve target purchases keep, a share of the load,
-	// and peakShare the same share of the peak, which reserves woken for a
-	// burst return to.
-	stopped, peakShare FleetCapacity
-	// peak is the market's load peak; while it holds, the reserves a burst
-	// bought or woke wait for the next one.
-	peak LoadPeak
-	// largest is the shape one of the market's reserves fits, with a disk
-	// slot for each of largestDisks; empty for none. loaded is set while
-	// the share of load, not the floor beside the largest shape, sets the
-	// stopped target.
-	largest      FleetCapacity
-	largestDisks int
-	loaded       bool
-}
-
-// target sets market m's targets from its current load, what its hosts'
-// containers reserve and what its pending containers ask for: its warm
-// slots, and its stopped target: its share of load, and at least its floor
-// beside the largest shape one reserve must fit, which a build resumes.
+// target sets market m's targets from its load, what its hosts' containers
+// reserve and what its pending containers ask for. The running target is
+// the load plus its headroom: the larger of the floor and a share of load,
+// and in the Spot CPU market at least the floor plus what arrived within
+// the arrival window, held for the keep window. The stopped target is a
+// share of load, at least the floor beside the largest shape one reserve
+// must fit, held for the cost horizon.
 func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 	t := marketTarget{m: m, load: ps.marketLoad(m)}
 	largest, disks := ps.s.Recent[m], ps.s.RecentDisks[m]
@@ -92,37 +117,43 @@ func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 		}
 	}
 	r := ps.p.Reserve(m)
-	// The Spot market keeps warm at least the work that came at a steady
-	// rate.
-	t.warm = r.Warm.Of(t.load)
+	warm := r.Warm.Of(t.load)
 	if m.spotCPU() && r.Warm != (HeadroomTarget{}) {
-		t.warm = t.warm.Upper(r.Warm.Floor.Plus(ps.s.Arrived[m]))
+		arrivals := r.Warm.Floor.Plus(ps.s.Arrived[m])
+		t.arriving = !ps.s.Arrived[m].Empty() && arrivals.Covers(warm)
+		warm = warm.Upper(arrivals)
 	}
-	t.slots = ps.p.slots(r.Warm, t.warm)
-	t.peak = ps.s.Peaks[m].after(t.load, ps.s.Now, ps.p.CostHorizon)
-	t.stopped, t.peakShare = r.Stopped.Of(t.load), r.Stopped.Of(t.peak.Load)
+	t.want = t.load.Plus(warm)
+	t.holds.Running = ps.s.Holds[m].Running.hold(t.want, ps.s.Now, ps.p.Keep)
+	t.headroom, t.floor = warm, r.Warm.Floor
+	stopped := r.Stopped.Of(t.load)
 	if r.FitLargest {
 		t.largest, t.largestDisks = ps.p.LargestShape.of(m, largest, disks)
-		floor := r.Stopped.Floor.Plus(t.largest)
-		t.loaded = !floor.Covers(t.stopped)
-		t.stopped, t.peakShare = t.stopped.Upper(floor), t.peakShare.Upper(floor)
+		stopped = stopped.Upper(r.Stopped.Floor.Plus(t.largest))
 	}
+	t.holds.Stopped = ps.s.Holds[m].Stopped.hold(stopped, ps.s.Now, ps.p.CostHorizon)
+	t.holds.ShortSince = ps.s.Holds[m].ShortSince
+	t.part = t.largest
+	if t.part.Empty() {
+		t.part = t.floor.Lower(ps.p.LargestShape.Cap)
+	}
+	t.heldParts = split(t.holds.Running.Load.Minus(t.load).Clamp(), t.part)
+	t.wantParts = split(t.headroom, t.part)
+	t.loaded = r.FitLargest && !r.Stopped.Floor.Plus(t.largest).Covers(t.holds.Stopped.Load)
 	return t
 }
 
-// marketLoad is what market m's work holds on running hosts: its hosts'
-// containers, less what Spot-tolerant work borrows on them and CPU work
-// packs on them, for a Spot market what its work borrows on on-demand
-// hosts of its GPU model, or of CPU, and for the CPU Spot market what its
-// work packs on GPU hosts.
+// marketLoad is what runs on market m's hosts: Spot-tolerant work
+// borrowing an on-demand host holds that host, so the on-demand market
+// keeps it for the keep window once the work ends. CPU work packed into a
+// GPU host is the CPU Spot market's: it never holds the GPU host, and the
+// CPU Spot market keeps room for it once the host leaves and it is queued
+// again.
 func (ps *pass) marketLoad(m ReserveMarket) FleetCapacity {
 	var load FleetCapacity
 	for _, h := range ps.hosts {
-		switch {
-		case h.market() == m:
-			load = load.Plus(h.Load.Minus(h.Lent).Minus(h.Packed))
-		case m == reserveMarketOf(MarketSpot, h.GPU):
-			load = load.Plus(h.Lent)
+		if h.market() == m {
+			load = load.Plus(h.Load.Minus(h.Packed))
 		}
 		if m.spotCPU() {
 			load = load.Plus(h.Packed)
@@ -131,14 +162,46 @@ func (ps *pass) marketLoad(m ReserveMarket) FleetCapacity {
 	return load
 }
 
-// slotItems are every market's warm slots as cover items, largest first.
-func slotItems(views []*marketView) []coverItem {
-	var out []coverItem
-	for _, v := range views {
-		for _, slot := range v.slots {
-			out = append(out, coverItem{slot: true, floor: slot.floor, need: slotNeed(v.m, slot.shape), market: v.m, wait: -1})
+// split divides c into the fewest equal parts, rounded up, that each fit
+// within bound in every dimension bound has; none when c is empty.
+func split(c, bound FleetCapacity) []FleetCapacity {
+	if c.Empty() {
+		return nil
+	}
+	n := int64(1)
+	for _, d := range [][2]int64{{int64(c.CPUMillis), int64(bound.CPUMillis)}, {c.MemoryBytes, bound.MemoryBytes}, {int64(c.GPUs), int64(bound.GPUs)}} {
+		if d[1] > 0 {
+			n = max(n, (d[0]+d[1]-1)/d[1])
 		}
 	}
-	slices.SortStableFunc(out, func(a, b coverItem) int { return size(b.need) - size(a.need) })
+	up := func(v int64) int64 { return (v + n - 1) / n }
+	part := FleetCapacity{CPUMillis: cpu.Millis(up(int64(c.CPUMillis))), MemoryBytes: up(c.MemoryBytes), GPUs: int(up(int64(c.GPUs)))}
+	return slices.Repeat([]FleetCapacity{part}, int(n))
+}
+
+// unplaced are the parts that do not fit, first fit, in the rooms.
+func unplaced(rooms, parts []FleetCapacity) []FleetCapacity {
+	rooms = slices.Clone(rooms)
+	var out []FleetCapacity
+	for _, part := range parts {
+		i := slices.IndexFunc(rooms, func(r FleetCapacity) bool { return r.Covers(part) })
+		if i < 0 {
+			out = append(out, part)
+			continue
+		}
+		rooms[i] = rooms[i].Minus(part)
+	}
+	return out
+}
+
+// placesAll reports whether the parts fit, first fit, in the rooms.
+func placesAll(rooms, parts []FleetCapacity) bool { return len(unplaced(rooms, parts)) == 0 }
+
+// total sums capacities.
+func total(parts []FleetCapacity) FleetCapacity {
+	var out FleetCapacity
+	for _, p := range parts {
+		out = out.Plus(p)
+	}
 	return out
 }

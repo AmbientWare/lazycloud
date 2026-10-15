@@ -254,6 +254,7 @@ func TestFleetReplayMatchesProd(t *testing.T) {
 		}
 	}
 	t.Logf("Spot CPU hosts that never ran a container %d", r.unusedSpotCPU)
+	t.Logf("actions %v", r.actions)
 	if len(s.pending) > 0 || len(r.violations) > 0 {
 		t.Errorf("%d containers unplaced, violations %v", len(s.pending), r.violations)
 	}
@@ -294,6 +295,7 @@ func TestFleetReplayOfAMixedGPURun(t *testing.T) {
 			t.Logf("%s start p%.0f %.1fs (prod %.1fs)", fn, 100*q, quantile(r.fnWaits[fn], q).Seconds(), want[i])
 		}
 	}
+	t.Logf("actions %v", r.actions)
 	if len(s.pending) > 0 || len(r.violations) > 0 {
 		t.Errorf("%d containers unplaced, violations %v", len(s.pending), r.violations)
 	}

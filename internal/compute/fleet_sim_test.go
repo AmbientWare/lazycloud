@@ -117,6 +117,8 @@ type simArrival struct {
 type simResult struct {
 	launches, refusals int
 	violations         []string
+	// actions counts the plans' actions by kind and reason.
+	actions map[string]int
 	// unusedSpotCPU counts the Spot CPU hosts that ended without running a
 	// container.
 	unusedSpotCPU int
@@ -148,10 +150,10 @@ type sim struct {
 	pending []*simContainer
 	r       simResult
 	// recent is the largest recent shape per market the planner reads, and
-	// peaks carries each market's load peak from one pass to the next, as
-	// the published plan does.
+	// holds carries each market's held targets from one pass to the next,
+	// as the published plan does.
 	recent map[ReserveMarket]FleetCapacity
-	peaks  map[ReserveMarket]LoadPeak
+	holds  map[ReserveMarket]MarketHolds
 	// maxHosts is the fleet limit; provision is how long a launch takes to
 	// serve.
 	maxHosts int
@@ -354,20 +356,10 @@ func (s *sim) fleetHost(h *simHost) FleetHost {
 	if fh.State != FleetStopping && !s.now.Before(h.startAt) {
 		fh.StoppedAt = nil
 	}
-	fh.Load, fh.Lent, fh.Containers, fh.BusySince, fh.UsedDisks = FleetCapacity{}, FleetCapacity{}, 0, nil, 0
-	var tolerant FleetCapacity
+	fh.Load, fh.Containers, fh.UsedDisks = FleetCapacity{}, 0, 0
 	for _, c := range h.containers {
 		fh.Load, fh.UsedDisks = fh.Load.Plus(reservedShape(c.need)), fh.UsedDisks+c.need.Disks
 		fh.Containers++
-		if fh.BusySince == nil || c.started.After(*fh.BusySince) {
-			fh.BusySince = ptr(c.started)
-		}
-		if c.need.Preemptible {
-			tolerant = tolerant.Plus(reservedShape(c.need))
-		}
-	}
-	if h.Market == MarketOnDemand {
-		fh.Lent = tolerant
 	}
 	return fh
 }
@@ -460,11 +452,11 @@ func (s *sim) plan() time.Duration {
 	for _, key := range order {
 		snapshot.Pending = append(snapshot.Pending, *groups[key])
 	}
-	snapshot.Peaks = s.peaks
+	snapshot.Holds = s.holds
 	plan := PlanFleet(s.p, snapshot)
-	s.peaks = map[ReserveMarket]LoadPeak{}
+	s.holds = map[ReserveMarket]MarketHolds{}
 	for _, mp := range plan.Markets {
-		s.peaks[mp.Market] = mp.Peak
+		s.holds[mp.Market] = mp.Holds
 	}
 	s.check(snapshot, plan)
 	s.apply(plan)
@@ -713,7 +705,11 @@ func (s *sim) launched(h *simHost) {
 
 func (s *sim) apply(plan FleetPlan) {
 	bought := map[int]HostID{}
+	if s.r.actions == nil {
+		s.r.actions = map[string]int{}
+	}
 	for i, a := range plan.Actions {
+		s.r.actions[string(a.Kind)+"/"+string(a.Reason)]++
 		switch a.Kind {
 		case ActionBuy, ActionRightsize, ActionBuyReserve:
 			var waiters []HostWaitersRow
@@ -773,15 +769,6 @@ func (s *sim) apply(plan FleetPlan) {
 			if id, ok := bought[*w.Action]; ok {
 				s.pending[i].host = ptr(id)
 			}
-		}
-	}
-	for _, h := range s.hosts {
-		h.IdleSince, h.FreeSince = nil, nil
-		if since, ok := plan.IdleSince[h.ID]; ok {
-			h.IdleSince, h.FreeSince = ptr(since), ptr(since)
-		}
-		if since, ok := plan.FreeSince[h.ID]; ok {
-			h.FreeSince = ptr(since)
 		}
 	}
 }
