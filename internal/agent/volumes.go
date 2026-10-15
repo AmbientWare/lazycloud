@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -184,8 +185,9 @@ type processCredentials struct {
 }
 
 // writeCredentials writes the credential_process files a mount reads its
-// keys from into dir.
-func writeCredentials(dir string, creds processCredentials) error {
+// keys from into dir. With keep set a key already there stays, and the
+// error is fs.ErrExist.
+func writeCredentials(dir string, creds processCredentials, keep bool) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create credential directory: %w", err)
 	}
@@ -193,7 +195,11 @@ func writeCredentials(dir string, creds processCredentials) error {
 	if err != nil {
 		return fmt.Errorf("encode credentials: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
+	write := writeFileAtomic
+	if keep {
+		write = writeFileExclusive
+	}
+	if err := write(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	config := filepath.Join(dir, "config")
@@ -221,7 +227,7 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err := writeCredentials(dir, processCredentials{
 		Version: 1, AccessKeyID: g.GetAccessKeyId(), SecretAccessKey: g.GetSecretAccessKey(),
 		SessionToken: g.GetSessionToken(), Expiration: g.GetExpiresAt().AsTime().UTC().Format(time.RFC3339),
-	}); err != nil {
+	}, false); err != nil {
 		return err
 	}
 	location, err := json.Marshal(bucketLocation{
@@ -293,17 +299,32 @@ func (v *volumes) refreshGrant(ctx context.Context, workspace string) error {
 }
 
 // mountKey returns the key the platform-volume mount mounter signs with,
-// made on first use beside the mount's other keys.
+// made on first use beside the mount's other keys. Callers that make it at
+// once all get the first one written.
 func (v *volumes) mountKey(mounter string) (string, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	var c processCredentials
-	data, err := os.ReadFile(filepath.Join(v.mountKeys(mounter), "credentials.json"))
-	if err == nil && json.Unmarshal(data, &c) == nil && c.AccessKeyID != "" {
-		return c.AccessKeyID, nil
+	dir := v.mountKeys(mounter)
+	if key, err := readKey(dir); err == nil {
+		return key, nil
 	}
 	key := securerand.Text()
-	return key, writeCredentials(v.mountKeys(mounter), processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key})
+	err := writeCredentials(dir, processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key}, true)
+	if errors.Is(err, fs.ErrExist) {
+		return readKey(dir)
+	}
+	return key, err
+}
+
+// readKey reads the access key of the credential_process files in dir.
+func readKey(dir string) (string, error) {
+	var c processCredentials
+	data, err := os.ReadFile(filepath.Join(dir, "credentials.json"))
+	if err != nil {
+		return "", fmt.Errorf("read mount key: %w", err)
+	}
+	if err := json.Unmarshal(data, &c); err != nil || c.AccessKeyID == "" {
+		return "", fmt.Errorf("mount key file %s holds no key", dir)
+	}
+	return c.AccessKeyID, nil
 }
 
 // warm has the snapshotter fill the objects a start's workload recorded

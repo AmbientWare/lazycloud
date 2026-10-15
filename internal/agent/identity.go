@@ -139,6 +139,18 @@ func forgetIdentity(stateDir string) error {
 
 // writeFileAtomic writes data beside path and renames it into place.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	return writeFileVia(path, data, mode, os.Rename)
+}
+
+// writeFileExclusive writes path as writeFileAtomic does, unless a file is
+// there already: then the error is fs.ErrExist and the file stays.
+func writeFileExclusive(path string, data []byte, mode os.FileMode) error {
+	return writeFileVia(path, data, mode, os.Link)
+}
+
+// writeFileVia writes data to a temporary file beside path and places it
+// at path with place.
+func writeFileVia(path string, data []byte, mode os.FileMode, place func(tmp, path string) error) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
@@ -159,8 +171,8 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("rename: %w", err)
+	if err := place(tmp.Name(), path); err != nil {
+		return fmt.Errorf("place: %w", err)
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ func (v *volumes) bucketSpec(name string, group []*hostproto.VolumeMount) (mount
 		dirs[i] = strings.TrimPrefix(s.GetCloudBucket().GetPrefix(), shared)
 	}
 	creds := v.mountKeys(name)
-	if err := writeCredentials(creds, processCredentials{Version: 1, AccessKeyID: b.GetAccessKeyId(), SecretAccessKey: b.GetSecretAccessKey()}); err != nil {
+	if err := writeCredentials(creds, processCredentials{Version: 1, AccessKeyID: b.GetAccessKeyId(), SecretAccessKey: b.GetSecretAccessKey()}, false); err != nil {
 		return mountSpec{}, nil, err
 	}
 	return mountSpec{
