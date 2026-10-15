@@ -39,7 +39,7 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 	price, _ := typ.OnDemandMicros("us-east-2")
 	h := FleetHost{
 		ID: HostID{id}, InstanceType: typ.Name, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1",
-		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Current: true, Stoppable: true,
+		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Stoppable: true,
 		HourlyMicros: ptr(price + rootDiskMicros("us-east-2", rootVolumeGiB, baselineMiBps) + 5000),
 	}
 	if h.reserve() {
@@ -120,36 +120,6 @@ func TestPlanBuysTheLowerTotalCostForTheWarmTarget(t *testing.T) {
 		if mp := marketPlan(t, plan, onDemand); !mp.Shortfall.Empty() {
 			t.Errorf("target %+v left %+v short", c.target, mp.Shortfall)
 		}
-	}
-}
-
-// A reserve prepared on an older agent build holds none of the stopped
-// target: a replacement is bought and the stale one stays until the
-// replacement is ready, while one the target does not need retires. CPU
-// work it would fit buys a host, which serves sooner than a resume and an
-// agent update.
-func TestPlanReplacesAStaleReserveBeforeRetiringIt(t *testing.T) {
-	t.Parallel()
-	stale := planHost(1, planSmall, FleetStopped)
-	stale.Current = false
-	kinds := func(plan FleetPlan) []FleetActionKind {
-		var out []FleetActionKind
-		for _, a := range plan.Actions {
-			out = append(out, a.Kind)
-		}
-		return out
-	}
-	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale))); !slices.Equal(got, []FleetActionKind{ActionBuyReserve}) {
-		t.Fatalf("needed: %v", got)
-	}
-	replaced := planHost(2, planSmall, FleetStopped)
-	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, small), planSnapshot(t, stale, replaced))); !slices.Equal(got, []FleetActionKind{ActionRetireReserve}) {
-		t.Fatalf("replaced: %v", got)
-	}
-	snapshot := planSnapshot(t, stale)
-	snapshot.Pending = []DemandGroup{{Need: Requirement{CPUMillis: 1000, MemoryBytes: gib}, Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}
-	if got := kinds(PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), snapshot)); slices.Contains(got, ActionResume) {
-		t.Fatalf("CPU work resumed a stale reserve: %v", got)
 	}
 }
 
@@ -1174,13 +1144,11 @@ func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
 		gpu     bool
 		state   FleetState
 		stopped time.Duration
-		stale   bool
 		resumes bool
 	}{
-		{"L4, request active", true, FleetStopping, 33 * time.Second, false, true},
-		{"CPU, request active", false, FleetStopping, 33 * time.Second, false, false},
-		{"L4, request active past the bound", true, FleetStopping, p.Starts.SpotDisableMax + time.Second, false, false},
-		{"L4, older agent build", true, FleetStopped, time.Hour, true, true},
+		{"L4, request active", true, FleetStopping, 33 * time.Second, true},
+		{"CPU, request active", false, FleetStopping, 33 * time.Second, false},
+		{"L4, request active past the bound", true, FleetStopping, p.Starts.SpotDisableMax + time.Second, false},
 	} {
 		h := planHost(1, planSmall, c.state)
 		need := cpuSpot
@@ -1188,7 +1156,7 @@ func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
 			h = gpuReserve(t, 1, MarketSpot)
 			h.State, need = c.state, l4Job
 		}
-		h.Market, h.StoppedAt, h.Current = MarketSpot, ptr(offerNow.Add(-c.stopped)), !c.stale
+		h.Market, h.StoppedAt = MarketSpot, ptr(offerNow.Add(-c.stopped))
 		s := spotQuoted(gpuPlanSnapshot(t, h), 200_000, "m.small")
 		s.Offers.Catalog = append(s.Offers.Catalog, planSmall)
 		g, _ := pendingOne(need, nil)

@@ -958,10 +958,10 @@ func TestAFloorReserveBusyPastTheKeepWindowIsReplaced(t *testing.T) {
 	}
 }
 
-// A release of the reserves' agent build leaves them in place. A release
-// of another build buys their replacements first and retires none of them
-// before those are ready.
-func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
+// An agent release leaves the reserves in place whether or not its build
+// changed: a reserve stopped on an older build updates its agent when it
+// resumes, so nothing is bought or retired for a release.
+func TestAnAgentReleaseKeepsTheReserves(t *testing.T) {
 	t.Parallel()
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	spotPrices(t, o)
@@ -981,8 +981,8 @@ func TestAnAgentReleaseReplacesReservesOnlyWhenItsBuildChanges(t *testing.T) {
 		t.Fatalf("plan after a release of the same build %+v, want nothing retired or bought", r)
 	}
 	release("1.2.0", strings.Repeat("c", 64))
-	if r := plan(t, o); r.Retired != 0 || r.Requested == 0 {
-		t.Fatalf("plan after a release of another build %+v, want replacements bought and nothing retired", r)
+	if r := plan(t, o); r.Retired != 0 || r.Requested != 0 {
+		t.Fatalf("plan after a release of another build %+v, want nothing retired or bought", r)
 	}
 }
 

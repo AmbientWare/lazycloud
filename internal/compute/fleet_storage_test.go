@@ -65,7 +65,7 @@ func TestAReserveFollowsItsMarketsReads(t *testing.T) {
 	reserve := func(id byte, region, zone, zoneID string, state FleetState) FleetHost {
 		return FleetHost{
 			ID: HostID{id}, InstanceType: "g6.2xlarge", Region: region, Zone: zone, ZoneID: zoneID, Market: MarketSpot, GPU: "L4",
-			Usable: mustType(t, "g6.2xlarge").Usable(0), State: state, ReserveMode: ptr(ReserveStop), Current: true, Stoppable: true, Slept: true,
+			Usable: mustType(t, "g6.2xlarge").Usable(0), State: state, ReserveMode: ptr(ReserveStop), Stoppable: true, Slept: true,
 			HourlyMicros: ptr(int64(400_000)), PhaseAt: offerNow,
 		}
 	}
