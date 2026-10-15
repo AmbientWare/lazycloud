@@ -11,6 +11,7 @@
 !python/
 !deploy/local/build-runtime.sh
 !deploy/local/fetch-geesefs.sh
+!deploy/agent/volume-cache/volume_cache.c
 !deploy/images/web.conf
 !web/
 web/node_modules/
