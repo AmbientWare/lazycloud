@@ -177,7 +177,7 @@ func newRunSim(t *testing.T, run fleetRun) *sim {
 		s.next++
 		h := &simHost{offer: o, failAt: f.FailsAt, FleetHost: FleetHost{
 			ID: HostID{byte(s.next >> 8), byte(s.next), 0xf1}, InstanceType: f.Type, Region: f.Region, Zone: zone, ZoneID: f.ZoneID, Market: f.Market,
-			GPU: typ.GPU, Usable: o.Usable, State: f.State, Current: true, HourlyMicros: ptr(f.HourlyMicros), ReserveMode: f.ReserveMode, HibernationConfigured: hibernate,
+			GPU: typ.GPU, Usable: o.Usable, State: f.State, HourlyMicros: ptr(f.HourlyMicros), ReserveMode: f.ReserveMode, HibernationConfigured: hibernate,
 			Stoppable: slept || f.Market == MarketOnDemand, Slept: slept, PhaseAt: f.Since,
 		}}
 		if f.FailsAt != nil {

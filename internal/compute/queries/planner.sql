@@ -22,7 +22,6 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
        h.interruption_at, h.reserve_mode, h.hibernation_configured, h.spot_request_id, h.image_evidence,
        h.prepared_agent_version, h.rollout_bucket, h.updating_until, h.replaces,
        h.rightsize_refused_at, h.hands_back_at, h.stopped_at,
-       on_target(h.rollout_bucket, h.prepared_agent_version)::bool as prepared_current,
        coalesce(h.start_refused_at > now() - make_interval(secs => @cooldown_seconds::float8), false)::bool as start_refused,
        coalesce(used.cpu, 0)::bigint as used_cpu, coalesce(used.memory, 0)::bigint as used_memory,
        coalesce(used.gpus, 0)::int as used_gpus, coalesce(used.containers, 0)::int as containers,

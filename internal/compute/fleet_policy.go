@@ -45,10 +45,12 @@ func (a FleetCapacity) Lower(b FleetCapacity) FleetCapacity {
 // Clamp raises negative dimensions to zero.
 func (a FleetCapacity) Clamp() FleetCapacity { return a.Upper(FleetCapacity{}) }
 
-// Percent is p percent of a, each dimension rounded up.
+// Percent is p percent of a: CPU and memory rounded up, GPUs rounded down,
+// since a fraction of a card is no card. A share of one GPU job holds no
+// warm card; a share of four holds one.
 func (a FleetCapacity) Percent(p int64) FleetCapacity {
 	up := func(v int64) int64 { return (v*p + 99) / 100 }
-	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(up(int64(a.GPUs)))}
+	return FleetCapacity{CPUMillis: cpu.Millis(up(int64(a.CPUMillis))), MemoryBytes: up(a.MemoryBytes), GPUs: int(int64(a.GPUs) * p / 100)}
 }
 
 // Empty reports whether a has nothing positive in any dimension.
@@ -226,11 +228,8 @@ type Policy struct {
 // reserve's start. EC2 starts a stopped Spot instance only once it
 // disables the persistent request, 38-165 s after the stop and 66 s on
 // average (2026-10-13); past SpotDisableMax work stops waiting for it.
-// Update is what a reserve stopped on an older agent build adds to its
-// resume: it downloads, verifies and unpacks the 153 MB release in 5.2 s
-// (an m7i.large in us-east-2, 2026-10-13), then restarts into it.
 type StartTimes struct {
-	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax, Update time.Duration
+	Launch, GPULaunch, Resume, GPUResume, SpotDisable, SpotDisableMax time.Duration
 }
 
 // DefaultPolicy is the policy the planner runs.
@@ -244,11 +243,11 @@ func DefaultPolicy() Policy {
 	// so reserves sized to load cost more than the starts they speed up.
 	spotMarket := cpuMarket
 	spotMarket.Stopped.LoadPercent = 0
-	// GPU work keeps a share of its load warm, which rounds up to a whole
-	// card beside each few jobs: without it the start after a job resumes a
-	// stopped reserve, a minute or more. A Spot GPU host that serves counts
-	// as reserve supply: a purchase runs about five minutes of a GPU host
-	// for the next concurrent start alone.
+	// GPU work keeps a share of its load warm in whole cards: one beside
+	// every four jobs, none beside one, whose next start resumes the
+	// stopped reserve. A Spot GPU host that serves counts as reserve
+	// supply: a purchase runs about five minutes of a GPU host for the next
+	// concurrent start alone.
 	card := MarketReserve{Warm: HeadroomTarget{LoadPercent: 25}, Stopped: HeadroomTarget{LoadPercent: 50}, FitLargest: true}
 	spotCard := MarketReserve{Warm: card.Warm, Stopped: card.Stopped, FitLargest: true, AwaitReturn: true}
 	gpus := map[string]GPUReserve{}
@@ -280,7 +279,7 @@ func DefaultPolicy() Policy {
 		SpotPriceAge:  time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
-			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second, Update: 10 * time.Second,
+			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second,
 		},
 	}
 }

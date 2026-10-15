@@ -80,12 +80,11 @@ func (ps *pass) keepOrder(v *marketView) []*FleetHost {
 	return out
 }
 
-// returnable reports whether host h of market v may stop into the reserve:
-// EC2 can stop it, its type is known, it is no interruption's, and it lies
-// where the market's starts read.
-func (ps *pass) returnable(v *marketView, h FleetHost) bool {
+// returnable reports whether host h may stop into the reserve: EC2 can stop
+// it, its type is known and it is no interruption's.
+func (ps *pass) returnable(h FleetHost) bool {
 	_, catalogued := ps.typeNamed(h.InstanceType)
-	return catalogued && h.Stoppable && !h.Protected && !ps.misplaced(v, h.Region)
+	return catalogued && h.Stoppable && !h.Protected
 }
 
 // leave removes a surplus host: a requested one is cancelled; a serving one
@@ -100,7 +99,7 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 	}
 	var short *ActionReason
 	switch {
-	case !ps.returnable(v, *h):
+	case !ps.returnable(*h):
 	case !ps.reserveSupply(v, h.ID).Covers(v.holds.Stopped.Load):
 		short = ptr(ReasonReserve)
 	case ps.fitsLargest(v, *h) && !ps.holdsLargest(v, h.ID):
@@ -111,7 +110,7 @@ func (ps *pass) leave(v *marketView, h *FleetHost) {
 		if t, _ := ps.typeNamed(h.InstanceType); h.HibernationConfigured && hibernates(t) {
 			mode = ReserveHibernate
 		}
-		h.State, h.ReserveMode, h.Current = FleetPreparing, ptr(mode), false
+		h.State, h.ReserveMode = FleetPreparing, ptr(mode)
 		// It runs until it stops, so it keeps its host room.
 		ps.reserveRoom--
 		ps.act(FleetAction{Kind: ActionReturnToReserve, Reason: *short, Market: v.m, Host: ptr(h.ID), Mode: ptr(mode)})
@@ -261,12 +260,14 @@ func (ps *pass) buyHeadroom(v *marketView, need CoverNeed) CoverResult {
 	return CoverResult{Nodes: append(result.Nodes, rest.Nodes...), UnmetItems: rest.UnmetItems, Supplied: result.Supplied.Plus(rest.Supplied)}
 }
 
-// counted reports a reserve that holds market v's stopped target: on the
-// target agent build, not interrupted, not launched yet wherever its walk
-// points, and a launched one only where it is not misplaced.
+// counted reports a reserve that holds market v's stopped target: one not
+// interrupted, wherever it lies and whatever agent build it stopped on. A
+// reserve outside the region the market's starts read from still serves
+// them, and retires first once the market holds more than it needs; one on
+// an older build updates its agent when it resumes.
 func (ps *pass) counted(v *marketView) func(FleetHost) bool {
 	return func(h FleetHost) bool {
-		return h.reserve() && !h.Protected && !stale(h) && !v.retired[h.ID] && (h.Requested || !ps.misplaced(v, h.Region))
+		return h.reserve() && !h.Protected && !v.retired[h.ID]
 	}
 }
 
@@ -290,7 +291,7 @@ func (ps *pass) dueBackSupply(v *marketView) FleetCapacity {
 // run work for less than the keep window. One busy longer is not due back,
 // and the reserve buys its replacement.
 func (ps *pass) dueBack(v *marketView, h FleetHost) bool {
-	if !serving(h) && !starting(h) || !ps.returnable(v, h) {
+	if !serving(h) && !starting(h) || !ps.returnable(h) {
 		return false
 	}
 	if ps.p.Reserve(v.m).AwaitReturn {
@@ -312,15 +313,16 @@ func (ps *pass) holdsLargest(v *marketView, skip HostID) bool {
 		}
 	}
 	return slices.ContainsFunc(ps.planned, func(n plannedHost) bool {
-		return n.market == v.m && n.reserve && v.fits(n.offer.Usable, n.offer.Type) && !ps.misplaced(v, n.offer.Region)
+		return n.market == v.m && n.reserve && v.fits(n.offer.Usable, n.offer.Type)
 	})
 }
 
 // reserves keeps market v's stopped target, among its reserves one that
 // fits the largest shape. Interrupted reserves retire at once: they never
-// resume. The rest are walked in one order, the one that fits the largest
-// shape first, ready ones before pending, those the market could not buy
-// again before those it could, the costliest to hold last, and kept until
+// resume. The rest are walked in one order, those in the region the
+// market's starts read from first, the one that fits the largest shape
+// next, ready ones before pending, those the market could not buy again
+// before those it could, the costliest to hold last, and kept until
 // the counted ready ones cover the target; the ready ones after that
 // retire, and a pending one waits until it is ready to be walked as
 // surplus. What the kept reserves and the hosts due back lack is bought
@@ -338,7 +340,8 @@ func (ps *pass) reserves(v *marketView) {
 	}
 	candidates := ps.inMarket(v.m, func(h FleetHost) bool { return h.reserve() && !h.Protected && h.State != FleetStopping })
 	slices.SortStableFunc(candidates, func(a, b *FleetHost) int {
-		return cmp.Or(boolOrder(!counted(*a), !counted(*b)), boolOrder(!ps.fitsLargest(v, *a), !ps.fitsLargest(v, *b)), boolOrder(!a.resumable(), !b.resumable()),
+		return cmp.Or(boolOrder(!counted(*a), !counted(*b)), boolOrder(ps.misplaced(v, a.Region), ps.misplaced(v, b.Region)),
+			boolOrder(!ps.fitsLargest(v, *a), !ps.fitsLargest(v, *b)), boolOrder(!a.resumable(), !b.resumable()),
 			boolOrder(growable(a), growable(b)), cmp.Compare(ps.stoppedMicros(*a), ps.stoppedMicros(*b)),
 			cmp.Compare(a.Usable.CPUMillis, b.Usable.CPUMillis), strings.Compare(a.ID.String(), b.ID.String()))
 	})
