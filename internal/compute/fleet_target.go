@@ -128,7 +128,7 @@ func (ps *pass) target(m ReserveMarket, items []coverItem) marketTarget {
 	t.headroom, t.floor = warm, r.Warm.Floor
 	stopped := r.Stopped.Of(t.load)
 	if r.FitLargest {
-		t.largest, t.largestDisks = ps.p.LargestShape.of(m, largest, disks)
+		t.largest, t.largestDisks = ps.p.LargestShape.of(m, largest, disks, ps.s.Offers.Catalog)
 		stopped = stopped.Upper(r.Stopped.Floor.Plus(t.largest))
 	}
 	t.holds.Stopped = ps.s.Holds[m].Stopped.hold(stopped, ps.s.Now, ps.p.CostHorizon)

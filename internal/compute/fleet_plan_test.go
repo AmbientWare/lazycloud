@@ -1084,6 +1084,28 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 // keep one idle card beside them, one job keeps none, so a lone GPU job
 // never holds a second GPU host (prod held one beside every on-demand GPU
 // job on 2026-10-15). The card is bought within the size rule.
+// A market's largest-shape reserve is bounded by the largest type a reserve
+// may be: after a 10 CPU, 41 GiB A10G job, whose only fitting type exceeds
+// the 64 GiB cap, the on-demand A10G market keeps a g5.4xlarge, the largest
+// A10G type within the cap, instead of holding no reserve at all (prod
+// reported "no offer fits" for every on-demand GPU start on 2026-10-15).
+func TestTheLargestShapeReserveIsBoundedByTheTypesWithinTheCap(t *testing.T) {
+	t.Parallel()
+	s := planSnapshot(t)
+	s.Offers.Catalog = FleetCatalog()
+	s.Recent = map[ReserveMarket]FleetCapacity{{GPU: "A10G"}: {CPUMillis: 10_000, MemoryBytes: 41 * gib, GPUs: 1}}
+	plan := PlanFleet(gpuPolicy(), s)
+	var bought []string
+	for _, a := range actionsOf(plan, ActionBuyReserve) {
+		if a.Market.GPU == "A10G" && !a.Market.Preemptible {
+			bought = append(bought, a.Offer.Type.Name)
+		}
+	}
+	if mp := marketPlan(t, plan, ReserveMarket{GPU: "A10G"}); !slices.Equal(bought, []string{"g5.4xlarge"}) || mp.Reason == WaitNoOffer {
+		t.Fatalf("bought %v, reason %q; want one g5.4xlarge reserve", bought, mp.Reason)
+	}
+}
+
 func TestGPUWarmShareIsWholeCards(t *testing.T) {
 	t.Parallel()
 	typ := mustType(t, "g6.xlarge")
