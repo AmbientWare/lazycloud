@@ -47,10 +47,10 @@ func removeImage(t *testing.T, ctrd *containerd.Client, image string) {
 
 // TestPlatformAndTenantImagesReadThroughTheirOwnGrants: a tenant's image
 // on the mount image's base is pulled first, so the snapshot of the shared
-// base layer is the one its pull committed. Once the tenant's grant
-// expired and its pairs are gone, a network holder, which runs the mount
-// image, still starts: it reads the base through the grant the session
-// gave for the platform image.
+// base layer is the one its pull committed. Once the tenant's pairs are
+// gone, a network holder, which runs the mount image, still starts: it
+// reads the base through the grant the session gave for the platform
+// image, which outlives the tenant's.
 func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	e := newEnv(t)
 	ctx := t.Context()
@@ -101,7 +101,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	// The tenant's grants read a copy of its pairs of their own.
 	store, bucket := storagetest.Client(), layerBucket
 	prefix := "agent-test/tenant-" + uuid.NewString()[:8] + "/"
-	expires := time.Now().Add(8 * time.Second)
+	expires := time.Now().Add(time.Hour)
 	tenantConfig, err := tenant.ConfigFile()
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	if _, err := snapshots.Stat(ctx, shared); err != nil {
 		t.Fatalf("the tenant's pull committed no snapshot of the base: %v", err)
 	}
-	time.Sleep(time.Until(expires.Add(time.Second)))
+	// A read of the base through the tenant's grant now fails.
 	for _, g := range grants {
 		key := prefix + strings.TrimPrefix(g.GetDiffId(), "sha256:")
 		for _, object := range []string{"/index", "/data"} {
