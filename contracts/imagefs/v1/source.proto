@@ -132,6 +132,8 @@ message BucketGrant {
   string secret_access_key = 6;
   string session_token = 7;
   google.protobuf.Timestamp expires_at = 8;
+  // The workspace's key peer frame reads are signed with, 32 bytes.
+  bytes peer_key = 9;
 }
 
 message GrantDiskRequest {
@@ -221,6 +223,9 @@ message GrantVolumesRequest {
   // both empty for a refresh.
   string key = 3;
   string container_id = 4;
+  // The peer addresses, host:port, of the workspace's other hosts in the
+  // region; replaces the last list given for the workspace.
+  repeated string peers = 5;
 }
 
 message GrantVolumesResponse {}

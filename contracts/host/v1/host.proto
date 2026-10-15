@@ -187,6 +187,12 @@ message VolumeTrace {
   bool record = 2;
 }
 
+// VolumePeer is another host's volume cache, at its peer address.
+message VolumePeer {
+  string host_id = 1;
+  string address = 2;
+}
+
 // Interruption is a provider's notice that it reclaims the instance at
 // reclaim_at, such as an EC2 Spot interruption.
 message Interruption {
@@ -211,6 +217,9 @@ message Hello {
   // The last PrepareReserve attempt the host answered ready, kept across
   // boots, so a resumed or rebooted reserve names the stop it came back from.
   string sleep_attempt_id = 73;
+  // The private address other hosts of the region reach the host's volume
+  // cache on, as host:port; empty when the host serves none.
+  string peer_address = 74;
   // The images the agent runs on its own, such as its image builder and
   // volume mount image, by digest. The server answers with PlatformImages.
   repeated string platform_images = 110;
@@ -416,6 +425,9 @@ message StorageGrant {
   string session_token = 7;
   google.protobuf.Timestamp expires_at = 8;
   bool force_path_style = 9;
+  // The workspace's key, 32 bytes, that hosts holding its grant sign peer
+  // frame reads with.
+  bytes peer_key = 10;
 }
 
 // UpdateAgent asks an updatable agent to install a release and restart into
@@ -517,6 +529,9 @@ message StartContainer {
   bool record_trace = 121;
   // Set for a start that mounts platform volumes.
   VolumeTrace volume_trace = 122;
+  // Hosts of the region that hold the workspace's grant, whose volume
+  // caches a frame is asked of before the store.
+  repeated VolumePeer volume_peers = 123;
   // The W3C traceparent of the server's span that sent the start, when it
   // was sampled. The host's spans of the start are its children.
   string traceparent = 130;

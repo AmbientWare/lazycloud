@@ -621,8 +621,10 @@ type BucketGrant struct {
 	SecretAccessKey string                 `protobuf:"bytes,6,opt,name=secret_access_key,json=secretAccessKey,proto3" json:"secret_access_key,omitempty"`
 	SessionToken    string                 `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The workspace's key peer frame reads are signed with, 32 bytes.
+	PeerKey       []byte `protobuf:"bytes,9,opt,name=peer_key,json=peerKey,proto3" json:"peer_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BucketGrant) Reset() {
@@ -707,6 +709,13 @@ func (x *BucketGrant) GetSessionToken() string {
 func (x *BucketGrant) GetExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *BucketGrant) GetPeerKey() []byte {
+	if x != nil {
+		return x.PeerKey
 	}
 	return nil
 }
@@ -1132,8 +1141,11 @@ type GrantVolumesRequest struct {
 	Grant       *BucketGrant           `protobuf:"bytes,2,opt,name=grant,proto3" json:"grant,omitempty"`
 	// The container whose mount signs requests with key, 16 bytes or more;
 	// both empty for a refresh.
-	Key           string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
-	ContainerId   string `protobuf:"bytes,4,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Key         string `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	ContainerId string `protobuf:"bytes,4,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// The peer addresses, host:port, of the workspace's other hosts in the
+	// region; replaces the last list given for the workspace.
+	Peers         []string `protobuf:"bytes,5,rep,name=peers,proto3" json:"peers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1194,6 +1206,13 @@ func (x *GrantVolumesRequest) GetContainerId() string {
 		return x.ContainerId
 	}
 	return ""
+}
+
+func (x *GrantVolumesRequest) GetPeers() []string {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
 }
 
 type GrantVolumesResponse struct {
@@ -1577,7 +1596,7 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"e\n" +
 	"\x10EndTraceResponse\x125\n" +
 	"\x05reads\x18\x01 \x03(\v2\x1f.lazycloud.imagefs.v1.FrameReadR\x05reads\x12\x1a\n" +
-	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xb3\x02\n" +
+	"\bcomplete\x18\x02 \x01(\bR\bcomplete\"\xce\x02\n" +
 	"\vBucketGrant\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x16\n" +
@@ -1587,7 +1606,8 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\x11secret_access_key\x18\x06 \x01(\tR\x0fsecretAccessKey\x12#\n" +
 	"\rsession_token\x18\a \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
-	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"d\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x19\n" +
+	"\bpeer_key\x18\t \x01(\fR\apeerKey\"d\n" +
 	"\x10GrantDiskRequest\x12\x17\n" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x127\n" +
 	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\"\x13\n" +
@@ -1613,12 +1633,13 @@ const file_imagefs_v1_source_proto_rawDesc = "" +
 	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"[\n" +
 	"\x11DiskReadsResponse\x12!\n" +
 	"\fstart_frames\x18\x01 \x03(\rR\vstartFrames\x12#\n" +
-	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\xa6\x01\n" +
+	"\rrecent_frames\x18\x02 \x03(\rR\frecentFrames\"\xbc\x01\n" +
 	"\x13GrantVolumesRequest\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x127\n" +
 	"\x05grant\x18\x02 \x01(\v2!.lazycloud.imagefs.v1.BucketGrantR\x05grant\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12!\n" +
-	"\fcontainer_id\x18\x04 \x01(\tR\vcontainerId\"\x16\n" +
+	"\fcontainer_id\x18\x04 \x01(\tR\vcontainerId\x12\x14\n" +
+	"\x05peers\x18\x05 \x03(\tR\x05peers\"\x16\n" +
 	"\x14GrantVolumesResponse\"=\n" +
 	"\n" +
 	"VolumeRead\x12\x1b\n" +
