@@ -157,12 +157,14 @@ type frameCache struct {
 	unstored map[frameKey]*unstored
 	kept     []frameKey
 	// objects are the volume object versions stored as one file each, most
-	// recently used first in objectList, and links the complete ones in
-	// the link tree under linkDir by link path.
+	// recently used first in objectList, and links the version that holds
+	// each path of the link tree under linkDir. linkMu orders the tree's
+	// renames and removals; it is taken before mu, never under it.
 	objects    map[string]*storedObject
 	objectList list.List
 	links      map[string]*storedObject
 	linkDir    string
+	linkMu     sync.Mutex
 }
 
 func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, error) {

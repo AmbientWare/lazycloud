@@ -47,7 +47,7 @@ type storedObject struct {
 	// was last read or stored, which orders eviction against frames.
 	stored int64
 	used   time.Time
-	// linked is set once the complete file is in the link tree.
+	// linked is set while the version holds its link path.
 	linked bool
 	elem   *list.Element
 }
@@ -149,51 +149,81 @@ func (c *frameCache) storeObjectFrame(src objectSource, k frameKey, data []byte)
 }
 
 // linkObject puts o's complete file at its link path, in place of any
-// file there, with the store's modification time.
+// file there, with the store's modification time. o takes the path under
+// mu before any file moves, and the move runs under linkMu once o still
+// holds the path, as every removal does, so a version evicted as another
+// is linked never removes the other's link.
 func (c *frameCache) linkObject(o *storedObject) error {
+	link := o.info.link
+	c.mu.Lock()
+	if c.objects[o.key] != o {
+		c.mu.Unlock()
+		return nil
+	}
+	if other := c.links[link]; other != nil && other != o {
+		other.linked = false
+	}
+	c.links[link] = o
+	o.linked = true
+	c.mu.Unlock()
+	c.linkMu.Lock()
+	defer c.linkMu.Unlock()
+	if !c.holdsLink(o) {
+		return nil
+	}
 	if err := os.Chtimes(o.path, o.info.modified, o.info.modified); err != nil {
 		return fmt.Errorf("set the file's time: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(o.info.link), 0o755); err != nil { //nolint:gosec // Workloads read the tree.
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil { //nolint:gosec // Workloads read the tree.
 		return fmt.Errorf("make the link's directory: %w", err)
 	}
-	tmp := o.info.link + ".linking"
+	tmp := link + ".linking"
 	_ = os.Remove(tmp)
 	if err := os.Link(o.path, tmp); err != nil {
 		return fmt.Errorf("link the file: %w", err)
 	}
-	if err := os.Rename(tmp, o.info.link); err != nil {
+	if err := os.Rename(tmp, link); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("place the link: %w", err)
 	}
+	return nil
+}
+
+// holdsLink reports whether o holds its link path.
+func (c *frameCache) holdsLink(o *storedObject) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if other := c.links[o.info.link]; other != nil && other != o {
-		other.linked = false
+	return c.links[o.info.link] == o
+}
+
+// unlink removes the link tree's file at o's link path while o holds it.
+func (c *frameCache) unlink(o *storedObject) {
+	c.linkMu.Lock()
+	defer c.linkMu.Unlock()
+	c.mu.Lock()
+	held := c.links[o.info.link] == o
+	if held {
+		delete(c.links, o.info.link)
+		o.linked = false
 	}
-	c.links[o.info.link] = o
-	o.linked = true
-	return nil
+	c.mu.Unlock()
+	if !held {
+		return
+	}
+	if err := os.Remove(o.info.link); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.log.Warn("removing a volume object's link failed", "link", o.info.link, "error", err)
+	}
 }
 
 // dropLink removes the link tree's file at link unless it is version's,
 // so a workload never opens a version the mount no longer names. The tree
 // starts empty with the cache, so links names every file in it.
 func (c *frameCache) dropLink(link, version string) {
-	if link == "" {
-		return
-	}
 	c.mu.Lock()
 	o := c.links[link]
-	if o == nil || o.key == version {
-		c.mu.Unlock()
-		return
-	}
-	delete(c.links, link)
-	o.linked = false
 	c.mu.Unlock()
-	if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		c.log.Warn("removing a volume object's link failed", "link", link, "error", err)
+	if o != nil && o.key != version {
+		c.unlink(o)
 	}
 }
 
@@ -201,19 +231,14 @@ func (c *frameCache) dropLink(link, version string) {
 func (c *frameCache) unlistObjectLocked(o *storedObject) {
 	c.objectList.Remove(o.elem)
 	delete(c.objects, o.key)
-	if o.linked && c.links[o.info.link] == o {
-		delete(c.links, o.info.link)
-	}
 	c.used -= o.stored
 }
 
 // removeObject deletes o's file and its link. An open reader keeps the
 // file until it closes, so the space counts free once it does.
 func (c *frameCache) removeObject(o *storedObject) int64 {
-	if o.linked {
-		if err := os.Remove(o.info.link); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			c.log.Warn("removing a volume object's link failed", "link", o.info.link, "error", err)
-		}
+	if o.info.link != "" {
+		c.unlink(o)
 	}
 	if err := os.Remove(o.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		c.log.Warn("evicting a volume object failed", "object", o.key, "error", err)
