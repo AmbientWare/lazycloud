@@ -37,6 +37,15 @@ const (
 	trimEvery = 5 * time.Second
 	// frameDecoders bounds the layer and disk frames decoded at once.
 	frameDecoders = 16
+	// writeQueue bounds the volume frames waiting for the writer, which
+	// stores them one at a time: a disk slower than the store holds back
+	// fills and warms, never a read.
+	writeQueue = 16
+	// keptFrames bounds the volume frames held in memory, not queued for
+	// the writer, for the reads that come back to them: a loader reads
+	// tensors in name order, not file order, and GeeseFS reads a range
+	// again once its own buffers drop it.
+	keptFrames = 32
 )
 
 // errNoGrant marks a read of a layer or disk the agent has not granted, or
@@ -57,7 +66,22 @@ type frameSource interface {
 	frameLen(frame int) int
 	// fetch reads frame from the store, trying again while that may help.
 	fetch(ctx context.Context, frame int) ([]byte, error)
+	store() frameStore
 }
+
+// frameStore is how the cache keeps a source's fetched frames.
+type frameStore int
+
+const (
+	// storeNow writes each frame to disk before its reads get it.
+	storeNow frameStore = iota + 1
+	// storeBehind hands each frame to the writer, holding it in memory
+	// meanwhile, so a read never waits on the disk.
+	storeBehind
+	// storeNone holds frames in memory only, on a host whose disk reads
+	// slower than the stores deliver.
+	storeNone
+)
 
 // cachedFrame is one stored frame. Every store writes a new file, so an
 // eviction deletes only the file it chose.
@@ -67,6 +91,14 @@ type cachedFrame struct {
 	size int64
 	// held says the frame is on the list of held frames.
 	held bool
+}
+
+// unstored is a volume frame the cache holds in memory, readable, until
+// the writer stores it or a newer kept frame drops it. Guarded by
+// frameCache.mu.
+type unstored struct {
+	data   []byte
+	queued bool
 }
 
 // frameCache keeps uncompressed frames on local disk under a byte bound,
@@ -109,6 +141,10 @@ type frameCache struct {
 	// life bounds every fetch: a fetch is shared, so no one reader's or
 	// fill's context may end it.
 	life context.Context
+	// writes queues the unstored frames the writer stores next; writer
+	// waits for the writer, which ends with life.
+	writes chan frameKey
+	writer sync.WaitGroup
 
 	mu   sync.Mutex
 	used int64
@@ -127,6 +163,10 @@ type frameCache struct {
 	// mounted digest share. mountWake closes when a digest mounts.
 	live      map[imagefs.Digest]*layer
 	mountWake chan struct{}
+	// unstored holds the volume frames not on disk: queued for the writer,
+	// or kept, oldest first in kept, at most keptFrames.
+	unstored map[frameKey]*unstored
+	kept     []frameKey
 }
 
 func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, error) {
@@ -152,8 +192,11 @@ func newFrameCache(life context.Context, dir string, cfg Config) (*frameCache, e
 		holds:      make(map[frameKey]int),
 		live:       make(map[imagefs.Digest]*layer),
 		mountWake:  make(chan struct{}),
+		writes:     make(chan frameKey, writeQueue),
+		unstored:   make(map[frameKey]*unstored),
 	}
 	c.free = c.freeBytes()
+	c.writer.Go(c.write)
 	return c, nil
 }
 
@@ -263,12 +306,12 @@ func (c *frameCache) recentlyHeld(keys map[frameKey]uint32, limit int) []uint32 
 	return out
 }
 
-// cached reports whether k is stored.
+// cached reports whether k is stored or queued for the writer.
 func (c *frameCache) cached(k frameKey) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.frames[k]
-	return ok
+	_, stored := c.frames[k]
+	return stored || c.unstored[k] != nil && c.unstored[k].queued
 }
 
 // read fills p with frame's bytes from off and reports whether the cache
@@ -279,14 +322,20 @@ func (c *frameCache) read(src frameSource, frame int, p []byte, off int64) (bool
 		return true, 0, nil
 	}
 	began := time.Now()
-	data, err := c.load(src, frame) //nolint:contextcheck // a shared fetch runs under the cache's life
-	if err != nil {
-		return false, 0, err
+	data, hit := c.fromMemory(src.key(frame))
+	if !hit {
+		var err error
+		if data, err = c.load(src, frame); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
+			return false, 0, err
+		}
 	}
 	if off+int64(len(p)) > int64(len(data)) {
 		return false, 0, fmt.Errorf("%w: read past frame %d of %s", imagefs.ErrInvalidIndex, frame, src.key(frame).object)
 	}
 	copy(p, data[off:])
+	if hit {
+		return true, 0, nil
+	}
 	return false, time.Since(began), nil
 }
 
@@ -330,19 +379,23 @@ next:
 		}
 		wg.Go(func() { //nolint:contextcheck // a shared fetch runs under the cache's life
 			defer func() { <-c.filling }()
-			if _, err := c.load(src, i); err != nil {
+			if _, err := c.load(src, i); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
 				c.log.Debug("background fetch failed", "object", src.key(i).object, "frame", i, "error", err)
 				return
 			}
 			loaded.Add(1)
+			if src.store() == storeBehind {
+				c.queue(ctx, src.key(i))
+			}
 		})
 	}
 	wg.Wait()
 	return loaded.Load()
 }
 
-// load returns frame's bytes, fetching it once however many reads wait.
-// The fetch runs under the cache's life and fetchTimeout alone.
+// load returns frame's bytes, fetching it once however many reads wait,
+// and keeps them as src stores. The fetch runs under the cache's life and
+// fetchTimeout alone.
 func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 	k := src.key(frame)
 	v, err, _ := c.fetches.Do(k.object+"/"+strconv.Itoa(k.frame), func() (any, error) {
@@ -351,6 +404,9 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 			if data, err := os.ReadFile(f.path); err == nil && len(data) == src.frameLen(frame) {
 				return data, nil
 			}
+		}
+		if data, ok := c.fromMemory(k); ok {
+			return data, nil
 		}
 		ctx, cancel := context.WithTimeout(c.life, fetchTimeout)
 		defer cancel()
@@ -364,8 +420,13 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := c.store(k, data); err != nil {
-			c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
+		switch src.store() {
+		case storeNow:
+			if err := c.store(k, data); err != nil {
+				c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
+			}
+		case storeBehind, storeNone:
+			c.holdFrame(k, data, src.store() == storeBehind)
 		}
 		return data, nil
 	})
@@ -410,9 +471,100 @@ func retryable(err error) bool {
 	return true
 }
 
-// store writes a fetched frame to a new file and keeps it. The frame's
-// bytes reach their readers whether or not it is stored.
+// holdFrame keeps a volume frame in memory, queued for the writer when it is to
+// be stored and the queue has room, and otherwise kept for the reads that
+// come back to it, dropping the oldest kept frame past keptFrames.
+func (c *frameCache) holdFrame(k frameKey, data []byte, queue bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	u := &unstored{data: data}
+	c.unstored[k] = u
+	if queue {
+		select {
+		case c.writes <- k:
+			u.queued = true
+			return
+		default:
+		}
+	}
+	c.keepLocked(k)
+}
+
+// keepLocked lists k last among the kept frames and drops the oldest past
+// keptFrames.
+func (c *frameCache) keepLocked(k frameKey) {
+	c.kept = append(slices.DeleteFunc(c.kept, func(old frameKey) bool { return old == k }), k)
+	for len(c.kept) > keptFrames {
+		if old := c.kept[0]; c.unstored[old] != nil && !c.unstored[old].queued {
+			delete(c.unstored, old)
+		}
+		c.kept = c.kept[1:]
+	}
+}
+
+// fromMemory returns a volume frame held in memory.
+func (c *frameCache) fromMemory(k frameKey) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if u := c.unstored[k]; u != nil {
+		return u.data, true
+	}
+	return nil, false
+}
+
+// queue hands a frame a fill or warm loaded to the writer once it has
+// room, so they go no faster than the disk stores, unless ctx ends first.
+func (c *frameCache) queue(ctx context.Context, k frameKey) {
+	c.mu.Lock()
+	u := c.unstored[k]
+	c.mu.Unlock()
+	if u == nil || u.queued {
+		return
+	}
+	select {
+	case c.writes <- k:
+	case <-ctx.Done():
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	u.queued = true
+	c.kept = slices.DeleteFunc(c.kept, func(old frameKey) bool { return old == k })
+}
+
+// write stores the queued frames until the cache's life ends.
+func (c *frameCache) write() {
+	for {
+		var k frameKey
+		select {
+		case <-c.life.Done():
+			return
+		case k = <-c.writes:
+		}
+		c.mu.Lock()
+		u := c.unstored[k]
+		c.mu.Unlock()
+		if u == nil {
+			continue
+		}
+		if err := c.store(k, u.data); err != nil {
+			c.log.Warn("frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
+		}
+		c.mu.Lock()
+		if c.unstored[k] == u {
+			delete(c.unstored, k)
+		}
+		c.mu.Unlock()
+	}
+}
+
+// store writes a fetched frame to a new file, after evicting what the
+// cache must to stay within its bounds with it, and keeps it.
 func (c *frameCache) store(k frameKey, data []byte) error {
+	c.mu.Lock()
+	victims := c.evictLocked(nil, int64(len(data)))
+	c.mu.Unlock()
+	c.remove(victims)
 	file, err := os.CreateTemp(c.dir, "frame-")
 	if err != nil {
 		return fmt.Errorf("store frame: %w", err)
@@ -463,17 +615,17 @@ func (c *frameCache) keep(k frameKey, path string, size, written int64) {
 	}
 	c.linkLocked(&cachedFrame{key: k, path: path, size: size}, true)
 	c.free -= written
-	victims = c.evictLocked(victims)
+	victims = c.evictLocked(victims, 0)
 	c.mu.Unlock()
 	c.remove(victims)
 }
 
 // evictLocked unlists frames, least recently used first, until the cache
-// is within its bound and the volume has reserve free, and returns them
-// with victims for remove.
-func (c *frameCache) evictLocked(victims []*cachedFrame) []*cachedFrame {
-	short := c.reserve - c.free
-	for c.used > c.limit || short > 0 {
+// is within its bound and the volume has reserve free with incoming more
+// bytes, and returns them with victims for remove.
+func (c *frameCache) evictLocked(victims []*cachedFrame, incoming int64) []*cachedFrame {
+	short := c.reserve - c.free + incoming
+	for c.used+incoming > c.limit || short > 0 {
 		from := &c.idle
 		if from.Len() == 0 {
 			from = &c.held
@@ -513,7 +665,7 @@ func (c *frameCache) trim(ctx context.Context) {
 		free := c.freeBytes()
 		c.mu.Lock()
 		c.free = free
-		victims := c.evictLocked(nil)
+		victims := c.evictLocked(nil, 0)
 		c.mu.Unlock()
 		c.remove(victims)
 	}

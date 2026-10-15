@@ -139,6 +139,9 @@ message HostMessage {
     // The frames a container read through its first task or request, for a
     // start that asked with record_trace.
     StartupTrace startup_trace = 120;
+    // The volume objects a container read through its first task or
+    // request, for a start whose volume_trace asked to record them.
+    ContainerVolumeTrace volume_trace = 121;
     // Spans the host recorded in traces the server sampled. The agent sends
     // them while the session's queue has room and drops them otherwise.
     Traces traces = 130;
@@ -165,6 +168,23 @@ message StartupTrace {
 // numbers the layer's frames.
 message ImageTrace {
   repeated lazycloud.imagefs.v1.FrameRead reads = 1;
+}
+
+// ContainerVolumeTrace is the objects of 1 MiB or more a container's mount
+// of its platform volumes read from its start through the end of its first
+// task or request, or ten minutes when none ended sooner, each version once
+// in first-read order.
+message ContainerVolumeTrace {
+  string container_id = 1;
+  repeated lazycloud.imagefs.v1.VolumeRead reads = 2;
+}
+
+// VolumeTrace is what the start's platform volumes were read for: the
+// objects its workload's earlier containers read, which the host warms
+// before it pulls the image, and whether to record a new trace.
+message VolumeTrace {
+  repeated lazycloud.imagefs.v1.VolumeRead reads = 1;
+  bool record = 2;
 }
 
 // Interruption is a provider's notice that it reclaims the instance at
@@ -495,6 +515,8 @@ message StartContainer {
   // Record the frames this container reads through its first task or
   // request and report them in a StartupTrace.
   bool record_trace = 121;
+  // Set for a start that mounts platform volumes.
+  VolumeTrace volume_trace = 122;
   // The W3C traceparent of the server's span that sent the start, when it
   // was sampled. The host's spans of the start are its children.
   string traceparent = 130;

@@ -12,7 +12,9 @@ import (
 // the keys its workspace secrets hold, which the agent keeps beside the
 // mount until the mount goes.
 
-func (v *volumes) bucketKeys(name string) string {
+// mountKeys holds the keys the mount container name signs with: a cloud
+// bucket's own, or the endpoint key of a platform-volume mount.
+func (v *volumes) mountKeys(name string) string {
 	return filepath.Join(v.a.cfg.StateDir, "storage", "buckets", name)
 }
 
@@ -34,7 +36,7 @@ func (v *volumes) bucketSpec(name string, group []*hostproto.VolumeMount) (mount
 	for i, s := range group {
 		dirs[i] = strings.TrimPrefix(s.GetCloudBucket().GetPrefix(), shared)
 	}
-	creds := v.bucketKeys(name)
+	creds := v.mountKeys(name)
 	if err := writeCredentials(creds, processCredentials{Version: 1, AccessKeyID: b.GetAccessKeyId(), SecretAccessKey: b.GetSecretAccessKey()}); err != nil {
 		return mountSpec{}, nil, err
 	}

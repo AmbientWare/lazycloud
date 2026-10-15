@@ -431,9 +431,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.replaceSnapshotter(ctx); err != nil {
 		a.log.Warn("replacing the snapshotter failed", "error", err)
 	}
-	if a.volumes.endpoint, err = a.volumeEndpoint(ctx); err != nil {
-		a.log.Warn("the snapshotter did not answer for volumes; volumes mount from their buckets", "error", err)
-	}
 	a.volumes.adoptGrants()
 	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", a.capacity.GetCpuMillis(),

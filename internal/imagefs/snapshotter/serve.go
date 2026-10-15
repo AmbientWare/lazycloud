@@ -23,8 +23,8 @@ const stopGrace = 10 * time.Second
 
 // Serve runs the snapshotter on a Unix socket only root reaches, serving
 // containerd's snapshotter API, LayerSources, DiskSources and
-// VolumeSources, and with cfg.VolumeAddr the volumes' S3 endpoint, until
-// ctx ends. ready runs once they accept calls.
+// VolumeSources, and the volumes' S3 endpoint on cfg.VolumeAddr, until ctx
+// ends. ready runs once they accept calls.
 func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	s, err := newSnapshotter(ctx, cfg)
 	if err != nil {
@@ -53,21 +53,15 @@ func Serve(ctx context.Context, cfg Config, socket string, ready func()) error {
 	imagefsproto.RegisterVolumeSourcesServer(server, volumeSources{volumes: s.volumes})
 	// Forwarded writes and reads run as long as they take.
 	volumes := &http.Server{Handler: s.volumes, ReadHeaderTimeout: stopGrace}
-	var endpoint net.Listener
-	if cfg.VolumeAddr != "" {
-		// A host whose port is taken mounts its volumes from their buckets.
-		if endpoint, err = lc.Listen(ctx, "tcp", cfg.VolumeAddr); err != nil {
-			cfg.Logger.Error("the volume endpoint cannot listen; volumes mount from their buckets", "error", err)
-		} else {
-			s.volumes.addr = cfg.VolumeAddr
-		}
+	endpoint, err := lc.Listen(ctx, "tcp", cfg.VolumeAddr)
+	if err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("serve the volume endpoint: %w", err)
 	}
 	var serving sync.WaitGroup
 	served := make(chan error, 2)
 	serving.Go(func() { served <- server.Serve(listener) })
-	if endpoint != nil {
-		serving.Go(func() { served <- volumes.Serve(endpoint) })
-	}
+	serving.Go(func() { served <- volumes.Serve(endpoint) })
 	ready()
 	select {
 	case err = <-served:

@@ -40,10 +40,6 @@ setup() {
   # Builds push to the registry forward on the VM's loopback.
   printf '[Service]\nEnvironment=LAZYCLOUD_BUILD_NETWORK=host\n' |
     shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-agent.service.d && cat >/etc/systemd/system/lazycloud-agent.service.d/local-host.conf'
-  # Its snapshotter caches volumes as on GPU hosts, whose data volume is
-  # instance store.
-  printf '[Service]\nEnvironment=LAZYCLOUD_VOLUME_CACHE=true\n' |
-    shell sh -c 'mkdir -p /etc/systemd/system/lazycloud-snapshotter.service.d && cat >/etc/systemd/system/lazycloud-snapshotter.service.d/local-host.conf'
   shell systemctl daemon-reload && shell systemctl enable --now lazycloud-bridge-address.service
 }
 

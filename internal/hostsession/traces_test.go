@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 )
@@ -85,5 +86,67 @@ func TestStartupTracesStayWithTheirWorkspace(t *testing.T) {
 	}
 	if other := starts[theirsAgain.String()]; !other.GetRecordTrace() || other.GetPrefetch() != nil {
 		t.Fatalf("another workspace's start records %v and prefetches %v", other.GetRecordTrace(), other.GetPrefetch())
+	}
+}
+
+// TestVolumeTracesComeBackWithTheirWorkload: a workload's first start that
+// mounts a volume asks the host to record what it reads, and the trace the
+// host reports for its container comes with the workload's next start. A
+// trace for a container another host runs is dropped.
+func TestVolumeTracesComeBackWithTheirWorkload(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	elsewhere, _ := h.enroll()
+	spec := `{"handler": "a:b", "image": {"python_version": "3.12"}, "volumes": [{"name": "data", "mount_path": "data"}]}`
+	_, mine := h.startingWith(host, spec)
+	theirWorkspace, theirs := h.startingWith(elsewhere, spec)
+	theirMounts, err := h.store.MountVolumes(t.Context(), theirWorkspace, theirs, []apitypes.VolumeMountSpec{{Name: "data"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := open(t, ctx, h.client)
+	in := commands(t, stream)
+	first := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart()
+	if trace := first.GetVolumeTrace(); !trace.GetRecord() || len(trace.GetReads()) != 0 {
+		t.Fatalf("the workload's first start carries %v", trace)
+	}
+	report := func(container uuid.UUID, volume string, paths ...string) {
+		t.Helper()
+		reads := make([]*imagefsproto.VolumeRead, len(paths))
+		for n, p := range paths {
+			reads[n] = &imagefsproto.VolumeRead{VolumeId: volume, Path: p}
+		}
+		if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_VolumeTrace{VolumeTrace: &hostproto.ContainerVolumeTrace{
+			ContainerId: container.String(), Reads: reads,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report(theirs, theirMounts[0].Volume.String(), "theirs.bin")
+	volume := first.GetVolumes()[0].GetVolume().GetVolumeId()
+	report(mine, volume, "model.bin", "vae.bin")
+	var stored int
+	for deadline := time.Now().Add(5 * time.Second); stored == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if err := h.pool.QueryRow(t.Context(), `select count(*) from volume_traces`).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stored != 1 {
+		t.Fatalf("%d volume traces stored, want the host's own container's", stored)
+	}
+
+	var again uuid.UUID
+	if err := h.pool.QueryRow(t.Context(), `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+		select workspace_id, release_id, 'starting', host_id, 1, 1000, 1 << 28, now() from containers where id = $1 returning id`, mine).Scan(&again); err != nil {
+		t.Fatal(err)
+	}
+	next := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart().GetContainerId() == again.String() }).GetStart()
+	var paths []string
+	for _, r := range next.GetVolumeTrace().GetReads() {
+		paths = append(paths, r.GetPath())
+	}
+	if next.GetVolumeTrace().GetRecord() || !slices.Equal(paths, []string{"model.bin", "vae.bin"}) {
+		t.Fatalf("the workload's next start carries %v", next.GetVolumeTrace())
 	}
 }

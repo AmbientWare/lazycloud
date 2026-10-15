@@ -37,6 +37,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
@@ -889,14 +890,13 @@ func TestSlicesOutliveADroppedSystemdConnection(t *testing.T) {
 	}
 }
 
-// TestCachedVolumesMountThroughTheSnapshotter: on a host that caches
-// volumes, as test hosts do, the mount container holds only the
-// workspace's endpoint key, no store credential. What
+// TestPlatformVolumesMountThroughTheSnapshotter: the mount container of a
+// container's platform volumes reaches only the snapshotter's loopback
+// endpoint and holds only its container's key, no store credential. What
 // one container writes, another container's mount reads, symlinks
 // included, and a file overwritten in the bucket reads anew once listed
 // again.
-func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
-	t.Parallel()
+func TestPlatformVolumesMountThroughTheSnapshotter(t *testing.T) {
 	e, s, store := volumeEnv(t)
 	source := serveSource(t, "testdata/volumes")
 	workspace, volume := uuid.NewString(), uuid.NewString()
@@ -906,14 +906,28 @@ func TestCachedVolumesMountThroughTheSnapshotter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if script := strings.Join(inspect.Container.Config.Entrypoint, " "); !strings.Contains(script, "'--endpoint' 'http://"+layersource.VolumeEndpoint+"'") {
+		t.Fatalf("the mount reaches another endpoint: %s", script)
+	}
+	keys := 0
 	for _, m := range inspect.Container.Mounts {
 		if m.Destination != "/creds" {
 			continue
 		}
-		key, err := os.ReadFile(filepath.Join(m.Source, "credentials.json")) //nolint:gosec // The test's own state.
-		if err != nil || filepath.Base(m.Source) != "endpoint" || strings.Contains(string(key), store.accessKey) {
-			t.Fatalf("the mount container holds %s: %s (%v)", m.Source, key, err)
+		entries, err := os.ReadDir(m.Source)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, entry := range entries {
+			body, err := os.ReadFile(filepath.Join(m.Source, entry.Name())) //nolint:gosec // The test's own state.
+			if err != nil || strings.Contains(string(body), store.accessKey) || strings.Contains(string(body), store.secretKey) {
+				t.Fatalf("the mount container holds %s: %s (%v)", entry.Name(), body, err)
+			}
+		}
+		keys++
+	}
+	if keys != 1 {
+		t.Fatalf("the mount container has %d key directories", keys)
 	}
 
 	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "4"]}`)))
@@ -1080,5 +1094,32 @@ func TestWritesJustBeforeAStopAreStored(t *testing.T) {
 				t.Fatalf("the bucket holds %s, written %s", got, sum)
 			}
 		})
+	}
+}
+
+// TestAStartReportsTheVolumeObjectsItRead: a start asked to record its
+// volume reads reports, once its first task ends, the objects that task
+// read.
+func TestAStartReportsTheVolumeObjectsItRead(t *testing.T) {
+	e, s, store := volumeEnv(t)
+	source := serveSource(t, "testdata/volumes")
+	workspace, volume := uuid.NewString(), uuid.NewString()
+	s.send(t, store.grant(workspace))
+	writer := e.startVolume(s, source, workspace, volume)
+	sum := result(t, e.completion(e.task(writer, `{"args": ["large", "/volumes/data/model.bin", "3"]}`)))
+
+	start := volumeStart(e, source, workspace, volume, true)
+	start.GetStart().VolumeTrace = &hostproto.VolumeTrace{Record: true}
+	reader := start.GetStart().GetContainerId()
+	s.send(t, start)
+	s.phase(t, reader, ready)
+	if got := result(t, e.completion(e.task(reader, `{"args": ["sum", "/volumes/data/model.bin"]}`))); got != sum {
+		t.Fatalf("the reader sums %s, written %s", got, sum)
+	}
+	report := s.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool {
+		return m.GetVolumeTrace().GetContainerId() == reader
+	}).GetVolumeTrace()
+	if reads := report.GetReads(); len(reads) != 1 || reads[0].GetVolumeId() != volume || reads[0].GetPath() != "model.bin" {
+		t.Fatalf("the start reported %v", reads)
 	}
 }

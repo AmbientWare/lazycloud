@@ -43,6 +43,12 @@ order by 1;
 update containers set image_reference = @reference
 where id = @id and host_id = @host_id and state = 'starting';
 
+-- name: ContainerWorkload :one
+-- The workspace and workload of a live container of a release on the host.
+select c.workspace_id, r.workload_id from containers c
+join releases r on r.id = c.release_id
+where c.id = @id and c.host_id = @host_id and c.state <> 'stopped';
+
 -- name: ContainerImage :one
 -- The workspace and image reference of a live container on the host.
 select workspace_id, image_reference::text as reference from containers

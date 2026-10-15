@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,16 +29,17 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
+	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 	"github.com/AmbientWare/lazycloud/internal/platformimages"
 )
 
 // A container's platform volumes share one mount container, which mounts the
-// volumes/ prefix of its workspace bucket; each cloud bucket it names gets
-// one more. On a host that caches volumes the mount addresses the
-// snapshotter's endpoint, which holds the workspace's credential; elsewhere
-// GeeseFS holds it. The workload binds each volume's own directory of the
-// mount, never the credentials or other volumes, through a bind the agent
-// makes of it, which needs root.
+// volumes/ prefix of its workspace bucket through the snapshotter's
+// endpoint, which holds the workspace's credential: the mount signs with a
+// key of its container's only. Each cloud bucket the container names gets
+// one more mount container, which holds the bucket's keys. The workload
+// binds each volume's own directory of the mount, never the keys or other
+// volumes, through a bind the agent makes of it, which needs root.
 // A mount container shares its mount with the host through a
 // shared-propagation bind of the mount directory, so it outlives agent
 // restarts, like its workload.
@@ -45,7 +47,9 @@ import (
 // (slices.go), inside the memory the server reserved for them.
 const (
 	labelKind = "lazycloud.kind"
-	kindMount = "volume-mount"
+	// labelWorkspace names the workspace of a platform-volume mount.
+	labelWorkspace = "lazycloud.workspace"
+	kindMount      = "volume-mount"
 	// grantWait bounds how long a start waits for a workspace's first grant.
 	grantWait = time.Minute
 	// mountWait bounds how long a new mount takes to appear once its
@@ -86,11 +90,17 @@ const (
 	mounterFlushSeconds = 600
 	// grantMargin is how long a stored key must still be valid to mount.
 	grantMargin = time.Minute
+	// volumeTraceWindow bounds the reads a start records: a cold load of a
+	// model's weights takes minutes on a small host.
+	volumeTraceWindow = 10 * time.Minute
 )
 
 // volumes owns the host's mount containers and their credentials.
 type volumes struct {
 	a *Agent
+	// sources is the snapshotter's VolumeSources; set before the first
+	// session.
+	sources imagefsproto.VolumeSourcesClient
 
 	mu sync.Mutex
 	// granted is closed once a workspace's first grant is written.
@@ -99,12 +109,6 @@ type volumes struct {
 	mounts map[string][]*mounter
 	// bus reaches systemd, which runs the slices.
 	bus *systemd.Conn
-
-	// sources is the snapshotter's VolumeSources, and endpoint the address
-	// platform volumes mount through, empty when they mount from their
-	// buckets; set before the first session.
-	sources  imagefsproto.VolumeSourcesClient
-	endpoint string
 }
 
 // mounter is one mount container.
@@ -113,8 +117,9 @@ type mounter struct {
 	// keys; dir is the host path of the mount; id is the Docker id once it
 	// runs.
 	name, dir, id string
-	// container is the workload the mount serves.
-	container string
+	// container is the workload the mount serves, and workspace the one
+	// whose platform volumes it mounts, empty for a cloud bucket's.
+	container, workspace string
 	// exited closes when the mount container stops running.
 	exited chan struct{}
 
@@ -138,8 +143,8 @@ func (v *volumes) mountDir() string { return filepath.Join(v.a.cfg.StateDir, "mo
 // newMounter returns the mount container name, which serves container. Each
 // mounts in its own directory directly in the mount directory, so no mount
 // lies inside another's.
-func (v *volumes) newMounter(name, container string) *mounter {
-	return &mounter{name: name, dir: filepath.Join(v.mountDir(), name), container: container, exited: make(chan struct{})}
+func (v *volumes) newMounter(name, container, workspace string) *mounter {
+	return &mounter{name: name, dir: filepath.Join(v.mountDir(), name), container: container, workspace: workspace, exited: make(chan struct{})}
 }
 
 func mounterName(container string, n int) string {
@@ -202,9 +207,8 @@ func writeCredentials(dir string, creds processCredentials) error {
 	return nil
 }
 
-// grant stores a workspace's credentials where its mounts read them. On a
-// host that caches volumes the grant counts once grantCache hands it to
-// the snapshotter.
+// grant stores a workspace's credentials, which the snapshotter's grants
+// and the disks' publishes read.
 func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	workspace := g.GetWorkspaceId()
 	if !isUUID(workspace) {
@@ -229,19 +233,15 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err := writeFileAtomic(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
-	if v.endpoint != "" {
-		return nil
-	}
 	v.mu.Lock()
 	v.markGranted(workspace)
 	v.mu.Unlock()
 	return nil
 }
 
-// grantCache hands the stored grant of a workspace to the snapshotter of a
-// host that caches volumes, with the key its mounts sign with, and counts
-// the grant as received.
-func (v *volumes) grantCache(ctx context.Context, workspace string) error {
+// grantVolumes hands the stored grant of a workspace to the snapshotter,
+// with a container's mount key, or with "" none.
+func (v *volumes) grantVolumes(ctx context.Context, workspace, container, key string) error {
 	c, err := v.credentials(workspace)
 	if err != nil {
 		return err
@@ -250,40 +250,121 @@ func (v *volumes) grantCache(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
-	key, err := v.endpointKey(workspace)
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
 	defer cancel()
-	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, Key: key, Grant: &imagefsproto.BucketGrant{
+	if _, err := v.sources.GrantVolumes(ctx, &imagefsproto.GrantVolumesRequest{WorkspaceId: workspace, ContainerId: container, Key: key, Grant: &imagefsproto.BucketGrant{
 		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.PathStyle,
 		AccessKeyId: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, ExpiresAt: timestamppb.New(c.Expires),
 	}}); err != nil {
 		return fmt.Errorf("grant volumes to the snapshotter: %w", err)
 	}
-	v.mu.Lock()
-	v.markGranted(workspace)
-	v.mu.Unlock()
 	return nil
 }
 
-// endpointCreds holds the credential_process files a mount of a
-// workspace's volumes signs with on a host that caches volumes: a random
-// key of the workspace's, which the snapshotter checks.
-func (v *volumes) endpointCreds(workspace string) string {
-	return filepath.Join(v.storageDir(workspace), "endpoint")
+// refreshGrant hands a workspace's fresh grant to the snapshotter with the
+// key of each live mount of its volumes, so one restarted since knows them
+// all again.
+func (v *volumes) refreshGrant(ctx context.Context, workspace string) error {
+	v.mu.Lock()
+	var mounts []*mounter
+	for _, ms := range v.mounts {
+		for _, m := range ms {
+			if m.workspace == workspace {
+				mounts = append(mounts, m)
+			}
+		}
+	}
+	v.mu.Unlock()
+	if len(mounts) == 0 {
+		return v.grantVolumes(ctx, workspace, "", "")
+	}
+	for _, m := range mounts {
+		key, err := v.mountKey(m.name)
+		if err != nil {
+			return err
+		}
+		if err := v.grantVolumes(ctx, workspace, m.container, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// endpointKey returns the workspace's endpoint key, made on first use.
-func (v *volumes) endpointKey(workspace string) (string, error) {
+// mountKey returns the key the platform-volume mount mounter signs with,
+// made on first use beside the mount's other keys.
+func (v *volumes) mountKey(mounter string) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	var c processCredentials
-	data, err := os.ReadFile(filepath.Join(v.endpointCreds(workspace), "credentials.json"))
+	data, err := os.ReadFile(filepath.Join(v.mountKeys(mounter), "credentials.json"))
 	if err == nil && json.Unmarshal(data, &c) == nil && c.AccessKeyID != "" {
 		return c.AccessKeyID, nil
 	}
 	key := securerand.Text()
-	return key, writeCredentials(v.endpointCreds(workspace), processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key})
+	return key, writeCredentials(v.mountKeys(mounter), processCredentials{Version: 1, AccessKeyID: key, SecretAccessKey: key})
+}
+
+// warm has the snapshotter fill the objects a start's workload recorded
+// reading from its platform volumes, once their grant is here and while
+// the start pulls its image. A start asked to record its reads reports
+// them.
+func (v *volumes) warm(c *container, spec *hostproto.StartContainer) {
+	mounter, workspace, volumeIDs, err := platformMounts(c.id, spec.GetVolumes())
+	if err != nil || mounter == "" {
+		return
+	}
+	if spec.GetVolumeTrace().GetRecord() {
+		v.a.goOwned(func(context.Context) { v.trace(c.work, c) }) //nolint:contextcheck // A trace lasts as long as the container's work.
+	}
+	req := &imagefsproto.WarmVolumesRequest{WorkspaceId: workspace}
+	for _, r := range spec.GetVolumeTrace().GetReads() {
+		if slices.Contains(volumeIDs, r.GetVolumeId()) {
+			req.Reads = append(req.Reads, r)
+		}
+	}
+	if len(req.Reads) == 0 {
+		return
+	}
+	v.a.goOwned(func(ctx context.Context) {
+		if v.waitGrant(ctx, workspace) != nil {
+			return
+		}
+		if err := v.grantVolumes(ctx, workspace, "", ""); err != nil {
+			c.log.Warn("warming volumes failed", "error", err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+		defer cancel()
+		if _, err := v.sources.WarmVolumes(ctx, req); err != nil {
+			c.log.Warn("warming volumes failed", "error", err)
+		}
+	})
+}
+
+// trace reports the objects of 1 MiB or more the container's mount read
+// through its first task or request, or volumeTraceWindow. A container that
+// exits first reports none.
+func (v *volumes) trace(ctx context.Context, c *container) {
+	timer := time.NewTimer(volumeTraceWindow)
+	defer timer.Stop()
+	select {
+	case <-c.firstServed:
+	case <-timer.C:
+	case <-ctx.Done():
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+	defer cancel()
+	reads, err := v.sources.VolumeReads(ctx, &imagefsproto.VolumeReadsRequest{ContainerId: c.id})
+	if err != nil {
+		c.log.Warn("reading the volume trace failed", "error", err)
+		return
+	}
+	if len(reads.GetReads()) > 0 {
+		v.a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_VolumeTrace{VolumeTrace: &hostproto.ContainerVolumeTrace{
+			ContainerId: c.id, Reads: reads.GetReads(),
+		}}})
+	}
 }
 
 // bucketLocation is where a workspace's bucket is, kept beside its
@@ -342,8 +423,8 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 	}
 	groups := mounterGroups(specs)
 	mounters := make([]*mounter, len(groups))
-	for n := range groups {
-		mounters[n] = v.newMounter(mounterName(c.id, n), c.id)
+	for n, group := range groups {
+		mounters[n] = v.newMounter(mounterName(c.id, n), c.id, group[0].GetVolume().GetWorkspaceId())
 	}
 	// Tracked first, so that release removes what is made for them.
 	v.mu.Lock()
@@ -369,7 +450,7 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 			if group[0].GetCloudBucket() != nil {
 				ms, dirs[n], err = v.bucketSpec(mounters[n].name, group)
 			} else {
-				ms, dirs[n], err = v.volumeSpec(startCtx, group)
+				ms, dirs[n], err = v.volumeSpec(startCtx, c.id, mounters[n].name, group)
 			}
 			if err != nil {
 				return err
@@ -494,21 +575,38 @@ func mounterGroups(specs []*hostproto.VolumeMount) [][]*hostproto.VolumeMount {
 	return groups
 }
 
-// volumeSpec mounts the volumes/ prefix of the workspace bucket with the
-// workspace's grant, and returns each volume's directory in it.
-func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount) (mountSpec, []string, error) {
-	workspace := group[0].GetVolume().GetWorkspaceId()
-	dirs := make([]string, len(group))
-	for i, s := range group {
-		volume := s.GetVolume()
-		if volume == nil {
-			return mountSpec{}, nil, fmt.Errorf("volume at %s names no source", s.GetMountPath())
+// platformMounts returns the mounter of the container's platform volumes,
+// "" for none, their workspace and their ids.
+func platformMounts(container string, specs []*hostproto.VolumeMount) (string, string, []string, error) {
+	for n, group := range mounterGroups(specs) {
+		if group[0].GetCloudBucket() != nil {
+			continue
 		}
-		id := volume.GetVolumeId()
-		if volume.GetWorkspaceId() != workspace || !isUUID(workspace) || !isUUID(id) || volume.GetPrefix() != "volumes/"+id+"/" {
-			return mountSpec{}, nil, fmt.Errorf("volume at %s has an invalid location", s.GetMountPath())
+		workspace := group[0].GetVolume().GetWorkspaceId()
+		ids := make([]string, len(group))
+		for i, s := range group {
+			volume := s.GetVolume()
+			if volume == nil {
+				return "", "", nil, fmt.Errorf("volume at %s names no source", s.GetMountPath())
+			}
+			id := volume.GetVolumeId()
+			if volume.GetWorkspaceId() != workspace || !isUUID(workspace) || !isUUID(id) || volume.GetPrefix() != "volumes/"+id+"/" {
+				return "", "", nil, fmt.Errorf("volume at %s has an invalid location", s.GetMountPath())
+			}
+			ids[i] = id
 		}
-		dirs[i] = id
+		return mounterName(container, n), workspace, ids, nil
+	}
+	return "", "", nil, nil
+}
+
+// volumeSpec mounts the volumes/ prefix of the workspace bucket through the
+// snapshotter's endpoint with the mounter's key, and returns each volume's
+// directory in it.
+func (v *volumes) volumeSpec(ctx context.Context, container, mounter string, group []*hostproto.VolumeMount) (mountSpec, []string, error) {
+	_, workspace, dirs, err := platformMounts(container, group)
+	if err != nil {
+		return mountSpec{}, nil, err
 	}
 	if err := v.waitGrant(ctx, workspace); err != nil {
 		return mountSpec{}, nil, err
@@ -517,18 +615,18 @@ func (v *volumes) volumeSpec(ctx context.Context, group []*hostproto.VolumeMount
 	if err != nil {
 		return mountSpec{}, nil, err
 	}
-	spec := mountSpec{
-		what: "the mount of the workspace's volumes", creds: v.storageDir(workspace), source: loc.Bucket + ":volumes/", endpoint: loc.Endpoint, region: loc.Region,
-		pathStyle: loc.PathStyle,
+	key, err := v.mountKey(mounter)
+	if err != nil {
+		return mountSpec{}, nil, err
 	}
-	if v.endpoint != "" {
-		// The snapshotter may have restarted since it last held the grant.
-		if err := v.grantCache(ctx, workspace); err != nil {
-			return mountSpec{}, nil, err
-		}
-		spec.creds, spec.endpoint, spec.pathStyle = v.endpointCreds(workspace), "http://"+v.endpoint, true
+	// The snapshotter may have restarted since it last held the grant.
+	if err := v.grantVolumes(ctx, workspace, container, key); err != nil {
+		return mountSpec{}, nil, err
 	}
-	return spec, dirs, nil
+	return mountSpec{
+		what: "the mount of the workspace's volumes", creds: v.mountKeys(mounter), source: loc.Bucket + ":volumes/",
+		endpoint: "http://" + layersource.VolumeEndpoint, region: loc.Region, pathStyle: true,
+	}, dirs, nil
 }
 
 // release stops the container's mounts, deletes their keys and stops its
@@ -543,8 +641,9 @@ func (v *volumes) release(ctx context.Context, container string) {
 	}
 }
 
-// stopAll stops mounts and deletes their keys, then stops slices, which
-// would kill a mount still storing what its workload left.
+// stopAll stops mounts, deletes their keys and has the snapshotter forget
+// them, then stops slices, which would kill a mount still storing what its
+// workload left.
 func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...string) {
 	var stops errgroup.Group
 	stops.SetLimit(mounterConcurrency)
@@ -553,8 +652,15 @@ func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...stri
 			if err := v.stop(ctx, m); err != nil {
 				v.a.log.Warn("stopping a volume mount failed", "mount", m.name, "error", err)
 			}
-			if err := os.RemoveAll(v.bucketKeys(m.name)); err != nil {
-				v.a.log.Warn("removing cloud bucket keys failed", "mount", m.name, "error", err)
+			if err := os.RemoveAll(v.mountKeys(m.name)); err != nil {
+				v.a.log.Warn("removing a mount's keys failed", "mount", m.name, "error", err)
+			}
+			if m.workspace != "" {
+				ctx, cancel := context.WithTimeout(ctx, grantTimeout)
+				defer cancel()
+				if _, err := v.sources.ReleaseVolumes(ctx, &imagefsproto.ReleaseVolumesRequest{ContainerId: m.container}); err != nil {
+					v.a.log.Warn("releasing a mount's key failed", "mount", m.name, "error", err)
+				}
 			}
 			return nil
 		})
@@ -771,6 +877,9 @@ exit 1`, target, strings.Join(quoted, " "))
 	labels := v.a.hostLabels()
 	labels[labelKind] = kindMount
 	labels[labelContainer] = m.container
+	if m.workspace != "" {
+		labels[labelWorkspace] = m.workspace
+	}
 	pids, flushSeconds := int64(mounterPidsLimit), mounterFlushSeconds
 	var err error
 	m.id, err = v.a.createContainer(ctx, m.name, client.ContainerCreateOptions{
@@ -929,7 +1038,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 		if s.Labels[labelKind] != kindMount || len(s.Names) == 0 {
 			continue
 		}
-		m := v.newMounter(strings.TrimPrefix(s.Names[0], "/"), s.Labels[labelContainer])
+		m := v.newMounter(strings.TrimPrefix(s.Names[0], "/"), s.Labels[labelContainer], s.Labels[labelWorkspace])
 		m.id = s.ID
 		if c := v.a.lookup(m.container); c != nil && !c.hasExited() && s.State == containertypes.StateRunning && mounted(m.dir) {
 			m.up = true
@@ -996,7 +1105,7 @@ func (v *volumes) adopt(ctx context.Context, summaries []containertypes.Summary)
 	for _, m := range dead {
 		stopping[m.name] = true
 	}
-	for dir, remove := range map[string]func(string) error{v.bucketKeys(""): os.RemoveAll, v.bindsDir(): unbind, v.mountDir(): os.Remove} {
+	for dir, remove := range map[string]func(string) error{v.mountKeys(""): os.RemoveAll, v.bindsDir(): unbind, v.mountDir(): os.Remove} {
 		entries, err := os.ReadDir(dir)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("list %s: %w", dir, err)

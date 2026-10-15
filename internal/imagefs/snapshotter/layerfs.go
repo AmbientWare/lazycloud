@@ -42,6 +42,8 @@ func (l *layer) key(frame int) frameKey { return frameKey{object: string(l.diges
 
 func (l *layer) frameLen(frame int) int { return l.index.FrameLen(frame) }
 
+func (*layer) store() frameStore { return storeNow }
+
 // keys yields the key of each of the layer's frames.
 func (l *layer) keys() iter.Seq[frameKey] {
 	return func(yield func(frameKey) bool) {

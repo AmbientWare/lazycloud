@@ -22,7 +22,9 @@
 // grants of the workspace buckets whose volumes its host mounts, which it
 // signs every request it forwards with. The endpoint answers a process on
 // the host's loopback, as the mount containers are, for a workspace's
-// bucket only when it signs with that workspace's key.
+// bucket only when it signs with the key of a container the agent granted
+// that bucket, and records per container the objects it reads, which the
+// agent reports so later starts of its workload warm them.
 package snapshotter
 
 import (
@@ -77,8 +79,12 @@ type Config struct {
 	// none.
 	FillBytes int64
 	// VolumeAddr is the loopback address the volumes' S3 endpoint listens
-	// on; empty serves none.
+	// on.
 	VolumeAddr string
+	// VolumeDisk stores volume frames on the cache's disk, fills objects
+	// whole and warms them; unset, frames stay in memory while reads come
+	// back to them.
+	VolumeDisk bool
 	HTTP       *http.Client
 	Logger     *slog.Logger
 	Tracer     oteltrace.Tracer
@@ -141,7 +147,7 @@ func newSnapshotter(ctx context.Context, cfg Config) (*snapshotter, error) {
 		return nil, fmt.Errorf("open overlay snapshotter: %w", err)
 	}
 	s := &snapshotter{
-		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, volumes: newVolumes(cache, cfg.HTTP, cfg.Logger), log: cfg.Logger, cancel: cancel,
+		Snapshotter: ov, root: cfg.Root, ms: ms, cache: cache, disks: served, volumes: newVolumes(cache, cfg.HTTP, cfg.Logger, cfg.VolumeDisk), log: cfg.Logger, cancel: cancel,
 		requests: make(chan func()),
 		done:     make(chan struct{}),
 		mounted:  make(map[string]*mountedLayer),
@@ -165,6 +171,7 @@ func (s *snapshotter) Close() error {
 	<-s.done
 	s.teardowns.Wait()
 	s.cache.background.Wait()
+	s.cache.writer.Wait()
 	return s.Snapshotter.Close() //nolint:wrapcheck // the metadata store's own error
 }
 
