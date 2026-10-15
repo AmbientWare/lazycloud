@@ -13,20 +13,6 @@ nightly cleanup.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    browser[Browser] -->|HTTPS and WebSocket| studio["studio<br/>ASGI app"]
-    studio -->|spawn| generate["generate_images<br/>GPU function"]
-    studio -->|spawn| share["share_image<br/>CPU function"]
-    generate -->|map| progress[("image-studio-progress")]
-    progress -->|map| studio
-    generate -->|volume| gallery[("image-studio-gallery")]
-    gallery -->|volume| studio
-    weights["download_weights<br/>CPU function"] -->|volume| models[("image-studio-models")]
-    models -->|volume| generate
-    cleanup["delete_expired_images<br/>schedule"] -->|volume| gallery
-```
-
 | Workload | Kind | What it does | Why it runs there |
 | --- | --- | --- | --- |
 | `studio` | ASGI app | Serves the Next.js page, the JSON API and the progress WebSocket | Page and API share one origin, so one key guards both; a quarter CPU covers it |
