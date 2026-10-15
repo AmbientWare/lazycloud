@@ -153,12 +153,13 @@ type FleetSnapshot struct {
 	Pending []DemandGroup
 	// Recent is the largest shape each market's placed containers reserved
 	// within the policy's LargestShape window, and RecentDisks the most
-	// disks one of them attached; Arrived is what the CPU Spot market's
+	// disks one of them attached; Started the largest within the WarmWindow,
+	// which sizes the warm floor; Arrived is what the CPU Spot market's
 	// placed containers created within the ArrivalWindow reserve, less
 	// their largest batch.
-	Recent, Arrived map[ReserveMarket]FleetCapacity
-	RecentDisks     map[ReserveMarket]int
-	Offers          OfferInputs
+	Recent, Started, Arrived map[ReserveMarket]FleetCapacity
+	RecentDisks              map[ReserveMarket]int
+	Offers                   OfferInputs
 	// HostRoom is how many more hosts may run or start, reserves being
 	// prepared among them; ReserveRoom how many more may be held stopped.
 	HostRoom    int

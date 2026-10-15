@@ -1087,6 +1087,31 @@ func TestAnL4JobBuysTheSmallestSizeItsPoolsAllow(t *testing.T) {
 // while its own host still starts (prod bought three g5.2xlarge for a
 // quarter CPU of headroom the same day). The card is bought within the
 // size rule.
+// The warm floor follows the shapes that start: a market whose largest
+// start within the warm window was larger than its floor keeps room for
+// that shape, and keeps only the floor once nothing that large has started
+// for the window.
+func TestTheWarmFloorFollowsTheShapesThatStartedWithinTheWindow(t *testing.T) {
+	t.Parallel()
+	p := planPolicy(small, FleetCapacity{})
+	warm := idle(planHost(1, planSmall, FleetServing))
+	for _, c := range []struct {
+		started FleetCapacity
+		buys    bool
+	}{
+		{FleetCapacity{}, false},
+		{small, false},
+		{large, true},
+	} {
+		s := planSnapshot(t, warm)
+		s.Started = map[ReserveMarket]FleetCapacity{onDemand: c.started}
+		got := actionsOf(PlanFleet(p, s), ActionBuy)
+		if (len(got) == 1) != c.buys || c.buys && !got[0].Offer.Usable.Covers(large) {
+			t.Errorf("started %+v: bought %+v, want a host for the shape %t", c.started, got, c.buys)
+		}
+	}
+}
+
 func TestGPUWarmShareIsWholeCards(t *testing.T) {
 	t.Parallel()
 	typ := mustType(t, "g6.xlarge")

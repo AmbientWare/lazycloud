@@ -389,9 +389,14 @@ func (s *sim) plan() time.Duration {
 	// it: a run is arrivals less than the batch's quiet apart, cut into
 	// batches of its max from the run's first; older containers drop out of
 	// the log.
-	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.ArrivalWindow })
+	s.placedLog = slices.DeleteFunc(s.placedLog, func(c *simContainer) bool { return s.now.Sub(c.arrived) >= s.p.WarmWindow })
+	started := map[ReserveMarket]FleetCapacity{}
 	var spot []*simContainer
 	for _, c := range s.placedLog {
+		started[c.market] = started[c.market].Upper(reservedShape(c.need))
+		if s.now.Sub(c.arrived) >= s.p.ArrivalWindow {
+			continue
+		}
 		if c.need.Preemptible && c.need.GPUsNeeded() == 0 {
 			spot = append(spot, c)
 		}
@@ -412,7 +417,7 @@ func (s *sim) plan() time.Duration {
 	}
 	arrived := map[ReserveMarket]FleetCapacity{{Preemptible: true}: sum.Minus(largest.Upper(batch)).Clamp()}
 	s.in.Spot = s.prices(s.now)
-	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Arrived: arrived, Offers: s.offers(), BatchWait: s.batchWait()}
+	snapshot := FleetSnapshot{Now: s.now, Recent: s.recent, Started: started, Arrived: arrived, Offers: s.offers(), BatchWait: s.batchWait()}
 	live, reserves := 0, 0
 	for _, h := range s.hosts {
 		snapshot.Hosts = append(snapshot.Hosts, s.fleetHost(h))
