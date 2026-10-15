@@ -63,8 +63,10 @@ for version in "${versions[@]}"; do
   # Containers mount the runtime read-only, so Python cannot cache bytecode
   # and would compile every module on each start. Unchecked-hash bytecode
   # holds no timestamps, so the same interpreter release builds the same bytes.
+  # The bundled examples are user projects on their own Python versions,
+  # not runner code: they ship as files and are not compiled here.
   "$uv" run --quiet --no-project --python "$version" python -m compileall -q -j 0 \
-    --invalidation-mode unchecked-hash "$target" >/dev/null
+    --invalidation-mode unchecked-hash -x '/_examples/' "$target" >/dev/null
 
   previous="$work/previous-$version"
   if [[ -e "$out/$version" ]]; then
