@@ -570,18 +570,26 @@ func (v *volumes) stopAll(ctx context.Context, mounts []*mounter, slices ...stri
 const fuseConnections = "/sys/fs/fuse/connections"
 
 // fuseConnection is the control directory of the FUSE connection mounted at
-// path, or empty when path is no FUSE mount.
-func fuseConnection(path string) string {
+// path, with the mount's root held open, or empty when path is no FUSE
+// mount. The open root keeps the connection, and its number, until the
+// caller closes it: once a lazy unmount released it, the number could be
+// another mount's, one of the snapshotter's included, by the time the
+// caller aborts it. The root is opened before the mount is read, so a
+// mount read is a mount held; nothing mounts at path again.
+func fuseConnection(path string) (string, *os.File) {
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", nil
+	}
+	root := os.NewFile(uintptr(fd), path)
 	device, ok := mountDevice(path)
 	major, minor, found := strings.Cut(device, ":")
-	if !ok || !found || major != "0" {
-		return ""
-	}
 	connection := filepath.Join(fuseConnections, minor)
-	if _, err := os.Stat(connection); err != nil {
-		return ""
+	if _, err := os.Stat(connection); !ok || !found || major != "0" || err != nil {
+		_ = root.Close()
+		return "", nil
 	}
-	return connection
+	return connection, root
 }
 
 // mountPath undoes how mountinfo escapes a mount point's path.
@@ -874,7 +882,10 @@ func (v *volumes) stop(ctx context.Context, m *mounter) error {
 	if err := unbind(filepath.Join(v.bindsDir(), m.name)); err != nil {
 		v.a.log.Warn("removing a mount's binds failed", "mount", m.name, "error", err)
 	}
-	connection := fuseConnection(m.dir)
+	connection, root := fuseConnection(m.dir)
+	if root != nil {
+		defer func() { _ = root.Close() }()
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- v.a.stopDocker(ctx, m.name, mounterFlushSeconds) }()
 	poll := time.NewTicker(mountPoll)
