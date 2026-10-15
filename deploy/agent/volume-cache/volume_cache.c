@@ -18,7 +18,8 @@
 // wrappers, which would collide with the definitions below. Callers built
 // with fortify reach __open_2 and __openat_2 (and their 64 variants) for
 // two-argument opens with a non-constant flag word, so those are interposed
-// too.
+// too. On 64-bit glibc open is openat on AT_FDCWD with O_LARGEFILE, so the
+// open family forwards to the openat family.
 #undef _FORTIFY_SOURCE
 #undef _FILE_OFFSET_BITS
 #undef _TIME_BITS
@@ -49,22 +50,17 @@
 #define MAX_VOLUMES 64
 #define VOLUME_LIST_MAX 4096
 
-typedef int (*open_fn)(const char *, int, ...);
-typedef int (*open2_fn)(const char *, int);
 typedef int (*openat_fn)(int, const char *, int, ...);
 typedef int (*openat2_fn)(int, const char *, int);
 typedef FILE *(*fopen_fn)(const char *, const char *);
 
 struct real {
-	open_fn open, open64;
-	open2_fn open_2, open64_2;
 	openat_fn openat, openat64;
 	openat2_fn openat_2, openat64_2;
 	fopen_fn fopen, fopen64;
 };
 
 struct config {
-	bool enabled;
 	bool debug;
 	char cache[PATH_MAX];
 	size_t cache_len;
@@ -87,38 +83,22 @@ static struct config config;
 // first call on a thread may itself allocate.
 static __thread bool resolving __attribute__((tls_model("initial-exec")));
 
+// Threads that race here store the same pointers; the atomic stores and
+// REAL's loads keep that well defined.
 static void resolve(void)
 {
 	if (__atomic_load_n(&real_resolved, __ATOMIC_ACQUIRE))
 		return;
 	resolving = true;
-	struct real r = {
-		.open = (open_fn)dlsym(RTLD_NEXT, "open"),
-		.open64 = (open_fn)dlsym(RTLD_NEXT, "open64"),
-		.open_2 = (open2_fn)dlsym(RTLD_NEXT, "__open_2"),
-		.open64_2 = (open2_fn)dlsym(RTLD_NEXT, "__open64_2"),
-		.openat = (openat_fn)dlsym(RTLD_NEXT, "openat"),
-		.openat64 = (openat_fn)dlsym(RTLD_NEXT, "openat64"),
-		.openat_2 = (openat2_fn)dlsym(RTLD_NEXT, "__openat_2"),
-		.openat64_2 = (openat2_fn)dlsym(RTLD_NEXT, "__openat64_2"),
-		.fopen = (fopen_fn)dlsym(RTLD_NEXT, "fopen"),
-		.fopen64 = (fopen_fn)dlsym(RTLD_NEXT, "fopen64"),
-	};
+#define RESOLVE(f, type, name) __atomic_store_n(&real.f, (type)dlsym(RTLD_NEXT, name), __ATOMIC_RELAXED)
+	RESOLVE(openat, openat_fn, "openat");
+	RESOLVE(openat64, openat_fn, "openat64");
+	RESOLVE(openat_2, openat2_fn, "__openat_2");
+	RESOLVE(openat64_2, openat2_fn, "__openat64_2");
+	RESOLVE(fopen, fopen_fn, "fopen");
+	RESOLVE(fopen64, fopen_fn, "fopen64");
+#undef RESOLVE
 	resolving = false;
-	// Threads that race here store the same pointers; the atomic stores and
-	// REAL's loads keep that well defined.
-#define STORE(f) __atomic_store_n(&real.f, r.f, __ATOMIC_RELAXED)
-	STORE(open);
-	STORE(open64);
-	STORE(open_2);
-	STORE(open64_2);
-	STORE(openat);
-	STORE(openat64);
-	STORE(openat_2);
-	STORE(openat64_2);
-	STORE(fopen);
-	STORE(fopen64);
-#undef STORE
 	__atomic_store_n(&real_resolved, true, __ATOMIC_RELEASE);
 }
 
@@ -126,6 +106,8 @@ static void resolve(void)
 
 static void debug_line(const char *decision, const char *path, const char *reason)
 {
+	if (!config.debug)
+		return;
 	char line[PATH_MAX + 64];
 	int n = snprintf(line, sizeof line, "volume-cache: %s %s%s%s\n", decision, path,
 	                 reason[0] ? " " : "", reason);
@@ -148,8 +130,7 @@ static void load_config(void)
 	while (cache_len > 1 && cache[cache_len - 1] == '/')
 		cache_len--;
 	if (cache_len >= sizeof config.cache || strlen(paths) >= sizeof config.volumes) {
-		if (config.debug)
-			debug_line("disabled", cache, "(settings too long)");
+		debug_line("disabled", cache, "(settings too long)");
 		return;
 	}
 	memcpy(config.cache, cache, cache_len);
@@ -166,8 +147,8 @@ static void load_config(void)
 			cursor[--len] = '\0';
 		if (len > 0 && cursor[0] == '/') {
 			if (config.volume_count == MAX_VOLUMES) {
-				if (config.debug)
-					debug_line("disabled", cursor, "(too many volume paths)");
+				debug_line("disabled", cursor, "(too many volume paths)");
+				config.volume_count = 0;
 				return;
 			}
 			config.volume[config.volume_count] = cursor;
@@ -176,7 +157,6 @@ static void load_config(void)
 		}
 		cursor = sep;
 	}
-	config.enabled = config.volume_count > 0;
 }
 
 static bool under_volume(const char *path)
@@ -186,10 +166,7 @@ static bool under_volume(const char *path)
 	bool under = false;
 	for (size_t i = 0; i < config.volume_count && !under; i++) {
 		size_t len = config.volume_len[i];
-		if (len == 1)
-			under = true;
-		else if (strncmp(path, config.volume[i], len) == 0 && (path[len] == '\0' || path[len] == '/'))
-			under = true;
+		under = len == 1 || (strncmp(path, config.volume[i], len) == 0 && (path[len] == '\0' || path[len] == '/'));
 	}
 	if (!under)
 		return false;
@@ -200,157 +177,114 @@ static bool under_volume(const char *path)
 	return true;
 }
 
-// Regular files of the same size and mtime second on both sides.
-static bool cache_current(const char *path, char *cached, size_t cached_size)
+// cache_copy writes the cache path of path into cached and returns it when
+// the open may be redirected there: a read-only open, relative to no
+// directory, of a file under a volume whose cache copy is a regular file
+// of the same size and mtime second as the mount's. NULL sends the open to
+// the mount.
+static const char *cache_copy(int dirfd, const char *path, int flags, char *cached)
 {
+	if (dirfd != AT_FDCWD || path == NULL)
+		return NULL;
+	pthread_once(&config_once, load_config);
+	if (config.volume_count == 0 || (flags & O_ACCMODE) != O_RDONLY || (flags & REFUSED_FLAGS) != 0 || !under_volume(path))
+		return NULL;
 	size_t path_len = strlen(path);
-	if (config.cache_len + path_len >= cached_size) {
-		if (config.debug)
-			debug_line("mount", path, "(path too long)");
-		return false;
+	if (config.cache_len + path_len >= PATH_MAX) {
+		debug_line("mount", path, "(path too long)");
+		return NULL;
 	}
 	memcpy(cached, config.cache, config.cache_len);
 	memcpy(cached + config.cache_len, path, path_len + 1);
 
 	struct stat mount_st, cache_st;
-	if (syscall(SYS_newfstatat, AT_FDCWD, path, &mount_st, 0) != 0) {
-		if (config.debug)
-			debug_line("mount", path, "(mount stat failed)");
-		return false;
-	}
-	if (syscall(SYS_newfstatat, AT_FDCWD, cached, &cache_st, 0) != 0) {
-		if (config.debug)
-			debug_line("mount", path, "(no cache copy)");
-		return false;
-	}
-	if (!S_ISREG(mount_st.st_mode) || !S_ISREG(cache_st.st_mode)) {
-		if (config.debug)
-			debug_line("mount", path, "(not a regular file)");
-		return false;
-	}
-	if (mount_st.st_size != cache_st.st_size) {
-		if (config.debug)
-			debug_line("mount", path, "(size differs)");
-		return false;
-	}
-	if (mount_st.st_mtim.tv_sec != cache_st.st_mtim.tv_sec) {
-		if (config.debug)
-			debug_line("mount", path, "(mtime differs)");
-		return false;
-	}
-	return true;
+	const char *reason = NULL;
+	if (syscall(SYS_newfstatat, AT_FDCWD, path, &mount_st, 0) != 0)
+		reason = "(mount stat failed)";
+	else if (syscall(SYS_newfstatat, AT_FDCWD, cached, &cache_st, 0) != 0)
+		reason = "(no cache copy)";
+	else if (!S_ISREG(mount_st.st_mode) || !S_ISREG(cache_st.st_mode))
+		reason = "(not a regular file)";
+	else if (mount_st.st_size != cache_st.st_size)
+		reason = "(size differs)";
+	else if (mount_st.st_mtim.tv_sec != cache_st.st_mtim.tv_sec)
+		reason = "(mtime differs)";
+	if (reason == NULL)
+		return cached;
+	debug_line("mount", path, reason);
+	return NULL;
 }
 
-static bool candidate(const char *path, int flags)
+// opened records whether the cache copy was opened, or refused the open.
+static void opened(const char *path, bool from_cache)
 {
-	if (path == NULL)
-		return false;
-	pthread_once(&config_once, load_config);
-	return config.enabled && (flags & O_ACCMODE) == O_RDONLY && (flags & REFUSED_FLAGS) == 0 &&
-	       under_volume(path);
+	debug_line(from_cache ? "cache" : "mount", path, from_cache ? "" : "(cache open failed)");
 }
 
-static bool fopen_candidate(const char *path, const char *mode)
+static int raw_open(int dirfd, const char *path, int flags, mode_t mode)
 {
-	if (path == NULL || mode == NULL || mode[0] != 'r' || strchr(mode, '+') != NULL)
-		return false;
-	pthread_once(&config_once, load_config);
-	return config.enabled && under_volume(path);
+	return (int)syscall(SYS_openat, dirfd, path, flags | O_LARGEFILE, mode);
 }
 
-static int open_common(open_fn real_open, const char *path, int flags, mode_t mode)
+static int openat_common(openat_fn *real_openat, int dirfd, const char *path, int flags, mode_t mode)
 {
+	if (resolving)
+		return raw_open(dirfd, path, flags, mode);
+	resolve();
+	openat_fn fn = __atomic_load_n(real_openat, __ATOMIC_RELAXED);
 	int saved_errno = errno;
-	char cached[PATH_MAX];
-	if (candidate(path, flags) && cache_current(path, cached, sizeof cached)) {
-		errno = saved_errno;
-		int fd = real_open(cached, flags);
-		if (fd >= 0) {
-			if (config.debug)
-				debug_line("cache", path, "");
+	char buf[PATH_MAX];
+	const char *cached = cache_copy(dirfd, path, flags, buf);
+	if (cached != NULL) {
+		int fd = fn(AT_FDCWD, cached, flags);
+		opened(path, fd >= 0);
+		if (fd >= 0)
 			return fd;
-		}
-		if (config.debug)
-			debug_line("mount", path, "(cache open failed)");
 	}
 	errno = saved_errno;
-	return real_open(path, flags, mode);
+	return fn(dirfd, path, flags, mode);
 }
 
-static int open2_common(open2_fn real_open, const char *path, int flags)
+static int openat2_common(openat2_fn *real_openat, int dirfd, const char *path, int flags)
 {
+	if (resolving)
+		return raw_open(dirfd, path, flags, 0);
+	resolve();
+	openat2_fn fn = __atomic_load_n(real_openat, __ATOMIC_RELAXED);
 	int saved_errno = errno;
-	char cached[PATH_MAX];
-	if (candidate(path, flags) && cache_current(path, cached, sizeof cached)) {
-		errno = saved_errno;
-		int fd = real_open(cached, flags);
-		if (fd >= 0) {
-			if (config.debug)
-				debug_line("cache", path, "");
+	char buf[PATH_MAX];
+	const char *cached = cache_copy(dirfd, path, flags, buf);
+	if (cached != NULL) {
+		int fd = fn(AT_FDCWD, cached, flags);
+		opened(path, fd >= 0);
+		if (fd >= 0)
 			return fd;
-		}
-		if (config.debug)
-			debug_line("mount", path, "(cache open failed)");
 	}
 	errno = saved_errno;
-	return real_open(path, flags);
+	return fn(dirfd, path, flags);
 }
 
-static int openat_common(openat_fn real_openat, int dirfd, const char *path, int flags, mode_t mode)
+static FILE *fopen_common(fopen_fn *real_fopen, const char *path, const char *mode)
 {
-	int saved_errno = errno;
-	char cached[PATH_MAX];
-	if (dirfd == AT_FDCWD && candidate(path, flags) && cache_current(path, cached, sizeof cached)) {
-		errno = saved_errno;
-		int fd = real_openat(AT_FDCWD, cached, flags);
-		if (fd >= 0) {
-			if (config.debug)
-				debug_line("cache", path, "");
-			return fd;
-		}
-		if (config.debug)
-			debug_line("mount", path, "(cache open failed)");
+	if (resolving) {
+		errno = EAGAIN;
+		return NULL;
 	}
-	errno = saved_errno;
-	return real_openat(dirfd, path, flags, mode);
-}
-
-static int openat2_common(openat2_fn real_openat, int dirfd, const char *path, int flags)
-{
+	resolve();
+	fopen_fn fn = __atomic_load_n(real_fopen, __ATOMIC_RELAXED);
 	int saved_errno = errno;
-	char cached[PATH_MAX];
-	if (dirfd == AT_FDCWD && candidate(path, flags) && cache_current(path, cached, sizeof cached)) {
-		errno = saved_errno;
-		int fd = real_openat(AT_FDCWD, cached, flags);
-		if (fd >= 0) {
-			if (config.debug)
-				debug_line("cache", path, "");
-			return fd;
-		}
-		if (config.debug)
-			debug_line("mount", path, "(cache open failed)");
-	}
-	errno = saved_errno;
-	return real_openat(dirfd, path, flags);
-}
-
-static FILE *fopen_common(fopen_fn real_fopen, const char *path, const char *mode)
-{
-	int saved_errno = errno;
-	char cached[PATH_MAX];
-	if (fopen_candidate(path, mode) && cache_current(path, cached, sizeof cached)) {
-		errno = saved_errno;
-		FILE *f = real_fopen(cached, mode);
-		if (f != NULL) {
-			if (config.debug)
-				debug_line("cache", path, "");
+	char buf[PATH_MAX];
+	const char *cached = NULL;
+	if (mode != NULL && mode[0] == 'r' && strchr(mode, '+') == NULL)
+		cached = cache_copy(AT_FDCWD, path, O_RDONLY, buf);
+	if (cached != NULL) {
+		FILE *f = fn(cached, mode);
+		opened(path, f != NULL);
+		if (f != NULL)
 			return f;
-		}
-		if (config.debug)
-			debug_line("mount", path, "(cache open failed)");
 	}
 	errno = saved_errno;
-	return real_fopen(path, mode);
+	return fn(path, mode);
 }
 
 static mode_t mode_arg(int flags, va_list ap)
@@ -360,107 +294,68 @@ static mode_t mode_arg(int flags, va_list ap)
 	return (mode_t)va_arg(ap, int);
 }
 
-static int raw_open(int dirfd, const char *path, int flags, mode_t mode)
-{
-	return (int)syscall(SYS_openat, dirfd, path, flags, mode);
-}
-
 EXPORT int open(const char *path, int flags, ...)
 {
 	va_list ap;
 	va_start(ap, flags);
-	mode_t mode = mode_arg(flags, ap);
+	int fd = openat_common(&real.openat, AT_FDCWD, path, flags, mode_arg(flags, ap));
 	va_end(ap);
-	if (resolving)
-		return raw_open(AT_FDCWD, path, flags, mode);
-	resolve();
-	return open_common(REAL(open), path, flags, mode);
+	return fd;
 }
 
 EXPORT int open64(const char *path, int flags, ...)
 {
 	va_list ap;
 	va_start(ap, flags);
-	mode_t mode = mode_arg(flags, ap);
+	int fd = openat_common(&real.openat64, AT_FDCWD, path, flags, mode_arg(flags, ap));
 	va_end(ap);
-	if (resolving)
-		return raw_open(AT_FDCWD, path, flags | O_LARGEFILE, mode);
-	resolve();
-	return open_common(REAL(open64), path, flags, mode);
+	return fd;
 }
 
 EXPORT int __open_2(const char *path, int flags)
 {
-	if (resolving)
-		return raw_open(AT_FDCWD, path, flags, 0);
-	resolve();
-	return open2_common(REAL(open_2), path, flags);
+	return openat2_common(&real.openat_2, AT_FDCWD, path, flags);
 }
 
 EXPORT int __open64_2(const char *path, int flags)
 {
-	if (resolving)
-		return raw_open(AT_FDCWD, path, flags | O_LARGEFILE, 0);
-	resolve();
-	return open2_common(REAL(open64_2), path, flags);
+	return openat2_common(&real.openat64_2, AT_FDCWD, path, flags);
 }
 
 EXPORT int openat(int dirfd, const char *path, int flags, ...)
 {
 	va_list ap;
 	va_start(ap, flags);
-	mode_t mode = mode_arg(flags, ap);
+	int fd = openat_common(&real.openat, dirfd, path, flags, mode_arg(flags, ap));
 	va_end(ap);
-	if (resolving)
-		return raw_open(dirfd, path, flags, mode);
-	resolve();
-	return openat_common(REAL(openat), dirfd, path, flags, mode);
+	return fd;
 }
 
 EXPORT int openat64(int dirfd, const char *path, int flags, ...)
 {
 	va_list ap;
 	va_start(ap, flags);
-	mode_t mode = mode_arg(flags, ap);
+	int fd = openat_common(&real.openat64, dirfd, path, flags, mode_arg(flags, ap));
 	va_end(ap);
-	if (resolving)
-		return raw_open(dirfd, path, flags | O_LARGEFILE, mode);
-	resolve();
-	return openat_common(REAL(openat64), dirfd, path, flags, mode);
+	return fd;
 }
 
 EXPORT int __openat_2(int dirfd, const char *path, int flags)
 {
-	if (resolving)
-		return raw_open(dirfd, path, flags, 0);
-	resolve();
-	return openat2_common(REAL(openat_2), dirfd, path, flags);
+	return openat2_common(&real.openat_2, dirfd, path, flags);
 }
 
 EXPORT int __openat64_2(int dirfd, const char *path, int flags)
 {
-	if (resolving)
-		return raw_open(dirfd, path, flags | O_LARGEFILE, 0);
-	resolve();
-	return openat2_common(REAL(openat64_2), dirfd, path, flags);
+	return openat2_common(&real.openat64_2, dirfd, path, flags);
 }
 
 EXPORT FILE *fopen(const char *path, const char *mode)
 {
-	if (resolving) {
-		errno = EAGAIN;
-		return NULL;
-	}
-	resolve();
-	return fopen_common(REAL(fopen), path, mode);
+	return fopen_common(&real.fopen, path, mode);
 }
 
 EXPORT FILE *fopen64(const char *path, const char *mode)
 {
-	if (resolving) {
-		errno = EAGAIN;
-		return NULL;
-	}
-	resolve();
-	return fopen_common(REAL(fopen64), path, mode);
+	return fopen_common(&real.fopen64, path, mode);
 }
