@@ -531,9 +531,10 @@ type ranking struct{ offers, refs, soon []FleetOffer }
 // misplaced reports a region outside the one market v's starts read from,
 // while the market's cheapest reserve that holds its largest shape lies in
 // the read region and buying it costs less than a start's read from the
-// region saves. A reserve there holds none of the stopped target, so the
-// market buys one in the read region and retires it once that is ready; a
-// host there does not return to the reserve.
+// region saves. A reserve there is the first to retire once the market
+// holds more than its stopped target; it is never bought again for its
+// region, since EC2 may have refused the read region and the launch walk
+// placed it where capacity was.
 func (ps *pass) misplaced(v *marketView, region string) bool {
 	r := ps.s.Offers.marketRead(v.m)
 	if r == nil || region == r.Region {
