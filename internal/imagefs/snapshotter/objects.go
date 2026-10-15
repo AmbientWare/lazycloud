@@ -60,20 +60,18 @@ type victims struct {
 	objects []*storedObject
 }
 
-// storedFrame reads frame of src from its object's file into p from off,
-// and reports whether the file held it.
-func (c *frameCache) storedFrame(src objectSource, frame int, p []byte, off int64) bool {
+// objectFrame returns the file holding frame k and the frame's length when
+// the frame is stored in its object's file, and marks the object used.
+func (c *frameCache) objectFrame(k frameKey) (path string, n int, ok bool) {
 	c.mu.Lock()
-	o := c.objects[src.key(frame).object]
-	if o == nil || frame >= len(o.frames) || !o.frames[frame] {
-		c.mu.Unlock()
-		return false
+	defer c.mu.Unlock()
+	o := c.objects[k.object]
+	if o == nil || k.frame >= len(o.frames) || !o.frames[k.frame] {
+		return "", 0, false
 	}
 	o.used = time.Now()
 	c.objectList.MoveToFront(o.elem)
-	path := o.path
-	c.mu.Unlock()
-	return readAt(path, p, int64(frame)*volumeFrame+off) == nil
+	return o.path, int(min(volumeFrame, o.info.size-int64(k.frame)*volumeFrame)), true
 }
 
 // storeObjectFrame writes frame k of src at its offset in the version's

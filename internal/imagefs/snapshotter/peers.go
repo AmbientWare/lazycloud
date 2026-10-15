@@ -120,8 +120,8 @@ func (v *volumes) askPeer(ctx context.Context, peer string, r peerRequest, key [
 	return data, nil
 }
 
-// servePeers answers other hosts' frame requests from the cache: a frame
-// of a granted workspace's object the host holds on disk or in memory.
+// peerServer answers other hosts' frame requests from the cache: a frame
+// of a granted workspace's object the host holds in memory or on disk.
 type peerServer struct{ v *volumes }
 
 func (s peerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -134,48 +134,15 @@ func (s peerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	o, ok := s.v.observedVersion(req.bucket, req.key, req.etag)
+	k := objectVersion{workspace: req.workspace, bucket: req.bucket, name: req.key, etag: req.etag}.key(frame)
+	data, ok := s.v.cache.fromMemory(k)
 	if !ok {
-		http.Error(w, "unknown version", http.StatusNotFound)
-		return
-	}
-	data := make([]byte, o.frameLen(frame))
-	held, ok := s.v.cache.fromMemory(o.key(frame))
-	if !ok {
-		if !s.v.cache.storedFrame(o, frame, data, 0) {
+		path, n, stored := s.v.cache.objectFrame(k)
+		if data = make([]byte, n); !stored || readAt(path, data, int64(frame)*volumeFrame) != nil {
 			http.Error(w, "not cached", http.StatusNotFound)
 			return
 		}
-		held = data
 	}
-	w.Header().Set("Content-Length", strconv.Itoa(len(held)))
-	_, _ = w.Write(held)
-}
-
-// observedVersion returns the version of the object as etag names it when
-// the cache holds frames of it: the observation or a stored object.
-func (v *volumes) observedVersion(bucket, key, etag string) (objectVersion, bool) {
-	v.mu.Lock()
-	b := v.buckets[bucket]
-	var o objectVersion
-	if b != nil {
-		if seen, ok := b.seen[key]; ok && seen.version.etag == etag {
-			o = seen.version
-		} else {
-			o = objectVersion{v: v, workspace: b.grant.workspace, bucket: bucket, name: key, path: s3Escape(key), etag: etag}
-		}
-	}
-	v.mu.Unlock()
-	if b == nil {
-		return objectVersion{}, false
-	}
-	if o.size == 0 {
-		v.cache.mu.Lock()
-		stored := v.cache.objects[o.key(0).object]
-		if stored != nil {
-			o.size, o.modified = stored.info.size, stored.info.modified
-		}
-		v.cache.mu.Unlock()
-	}
-	return o, o.size > 0
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	_, _ = w.Write(data)
 }

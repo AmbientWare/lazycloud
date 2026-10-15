@@ -66,19 +66,7 @@ type frameSource interface {
 	frameLen(frame int) int
 	// fetch reads frame from the store, trying again while that may help.
 	fetch(ctx context.Context, frame int) ([]byte, error)
-	store() frameStore
 }
-
-// frameStore is how the cache keeps a source's fetched frames.
-type frameStore int
-
-const (
-	// storeNow writes each frame to disk before its reads get it.
-	storeNow frameStore = iota + 1
-	// storeBehind hands each frame to the writer, holding it in memory
-	// meanwhile, so a read never waits on the disk.
-	storeBehind
-)
 
 // cachedFrame is one stored frame. Every store writes a new file, so an
 // eviction deletes only the file it chose.
@@ -97,7 +85,7 @@ type cachedFrame struct {
 // the writer stores it or a newer kept frame drops it. Guarded by
 // frameCache.mu.
 type unstored struct {
-	src    frameSource
+	src    objectSource
 	data   []byte
 	queued bool
 }
@@ -340,14 +328,15 @@ func (c *frameCache) cached(k frameKey) bool {
 // held it, or how long its fetch was waited for.
 func (c *frameCache) read(src frameSource, frame int, p []byte, off int64) (bool, time.Duration, error) {
 	// A frame evicted since the lookup, or unreadable, is fetched again.
-	if f := c.touch(src.key(frame)); f != nil && readAt(f.path, p, off) == nil {
+	k := src.key(frame)
+	if f := c.touch(k); f != nil && readAt(f.path, p, off) == nil {
 		return true, 0, nil
 	}
-	if o, ok := src.(objectSource); ok && c.storedFrame(o, frame, p, off) {
+	if path, _, ok := c.objectFrame(k); ok && readAt(path, p, int64(frame)*volumeFrame+off) == nil {
 		return true, 0, nil
 	}
 	began := time.Now()
-	data, hit := c.fromMemory(src.key(frame))
+	data, hit := c.fromMemory(k)
 	if !hit {
 		var err error
 		if data, err = c.load(src, frame); err != nil { //nolint:contextcheck // a shared fetch runs under the cache's life
@@ -355,7 +344,7 @@ func (c *frameCache) read(src frameSource, frame int, p []byte, off int64) (bool
 		}
 	}
 	if off+int64(len(p)) > int64(len(data)) {
-		return false, 0, fmt.Errorf("%w: read past frame %d of %s", imagefs.ErrInvalidIndex, frame, src.key(frame).object)
+		return false, 0, fmt.Errorf("%w: read past frame %d of %s", imagefs.ErrInvalidIndex, frame, k.object)
 	}
 	copy(p, data[off:])
 	if hit {
@@ -409,9 +398,7 @@ next:
 				return
 			}
 			loaded.Add(1)
-			if src.store() == storeBehind {
-				c.queue(ctx, src.key(i))
-			}
+			c.queue(ctx, src.key(i))
 		})
 	}
 	wg.Wait()
@@ -433,9 +420,8 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 		if data, ok := c.fromMemory(k); ok {
 			return data, nil
 		}
-		if o, ok := src.(objectSource); ok {
-			data := make([]byte, src.frameLen(frame))
-			if c.storedFrame(o, frame, data, 0) {
+		if path, n, ok := c.objectFrame(k); ok {
+			if data := make([]byte, n); readAt(path, data, int64(frame)*volumeFrame) == nil {
 				return data, nil
 			}
 		}
@@ -451,13 +437,10 @@ func (c *frameCache) load(src frameSource, frame int) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		switch src.store() {
-		case storeNow:
-			if err := c.store(k, data); err != nil {
-				c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
-			}
-		case storeBehind:
-			c.holdFrame(src, k, data)
+		if o, ok := src.(objectSource); ok {
+			c.holdFrame(o, k, data)
+		} else if err := c.store(k, data); err != nil {
+			c.log.WarnContext(ctx, "frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
 		}
 		return data, nil
 	})
@@ -504,9 +487,9 @@ func retryable(err error) bool {
 
 // holdFrame keeps a volume frame in memory, queued for the writer when the
 // queue has room, and otherwise kept for the reads that come back to it,
-// dropping the oldest kept frame past keptFrames. A fill stores what a
-// read's frames the queue had no room for later, at the disk's pace.
-func (c *frameCache) holdFrame(src frameSource, k frameKey, data []byte) {
+// dropping the oldest kept frame past keptFrames. A fill queues the kept
+// frames of its object later, at the disk's pace.
+func (c *frameCache) holdFrame(src objectSource, k frameKey, data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	u := &unstored{src: src, data: data}
@@ -541,8 +524,9 @@ func (c *frameCache) fromMemory(k frameKey) ([]byte, bool) {
 	return nil, false
 }
 
-// queue hands a frame a fill or warm loaded to the writer once it has
+// queue hands a kept frame a fill or warm loaded to the writer once it has
 // room, so they go no faster than the disk stores, unless ctx ends first.
+// A frame the cache holds no copy of in memory needs nothing.
 func (c *frameCache) queue(ctx context.Context, k frameKey) {
 	c.mu.Lock()
 	u := c.unstored[k]
@@ -576,13 +560,7 @@ func (c *frameCache) write() {
 		if u == nil {
 			continue
 		}
-		var err error
-		if o, ok := u.src.(objectSource); ok {
-			err = c.storeObjectFrame(o, k, u.data)
-		} else {
-			err = c.store(k, u.data)
-		}
-		if err != nil {
+		if err := c.storeObjectFrame(u.src, k, u.data); err != nil {
 			c.log.Warn("frame cache write failed", "object", k.object, "frame", k.frame, "error", err)
 		}
 		c.mu.Lock()

@@ -783,8 +783,6 @@ func (o objectVersion) key(frame int) frameKey {
 	return frameKey{object: "volume:" + o.workspace + "/" + o.bucket + "/" + o.name + "@" + o.etag, frame: frame}
 }
 
-func (o objectVersion) store() frameStore { return storeBehind }
-
 // object returns the version's size, time and link path: the link tree's
 // <workspace>/<volume>/<path> for a key under a volume whose path has no
 // empty, . or .. segment, and none otherwise.

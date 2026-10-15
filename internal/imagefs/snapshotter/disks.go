@@ -387,8 +387,6 @@ func (g *diskGeneration) key(frame int) frameKey {
 
 func (g *diskGeneration) frameLen(frame int) int { return g.index.FrameLen(frame) }
 
-func (*diskGeneration) store() frameStore { return storeNow }
-
 // keys yields the keys of the generation's stored frames.
 func (g *diskGeneration) keys() iter.Seq[frameKey] {
 	return func(yield func(frameKey) bool) {
