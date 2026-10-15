@@ -11,10 +11,8 @@ active deployment may replace a container you stop.
 
 ## lazycloud app
 
-An app is addressed by name or id.
-
-In the syntax below, replace uppercase names, and drop the square brackets
-when you pass an optional flag.
+An app is addressed by name or id. Uppercase names are placeholders, and
+square brackets mark optional flags.
 
 ```bash
 uv run lazycloud app list [--active | --inactive | --all]
@@ -28,11 +26,10 @@ uv run lazycloud app delete APP
 ## lazycloud deployment
 
 A deployment is addressed by name or id. `scale` pins a pod deployment to a
-container count and refuses other kinds. Functions and endpoints scale from the
-`autoscaler` on their decorator. See [Scaling and concurrency](/concepts/scaling).
-
-These commands inspect and operate deployments. Resources and autoscaler
-settings live in the Python definition, and each deploy applies them.
+container count and refuses other kinds; functions and endpoints scale from
+the `autoscaler` on their decorator ([Scaling and
+concurrency](/concepts/scaling)). Resources and autoscaler settings live in
+the Python definition, and each deploy applies them.
 
 ```bash
 uv run lazycloud deployment list [--app <name>] [--limit <n>]

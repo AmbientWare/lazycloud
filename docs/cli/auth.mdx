@@ -16,9 +16,9 @@ you, with access to every workspace your account belongs to. An expired code
 needs a fresh `lazycloud login`. The credential lives in
 `~/.lazycloud/config.yaml`.
 
-CI needs no login step. It reads `LAZYCLOUD_TOKEN` from your CI secret store
-and `LAZYCLOUD_WORKSPACE` for the target workspace. To save an existing
-environment token in a local profile:
+CI needs no login step. It reads `LAZYCLOUD_TOKEN` from your secret store and
+`LAZYCLOUD_WORKSPACE` for the target workspace. To save a token in a local
+profile:
 
 ```bash
 uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
@@ -40,8 +40,8 @@ uv run lazycloud workspace rename NAME     # renames the current workspace
 
 ## lazycloud profile
 
-Profiles hold separate sign-ins. One is active at a time.
-Switching workspaces within one account does not need a new profile.
+Profiles hold separate sign-ins; one is active at a time. Switching
+workspaces within one account needs no new profile.
 
 ```bash
 uv run lazycloud profile list

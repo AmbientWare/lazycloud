@@ -3,22 +3,19 @@ title: "CLI overview"
 description: "The lazycloud command: global flags, handler references, and command groups."
 ---
 
-The `lazycloud` command installs with the `lazycloud-client` Python package. See
-[Installation](/getting-started/installation). Sign in once with
-`lazycloud login`, as described in [Sign-in and tokens](/platform/auth).
+The `lazycloud` command installs with the `lazycloud-client` package
+([Installation](/getting-started/installation)). `lazycloud login` signs in
+once ([Sign-in and tokens](/platform/auth)).
 
 ```text
 uv run lazycloud [--json] [--debug] COMMAND [ARGS]...
 ```
 
-`--json` prints one JSON document to stdout for scripting. Progress goes to
-stderr. An error prints one JSON error document and exits nonzero. Log-follow
-commands print newline-delimited JSON, one record per event. The interactive
-commands `shell`, `dev`, and `serve` reject `--json`. `--debug` shows full
-tracebacks. `-h` or `--help` works on every command.
-
-Without `--json`, output is for humans. The CLI drops styling when you redirect
-output.
+`--json` prints one JSON document to stdout. Progress goes to stderr, an error
+is one JSON error document with a nonzero exit, and log-follow commands print
+one JSON record per line. The interactive commands `shell`, `dev`, and `serve`
+reject it. `--debug` shows full tracebacks. `-h` or `--help` works on every
+command. Without `--json`, output is for humans, unstyled when redirected.
 
 [Core concepts](/concepts) explains when `run`, `serve`, and
 `deploy` each fit.
@@ -31,17 +28,15 @@ root:
 - `quickstart:hello` selects `hello` in `quickstart.py`.
 - `myproject.api:app` selects `app` in `myproject/api.py`.
 
-Dots separate directory names, and `.py` is omitted. A file reference such as
-`quickstart.py:hello` also works and resolves to the same handler.
+Dots separate directory names, and `.py` is omitted. A file path such as
+`quickstart.py:hello` resolves to the same handler.
 
 The object is one decorated resource or an `App`. Deploying an `App` deploys
-everything it registers. Referencing one workload's Python object, for example
-`page_stats:analyze`, deploys only that workload.
+everything it registers; `page_stats:analyze` deploys only that workload.
 
-`deploy` also accepts a module without `:object`, such as
-`uv run lazycloud deploy quickstart`, when the module contains exactly one app.
-It deploys everything registered with that app. When the module has several
-apps, `module:app_name` selects one.
+`deploy` also accepts a bare module, `uv run lazycloud deploy quickstart`, when
+it contains exactly one app, and deploys everything registered with it. With
+several apps, `module:app_name` selects one.
 
 ## Command groups
 
