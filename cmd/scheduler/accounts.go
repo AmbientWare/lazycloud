@@ -17,17 +17,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-const (
-	// emailTick bounds how long a missed wake or a due retry waits.
-	emailTick = 5 * time.Second
-	// housekeepingTick paces pruning expired sessions and device codes and
-	// purging old email bodies.
-	housekeepingTick = time.Minute
-	// deletionTick paces workspace deletion while hosts stop containers.
-	deletionTick = 2 * time.Second
-	// deletionBatch bounds the workspaces one deletion pass advances.
-	deletionBatch = 20
-)
+// deletionBatch bounds the workspaces one deletion pass advances.
+const deletionBatch = 20
 
 // accountLoops deliver email, prune identity state and finish workspace
 // deletions.
@@ -72,10 +63,10 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 	return loops, func() { cancelEmail(); cancelDeletion() }
 }
 
-func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace, beats *heartbeats) {
+func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace, beats *heartbeats, t ticks) {
 	if a.deliver {
 		group.Go(func() error {
-			return p.loop(ctx, cadence{every: emailTick}, a.emailWake, nil, beats.track("email delivery", emailTick, func(ctx context.Context) bool {
+			return p.loop(ctx, cadence{every: t.email}, a.emailWake, nil, beats.track("email delivery", t.email, func(ctx context.Context) bool {
 				result, err := a.notifications.Deliver(ctx)
 				if err != nil {
 					a.logger.ErrorContext(ctx, "email delivery pass", "error", err)
@@ -85,7 +76,7 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace
 		})
 	}
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: housekeepingTick}, nil, nil, beats.track("housekeeping", housekeepingTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: t.housekeeping}, nil, nil, beats.track("housekeeping", t.housekeeping, func(ctx context.Context) bool {
 			if err := a.identity.Housekeeping(ctx, a.logger); err != nil {
 				a.logger.ErrorContext(ctx, "identity housekeeping", "error", err)
 			}
@@ -96,7 +87,7 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: deletionTick, quiet: true}, a.deletionWake, nil, beats.track("workspace deletion", deletionTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: t.deletion, quiet: true}, a.deletionWake, nil, beats.track("workspace deletion", t.deletion, func(ctx context.Context) bool {
 			// A workspace with objects left reruns the pass at once.
 			return a.deleteWorkspaces(ctx)
 		}))
