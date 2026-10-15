@@ -2,35 +2,48 @@ name: Go backend and host runtime
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/go.yml"
-      - "go.mod"
-      - "go.sum"
-      - "**/*.go"
-      - "contracts/**"
-      - "migrations/**"
-      - "buf.yaml"
-      - "buf.gen.yaml"
-      - ".golangci.yml"
-      - "**/sqlc.yaml"
-      # The test services.
-      - "compose.test.yaml"
-      - "deploy/local/garage.toml"
-      - "deploy/local/garage-bootstrap.sh"
-      - "deploy/local/install-snapshotter.sh"
-      - "deploy/local/acceptance.sh"
-      # The supervisor's HTTP runner tests run the Python runner.
-      - "python/**"
-      - "pyproject.toml"
-      - "uv.lock"
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  # A pull request runs the jobs below only when it changes what they
+  # check; "Go passed" always reports, so it can be required.
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      run: ${{ steps.changed.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: changed
+        uses: ./.github/actions/changed
+        with:
+          paths: |
+            .github/workflows/go.yml
+            .github/actions/changed
+            go.mod
+            go.sum
+            *.go
+            contracts
+            migrations
+            buf.yaml
+            buf.gen.yaml
+            .golangci.yml
+            *sqlc.yaml
+            compose.test.yaml
+            deploy/local/garage.toml
+            deploy/local/garage-bootstrap.sh
+            deploy/local/install-snapshotter.sh
+            deploy/local/acceptance.sh
+            python
+            pyproject.toml
+            uv.lock
+
   validate:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -67,6 +80,8 @@ jobs:
   # which needs root and Docker reconfigured, so this job sets the runner up
   # as a host before anything else runs in Docker.
   host-runtime:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -124,6 +139,8 @@ jobs:
   # trust only the HTTPS store's private CA, and an agent of the release
   # this change replaces updates to it. A skipped test fails the job.
   acceptance:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     # The tests and the snapshotter trace into Jaeger; the job keeps the
     # trace of the slowest container start.
@@ -188,3 +205,19 @@ jobs:
           name: cold-start-trace
           path: ${{ runner.temp }}/cold-start-trace.json
           if-no-files-found: ignore
+
+  passed:
+    name: Go passed
+    needs: [changes, validate, host-runtime, acceptance]
+    if: always()
+    runs-on: ubuntu-26.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success | skipped) ;;
+              *) echo "::error::a required job ended $result"; exit 1 ;;
+            esac
+          done

@@ -1,10 +1,9 @@
 name: Ship
 
-# Requires every owner check's latest run on main to have passed, cuts the
-# next v<version> tag on main, publishes the server, scheduler and web
-# images, the Python base images and the Python package under that version,
-# then records the version for prod through Deploy. The server image carries the agent release of the
-# same version.
+# Cuts the next v<version> tag on main, publishes the server, scheduler and
+# web images, the Python base images and the Python package under that
+# version, then records the version for prod through Deploy. The server
+# image carries the agent release of the same version.
 
 on:
   workflow_dispatch:
@@ -28,35 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Each owner workflow runs on every push to main that changes what it
-  # checks, so its latest run on main covers this commit. A run still going
-  # is waited for.
-  checks:
-    name: Owner checks passed on main
-    runs-on: ubuntu-26.04
-    permissions:
-      actions: read
-    steps:
-      - name: Every owner workflow's latest run on main passed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for workflow in go.yml python.yml web.yml deploy-checks.yml; do
-            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&event=push&per_page=1" --jq '.workflow_runs[0].id // empty')"
-            if [ -z "$run" ]; then
-              echo "::error::$workflow has no run on main."
-              exit 1
-            fi
-            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status >/dev/null || {
-              echo "::error::$workflow's latest run on main ($run) did not pass."
-              exit 1
-            }
-            echo "$workflow: run $run passed"
-          done
-
   version:
-    needs: checks
     name: Cut the version
     runs-on: ubuntu-26.04
     permissions:
@@ -66,7 +37,9 @@ jobs:
       commit: ${{ steps.source.outputs.commit }}
     steps:
       # A release tags the commit it runs from, and a tag on a branch commit
-      # is a version users can install that main never contained.
+      # is a version users can install that main never contained. Main
+      # changes only through pull requests whose checks passed up to date
+      # with it (the main ruleset), so its head needs no further checks.
       - name: Refuse anything but main
         if: github.ref != 'refs/heads/main'
         run: |

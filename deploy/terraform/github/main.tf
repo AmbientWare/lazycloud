@@ -1,7 +1,7 @@
 # The repository's release machinery: its environments and their
-# protections, the v* tag rule, the OIDC subject template, and the AWS roles
-# Ship and Node images run as. Apply after platform-core and
-# platform-deployment, with a repository administrator's GITHUB_TOKEN.
+# protections, the main branch and v* tag rules, the OIDC subject template,
+# and the AWS roles Ship and Node images run as. Apply after platform-core
+# and platform-deployment, with a repository administrator's GITHUB_TOKEN.
 
 data "terraform_remote_state" "core" {
   backend = "s3"
@@ -106,6 +106,55 @@ resource "github_actions_environment_secret" "prod_deploy_key" {
   environment     = github_repository_environment.environment["prod"].environment
   secret_name     = "PROD_DEPLOY_KEY"
   plaintext_value = tls_private_key.prod_deploy.private_key_openssh
+}
+
+# Main changes only through squash-merged pull requests whose owner checks
+# passed on a branch up to date with main, so main's head has passed every
+# check and neither main nor Ship runs them again. Each owner workflow ends
+# in a job that reports even when the pull request changes nothing it checks.
+resource "github_repository_ruleset" "main" {
+  name        = "main"
+  repository  = local.repository
+  target      = "branch"
+  enforcement = "active"
+
+  conditions {
+    ref_name {
+      include = ["~DEFAULT_BRANCH"]
+      exclude = []
+    }
+  }
+
+  rules {
+    deletion         = true
+    non_fast_forward = true
+
+    pull_request {
+      allowed_merge_methods             = ["squash"]
+      required_approving_review_count   = 0
+      dismiss_stale_reviews_on_push     = false
+      require_code_owner_review         = false
+      require_last_push_approval        = false
+      required_review_thread_resolution = false
+    }
+
+    required_status_checks {
+      strict_required_status_checks_policy = true
+
+      dynamic "required_check" {
+        for_each = toset(["Go passed", "Python passed", "Web passed", "Deployment checks passed"])
+        content {
+          context        = required_check.value
+          integration_id = 15368 # GitHub Actions
+        }
+      }
+    }
+  }
+}
+
+import {
+  to = github_repository_ruleset.main
+  id = "lazycloud:22999127"
 }
 
 resource "github_repository_ruleset" "prod" {
