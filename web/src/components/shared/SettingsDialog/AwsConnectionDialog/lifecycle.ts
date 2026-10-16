@@ -94,7 +94,7 @@ export type AwsConnectionConfirmation = {
 export function awsForgetConfirmation(connection: AwsConnection): AwsConnectionConfirmation {
   return {
     title: "Forget AWS connection?",
-    description: `LazyCloud stops managing account ${connection.account_id} and removes the connection. Anything it could not delete stays in AWS, and the next step links each one for you to delete.`,
+    description: `LazyCloud stops managing account ${connection.account_id} and removes the connection. Anything it could not delete stays in AWS; the next screen lists each one with a link to delete it.`,
     cancelLabel: "Keep connection",
     confirmLabel: "Forget connection",
   };
@@ -112,7 +112,7 @@ export function awsRemovalConfirmation(connection: AwsConnection): AwsConnection
   return {
     title: "Remove AWS connection?",
     description:
-      "Disconnecting is refused while any workspace lives in this account; delete those workspaces first. LazyCloud terminates its instances and deletes the connection stacks, then removes the connection.",
+      "Delete this account's workspaces first. LazyCloud then terminates its instances, deletes the connection stacks and removes the connection.",
     cancelLabel: "Keep connected",
     confirmLabel: "Remove connection",
   };

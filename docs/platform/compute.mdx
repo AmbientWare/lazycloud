@@ -48,8 +48,8 @@ uv run lazycloud cloud status --watch --until ready
 ```
 
 Either way you get an AWS Console link that opens a CloudFormation stack ready
-to create. The stack makes the management role and network. Review it, tick the
-IAM acknowledgement and choose Create stack. You don't need the AWS CLI, and
+to create. The stack makes the management role and network. After a look at what it
+creates, tick the IAM acknowledgement and choose Create stack. You don't need the AWS CLI, and
 LazyCloud never sees your AWS keys. The connection turns ready on its own once
 the stack finishes. If it stalls, the stack's events in AWS show why.
 
@@ -63,8 +63,8 @@ deletes its bucket.
 Disconnecting needs every workspace in the account deleted first. LazyCloud
 then terminates its instances, deletes the stacks it asked you to create and
 removes the connection. If a step can't finish, for example a stack AWS
-refuses to delete, the connection shows Action required. Fix the cause and
-retry, or forget the connection. Forgetting removes it at once and lists what
+refuses to delete, the connection shows Action required. Retry once the
+cause is fixed, or forget the connection. Forgetting removes it at once and lists what
 stayed in AWS, each with a Console link, for you to delete.
 
 ## Your own machines

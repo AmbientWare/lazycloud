@@ -34,15 +34,16 @@ uv run lazycloud cloud forget [--yes]      # drop a connection whose disconnect 
 ```
 
 `cloud connect aws` prints an AWS Console link and opens it in your browser.
-The link opens the connection stack ready to create. Sign in to the account,
-tick the IAM acknowledgement and choose Create stack. You need no AWS CLI or
-access keys. LazyCloud checks the connection once the stack finishes, and
+The link opens the connection stack ready to create. Once you're signed in to
+that account, tick the IAM acknowledgement and choose Create stack. No AWS CLI
+or access keys are involved. LazyCloud checks the connection once the stack finishes, and
 `cloud status --watch --until ready` waits for that. `cloud reconnect` and
 `cloud authorize` print and open the same kind of link.
 
 `cloud disconnect --wait` ends in one of two ways. Either the account is
 removed, or the connection is in `action_required` and exits with status 1.
-Fix what the detail names and run `cloud retry`, or run `cloud forget`.
+The detail names what failed. Once it's fixed, `cloud retry` picks the
+removal up again, and `cloud forget` gives up on it.
 `forget` removes the connection and lists each stack or instance LazyCloud
 could not delete, with a Console link to delete it yourself.
 
