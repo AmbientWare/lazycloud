@@ -144,7 +144,9 @@ containers, and a batch that fails after its retries yields `None`.
 )
 def score_batch(cases: list[ScoringCase]) -> list[bool]:
     return [execution_match(case.context, case.reference_sql, case.predicted_sql) for case in cases]
-...
+```
+
+```python lora_sql/evaluate.py
 def score(cases: Sequence[ScoringCase]) -> list[bool]:
     """Run each predicted query against its database, in parallel batches."""
     results = list(score_batch.map([(list(batch),) for batch in batched(cases, SCORING_BATCH)]))
