@@ -11,12 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -29,7 +32,7 @@ var connectionTemplate string
 
 // TemplateVersion names the connection template; validation refuses stacks
 // made from another one.
-const TemplateVersion = "2026-10-10.v1"
+const TemplateVersion = "2026-10-16.v1"
 
 // connectionRegion is where connection stacks are created.
 const connectionRegion = "us-east-2"
@@ -152,16 +155,6 @@ type Authorization struct {
 	expiresAt          *time.Time
 }
 
-// StackAction is the CreateStack request the customer submits.
-type StackAction struct {
-	AccountID      string
-	Region         string
-	TemplateSHA256 string
-	StackName      string
-	TemplateBody   string
-	Parameters     [][2]string
-}
-
 // Connection is an account's AWS connection as users see it.
 type Connection struct {
 	ID           uuid.UUID
@@ -176,9 +169,10 @@ type Connection struct {
 	ActionLabel  string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
-	// Stack is the CreateStack request while a managed authorization waits
-	// for the customer.
-	Stack *StackAction
+	// ConsoleURL opens the pending managed authorization's stack, ready to
+	// create, in the AWS Console while it waits for the customer. View sets
+	// it.
+	ConsoleURL string
 }
 
 // HostsWorkloads reports whether new workloads can be placed in the account.
@@ -440,24 +434,6 @@ func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 			conn.Retiring = &auth
 		}
 	}
-	waiting := conn.Phase == ConnAwaiting || conn.Phase == ConnReconnecting || conn.Phase == ConnDegraded
-	if p := conn.Pending; p != nil && p.Mode == ModeManagedStack && waiting {
-		conn.Stack = &StackAction{
-			AccountID: conn.AWSAccountID, Region: p.Region, TemplateSHA256: p.TemplateSHA256,
-			StackName: p.StackName, TemplateBody: connectionTemplate,
-			Parameters: [][2]string{
-				{"BucketPrefix", ""},
-				{"ConnectionRoleName", p.StackName},
-				{"ExternalId", p.externalID},
-				{"FleetName", "lazycloud"},
-				{"NodeInstanceProfileName", p.nodeInstanceProfle},
-				{"NodeRoleName", roleName(p.nodeRoleARN)},
-				{"PlatformPrincipalArn", ""},
-				{"StackPrefix", strings.TrimSuffix(p.StackName, fmt.Sprintf("-g%d", p.Generation))},
-				{"TargetAccountId", conn.AWSAccountID},
-			},
-		}
-	}
 	return conn
 }
 
@@ -490,28 +466,73 @@ func authorizationOf(a CloudAuthorization) Authorization {
 // ExternalID is the external ID an existing-role authorization requires.
 func (a Authorization) ExternalID() string { return a.externalID }
 
-// fillPrincipal sets the platform's principal, fleet name and workspace
-// bucket prefix in a stack action's parameters.
-func (c *Compute) fillPrincipal(conn *Connection) {
-	if conn.Stack == nil {
-		return
-	}
-	for n, p := range conn.Stack.Parameters {
-		switch p[0] {
-		case "PlatformPrincipalArn":
-			conn.Stack.Parameters[n][1] = c.fleet.PrincipalARN
-		case "FleetName":
-			conn.Stack.Parameters[n][1] = c.fleet.Name
-		case "BucketPrefix":
-			conn.Stack.Parameters[n][1] = c.fleet.BucketPrefix
-		}
-	}
-}
-
 // View returns the connection as its account sees it.
 func (c *Compute) View(conn Connection) Connection {
-	c.fillPrincipal(&conn)
+	waiting := conn.Phase == ConnAwaiting || conn.Phase == ConnReconnecting || conn.Phase == ConnDegraded
+	if p := conn.Pending; p != nil && p.Mode == ModeManagedStack && waiting {
+		conn.ConsoleURL = c.quickCreateURL(conn.AWSAccountID, *p)
+	}
 	return conn
+}
+
+// quickCreateURL opens the AWS Console's quick-create page for a's stack
+// from the published template, with every template parameter filled. The
+// customer signs in to the account, acknowledges the IAM capability and
+// creates the stack.
+func (c *Compute) quickCreateURL(account string, a Authorization) string {
+	q := url.Values{
+		"templateURL":                   {c.templateURL()},
+		"stackName":                     {a.StackName},
+		"param_TargetAccountId":         {account},
+		"param_PlatformPrincipalArn":    {c.fleet.PrincipalARN},
+		"param_ExternalId":              {a.externalID},
+		"param_ConnectionRoleName":      {a.StackName},
+		"param_StackPrefix":             {strings.TrimSuffix(a.StackName, fmt.Sprintf("-g%d", a.Generation))},
+		"param_BucketPrefix":            {c.fleet.BucketPrefix},
+		"param_FleetName":               {c.fleet.Name},
+		"param_NodeRoleName":            {roleName(a.nodeRoleARN)},
+		"param_NodeInstanceProfileName": {a.nodeInstanceProfle},
+	}
+	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudformation/home?region=%s#/stacks/quickcreate?%s",
+		a.Region, a.Region, q.Encode())
+}
+
+// templateKey is where the template's exact bytes are published. The key
+// names their digest, so a published object never changes.
+func templateKey() string { return "connection/" + TemplateSHA256() + ".json" }
+
+// templateURL is the published template's public S3 URL, which
+// CloudFormation reads the template from.
+func (c *Compute) templateURL() string {
+	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.fleet.TemplateBucket, c.fleet.AWS.Region, templateKey())
+}
+
+// PublishConnectionTemplate uploads the connection template to the
+// template bucket unless an earlier start already did. Without a platform
+// principal no connection can be made and nothing is published.
+func (c *Compute) PublishConnectionTemplate(ctx context.Context) error {
+	if c.fleet.PrincipalARN == "" {
+		return nil
+	}
+	if c.fleet.TemplateBucket == "" {
+		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
+	}
+	client := awsClients{base: c.fleet.AWS, endpoints: c.fleet.Endpoints}.s3(awsScope{}, "")
+	bucket, key := aws.String(c.fleet.TemplateBucket), aws.String(templateKey())
+	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: bucket, Key: key})
+	var missing *s3types.NotFound
+	switch {
+	case err == nil:
+		return nil
+	case !errors.As(err, &missing):
+		return fmt.Errorf("check the published connection template: %w", err)
+	}
+	if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: bucket, Key: key, Body: strings.NewReader(connectionTemplate), ContentType: aws.String("application/json"),
+	}); err != nil {
+		return fmt.Errorf("publish the connection template: %w", err)
+	}
+	return nil
 }
 
 // setPhase moves the connection to phase, scheduling its background step.

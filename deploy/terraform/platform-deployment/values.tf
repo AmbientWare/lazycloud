@@ -40,6 +40,7 @@ resource "aws_s3_object" "values" {
         LAZYCLOUD_IMAGE_REPOSITORY             = local.core.workload_image_repository
         LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN = aws_iam_role.registry_hosts.arn
         LAZYCLOUD_CLOUDFLARE_ZONE_ID           = var.cloudflare_zone_id
+        LAZYCLOUD_AWS_TEMPLATE_BUCKET          = aws_s3_bucket.templates.id
         LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS  = jsonencode({ for region in local.layer_replica_regions : region => aws_s3_bucket.layers[region].id })
       }
       hostService = { certificateArn = aws_acm_certificate_validation.hosts.certificate_arn }

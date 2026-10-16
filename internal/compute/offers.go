@@ -23,6 +23,10 @@ type Fleet struct {
 	// BucketPrefix starts the names of workspace buckets, which a connected
 	// account holds as <prefix>-<account id>-*.
 	BucketPrefix string
+	// TemplateBucket is the platform bucket, in the platform's AWS region,
+	// whose connection/ objects anyone may read. The server publishes the
+	// connection template there for CloudFormation to read.
+	TemplateBucket string
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string
@@ -53,7 +57,8 @@ type Endpoints struct {
 	STS            string
 	CloudFormation string
 	ServiceQuotas  string
-	// S3 serves connected accounts' buckets, path-style.
+	// S3 serves the template bucket and connected accounts' buckets,
+	// path-style.
 	S3 string
 }
 

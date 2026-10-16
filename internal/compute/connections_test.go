@@ -1,19 +1,28 @@
 package compute_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 const platformPrincipal = "arn:aws:iam::999988887777:role/lazycloud-platform"
@@ -89,6 +98,7 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 		zones := map[string]compute.Subnet{
 			"subnet-a": {ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
 			"subnet-b": {ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
+			"subnet-c": {ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
 		}
 		var subnets []compute.Subnet
 		for _, id := range list(call.Form, "SubnetId") {
@@ -99,32 +109,57 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 	return c
 }
 
-// authorize does what the customer's CloudFormation stack does: it creates
-// the connection role that demands the stack's external ID, and the stack
-// with its outputs.
+// quickCreate is the stack a console quick-create link opens: its name,
+// the template URL and the template parameters.
+type quickCreate struct {
+	stackName, templateURL string
+	params                 map[string]string
+}
+
+func quickCreateOf(t *testing.T, consoleURL string) quickCreate {
+	t.Helper()
+	_, fragment, ok := strings.Cut(consoleURL, "#/stacks/quickcreate?")
+	if !ok || !strings.HasPrefix(consoleURL, "https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#") {
+		t.Fatalf("console URL %q is not a us-east-2 CloudFormation quick-create link", consoleURL)
+	}
+	query, err := url.ParseQuery(fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := quickCreate{stackName: query.Get("stackName"), templateURL: query.Get("templateURL"), params: map[string]string{}}
+	for key := range query {
+		if name, ok := strings.CutPrefix(key, "param_"); ok {
+			q.params[name] = query.Get(key)
+		}
+	}
+	return q
+}
+
+// authorize does what creating the stack from the console link does: it
+// creates the connection role that demands the link's external ID, and
+// the stack with its outputs.
 func (c *customerAWS) authorize(t *testing.T, o owners, conn compute.Connection, r role) {
 	t.Helper()
-	stack := o.compute.View(conn).Stack
-	if stack == nil || conn.Pending == nil {
+	view := o.compute.View(conn)
+	if view.ConsoleURL == "" || conn.Pending == nil {
 		t.Fatalf("connection %s waits for no stack", conn.Phase)
 	}
-	params := map[string]string{}
-	for _, p := range stack.Parameters {
-		params[p[0]] = p[1]
-	}
+	stack := quickCreateOf(t, view.ConsoleURL)
+	account := stack.params["TargetAccountId"]
 	if r.externalID == "" && !r.open {
-		r.externalID = params["ExternalId"]
+		r.externalID = stack.params["ExternalId"]
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.roles[conn.Pending.RoleARN] = r
-	c.stacks[stack.StackName] = &cfnStack{
-		Name: stack.StackName, Status: "CREATE_COMPLETE",
-		ID: "arn:aws:cloudformation:us-east-2:" + stack.AccountID + ":stack/" + stack.StackName + "/" + uuid.NewString(),
+	c.roles["arn:aws:iam::"+account+":role/"+stack.params["ConnectionRoleName"]] = r
+	c.stacks[stack.stackName] = &cfnStack{
+		Name: stack.stackName, Status: "CREATE_COMPLETE",
+		ID: "arn:aws:cloudformation:us-east-2:" + account + ":stack/" + stack.stackName + "/" + uuid.NewString(),
 		Outputs: map[string]string{
-			"ConnectionRoleArn": conn.Pending.RoleARN, "VpcId": "vpc-customer", "SecurityGroupId": "sg-customer",
-			"SubnetIds": "subnet-a,subnet-b", "NodeInstanceProfileName": params["NodeInstanceProfileName"],
-			"NodeRoleArn": "arn:aws:iam::" + stack.AccountID + ":role/" + params["NodeRoleName"],
+			"ConnectionRoleArn": "arn:aws:iam::" + account + ":role/" + stack.params["ConnectionRoleName"],
+			"VpcId":             "vpc-customer", "SecurityGroupId": "sg-customer", "SubnetIds": "subnet-a,subnet-b,subnet-c",
+			"NodeInstanceProfileName": stack.params["NodeInstanceProfileName"],
+			"NodeRoleArn":             "arn:aws:iam::" + account + ":role/" + stack.params["NodeRoleName"],
 		},
 	}
 }
@@ -220,7 +255,7 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 	t.Parallel()
 	o, _, _ := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
-	stack := o.compute.View(connect(t, o, alice, "111111111111")).Stack
+	connect(t, o, alice, "111111111111")
 	var template struct {
 		Resources map[string]struct {
 			Properties struct {
@@ -238,7 +273,7 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 			}
 		}
 	}
-	if err := json.Unmarshal([]byte(stack.TemplateBody), &template); err != nil {
+	if err := json.Unmarshal(connectionTemplate(t), &template); err != nil {
 		t.Fatal(err)
 	}
 	buckets := "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"
@@ -272,6 +307,89 @@ func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 	}
 }
 
+func connectionTemplate(t *testing.T) []byte {
+	t.Helper()
+	body, err := os.ReadFile("connection_template.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// The console link opens the stack from the template the server
+// published, with a value for every template parameter that the template
+// accepts. Publishing again leaves the published object alone.
+func TestConnectLinksTheConsoleToThePublishedTemplate(t *testing.T) {
+	t.Parallel()
+	store := storagetest.Config(t)
+	o := newOwners(t, fleetConfig(compute.Fleet{
+		PrincipalARN: platformPrincipal, BucketPrefix: "lazycloud-ws-test", TemplateBucket: store.Bucket,
+		AWS:       aws.Config{Region: store.Region, Credentials: credentials.NewStaticCredentialsProvider(store.AccessKeyID, store.SecretAccessKey, "")},
+		Endpoints: compute.Endpoints{S3: store.Endpoint},
+	}))
+	if err := o.compute.PublishConnectionTemplate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	conn := connect(t, o, newUser(t, o.pool, "alice@example.com"), "111111111111")
+	stack := quickCreateOf(t, o.compute.View(conn).ConsoleURL)
+
+	key := "connection/" + compute.TemplateSHA256() + ".json"
+	if want := "https://" + store.Bucket + ".s3." + store.Region + ".amazonaws.com/" + key; stack.templateURL != want {
+		t.Fatalf("templateURL %s, want %s", stack.templateURL, want)
+	}
+	published := func() []byte {
+		out, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: &store.Bucket, Key: &key})
+		if err != nil {
+			t.Fatalf("read the published template: %v", err)
+		}
+		defer func() { _ = out.Body.Close() }()
+		body, err := io.ReadAll(out.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	if !bytes.Equal(published(), connectionTemplate(t)) {
+		t.Fatal("the published template differs from the connection template")
+	}
+
+	var template struct {
+		Parameters map[string]struct {
+			AllowedPattern string
+			MinLength      int
+		}
+	}
+	if err := json.Unmarshal(connectionTemplate(t), &template); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range template.Parameters {
+		value, ok := stack.params[name]
+		if !ok || len(value) < p.MinLength || (p.AllowedPattern != "" && !regexp.MustCompile(p.AllowedPattern).MatchString(value)) {
+			t.Errorf("parameter %s = %q (given %t), want a value the template accepts", name, value, ok)
+		}
+	}
+	for name := range stack.params {
+		if _, ok := template.Parameters[name]; !ok {
+			t.Errorf("the link sets %s, which the template does not declare", name)
+		}
+	}
+	if stack.stackName != conn.Pending.StackName || stack.params["ConnectionRoleName"] != conn.Pending.StackName {
+		t.Errorf("stack %s with role %s, want both named %s", stack.stackName, stack.params["ConnectionRoleName"], conn.Pending.StackName)
+	}
+
+	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: &store.Bucket, Key: &key, Body: strings.NewReader("{}"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.compute.PublishConnectionTemplate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if body := published(); string(body) != "{}" {
+		t.Fatal("publishing again uploaded the template over the object already at its digest")
+	}
+}
+
 func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -299,17 +417,8 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	}
 
 	conn := connect(t, o, alice, "111111111111")
-	stack := o.compute.View(conn).Stack
-	if conn.Phase != compute.ConnAwaiting || stack == nil || stack.TemplateSHA256 != compute.TemplateSHA256() {
-		t.Fatalf("connection %s with stack %+v, want awaiting authorization with the current template", conn.Phase, stack)
-	}
-	params := map[string]string{}
-	for _, p := range stack.Parameters {
-		params[p[0]] = p[1]
-	}
-	if len(params["ExternalId"]) < 32 || params["PlatformPrincipalArn"] != platformPrincipal ||
-		params["FleetName"] != "lazycloud-test" || params["TargetAccountId"] != "111111111111" || params["BucketPrefix"] != "lazycloud-ws-test" {
-		t.Fatalf("stack parameters %v", params)
+	if conn.Phase != compute.ConnAwaiting || conn.Pending == nil || conn.Pending.TemplateSHA256 != compute.TemplateSHA256() {
+		t.Fatalf("connection %s pending %+v, want awaiting authorization with the current template", conn.Phase, conn.Pending)
 	}
 	again := connect(t, o, alice, "111111111111")
 	if again.ID != conn.ID || again.Pending.ID != conn.Pending.ID {
@@ -326,7 +435,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existing.Pending == nil || existing.Pending.Mode != compute.ModeExistingRole || len(existing.Pending.ExternalID()) < 32 || existing.Stack != nil {
+	if existing.Pending == nil || existing.Pending.Mode != compute.ModeExistingRole || len(existing.Pending.ExternalID()) < 32 || o.compute.View(existing).ConsoleURL != "" {
 		t.Fatalf("existing-role connection %+v, want a pending role with a generated external ID and no stack", existing.Pending)
 	}
 }
@@ -350,7 +459,7 @@ func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	east := networks["us-east-2"]
-	if east.VPCID != "vpc-customer" || east.SecurityGroupID != "sg-customer" || len(east.Subnets) != 2 ||
+	if east.VPCID != "vpc-customer" || east.SecurityGroupID != "sg-customer" || len(east.Subnets) != 3 ||
 		east.Subnets[0].Zone != "us-east-2a" || east.Subnets[1].ZoneID != "use2-az2" {
 		t.Fatalf("recorded networks %+v, want the stack's VPC and subnets with their zones", networks)
 	}

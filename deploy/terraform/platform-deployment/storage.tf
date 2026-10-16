@@ -34,6 +34,38 @@ resource "aws_s3_bucket_lifecycle_configuration" "storage" {
   }
 }
 
+# The server publishes each connection template as connection/<sha256>.json
+# (LAZYCLOUD_AWS_TEMPLATE_BUCKET). CloudFormation reads it there for the
+# console links customers open in their own accounts, so anyone may read
+# connection/*. The public access block lets that bucket policy through and
+# still refuses public ACLs.
+resource "aws_s3_bucket" "templates" {
+  bucket = "${var.deployment}-templates-${local.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "templates" {
+  bucket                  = aws_s3_bucket.templates.id
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_policy" "templates" {
+  bucket     = aws_s3_bucket.templates.id
+  depends_on = [aws_s3_bucket_public_access_block.templates]
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "ReadConnectionTemplates"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.templates.arn}/connection/*"
+    }]
+  })
+}
+
 # What a host's grant assumes. The server narrows each session to one
 # workspace bucket's volumes/ and disks/ with a session policy
 # (storage.hostPolicy); this role bounds every session to workspace buckets.

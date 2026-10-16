@@ -377,6 +377,9 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	}
 	exec := execution.NewExecution(pool)
 	comp := compute.NewCompute(pool, exec, cfg.compute)
+	if err := comp.PublishConnectionTemplate(ctx); err != nil {
+		return err
+	}
 	store := storage.NewStorage(pool, cfg.objectStore, comp)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
