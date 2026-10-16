@@ -377,9 +377,6 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	}
 	exec := execution.NewExecution(pool)
 	comp := compute.NewCompute(pool, exec, cfg.compute)
-	if err := comp.PublishConnectionTemplate(ctx); err != nil {
-		return err
-	}
 	store := storage.NewStorage(pool, cfg.objectStore, comp)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
 	// that refuses the rule only costs those browser transfers.
@@ -483,6 +480,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	g.Go(func() error { return tel.ServeMetrics(background, logger) })
 	g.Go(func() error { return hostTraces.Run(background) })
 	g.Go(func() error { return ident.RunTokenUse(background, logger) })
+	g.Go(func() error { return comp.RunTemplatePublisher(gctx, logger) })
 	// The edge's route table, demand and request records keep running until
 	// its requests are done; then it forgets its registration and writes the
 	// records it still holds.

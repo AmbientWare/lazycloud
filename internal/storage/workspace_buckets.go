@@ -153,7 +153,11 @@ func (s *Storage) connectionCredentials(connection uuid.UUID) aws.CredentialsPro
 		if err != nil {
 			return aws.Credentials{}, err
 		}
-		return s.assumeRole(ctx, connection, account, "lazycloud-storage", "", time.Hour)
+		creds, err := s.connections.AssumeConnectionRole(ctx, account, "lazycloud-storage", "", time.Hour)
+		if err != nil {
+			return aws.Credentials{}, fmt.Errorf("connection %s: %w", connection, err)
+		}
+		return creds, nil
 	}), renewEarly)
 	s.credentials[connection] = credentials
 	return credentials
@@ -174,24 +178,12 @@ func (s *Storage) providerOf(ctx context.Context, store bucketClient) (bucketPro
 		return nil, err
 	}
 	return &awsBuckets{account: account.AWSAccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-		return s.assumeRole(ctx, *store.connection, account, session, policy, lifetime)
+		creds, err := s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
+		if err != nil {
+			return aws.Credentials{}, fmt.Errorf("connection %s: %w", *store.connection, err)
+		}
+		return creds, nil
 	}}, nil
-}
-
-// assumeRole assumes the connection role of account. AWS refusing it, as it
-// does once the customer deletes the role, is a *ConflictError, the same as
-// a connection without an active authorization.
-func (s *Storage) assumeRole(ctx context.Context, connection uuid.UUID, account compute.ConnectedAccount, session, policy string,
-	lifetime time.Duration) (aws.Credentials, error) {
-	creds, err := s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
-	var refused *compute.ConflictError
-	if errors.As(err, &refused) {
-		return aws.Credentials{}, conflict("%s", refused.Message)
-	}
-	if err != nil {
-		return aws.Credentials{}, fmt.Errorf("connection %s: %w", connection, err)
-	}
-	return creds, nil
 }
 
 // workspaceStore returns the workspace's bucket, creating it on first use.
