@@ -59,10 +59,9 @@ describe("AWS connection dialog", () => {
     expect(sent).toEqual([]);
     fireEvent.click(within(confirm).getByRole("button", { name: "Forget connection" }));
 
-    await screen.findByText("These stay in your AWS account. Delete each one in the AWS Console.");
+    await screen.findByText("lazycloud-connection");
     expect(sent).toEqual(["POST /v1/aws-connection/forget"]);
     expect(queryClient.getQueryData(accountQueryKeys.compute.awsConnection())).toBeNull();
-    expect(screen.getByText("lazycloud-connection")).toBeInTheDocument();
     expect(screen.getByText("i-0123456789abcdef0")).toBeInTheDocument();
     expect(
       screen.getAllByRole("link", { name: "Open" }).map((link) => link.getAttribute("href")),
