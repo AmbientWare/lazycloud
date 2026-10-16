@@ -247,6 +247,9 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if fleet.PrincipalARN != "" && fleet.TemplateBucket == "" {
+		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
+	}
 	cfg.compute.Fleet = fleet
 	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
 	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
@@ -480,6 +483,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	g.Go(func() error { return tel.ServeMetrics(background, logger) })
 	g.Go(func() error { return hostTraces.Run(background) })
 	g.Go(func() error { return ident.RunTokenUse(background, logger) })
+	g.Go(func() error { return comp.RunTemplatePublisher(gctx, logger) })
 	// The edge's route table, demand and request records keep running until
 	// its requests are done; then it forgets its registration and writes the
 	// records it still holds.

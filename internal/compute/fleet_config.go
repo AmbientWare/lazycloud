@@ -22,13 +22,15 @@ import (
 //	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per owner, and platform reserves (20)
 //	LAZYCLOUD_AWS_PRINCIPAL_ARN       principal connection roles trust
 //	LAZYCLOUD_WORKSPACE_BUCKET_PREFIX workspace bucket names' prefix (lazycloud-ws)
+//	LAZYCLOUD_AWS_TEMPLATE_BUCKET     public-read bucket the server publishes the connection template to
 //	LAZYCLOUD_AWS_ENDPOINT_EC2, _STS, _CLOUDFORMATION  service endpoint overrides
 func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	f := Fleet{
 		Name: getenv("LAZYCLOUD_FLEET_NAME"), AccountID: getenv("LAZYCLOUD_FLEET_ACCOUNT_ID"),
 		NodeRoleARN: getenv("LAZYCLOUD_FLEET_NODE_ROLE_ARN"), InstanceProfile: getenv("LAZYCLOUD_FLEET_INSTANCE_PROFILE"),
 		PrincipalARN: getenv("LAZYCLOUD_AWS_PRINCIPAL_ARN"), BucketPrefix: getenv("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX"),
-		StorageRegion: getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
+		TemplateBucket: getenv("LAZYCLOUD_AWS_TEMPLATE_BUCKET"),
+		StorageRegion:  getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
 		Endpoints: Endpoints{
 			EC2: getenv("LAZYCLOUD_AWS_ENDPOINT_EC2"), STS: getenv("LAZYCLOUD_AWS_ENDPOINT_STS"),
 			CloudFormation: getenv("LAZYCLOUD_AWS_ENDPOINT_CLOUDFORMATION"),

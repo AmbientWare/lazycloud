@@ -12,6 +12,7 @@ from lazycloud.contracts.api import (
     AwsConnectionAuthorization,
     AwsConnectionEnvelope,
     AwsConnectionRequest,
+    AwsForgetResult,
     AwsReconnectRequest,
     ComputeInstance,
     ComputeInstancePage,
@@ -95,6 +96,10 @@ class ComputeApi:
 
     def retry_aws(self) -> AwsConnection:
         return self.api._send(AwsConnection, "POST", "/v1/aws-connection/retry")
+
+    def forget_aws(self) -> AwsForgetResult:
+        """Removes a connection in action_required, returning what stays in AWS."""
+        return self.api._send(AwsForgetResult, "POST", "/v1/aws-connection/forget")
 
     def join_command(self, request: MachineJoinRequest) -> MachineJoinCommand:
         return self.api._send(MachineJoinCommand, "POST", "/v1/machines/join-command", body=request)

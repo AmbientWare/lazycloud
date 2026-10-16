@@ -178,7 +178,11 @@ func (s *Storage) providerOf(ctx context.Context, store bucketClient) (bucketPro
 		return nil, err
 	}
 	return &awsBuckets{account: account.AWSAccountID, assume: func(ctx context.Context, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
-		return s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
+		creds, err := s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)
+		if err != nil {
+			return aws.Credentials{}, fmt.Errorf("connection %s: %w", *store.connection, err)
+		}
+		return creds, nil
 	}}, nil
 }
 

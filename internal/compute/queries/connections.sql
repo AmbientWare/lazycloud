@@ -44,8 +44,10 @@ set phase = @phase, slot = sqlc.narg(slot), updated_at = now()
 where id = @id;
 
 -- name: StartValidation :exec
+-- An active authorization keeps its phase, and its connection keeps taking
+-- work, until the check decides.
 update cloud_authorizations
-set phase = 'validating', last_validation_started_at = now(), updated_at = now()
+set phase = case when slot = 'active' then phase else 'validating' end, last_validation_started_at = now(), updated_at = now()
 where id = @id;
 
 -- name: AuthorizationValidated :exec
@@ -63,7 +65,14 @@ set phase = 'degraded', error_code = @error_code, error_message = @error_message
 where id = @id;
 
 -- name: DeleteConnection :exec
-delete from cloud_connections where id = @id;
+-- The connection goes with the fleet state keyed by it: its published
+-- markets and its pools' cooldowns.
+with markets as (
+    delete from fleet_markets where starts_with(market, sqlc.arg(id)::uuid::text || '/')
+), cooldowns as (
+    delete from capacity_cooldowns where connection_key = sqlc.arg(id)::uuid::text
+)
+delete from cloud_connections where id = sqlc.arg(id)::uuid;
 
 -- name: ConnectionWorkspaces :many
 select name from workspaces where connection_id = @connection_id order by name limit 20;
@@ -72,19 +81,17 @@ select name from workspaces where connection_id = @connection_id order by name l
 select count(*)::int from hosts
 where connection_id = @connection_id and kind = 'connection' and phase not in ('deleted', 'failed');
 
--- name: DueConnections :many
-select id from cloud_connections where next_step_at <= now() order by next_step_at, id limit @batch_size;
-
--- name: ReadyConnectionOfAccount :one
-select cc.id, cc.phase from cloud_connections cc where cc.account_id = @account_id;
-
--- name: ActiveAuthorizationOfConnection :one
--- The authorization the fleet launches with while the connection hosts
--- workloads or still manages its instances.
-select a.*, cc.aws_account_id, cc.phase as connection_phase
-from cloud_authorizations a
-join cloud_connections cc on cc.id = a.connection_id
-where a.connection_id = @connection_id and a.slot = 'active' and a.phase = 'ready';
+-- name: ClaimDueConnection :one
+-- The connection whose background step is due longest, leased for
+-- @lease_seconds so one scheduler replica runs its step at a time; the
+-- step's outcome sets when the next one is due.
+update cloud_connections set next_step_at = now() + make_interval(secs => @lease_seconds::float8)
+where id = (
+    select id from cloud_connections where next_step_at <= now()
+    order by next_step_at, id limit 1
+    for update skip locked
+)
+returning id;
 
 -- name: RoleBoundElsewhere :one
 -- Whether another connection holds an authorization for this role.
@@ -107,8 +114,63 @@ where authorization_id = @authorization_id and phase in ('ready', 'joining')
 returning id;
 
 -- name: ConnectionAccess :one
--- The connected account and the role its active authorization grants.
-select cc.aws_account_id, a.region, a.role_arn, a.external_id
+-- The connected account, the role its active authorization grants and how
+-- that authorization last validated.
+select cc.aws_account_id, a.region, a.role_arn, a.external_id, a.phase, a.error_code, a.error_message
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = @id;
+
+-- name: RemainingStacks :many
+-- The connection's stacks, of every generation, not confirmed deleted.
+select id, region, stack_name::text as stack_name, stack_id from cloud_authorizations
+where connection_id = @connection_id and mode = 'managed_stack' and stack_name is not null and stack_deleted_at is null
+order by generation;
+
+-- name: StackDeleted :exec
+update cloud_authorizations set stack_deleted_at = now(), updated_at = now() where id = @id;
+
+-- name: ConnectionRegions :many
+-- The regions the connection's instances may run in: its networks' and
+-- any its hosts record.
+select h.region::text from hosts h where h.connection_id = sqlc.arg(connection)::uuid and h.region <> ''
+union
+select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = sqlc.arg(connection)::uuid
+order by 1;
+
+-- name: ConnectionHostsAmong :many
+-- Which of these hosts the connection launched.
+select id from hosts where id = any(@ids::uuid[]) and connection_id = @connection_id;
+
+-- name: LiveConnectionInstances :many
+-- The instances of the connection's hosts not confirmed gone.
+select instance_id::text as instance_id, region from hosts
+where connection_id = @connection_id and phase not in ('deleted', 'failed') and instance_id is not null
+order by instance_id;
+
+-- name: AbandonConnectionHosts :exec
+-- A forgotten connection's hosts end with it; their instances, if any
+-- remain, are the customer's to remove.
+update hosts
+set phase = 'failed', state = 'retired', failure = 'unknown', launch_lease_until = null,
+    phase_message = 'Left in the AWS account when its connection was forgotten', phase_at = now(), updated_at = now()
+where connection_id = @connection_id and phase not in ('deleted', 'failed');
+
+-- name: AccountConnectedElsewhere :one
+-- Whether another connection reaches the same AWS account.
+select exists (
+    select 1 from cloud_connections where aws_account_id = @aws_account_id and id <> @id
+)::bool;
+
+-- name: LockWorkspaceConnection :one
+-- The account's connection, share-locked so its phase holds until the
+-- caller's transaction commits.
+select * from cloud_connections where account_id = @account_id for share;
+
+-- name: StackDeleteRequested :exec
+update cloud_authorizations
+set stack_delete_requested_at = now(), stack_id = coalesce(nullif(@stack_id::text, ''), stack_id), updated_at = now()
+where id = @id;
+
+-- name: RequestRemoval :exec
+update cloud_connections set removal_requested_at = now() where id = @id;

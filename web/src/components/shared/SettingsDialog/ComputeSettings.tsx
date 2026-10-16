@@ -15,12 +15,6 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import type { Schemas } from "@/lib/api/client";
 import { formatCpu } from "@/lib/format";
 import {
@@ -135,11 +129,11 @@ function ConnectedCloudsPanel({
     <Panel
       title="Connected clouds"
       action={
-        <AddCloudMenu
+        <ConnectAwsButton
           connection={connection}
           connectedCloudEnabled={connectedCloudEnabled}
           billingError={billingError}
-          onSelectAws={onManageAws}
+          onConnect={onManageAws}
           onUpgrade={onUpgrade}
         />
       }
@@ -184,21 +178,22 @@ function ConnectedCloudsPanel({
   );
 }
 
-function AddCloudMenu({
+function ConnectAwsButton({
   connection,
   connectedCloudEnabled,
   billingError,
-  onSelectAws,
+  onConnect,
   onUpgrade,
 }: {
   connection: AwsConnection | null;
   connectedCloudEnabled: boolean;
   billingError: Error | null;
-  onSelectAws: () => void;
+  onConnect: () => void;
   onUpgrade: () => void;
 }) {
-  if (!connection && billingError) return null;
-  if (!connection && !connectedCloudEnabled) {
+  // The connection's own row manages it once it exists.
+  if (connection || billingError) return null;
+  if (!connectedCloudEnabled) {
     return (
       <Button size="sm" onClick={onUpgrade}>
         Upgrade to Business
@@ -206,29 +201,10 @@ function AddCloudMenu({
     );
   }
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="sm" className="whitespace-nowrap">
-          Add cloud
-          <Plus />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-60">
-        <DropdownMenuItem
-          disabled={connection !== null}
-          className="h-9 whitespace-nowrap"
-          onSelect={onSelectAws}
-        >
-          <Cloud />
-          <span className="min-w-0 flex-1 whitespace-nowrap">AWS</span>
-          {connection ? (
-            <span className="ml-auto text-[11px] text-muted-foreground">
-              {awsConnectionPresentation(connection).label}
-            </span>
-          ) : null}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button size="sm" className="whitespace-nowrap" onClick={onConnect}>
+      Connect AWS
+      <Plus />
+    </Button>
   );
 }
 

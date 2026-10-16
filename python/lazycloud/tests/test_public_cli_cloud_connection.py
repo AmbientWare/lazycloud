@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 from lazycloud._terminal.streams import console
@@ -17,6 +15,10 @@ NOW = "2026-09-30T12:00:00Z"
 ACCOUNT = "123456789012"
 ROLE = "arn:aws:iam::123456789012:role/platform-management"
 EXTERNAL_ID = "customer-test-external-id-0123456789abcdef"
+CREATE_STACK_URL = (
+    "https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2"
+    "#/stacks/quickcreate?stackName=lazycloud-connection"
+)
 
 cli = build_public_cli()
 
@@ -24,6 +26,19 @@ cli = build_public_cli()
 @pytest.fixture(autouse=True)
 def wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(console, "width", 200)
+
+
+@pytest.fixture(autouse=True)
+def opened(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The links the CLI opened in a browser."""
+    links: list[str] = []
+
+    def open_link(url: str) -> bool:
+        links.append(url)
+        return True
+
+    monkeypatch.setattr("lazycloud.cli.resources.webbrowser.open", open_link)
+    return links
 
 
 def _no_sleep(_seconds: float) -> None:
@@ -38,21 +53,6 @@ def _authorization(**extra: object) -> dict[str, object]:
         "created_at": NOW,
         "updated_at": NOW,
         **extra,
-    }
-
-
-def _stack() -> dict[str, object]:
-    return {
-        "account_id": ACCOUNT,
-        "region": "us-east-2",
-        "template_sha256": "a" * 64,
-        "request": {
-            "StackName": "lazycloud-connection",
-            "TemplateBody": '{"Resources": {}}',
-            "Parameters": [{"ParameterKey": "ExternalId", "ParameterValue": EXTERNAL_ID}],
-            "Capabilities": ["CAPABILITY_NAMED_IAM"],
-            "OnFailure": "DELETE",
-        },
     }
 
 
@@ -90,17 +90,21 @@ class _Connection:
     def delete(self, _: ApiRequest) -> Reply:
         if self.current is None:
             return error_reply("not_found", "no AWS connection", 404)
-        self.current = _connection(
-            "disconnect_draining", detail="Removing AWS compute.", available_actions=["retry"]
-        )
+        self.current = _connection("disconnect_draining", detail="Removing AWS compute.")
         return json_reply({"connection": self.current}, 202)
 
 
-def test_cloud_connect_returns_the_authorization_to_complete(fake_api: FakeApi) -> None:
+def test_cloud_connect_opens_the_stack_in_the_aws_console(
+    fake_api: FakeApi, opened: list[str]
+) -> None:
     @fake_api.route("POST", "/v1/aws-connection")
     def connect(request: ApiRequest) -> Reply:
         body = request.json()
-        authorization = {"external_id": EXTERNAL_ID} if "role_arn" in body else {"stack": _stack()}
+        authorization = (
+            {"external_id": EXTERNAL_ID}
+            if "role_arn" in body
+            else {"console_url": CREATE_STACK_URL}
+        )
         return json_reply(
             {
                 "connection": _connection("awaiting_authorization"),
@@ -117,9 +121,15 @@ def test_cloud_connect_returns_the_authorization_to_complete(fake_api: FakeApi) 
     managed = CliRunner().invoke(cli, ["cloud", "connect", "aws", "--account-id", ACCOUNT])
     assert managed.exit_code == 0, managed.output
     assert "AWS authorization required" in managed.stdout
-    assert "lazycloud cloud authorize --profile YOUR_AWS_PROFILE" in managed.stdout
-    assert "lazycloud cloud validate" in managed.stdout
+    assert CREATE_STACK_URL in managed.stdout
+    assert opened == [CREATE_STACK_URL]
     assert fake_api.calls("POST", "/v1/aws-connection")[-1].json() == {"account_id": ACCOUNT}
+
+    as_json = CliRunner().invoke(
+        cli, ["--json", "cloud", "connect", "aws", "--account-id", ACCOUNT]
+    )
+    assert json.loads(as_json.stdout)["authorization"]["console_url"] == CREATE_STACK_URL
+    assert opened == [CREATE_STACK_URL]
 
     networks: dict[str, object] = {
         "us-east-2": {
@@ -154,16 +164,37 @@ def test_cloud_connect_returns_the_authorization_to_complete(fake_api: FakeApi) 
         cli, ["cloud", "connect", "aws", "--account-id", ACCOUNT, "--role-arn", ROLE]
     )
     assert EXTERNAL_ID in shown.stdout
-    assert "cloud authorize" not in shown.stdout
+    assert opened == [CREATE_STACK_URL]
 
 
-def test_cloud_reconnect_cancel_and_retry(fake_api: FakeApi) -> None:
+def test_cloud_authorize_opens_the_pending_stack(fake_api: FakeApi, opened: list[str]) -> None:
+    connection = _Connection(
+        fake_api,
+        _connection(
+            "awaiting_authorization",
+            available_actions=["authorize", "validate", "remove"],
+            customer_action={"label": "Create the connection stack", "url": CREATE_STACK_URL},
+        ),
+    )
+
+    shown = CliRunner().invoke(cli, ["cloud", "authorize"])
+
+    assert shown.exit_code == 0, shown.output
+    assert CREATE_STACK_URL in shown.stdout
+    assert opened == [CREATE_STACK_URL]
+
+    connection.current = _connection("ready", available_actions=["reconnect", "remove"])
+    assert CliRunner().invoke(cli, ["cloud", "authorize"]).exit_code != 0
+    assert opened == [CREATE_STACK_URL]
+
+
+def test_cloud_reconnect_cancel_and_retry(fake_api: FakeApi, opened: list[str]) -> None:
     @fake_api.route("POST", "/v1/aws-connection/reconnect")
     def reconnect(request: ApiRequest) -> Reply:
         return json_reply(
             {
                 "connection": _connection("reconnect_pending"),
-                "authorization": {"stack": _stack()},
+                "authorization": {"console_url": CREATE_STACK_URL},
             }
         )
 
@@ -184,6 +215,7 @@ def test_cloud_reconnect_cancel_and_retry(fake_api: FakeApi) -> None:
     assert started.exit_code == 0, started.output
     assert "Replacement authorization required" in started.stdout
     assert "reconnect pending" in started.stdout
+    assert opened == [CREATE_STACK_URL]
     assert fake_api.calls("POST", "/v1/aws-connection/reconnect")[-1].json() == {"role_arn": ROLE}
     CliRunner().invoke(cli, ["cloud", "reconnect"])
     assert fake_api.calls("POST", "/v1/aws-connection/reconnect")[-1].json() == {}
@@ -266,12 +298,10 @@ def test_cloud_status_shows_and_waits_for_a_phase(
 
 
 def test_cloud_disconnect_waits_for_removal(
-    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
+    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch, opened: list[str]
 ) -> None:
     connection = _Connection(fake_api, _connection("ready"))
     monkeypatch.setattr("lazycloud.cli.resources.time.sleep", _no_sleep)
-    opened: list[str] = []
-    monkeypatch.setattr("lazycloud.cli.resources.webbrowser.open", opened.append)
 
     started = CliRunner().invoke(cli, ["--json", "cloud", "disconnect"])
     assert started.exit_code == 0, started.output
@@ -288,108 +318,56 @@ def test_cloud_disconnect_waits_for_removal(
     assert "does not have an AWS account connection" in str(missing.exception)
 
 
-def test_cloud_disconnect_opens_only_the_recovery_action(
-    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
+def test_cloud_disconnect_that_needs_the_customer_fails_and_opens_the_action(
+    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch, opened: list[str]
 ) -> None:
     recovery = _connection(
         "action_required",
-        detail="Automatic AWS cleanup needs attention before removal can finish.",
+        detail="The connection stack could not be deleted.",
+        available_actions=["retry", "forget"],
         customer_action={
             "url": "https://console.aws.amazon.com/cloudformation/final",
-            "label": "Review cleanup in AWS",
+            "label": "Review the stack in AWS",
         },
     )
     connection = _Connection(fake_api, _connection("ready"))
     connection.upcoming = [_connection("ready"), recovery]
     monkeypatch.setattr("lazycloud.cli.resources.time.sleep", _no_sleep)
-    opened: list[str] = []
-    monkeypatch.setattr("lazycloud.cli.resources.webbrowser.open", opened.append)
 
     result = CliRunner().invoke(cli, ["cloud", "disconnect", "--wait", "--open"])
 
-    assert result.exit_code == 0, result.output
-    assert "AWS disconnect status" in result.stdout
-    assert "Review cleanup in AWS" in result.stdout
+    assert result.exit_code == 1, result.output
     assert opened == ["https://console.aws.amazon.com/cloudformation/final"]
 
 
-# A stand-in `aws` binary. Its replies are the complete `--output json`
-# documents aws-cli v2 prints for these calls, as in the AWS CLI command
-# reference examples for sts get-caller-identity, ec2
-# describe-availability-zones and cloudformation create-stack; only the
-# account, region and zone names are this test's.
-_FAKE_AWS = """#!/bin/sh
-echo "$*" >> "$FAKE_AWS_LOG"
-case "$*" in
-  *"sts get-caller-identity"*)
-    printf '{"UserId": "AIDASAMPLEUSERID", "Account": "%s",' "$FAKE_AWS_ACCOUNT"
-    printf ' "Arn": "arn:aws:iam::%s:user/DevAdmin"}' "$FAKE_AWS_ACCOUNT" ;;
-  *"ec2 describe-availability-zones"*)
-    for zone in c:use2-az3 a:use2-az1; do
-      printf '{"State": "available", "OptInStatus": "opt-in-not-required", "Messages": [],'
-      printf ' "RegionName": "us-east-2", "ZoneName": "us-east-2%s", "ZoneId": "%s",' \
-        "${zone%%:*}" "${zone#*:}"
-      printf ' "GroupName": "us-east-2", "NetworkBorderGroup": "us-east-2",'
-      printf ' "ZoneType": "availability-zone"}\n'
-    done | paste -sd, | sed 's/^/{"AvailabilityZones": [/; s/$/]}/' ;;
-  *"cloudformation create-stack"*)
-    for argument in "$@"; do
-      case "$argument" in file://*) cp "${argument#file://}" "$FAKE_AWS_STACK" ;; esac
-    done
-    printf '{"StackId": "arn:aws:cloudformation:us-east-2:123456789012:stack/lazycloud/1"}' ;;
-esac
-"""
-
-
-def test_cloud_authorize_submits_the_stack_with_the_customer_profile(
-    fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    (binary / "aws").write_text(_FAKE_AWS)
-    (binary / "aws").chmod(0o755)
-    log, stack = tmp_path / "aws.log", tmp_path / "stack.json"
-    monkeypatch.setenv("PATH", f"{binary}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("FAKE_AWS_LOG", str(log))
-    monkeypatch.setenv("FAKE_AWS_STACK", str(stack))
-    monkeypatch.setenv("FAKE_AWS_ACCOUNT", ACCOUNT)
-    connection = _Connection(
-        fake_api,
-        _connection(
-            "awaiting_authorization",
-            customer_action={"label": "Authorize in AWS", "stack": _stack()},
-        ),
-    )
-
-    submitted = CliRunner().invoke(cli, ["--json", "cloud", "authorize", "--profile", "customer"])
-
-    assert submitted.exit_code == 0, submitted.output
-    assert json.loads(submitted.stdout) == {
-        "stack_id": "arn:aws:cloudformation:us-east-2:123456789012:stack/lazycloud/1",
-        "status": "CREATE_IN_PROGRESS",
-    }
-    assert all(
-        line.startswith("--region us-east-2 --profile customer ")
-        for line in log.read_text().splitlines()
-    )
-    request = json.loads(stack.read_text())
-    assert request["StackName"] == "lazycloud-connection"
-    assert request["Parameters"] == [
-        {"ParameterKey": "ExternalId", "ParameterValue": EXTERNAL_ID},
-        {"ParameterKey": "AvailabilityZoneA", "ParameterValue": "us-east-2a"},
-        {"ParameterKey": "AvailabilityZoneB", "ParameterValue": "us-east-2c"},
+def test_cloud_forget_lists_what_stays_in_aws(fake_api: FakeApi) -> None:
+    left: list[dict[str, object]] = [
+        {
+            "kind": "stack",
+            "id": "lazycloud-connection",
+            "region": "us-east-2",
+            "console_url": "https://console.aws.amazon.com/cloudformation/stack",
+        },
+        {
+            "kind": "instance",
+            "id": "i-0123456789abcdef0",
+            "region": "us-west-2",
+            "console_url": "https://console.aws.amazon.com/ec2/instance",
+        },
     ]
-    shown = CliRunner().invoke(cli, ["cloud", "authorize"])
-    assert "AWS connection stack submitted" in shown.stdout
+    fake_api.route("POST", "/v1/aws-connection/forget")(lambda _: json_reply({"left_in_aws": left}))
 
-    stack.unlink()
-    monkeypatch.setenv("FAKE_AWS_ACCOUNT", "210987654321")
-    other = CliRunner().invoke(cli, ["cloud", "authorize"])
-    assert "AWS credentials belong to a different account; no stack was created" in str(
-        other.exception
-    )
-    assert not stack.exists()
+    unconfirmed = CliRunner().invoke(cli, ["cloud", "forget"])
+    assert unconfirmed.exit_code != 0
+    assert not fake_api.requests
 
-    connection.current = _connection("ready")
-    nothing = CliRunner().invoke(cli, ["cloud", "authorize"])
-    assert "there is no pending AWS connection stack to authorize" in str(nothing.exception)
+    forgotten = CliRunner().invoke(cli, ["cloud", "forget", "--yes"])
+    assert forgotten.exit_code == 0, forgotten.output
+    for value in (
+        "lazycloud-connection",
+        "us-east-2",
+        "https://console.aws.amazon.com/cloudformation/stack",
+        "i-0123456789abcdef0",
+        "https://console.aws.amazon.com/ec2/instance",
+    ):
+        assert value in forgotten.stdout

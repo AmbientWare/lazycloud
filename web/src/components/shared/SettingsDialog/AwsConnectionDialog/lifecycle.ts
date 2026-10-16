@@ -14,15 +14,17 @@ export type AwsConnectionPresentation = {
   live: boolean;
 };
 
+/** Authorizing is the console link; removing and forgetting ask for confirmation first. */
 export type AwsConnectionDialogRecoveryAction = Exclude<
   AwsConnectionAction,
-  "authorize" | "remove"
+  "authorize" | "remove" | "forget"
 >;
 
 export type AwsConnectionDialogActionPlan = {
-  primary: AwsConnectionDialogRecoveryAction | null;
-  secondary: AwsConnectionDialogRecoveryAction | null;
-  destructive: "remove" | null;
+  /** In the API's order; the first is the primary action. */
+  recovery: AwsConnectionDialogRecoveryAction[];
+  remove: boolean;
+  forget: boolean;
 };
 
 export function awsConnectionPresentation(connection: AwsConnection): AwsConnectionPresentation {
@@ -46,49 +48,31 @@ export function awsConnectionPresentation(connection: AwsConnection): AwsConnect
   }
 }
 
+/** The dialog offers exactly the actions the API allows in the connection's current state. */
 export function awsConnectionDialogActionPlan(
   connection: AwsConnection,
 ): AwsConnectionDialogActionPlan {
-  const supports = (action: AwsConnectionAction) => connection.available_actions.includes(action);
+  const actions = connection.available_actions;
+  return {
+    recovery: actions.filter(isRecoveryAction),
+    remove: actions.includes("remove"),
+    forget: actions.includes("forget"),
+  };
+}
 
-  switch (connection.phase) {
-    case "awaiting_authorization":
-    case "validating":
-    case "ready":
-      return {
-        primary: null,
-        secondary: null,
-        destructive: supports("remove") ? "remove" : null,
-      };
-    case "degraded": {
-      const primary = supports("validate")
-        ? "validate"
-        : supports("reconnect")
-          ? "reconnect"
-          : null;
-      return {
-        primary,
-        secondary: primary === "validate" && supports("reconnect") ? "reconnect" : null,
-        destructive: supports("remove") ? "remove" : null,
-      };
-    }
-    case "reconnect_pending":
-      return {
-        primary: null,
-        secondary: supports("cancel_reconnect") ? "cancel_reconnect" : null,
-        destructive: null,
-      };
-    case "action_required":
-      return {
-        primary: supports("retry") ? "retry" : null,
-        secondary: null,
-        destructive: null,
-      };
-    case "retiring_authorization":
-    case "disconnect_draining":
-    case "revoking":
-    case "verifying_revocation":
-      return { primary: null, secondary: null, destructive: null };
+function isRecoveryAction(
+  action: AwsConnectionAction,
+): action is AwsConnectionDialogRecoveryAction {
+  switch (action) {
+    case "validate":
+    case "reconnect":
+    case "cancel_reconnect":
+    case "retry":
+      return true;
+    case "authorize":
+    case "remove":
+    case "forget":
+      return false;
   }
 }
 
@@ -100,12 +84,23 @@ export function awsConnectionIsRemoving(connection: AwsConnection): boolean {
   return awsConnectionPresentation(connection).label === "Removing";
 }
 
-export function awsRemovalConfirmation(connection: AwsConnection): {
+export type AwsConnectionConfirmation = {
   title: string;
   description: string;
   cancelLabel: string;
   confirmLabel: string;
-} {
+};
+
+export function awsForgetConfirmation(connection: AwsConnection): AwsConnectionConfirmation {
+  return {
+    title: "Forget AWS connection?",
+    description: `LazyCloud stops managing account ${connection.account_id} and removes the connection. Anything it could not delete stays in AWS; the next screen lists each one with a link to delete it.`,
+    cancelLabel: "Keep connection",
+    confirmLabel: "Forget connection",
+  };
+}
+
+export function awsRemovalConfirmation(connection: AwsConnection): AwsConnectionConfirmation {
   if (!connection.active_authorization) {
     return {
       title: "Cancel AWS setup?",
@@ -117,7 +112,7 @@ export function awsRemovalConfirmation(connection: AwsConnection): {
   return {
     title: "Remove AWS connection?",
     description:
-      "Disconnecting is refused while any workspace lives in this account; delete those workspaces first. Running compute will drain before managed resources and authorization are removed.",
+      "Delete this account's workspaces first. LazyCloud then terminates its instances, deletes the connection stacks and removes the connection.",
     cancelLabel: "Keep connected",
     confirmLabel: "Remove connection",
   };

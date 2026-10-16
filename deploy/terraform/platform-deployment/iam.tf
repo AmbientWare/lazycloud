@@ -128,6 +128,21 @@ data "aws_iam_policy_document" "control_plane" {
     }
   }
 
+  # The server publishes the connection template at start unless it is
+  # already there. Listing lets a HEAD of a missing object answer 404
+  # rather than 403.
+  statement {
+    sid       = "PublishConnectionTemplates"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.templates.arn}/connection/*"]
+  }
+
+  statement {
+    sid       = "ListConnectionTemplates"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.templates.arn]
+  }
+
   statement {
     sid       = "HostStorageGrants"
     actions   = ["sts:AssumeRole"]

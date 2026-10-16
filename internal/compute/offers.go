@@ -23,6 +23,10 @@ type Fleet struct {
 	// BucketPrefix starts the names of workspace buckets, which a connected
 	// account holds as <prefix>-<account id>-*.
 	BucketPrefix string
+	// TemplateBucket is the platform bucket, in the platform's AWS region,
+	// whose connection/ objects anyone may read. The server publishes the
+	// connection template there for CloudFormation to read.
+	TemplateBucket string
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string
@@ -42,6 +46,9 @@ type Fleet struct {
 	BootTimeout time.Duration
 	// CapacityCooldown is how long an offer that lacked capacity is skipped.
 	CapacityCooldown time.Duration
+	// DrainWait bounds how long a disconnect waits for the account's
+	// instances to end while its role still works.
+	DrainWait time.Duration
 	// Endpoints override AWS service endpoints; tests point them at
 	// recorded responses.
 	Endpoints Endpoints
@@ -53,7 +60,8 @@ type Endpoints struct {
 	STS            string
 	CloudFormation string
 	ServiceQuotas  string
-	// S3 serves connected accounts' buckets, path-style.
+	// S3 serves the template bucket and connected accounts' buckets,
+	// path-style.
 	S3 string
 }
 
@@ -90,6 +98,9 @@ func (f Fleet) withDefaults() Fleet {
 	}
 	if f.CapacityCooldown == 0 {
 		f.CapacityCooldown = 10 * time.Minute
+	}
+	if f.DrainWait == 0 {
+		f.DrainWait = time.Hour
 	}
 	return f
 }

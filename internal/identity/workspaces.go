@@ -62,10 +62,16 @@ func (i *Identity) ListWorkspaces(ctx context.Context, p Principal, page Workspa
 	return out, nil
 }
 
+// PlaceWorkspace returns, in the transaction creating a workspace, the
+// AWS account connection it is created in, holding that connection's
+// state until the transaction ends.
+type PlaceWorkspace func(ctx context.Context, tx pgx.Tx) (uuid.UUID, error)
+
 // CreateOwnedWorkspace creates a workspace owned by the caller, in the
-// connected AWS account connection or on platform compute when nil. Only
-// platform administrators create workspaces, with an account credential.
-func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name string, connection *uuid.UUID) (Workspace, error) {
+// AWS account connection place returns, or on platform compute when place
+// is nil. Only platform administrators create workspaces, with an account
+// credential.
+func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name string, place PlaceWorkspace) (Workspace, error) {
 	if !p.IsAdmin {
 		return Workspace{}, ErrAdminRequired
 	}
@@ -74,12 +80,19 @@ func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name s
 	}
 	var ws Workspace
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+		var connection uuid.UUID
+		if place != nil {
+			var err error
+			if connection, err = place(ctx, tx); err != nil {
+				return err
+			}
+		}
 		var err error
 		ws, err = addWorkspace(ctx, tx, name, p.User)
-		if err != nil || connection == nil {
+		if err != nil || place == nil {
 			return err
 		}
-		if err := i.queries.WithTx(tx).SetWorkspaceConnection(ctx, SetWorkspaceConnectionParams{ID: uuid.UUID(ws.ID), ConnectionID: connection}); err != nil {
+		if err := i.queries.WithTx(tx).SetWorkspaceConnection(ctx, SetWorkspaceConnectionParams{ID: uuid.UUID(ws.ID), ConnectionID: &connection}); err != nil {
 			return fmt.Errorf("place workspace: %w", err)
 		}
 		return nil

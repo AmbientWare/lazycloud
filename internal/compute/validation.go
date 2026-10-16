@@ -159,7 +159,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 				phase = ConnAwaiting
 			}
 			backoff := time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
-			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(backoff)), attempts, [2]string{})
+			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(backoff)), attempts, nil)
 		}
 		networks, err := json.Marshal(result.networks)
 		if err != nil {
@@ -172,23 +172,23 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return fmt.Errorf("record validation: %w", err)
 		}
 		if conn.Pending == nil || target.ID != conn.Pending.ID {
-			return setPhase(ctx, q, id, ConnReady, nil, 0, [2]string{})
+			return setPhase(ctx, q, id, ConnReady, nil, 0, nil)
 		}
 		if conn.Active != nil {
-			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr("retiring")}); err != nil {
+			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr(string(slotRetiring))}); err != nil {
 				return fmt.Errorf("retire active authorization: %w", err)
 			}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr("active")}); err != nil {
+		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr(string(slotActive))}); err != nil {
 			return fmt.Errorf("activate authorization: %w", err)
 		}
 		if conn.Active != nil {
-			return setPhase(ctx, q, id, ConnRetiring, now(), 0, [2]string{})
+			return setPhase(ctx, q, id, ConnRetiring, now(), 0, nil)
 		}
-		if err := setPhase(ctx, q, id, ConnReady, nil, 0, [2]string{}); err != nil {
+		if err := setPhase(ctx, q, id, ConnReady, nil, 0, nil); err != nil {
 			return err
 		}
-		return notifyCompute(ctx, tx, id)
+		return notifyChannel(ctx, tx, id)
 	})
 	if err != nil {
 		return fmt.Errorf("record validation: %w", err)
@@ -360,7 +360,7 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 	switch conn.Phase {
 	case ConnAwaiting, ConnReconnecting, ConnDegraded, ConnValidating:
 		if p := conn.Pending; p != nil && p.expiresAt != nil && p.expiresAt.Before(time.Now()) {
-			return c.expirePending(ctx, conn)
+			return c.settle(ctx, conn, c.expirePending(conn))
 		}
 		err := c.validateConnection(ctx, id, false)
 		var superseded *ConflictError
@@ -369,11 +369,11 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 		}
 		return err
 	case ConnRetiring:
-		return c.removeStack(ctx, conn, conn.Retiring, ConnReady)
+		return c.settle(ctx, conn, c.retire(ctx, conn))
 	case ConnDraining:
-		return c.finishDrain(ctx, conn)
+		return c.settle(ctx, conn, c.drain(ctx, conn))
 	case ConnRevoking, ConnVerifying:
-		return c.removeStack(ctx, conn, conn.Active, "")
+		return c.settle(ctx, conn, c.revoke(ctx, conn))
 	case ConnReady, ConnActionRequire:
 	}
 	return nil

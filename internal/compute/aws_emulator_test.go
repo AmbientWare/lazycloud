@@ -100,6 +100,12 @@ func (a *awsEmulator) serve(w http.ResponseWriter, r *http.Request) {
 	} else {
 		reply = handler(call)
 	}
+	if reply.status == 0 {
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+		return
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Amzn-Requestid", "req-0000")
 	w.WriteHeader(reply.status)
@@ -111,6 +117,13 @@ func (a *awsEmulator) on(action string, h awsHandler) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.handlers[action] = h
+}
+
+// handler is the handler action answers with now.
+func (a *awsEmulator) handler(action string) awsHandler {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.handlers[action]
 }
 
 // calls returns the recorded calls of action in arrival order.
@@ -179,6 +192,13 @@ func specTags(form url.Values, kind string) map[string]string {
 func esc(s string) string { return html.EscapeString(s) }
 
 func ok(body string) awsReply { return awsReply{status: http.StatusOK, body: body} }
+
+// dropped closes the connection without an answer, as a network failure or
+// a timeout leaves a call. net/http reports the closed connection as
+// io.EOF, which the SDK wraps in its operation error with no AWS error
+// code, and the emulator's fleet uses aws.NopRetryer, so the step sees it
+// at once.
+func dropped() awsReply { return awsReply{} }
 
 // ec2Error is EC2's error document.
 func ec2Error(status int, code, message string) awsReply {
@@ -344,6 +364,17 @@ func describeStacksReply(s cfnStack) awsReply {
 
 func deleteStackReply() awsReply {
 	return ok(`<DeleteStackResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"><ResponseMetadata><RequestId>req-0000</RequestId></ResponseMetadata></DeleteStackResponse>`)
+}
+
+// describeImagesReply is EC2's DescribeImages answer listing ids.
+func describeImagesReply(ids ...string) awsReply {
+	var b strings.Builder
+	b.WriteString(`<DescribeImagesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><imagesSet>`)
+	for _, id := range ids {
+		fmt.Fprintf(&b, `<item><imageId>%s</imageId><imageOwnerId>111122223333</imageOwnerId><imageState>available</imageState></item>`, esc(id))
+	}
+	b.WriteString(`</imagesSet></DescribeImagesResponse>`)
+	return ok(b.String())
 }
 
 func modifyImageAttributeReply() awsReply {

@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
@@ -75,6 +76,15 @@ func (a awsClients) cloudFormation(scope awsScope, region string) *cloudformatio
 	return cloudformation.NewFromConfig(a.config(scope, region), func(o *cloudformation.Options) {
 		if a.endpoints.CloudFormation != "" {
 			o.BaseEndpoint = aws.String(a.endpoints.CloudFormation)
+		}
+	})
+}
+
+// s3 is path-style on an overridden endpoint.
+func (a awsClients) s3(scope awsScope, region string) *s3.Client {
+	return s3.NewFromConfig(a.config(scope, region), func(o *s3.Options) {
+		if a.endpoints.S3 != "" {
+			o.BaseEndpoint, o.UsePathStyle = aws.String(a.endpoints.S3), true
 		}
 	})
 }

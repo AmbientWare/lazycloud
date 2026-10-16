@@ -2971,10 +2971,11 @@ paths:
       tags: [compute]
       summary: Connect an AWS account to back the workspaces the account owns
       description: >-
-        Without a role the response carries the CloudFormation stack the
-        customer submits with `lazycloud cloud authorize`. With an existing
-        role it carries the external ID the role must require. Repeating an
-        unfinished setup for the same account returns it again.
+        Without a role the response carries an AWS Console link that opens
+        the connection stack, ready to create, in the customer's account.
+        With an existing role it carries the external ID the role must
+        require. Repeating an unfinished setup for the same account returns
+        it again.
       requestBody:
         required: true
         content:
@@ -2992,9 +2993,10 @@ paths:
       tags: [compute]
       summary: Disconnect the AWS account
       description: >-
-        Refused while a workspace lives in the account. An unfinished setup is
-        removed at once; a connected account drains its instances, then the
-        platform deletes the stack and verifies the role is gone.
+        Refused while a workspace lives in the account. The platform
+        terminates its instances in the account, deletes every connection
+        stack it asked the customer to create, then removes the connection.
+        A step that cannot finish moves the connection to action_required.
       responses:
         "202":
           description: The connection while removal runs, or null once removed
@@ -3058,6 +3060,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AwsConnection" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/aws-connection/forget:
+    post:
+      operationId: forgetAwsConnection
+      tags: [compute]
+      summary: Remove a connection whose cleanup cannot finish
+      description: >-
+        Allowed in action_required. The platform stops managing the account
+        and returns what it could not delete, for the customer to remove in
+        AWS.
+      responses:
+        "200":
+          description: What remains in the AWS account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsForgetResult" }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/fleet:
@@ -7051,8 +7070,8 @@ components:
 
     AwsConnectionAction:
       type: string
-      enum: [authorize, validate, reconnect, cancel_reconnect, remove, retry]
-      x-enum-varnames: [AwsAuthorize, AwsValidate, AwsReconnect, AwsCancelReconnect, AwsRemove, AwsRetry]
+      enum: [authorize, validate, reconnect, cancel_reconnect, remove, retry, forget]
+      x-enum-varnames: [AwsAuthorize, AwsValidate, AwsReconnect, AwsCancelReconnect, AwsRemove, AwsRetry, AwsForget]
 
     AwsAuthorizationPhase:
       type: string
@@ -7087,42 +7106,13 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
-    AwsStackParameter:
-      type: object
-      required: [ParameterKey, ParameterValue]
-      properties:
-        ParameterKey: { type: string }
-        ParameterValue: { type: string }
-
-    AwsStackAction:
-      description: A CloudFormation CreateStack request the customer submits with their own credentials.
-      type: object
-      required: [account_id, region, template_sha256, request]
-      properties:
-        account_id: { type: string }
-        region: { type: string }
-        template_sha256: { type: string }
-        request:
-          type: object
-          required: [StackName, TemplateBody, Parameters, Capabilities, OnFailure]
-          properties:
-            StackName: { type: string }
-            TemplateBody: { type: string, maxLength: 51200 }
-            Parameters:
-              type: array
-              items: { $ref: "#/components/schemas/AwsStackParameter" }
-            Capabilities:
-              type: array
-              items: { type: string, enum: [CAPABILITY_NAMED_IAM] }
-            OnFailure: { type: string, enum: [DELETE] }
-
     AwsCustomerAction:
+      description: A step the customer takes in the AWS Console.
       type: object
-      required: [label]
+      required: [label, url]
       properties:
-        url: { type: string }
-        stack: { $ref: "#/components/schemas/AwsStackAction" }
         label: { type: string }
+        url: { type: string }
 
     AwsConnection:
       type: object
@@ -7207,8 +7197,30 @@ components:
         authorization:
           type: object
           properties:
-            stack: { $ref: "#/components/schemas/AwsStackAction" }
-            external_id: { type: string }
+            console_url:
+              description: Opens the connection stack, ready to create, in the AWS Console.
+              type: string
+            external_id:
+              description: The external ID an existing role must require.
+              type: string
+
+    AwsLeftover:
+      description: A resource in the customer's AWS account the platform could not delete.
+      type: object
+      required: [kind, id, region, console_url]
+      properties:
+        kind: { type: string, enum: [stack, instance] }
+        id: { type: string }
+        region: { type: string }
+        console_url: { type: string }
+
+    AwsForgetResult:
+      type: object
+      required: [left_in_aws]
+      properties:
+        left_in_aws:
+          type: array
+          items: { $ref: "#/components/schemas/AwsLeftover" }
 
     FleetCapacity:
       type: object

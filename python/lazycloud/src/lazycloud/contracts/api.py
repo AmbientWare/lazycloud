@@ -1703,6 +1703,7 @@ class AwsConnectionAction(str, Enum):
     AwsCancelReconnect = "cancel_reconnect"
     AwsRemove = "remove"
     AwsRetry = "retry"
+    AwsForget = "forget"
 
 
 class AwsAuthorizationPhase(str, Enum):
@@ -1750,30 +1751,9 @@ class AwsAuthorizationGeneration(APIModel):
     updated_at: AwareDatetime
 
 
-class AwsStackParameter(APIModel):
-    ParameterKey: str
-    ParameterValue: str
-
-
-class Request(APIModel):
-    StackName: str
-    TemplateBody: Annotated[str, Field(max_length=51200)]
-    Parameters: list[AwsStackParameter]
-    Capabilities: list[Literal["CAPABILITY_NAMED_IAM"]]
-    OnFailure: Literal["DELETE"]
-
-
-class AwsStackAction(APIModel):
-    account_id: str
-    region: str
-    template_sha256: str
-    request: Request
-
-
 class AwsCustomerAction(APIModel):
-    url: str | None = None
-    stack: AwsStackAction | None = None
     label: str
+    url: str
 
 
 class AwsConnection(APIModel):
@@ -1852,13 +1832,34 @@ class AwsReconnectRequest(APIModel):
 
 
 class Authorization(APIModel):
-    stack: AwsStackAction | None = None
-    external_id: str | None = None
+    console_url: Annotated[
+        str | None,
+        Field(description="Opens the connection stack, ready to create, in the AWS Console."),
+    ] = None
+    external_id: Annotated[
+        str | None, Field(description="The external ID an existing role must require.")
+    ] = None
 
 
 class AwsConnectionAuthorization(APIModel):
     connection: AwsConnection
     authorization: Authorization
+
+
+class Kind1(str, Enum):
+    stack = "stack"
+    instance = "instance"
+
+
+class AwsLeftover(APIModel):
+    kind: Kind1
+    id: str
+    region: str
+    console_url: str
+
+
+class AwsForgetResult(APIModel):
+    left_in_aws: list[AwsLeftover]
 
 
 class FleetCapacity(APIModel):
@@ -2218,14 +2219,14 @@ class CreditPaymentStatus(str, Enum):
     cancelled = "cancelled"
 
 
-class Kind1(str, Enum):
+class Kind2(str, Enum):
     manual = "manual"
     automatic = "automatic"
 
 
 class CreditPurchase(APIModel):
     id: UUID
-    kind: Kind1
+    kind: Kind2
     amount_nanos: int
     status: CreditPaymentStatus
     checkout_url: Annotated[

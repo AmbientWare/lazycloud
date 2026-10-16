@@ -234,8 +234,9 @@ const hostingConnections = `-- name: HostingConnections :many
 select cc.id, a.networks
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase in ('ready', 'reconnect_pending', 'retiring_authorization')
+where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 order by cc.id
+for share of cc
 `
 
 type HostingConnectionsRow struct {
@@ -244,7 +245,8 @@ type HostingConnectionsRow struct {
 }
 
 // Connections that take new workloads, with the networks of their active
-// authorization.
+// authorization. Each row is share-locked so no connection leaves hosting
+// while the pass that read it writes hosts into it.
 func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsRow, error) {
 	rows, err := q.db.Query(ctx, hostingConnections)
 	if err != nil {

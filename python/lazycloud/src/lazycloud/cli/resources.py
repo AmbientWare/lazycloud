@@ -8,7 +8,8 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import typer
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
+from rich.text import Text
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import duration
@@ -23,12 +24,14 @@ from lazycloud.cli.components.output import (
     table,
     write_stream,
 )
+from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import api_session
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
-from lazycloud.clients.aws import create_connection_stack
 from lazycloud.clients.compute import ComputeApi
 from lazycloud.contracts.api import (
     AwsConnection,
+    AwsConnectionAction,
+    AwsConnectionAuthorization,
     AwsConnectionPhase,
     AwsConnectionRequest,
     AwsNetwork,
@@ -158,26 +161,7 @@ def cloud_connect_aws(
     if networks:
         fields["networks"] = networks
     response = _compute().connect_aws(AwsConnectionRequest.model_validate(fields))
-    if response.authorization.stack is None and response.authorization.external_id is None:
-        raise RuntimeError("existing-role authorization did not return its external ID")
-    authorization: dict[str, object] = {
-        "account_id": account_id,
-        "phase": response.connection.phase.value,
-    }
-    if response.authorization.stack:
-        authorization["authorize"] = "Run `lazycloud cloud authorize --profile YOUR_AWS_PROFILE`."
-    if response.authorization.external_id:
-        authorization["external_id"] = response.authorization.external_id
-    authorization["next_step"] = "Run `lazycloud cloud validate` after the AWS stack finishes."
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=result_card(
-            json_default(authorization),
-            title="AWS authorization required",
-            tone="info",
-        ),
-    )
+    _emit_authorization(ctx, response, title="AWS authorization required")
 
 
 @cloud_app.command("reconnect")
@@ -192,49 +176,33 @@ def cloud_reconnect(
     response = _compute().reconnect_aws(
         AwsReconnectRequest(role_arn=role_arn) if role_arn is not None else AwsReconnectRequest()
     )
-    account_id = response.connection.account_id
-    authorization: dict[str, object] = {
-        "account_id": account_id,
-        "phase": response.connection.phase.value,
-    }
-    if response.authorization.stack:
-        authorization["authorize"] = "Run `lazycloud cloud authorize --profile YOUR_AWS_PROFILE`."
-    if response.authorization.external_id:
-        authorization["external_id"] = response.authorization.external_id
-    authorization["next_step"] = "Run `lazycloud cloud validate` after the AWS stack finishes."
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=result_card(
-            json_default(authorization),
-            title="Replacement authorization required",
-            tone="info",
-        ),
-    )
+    _emit_authorization(ctx, response, title="Replacement authorization required")
 
 
 @cloud_app.command("authorize")
 def cloud_authorize(
     ctx: typer.Context,
-    profile: Annotated[
-        str | None, typer.Option("--profile", help="Customer AWS CLI profile.")
-    ] = None,
 ) -> None:
-    """Create the pending IAM connection stack in your AWS account."""
+    """Open the pending connection stack in the AWS Console."""
     connection = _compute().aws_connection()
-    action = connection.customer_action if connection is not None else None
-    if action is None or action.stack is None:
-        raise RuntimeError("there is no pending AWS connection stack to authorize")
-    stack_id = create_connection_stack(action.stack, profile=profile)
+    if (
+        connection is None
+        or AwsConnectionAction.AwsAuthorize not in connection.available_actions
+        or connection.customer_action is None
+    ):
+        raise RuntimeError("there is no pending AWS authorization to complete in the AWS Console")
+    url = connection.customer_action.url
     emit(
         ctx,
-        payload={"stack_id": stack_id, "status": "CREATE_IN_PROGRESS"},
+        payload=connection.model_dump(mode="json"),
         view=result_card(
-            "Run `lazycloud cloud validate` after the stack finishes in CloudFormation.",
-            title="AWS connection stack submitted",
+            {"account_id": connection.account_id},
+            title="Create the connection stack in AWS",
             tone="info",
+            message=_CREATE_STACK,
         ),
     )
+    _show_console_link(ctx, url)
 
 
 @cloud_app.command("validate")
@@ -325,15 +293,20 @@ def cloud_disconnect(
         bool,
         typer.Option(
             "--open/--no-open",
-            help="Open AWS only when automatic removal requires recovery.",
+            help="Open the AWS Console when removal needs your action.",
         ),
     ] = False,
     wait: Annotated[
         bool,
-        typer.Option("--wait/--no-wait", help="Wait for the connection to be fully removed."),
+        typer.Option(
+            "--wait/--no-wait",
+            help="Wait until the connection is removed or needs your action.",
+        ),
     ] = False,
-    interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 2.0,
-    timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 600.0,
+    interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 5.0,
+    # A removal may wait an hour for its instances to end, then retry stack
+    # deletion for about 40 minutes before it needs the customer.
+    timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 7200.0,
 ) -> None:
     """Disconnect the cloud account and remove its managed compute."""
     compute = _compute()
@@ -353,30 +326,80 @@ def cloud_disconnect(
     payload: dict[str, object] = {
         "connection": connection.model_dump(mode="json") if connection is not None else None
     }
-    summary = (
-        {"account_id": account_id, "status": "removed"}
-        if connection is None
-        else _connection_summary(connection)
-    )
+    if connection is None:
+        emit(
+            ctx,
+            payload=payload,
+            view=result_card(
+                {"account_id": account_id, "status": "removed"},
+                title="AWS account removed",
+                tone="success",
+            ),
+        )
+        return
+    if connection.phase is not AwsConnectionPhase.action_required:
+        emit(
+            ctx,
+            payload=payload,
+            view=result_card(
+                json_default(_connection_summary(connection)),
+                title="AWS disconnect started",
+                tone="info",
+                message="`lazycloud cloud disconnect --wait` waits for the outcome.",
+            ),
+        )
+        return
     emit(
         ctx,
         payload=payload,
         view=result_card(
-            json_default(summary),
-            title="AWS account removed" if connection is None else "AWS disconnect status",
-            tone="success" if connection is None else "info",
+            json_default(_connection_summary(connection)),
+            title="AWS disconnect needs your action",
+            tone="warning",
+            message=(
+                "`lazycloud cloud retry` tries again once the cause is fixed.\n"
+                "`lazycloud cloud forget` removes the connection and lists what stays in AWS."
+            ),
         ),
     )
-    if connection is None:
-        return
-    if connection.phase is AwsConnectionPhase.action_required:
-        if (
-            open_console
-            and connection.customer_action is not None
-            and connection.customer_action.url is not None
-        ):
-            webbrowser.open(connection.customer_action.url)
-        return
+    if open_console and connection.customer_action is not None:
+        webbrowser.open(connection.customer_action.url)
+    raise typer.Exit(code=1)
+
+
+@cloud_app.command("forget")
+def cloud_forget(
+    ctx: typer.Context,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
+) -> None:
+    """Remove a connection whose disconnect cannot finish, and list what stays in AWS."""
+    confirm_destructive(
+        ctx,
+        subject="cloud forget",
+        consequence=(
+            "LazyCloud stops managing this AWS account. Anything it could not delete "
+            "stays in AWS for you to remove."
+        ),
+        yes=yes,
+    )
+    result = _compute().forget_aws()
+    rows = [
+        [item.kind.value, item.id, item.region, item.console_url] for item in result.left_in_aws
+    ]
+    emit(
+        ctx,
+        payload=result.model_dump(mode="json"),
+        view=table(
+            "Left in AWS",
+            ["kind", "id", "region", "aws console"],
+            rows,
+            title="AWS connection forgotten. These stay in AWS for you to delete:",
+        )
+        if rows
+        else notice_card(
+            "Nothing was left in AWS.", title="AWS connection forgotten", tone="success"
+        ),
+    )
 
 
 @cloud_app.command("cancel-reconnect")
@@ -411,6 +434,45 @@ def cloud_retry(
             tone="info",
         ),
     )
+
+
+_CREATE_STACK = (
+    "The link below opens the stack in the AWS Console. Review it, tick the IAM "
+    "acknowledgement and choose Create stack. LazyCloud checks the connection once the "
+    "stack finishes; `lazycloud cloud status --watch --until ready` follows it."
+)
+
+
+def _emit_authorization(
+    ctx: typer.Context, response: AwsConnectionAuthorization, *, title: str
+) -> None:
+    summary: dict[str, JsonValue] = {
+        "account_id": response.connection.account_id,
+        "phase": response.connection.phase.value,
+    }
+    message = ""
+    console_url = response.authorization.console_url
+    if console_url is not None:
+        message = _CREATE_STACK
+    if response.authorization.external_id is not None:
+        summary["external_id"] = response.authorization.external_id
+        message = "Run `lazycloud cloud validate` once the role requires this external ID."
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card(summary, title=title, tone="info", message=message),
+    )
+    if console_url is not None:
+        _show_console_link(ctx, console_url)
+
+
+def _show_console_link(ctx: typer.Context, url: str) -> None:
+    """Prints the link on one unwrapped line so it stays copyable, and opens it in a browser
+    when one is available."""
+    if json_output_enabled(ctx):
+        return
+    console.print(Text(url), soft_wrap=True)
+    webbrowser.open(url)
 
 
 def _aws_validation_failure(response: AwsConnection) -> tuple[str, str] | None:

@@ -353,22 +353,12 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 	return out
 }
 
-func stackOut(st *compute.StackAction) *apitypes.AwsStackAction {
-	if st == nil {
-		return nil
-	}
-	out := &apitypes.AwsStackAction{AccountId: st.AccountID, Region: st.Region, TemplateSha256: st.TemplateSHA256}
-	out.Request.StackName, out.Request.TemplateBody = st.StackName, st.TemplateBody
-	out.Request.Capabilities = []apitypes.AwsStackActionRequestCapabilities{apitypes.CAPABILITYNAMEDIAM}
-	out.Request.OnFailure = apitypes.AwsStackActionRequestOnFailureDELETE
-	for _, p := range st.Parameters {
-		out.Request.Parameters = append(out.Request.Parameters, apitypes.AwsStackParameter{ParameterKey: p[0], ParameterValue: p[1]})
-	}
-	return out
+func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
+	return connectionView(s.owners.Compute.View(conn))
 }
 
-func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
-	conn = s.owners.Compute.View(conn)
+// connectionView maps a connection as its account sees it, from View.
+func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	out := apitypes.AwsConnection{
 		Id: conn.ID, AccountId: conn.AWSAccountID, Phase: apitypes.AwsConnectionPhase(conn.Phase), Revision: conn.Revision,
 		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(),
@@ -380,25 +370,23 @@ func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 		out.AvailableActions = append(out.AvailableActions, apitypes.AwsConnectionAction(a))
 	}
 	switch {
-	case conn.Stack != nil:
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack", Stack: stackOut(conn.Stack)}
-	case conn.ActionLabel != "":
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.ActionLabel}
-		if conn.ActionURL != "" {
-			out.CustomerAction.Url = &conn.ActionURL
-		}
+	case conn.ConsoleURL != nil:
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: *conn.ConsoleURL}
+	case conn.Customer != nil:
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.Customer.Label, Url: conn.Customer.URL}
 	}
 	return out
 }
 
 func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConnectionAuthorization {
-	out := apitypes.AwsConnectionAuthorization{Connection: s.connectionOut(conn)}
-	if conn.Pending != nil {
-		if conn.Pending.Mode == compute.ModeExistingRole {
-			id := conn.Pending.ExternalID()
+	view := s.owners.Compute.View(conn)
+	out := apitypes.AwsConnectionAuthorization{Connection: connectionView(view)}
+	if view.Pending != nil {
+		if view.Pending.Mode == compute.ModeExistingRole {
+			id := view.Pending.ExternalID()
 			out.Authorization.ExternalId = &id
 		} else {
-			out.Authorization.Stack = out.Connection.CustomerAction.Stack
+			out.Authorization.ConsoleUrl = view.ConsoleURL
 		}
 	}
 	return out
@@ -524,4 +512,24 @@ func (s *Server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionReq
 		return nil, err
 	}
 	return RetryAwsConnection200JSONResponse(s.connectionOut(conn)), nil
+}
+
+// ForgetAwsConnection stops managing an account whose disconnect needs
+// attention, and returns what remains in AWS.
+func (s *Server) ForgetAwsConnection(ctx context.Context, _ ForgetAwsConnectionRequestObject) (ForgetAwsConnectionResponseObject, error) {
+	p, err := s.account(ctx, "forget the AWS connection")
+	if err != nil {
+		return nil, err
+	}
+	left, err := s.owners.Compute.Forget(ctx, p.User)
+	if err != nil {
+		return nil, err
+	}
+	out := ForgetAwsConnection200JSONResponse{LeftInAws: []apitypes.AwsLeftover{}}
+	for _, l := range left {
+		out.LeftInAws = append(out.LeftInAws, apitypes.AwsLeftover{
+			Kind: apitypes.AwsLeftoverKind(l.Kind), Id: l.ID, Region: l.Region, ConsoleUrl: l.ConsoleURL,
+		})
+	}
+	return out, nil
 }

@@ -78,7 +78,7 @@ func (q *Queries) ClearCooldown(ctx context.Context, arg ClearCooldownParams) er
 
 const connectionScope = `-- name: ConnectionScope :one
 select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
-       a.node_role_arn, cc.phase
+       a.node_role_arn, cc.phase, a.phase as authorization_phase
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = $1
@@ -92,6 +92,7 @@ type ConnectionScopeRow struct {
 	NodeInstanceProfile *string
 	NodeRoleArn         *string
 	Phase               string
+	AuthorizationPhase  string
 }
 
 func (q *Queries) ConnectionScope(ctx context.Context, id uuid.UUID) (ConnectionScopeRow, error) {
@@ -105,6 +106,7 @@ func (q *Queries) ConnectionScope(ctx context.Context, id uuid.UUID) (Connection
 		&i.NodeInstanceProfile,
 		&i.NodeRoleArn,
 		&i.Phase,
+		&i.AuthorizationPhase,
 	)
 	return i, err
 }

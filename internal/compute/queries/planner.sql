@@ -252,12 +252,14 @@ order by market;
 
 -- name: HostingConnections :many
 -- Connections that take new workloads, with the networks of their active
--- authorization.
+-- authorization. Each row is share-locked so no connection leaves hosting
+-- while the pass that read it writes hosts into it.
 select cc.id, a.networks
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase in ('ready', 'reconnect_pending', 'retiring_authorization')
-order by cc.id;
+where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
+order by cc.id
+for share of cc;
 
 -- name: InsertRequestedHosts :exec
 -- Hosts to buy, for the launcher. The planner names each id, so container

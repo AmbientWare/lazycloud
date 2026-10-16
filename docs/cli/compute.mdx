@@ -23,19 +23,29 @@ account and backs every workspace you own.
 
 ```bash
 uv run lazycloud cloud connect aws --account-id <id> [--role-arn <arn>]
-uv run lazycloud cloud authorize [--profile <aws-profile>]
+uv run lazycloud cloud authorize           # reopen the pending stack in the AWS Console
 uv run lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]
 uv run lazycloud cloud validate            # recheck the current authorization
-uv run lazycloud cloud reconnect  # start a replacement authorization
+uv run lazycloud cloud reconnect           # start a replacement authorization
 uv run lazycloud cloud cancel-reconnect
 uv run lazycloud cloud retry               # retry the connection's pending action
 uv run lazycloud cloud disconnect [--wait]
+uv run lazycloud cloud forget [--yes]      # drop a connection whose disconnect cannot finish
 ```
 
-`cloud authorize` checks that your AWS CLI profile belongs to the connected
-account and submits the connection stack to CloudFormation, so your AWS
-credentials stay local. `cloud validate` confirms the result once the stack
-finishes, and `cloud status --until ready` waits for it.
+`cloud connect aws` prints an AWS Console link and opens it in your browser.
+The link opens the connection stack ready to create. Once you're signed in to
+that account, tick the IAM acknowledgement and choose Create stack. No AWS CLI
+or access keys are involved. LazyCloud checks the connection once the stack finishes, and
+`cloud status --watch --until ready` waits for that. `cloud reconnect` and
+`cloud authorize` print and open the same kind of link.
+
+`cloud disconnect --wait` ends in one of two ways. Either the account is
+removed, or the connection is in `action_required` and exits with status 1.
+The detail names what failed. Once it's fixed, `cloud retry` picks the
+removal up again, and `cloud forget` gives up on it.
+`forget` removes the connection and lists each stack or instance LazyCloud
+could not delete, with a Console link to delete it yourself.
 
 ## lazycloud machine
 

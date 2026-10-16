@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,12 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -29,9 +33,10 @@ var connectionTemplate string
 
 // TemplateVersion names the connection template; validation refuses stacks
 // made from another one.
-const TemplateVersion = "2026-10-10.v1"
+const TemplateVersion = "2026-10-16.v1"
 
-// connectionRegion is where connection stacks are created.
+// connectionRegion is where connection stacks are created. The template's
+// subnets name this region's zone IDs, which are the same in every account.
 const connectionRegion = "us-east-2"
 
 // TemplateSHA256 is the hex digest of the connection template.
@@ -125,6 +130,17 @@ const (
 	ActionCancelReconnect ConnectionAction = "cancel_reconnect"
 	ActionRemove          ConnectionAction = "remove"
 	ActionRetry           ConnectionAction = "retry"
+	ActionForget          ConnectionAction = "forget"
+)
+
+// authorizationSlot is the place an authorization holds in its connection;
+// a retired one holds none.
+type authorizationSlot string
+
+const (
+	slotActive   authorizationSlot = "active"
+	slotPending  authorizationSlot = "pending"
+	slotRetiring authorizationSlot = "retiring"
 )
 
 // Authorization is one role generation of a connection.
@@ -150,16 +166,9 @@ type Authorization struct {
 	nodeInstanceProfle string
 	networks           map[string]Network
 	expiresAt          *time.Time
-}
-
-// StackAction is the CreateStack request the customer submits.
-type StackAction struct {
-	AccountID      string
-	Region         string
-	TemplateSHA256 string
-	StackName      string
-	TemplateBody   string
-	Parameters     [][2]string
+	// deleteRequested is when the platform last asked CloudFormation to
+	// delete the stack.
+	deleteRequested *time.Time
 }
 
 // Connection is an account's AWS connection as users see it.
@@ -172,39 +181,61 @@ type Connection struct {
 	Pending      *Authorization
 	Retiring     *Authorization
 	NextRetryAt  *time.Time
-	ActionURL    string
-	ActionLabel  string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	// Stack is the CreateStack request while a managed authorization waits
-	// for the customer.
-	Stack *StackAction
+	// Customer is what the customer must do in AWS while the connection
+	// waits on them.
+	Customer  *CustomerStep
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// ConsoleURL opens the pending managed authorization's stack, ready to
+	// create, in the AWS Console while it waits for the customer. View sets
+	// it.
+	ConsoleURL       *string
+	removalRequested *time.Time
+}
+
+// CustomerStep is what the customer does in AWS: Label, at URL.
+type CustomerStep struct {
+	URL, Label string
 }
 
 // HostsWorkloads reports whether new workloads can be placed in the account.
 func (c Connection) HostsWorkloads() bool {
-	if c.Active == nil || c.Active.Phase != AuthReady {
-		return false
-	}
-	switch c.Phase {
-	case ConnReady, ConnReconnecting, ConnRetiring:
-		return true
-	case ConnActionRequire:
-		return c.Retiring != nil
-	case ConnAwaiting, ConnValidating, ConnDegraded, ConnDraining, ConnRevoking, ConnVerifying:
-	}
-	return false
+	return c.Active != nil && acceptsWork(c.Phase, c.Active.Phase)
 }
 
-// removing reports whether the connection is being disconnected.
+// removing reports whether the connection is being disconnected, or its
+// removal waits on the customer.
 func (c Connection) removing() bool {
-	return c.Phase == ConnDraining || c.Phase == ConnRevoking || c.Phase == ConnVerifying
+	return c.Phase == ConnDraining || c.Phase == ConnRevoking || c.Phase == ConnVerifying ||
+		(c.Phase == ConnActionRequire && c.Retiring == nil)
+}
+
+// acceptsWork decides whether a connection in phase, whose active
+// authorization is in active, takes new workspaces and hosts: the active
+// authorization works and the connection is neither being removed nor
+// waiting on the customer. HostingConnections applies the same rule in
+// SQL.
+func acceptsWork(phase ConnectionPhase, active AuthorizationPhase) bool {
+	switch phase {
+	case ConnDraining, ConnRevoking, ConnVerifying, ConnActionRequire:
+		return false
+	case ConnAwaiting, ConnValidating, ConnReady, ConnDegraded, ConnReconnecting, ConnRetiring:
+	}
+	return active == AuthReady
+}
+
+// awaitsStack reports whether the pending authorization waits for the
+// customer to create its stack.
+func (c Connection) awaitsStack() bool {
+	waiting := c.Phase == ConnAwaiting || c.Phase == ConnReconnecting || c.Phase == ConnDegraded
+	return waiting && c.Pending != nil && c.Pending.Mode == ModeManagedStack
 }
 
 // ManagesCapacity reports whether the platform still runs the account's
 // existing instances.
 func (c Connection) ManagesCapacity() bool {
-	return c.HostsWorkloads() || (c.Phase == ConnDraining && c.Active != nil && c.Active.Phase == AuthReady)
+	return c.HostsWorkloads() || c.Active != nil && c.Active.Phase == AuthReady &&
+		(c.Phase == ConnDraining || c.Phase == ConnActionRequire && c.Retiring != nil)
 }
 
 // Actions lists what the user may do in the current phase.
@@ -217,8 +248,11 @@ func (c Connection) Actions() []ConnectionAction {
 	case ConnReady:
 		return []ConnectionAction{ActionReconnect, ActionRemove}
 	case ConnDegraded:
-		if c.Active != nil {
+		switch {
+		case c.Active != nil:
 			return []ConnectionAction{ActionReconnect, ActionValidate, ActionRemove}
+		case c.awaitsStack():
+			return []ConnectionAction{ActionAuthorize, ActionValidate, ActionRemove}
 		}
 		return []ConnectionAction{ActionValidate, ActionRemove}
 	case ConnReconnecting:
@@ -227,7 +261,7 @@ func (c Connection) Actions() []ConnectionAction {
 		if c.Retiring != nil {
 			return []ConnectionAction{ActionRetry, ActionRemove}
 		}
-		return []ConnectionAction{ActionRetry}
+		return []ConnectionAction{ActionRetry, ActionForget}
 	case ConnDraining, ConnRevoking, ConnVerifying:
 	}
 	return []ConnectionAction{}
@@ -286,6 +320,9 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 				return fmt.Errorf("read authorizations: %w", err)
 			}
 			view := connectionOf(existing, auths)
+			if view.removing() {
+				return &ConflictError{Message: "this account's AWS connection is being removed; connect again once `lazycloud cloud status` shows none"}
+			}
 			if view.Active == nil && view.Pending != nil && existing.AwsAccountID == req.AWSAccountID &&
 				(view.Pending.Mode == ModeExistingRole) == (req.RoleARN != "") &&
 				(req.RoleARN == "" || view.Pending.RoleARN == req.RoleARN) {
@@ -426,36 +463,20 @@ func (c *Compute) connectionByID(ctx context.Context, id uuid.UUID) (Connection,
 func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	conn := Connection{
 		ID: row.ID, AWSAccountID: row.AwsAccountID, Phase: ConnectionPhase(row.Phase), Revision: int(row.Revision),
-		NextRetryAt: row.NextStepAt, ActionURL: deref(row.ActionUrl), ActionLabel: deref(row.ActionLabel),
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		NextRetryAt: row.NextStepAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
+	}
+	if row.ActionUrl != nil && row.ActionLabel != nil {
+		conn.Customer = &CustomerStep{URL: *row.ActionUrl, Label: *row.ActionLabel}
 	}
 	for _, a := range auths {
 		auth := authorizationOf(a)
-		switch deref(a.Slot) {
-		case "active":
+		switch authorizationSlot(deref(a.Slot)) {
+		case slotActive:
 			conn.Active = &auth
-		case "pending":
+		case slotPending:
 			conn.Pending = &auth
-		case "retiring":
+		case slotRetiring:
 			conn.Retiring = &auth
-		}
-	}
-	waiting := conn.Phase == ConnAwaiting || conn.Phase == ConnReconnecting || conn.Phase == ConnDegraded
-	if p := conn.Pending; p != nil && p.Mode == ModeManagedStack && waiting {
-		conn.Stack = &StackAction{
-			AccountID: conn.AWSAccountID, Region: p.Region, TemplateSHA256: p.TemplateSHA256,
-			StackName: p.StackName, TemplateBody: connectionTemplate,
-			Parameters: [][2]string{
-				{"BucketPrefix", ""},
-				{"ConnectionRoleName", p.StackName},
-				{"ExternalId", p.externalID},
-				{"FleetName", "lazycloud"},
-				{"NodeInstanceProfileName", p.nodeInstanceProfle},
-				{"NodeRoleName", roleName(p.nodeRoleARN)},
-				{"PlatformPrincipalArn", ""},
-				{"StackPrefix", strings.TrimSuffix(p.StackName, fmt.Sprintf("-g%d", p.Generation))},
-				{"TargetAccountId", conn.AWSAccountID},
-			},
 		}
 	}
 	return conn
@@ -476,7 +497,7 @@ func authorizationOf(a CloudAuthorization) Authorization {
 		ErrorMessage: deref(a.ErrorMessage), ValidationStarted: a.LastValidationStartedAt, LastValidated: a.LastValidatedAt,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
 		externalID: a.ExternalID, nodeRoleARN: deref(a.NodeRoleArn), nodeInstanceProfle: deref(a.NodeInstanceProfile),
-		expiresAt: a.ExpiresAt,
+		expiresAt: a.ExpiresAt, deleteRequested: a.StackDeleteRequestedAt,
 	}
 	if a.ErrorCode != nil {
 		code := AuthorizationError(*a.ErrorCode)
@@ -490,35 +511,96 @@ func authorizationOf(a CloudAuthorization) Authorization {
 // ExternalID is the external ID an existing-role authorization requires.
 func (a Authorization) ExternalID() string { return a.externalID }
 
-// fillPrincipal sets the platform's principal, fleet name and workspace
-// bucket prefix in a stack action's parameters.
-func (c *Compute) fillPrincipal(conn *Connection) {
-	if conn.Stack == nil {
-		return
+// View returns the connection as its account sees it.
+func (c *Compute) View(conn Connection) Connection {
+	if conn.awaitsStack() {
+		conn.ConsoleURL = ptr(c.quickCreateURL(conn.AWSAccountID, *conn.Pending))
 	}
-	for n, p := range conn.Stack.Parameters {
-		switch p[0] {
-		case "PlatformPrincipalArn":
-			conn.Stack.Parameters[n][1] = c.fleet.PrincipalARN
-		case "FleetName":
-			conn.Stack.Parameters[n][1] = c.fleet.Name
-		case "BucketPrefix":
-			conn.Stack.Parameters[n][1] = c.fleet.BucketPrefix
+	return conn
+}
+
+// quickCreateURL opens the AWS Console's quick-create page for a's stack
+// from the published template, with every template parameter filled. The
+// customer signs in to the account, acknowledges the IAM capability and
+// creates the stack.
+func (c *Compute) quickCreateURL(account string, a Authorization) string {
+	q := url.Values{
+		"templateURL":                   {c.templateURL()},
+		"stackName":                     {a.StackName},
+		"param_TargetAccountId":         {account},
+		"param_PlatformPrincipalArn":    {c.fleet.PrincipalARN},
+		"param_ExternalId":              {a.externalID},
+		"param_ConnectionRoleName":      {a.StackName},
+		"param_StackPrefix":             {strings.TrimSuffix(a.StackName, fmt.Sprintf("-g%d", a.Generation))},
+		"param_BucketPrefix":            {c.fleet.BucketPrefix},
+		"param_FleetName":               {c.fleet.Name},
+		"param_NodeRoleName":            {roleName(a.nodeRoleARN)},
+		"param_NodeInstanceProfileName": {a.nodeInstanceProfle},
+	}
+	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudformation/home?region=%s#/stacks/quickcreate?%s",
+		a.Region, a.Region, q.Encode())
+}
+
+// templateKey is where the template's exact bytes are published. The key
+// names their digest, so a published object never changes.
+func templateKey() string { return "connection/" + TemplateSHA256() + ".json" }
+
+// templateURL is the published template's public S3 URL, which
+// CloudFormation reads the template from.
+func (c *Compute) templateURL() string {
+	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.fleet.TemplateBucket, c.fleet.AWS.Region, templateKey())
+}
+
+// RunTemplatePublisher publishes the connection template until it
+// succeeds, backing off between failed attempts up to five minutes apart,
+// and returns when it does or ctx ends. Console links name the template by
+// its digest, so connecting works meanwhile; only CloudFormation's fetch of
+// the template waits for it.
+func (c *Compute) RunTemplatePublisher(ctx context.Context, logger *slog.Logger) error {
+	for delay := 5 * time.Second; ; delay = min(2*delay, 5*time.Minute) {
+		err := c.PublishConnectionTemplate(ctx)
+		if err == nil {
+			return nil
+		}
+		logger.WarnContext(ctx, "the connection template is not published yet", "error", err, "retry_in", delay)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
 		}
 	}
 }
 
-// View returns the connection as its account sees it.
-func (c *Compute) View(conn Connection) Connection {
-	c.fillPrincipal(&conn)
-	return conn
+// PublishConnectionTemplate uploads the connection template to the
+// template bucket unless an earlier start already did. Without a platform
+// principal no connection can be made and nothing is published.
+func (c *Compute) PublishConnectionTemplate(ctx context.Context) error {
+	if c.fleet.PrincipalARN == "" {
+		return nil
+	}
+	client := c.aws().s3(awsScope{key: string(KindPlatform)}, "")
+	bucket, key := aws.String(c.fleet.TemplateBucket), aws.String(templateKey())
+	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: bucket, Key: key})
+	var missing *s3types.NotFound
+	switch {
+	case err == nil:
+		return nil
+	case !errors.As(err, &missing):
+		return fmt.Errorf("check the published connection template: %w", err)
+	}
+	if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: bucket, Key: key, Body: strings.NewReader(connectionTemplate), ContentType: aws.String("application/json"),
+	}); err != nil {
+		return fmt.Errorf("publish the connection template: %w", err)
+	}
+	return nil
 }
 
 // setPhase moves the connection to phase, scheduling its background step.
-func setPhase(ctx context.Context, q *Queries, id uuid.UUID, phase ConnectionPhase, next *time.Time, attempts int, action [2]string) error {
+func setPhase(ctx context.Context, q *Queries, id uuid.UUID, phase ConnectionPhase, next *time.Time, attempts int, action *CustomerStep) error {
 	params := SetConnectionPhaseParams{ID: id, Phase: string(phase), NextStepAt: next, StepAttempts: int32(attempts)} //nolint:gosec // Attempts are bounded.
-	if action[0] != "" || action[1] != "" {
-		params.ActionUrl, params.ActionLabel = ptr(action[0]), ptr(action[1])
+	if action != nil {
+		params.ActionUrl, params.ActionLabel = &action.URL, &action.Label
 	}
 	if _, err := q.SetConnectionPhase(ctx, params); err != nil {
 		return fmt.Errorf("set connection phase: %w", err)
@@ -569,7 +651,7 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 		if err := c.insertAuthorization(ctx, q, row, int(gen), req); err != nil {
 			return err
 		}
-		return setPhase(ctx, q, row.ID, ConnReconnecting, now(), 0, [2]string{})
+		return setPhase(ctx, q, row.ID, ConnReconnecting, now(), 0, nil)
 	})
 	if err != nil {
 		return Connection{}, fmt.Errorf("reconnect AWS: %w", err)
@@ -577,8 +659,9 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 	return c.connectionByID(ctx, id)
 }
 
-// CancelReconnect drops a pending replacement; the active authorization
-// keeps serving.
+// CancelReconnect drops a pending replacement, which retires as a replaced
+// authorization does, deleting its stack; the active authorization keeps
+// serving.
 func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) (Connection, error) {
 	var id uuid.UUID
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
@@ -590,17 +673,14 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 		id = row.ID
 		conn := connectionOf(row, auths)
 		switch {
-		case conn.Phase == ConnReady:
+		case conn.Pending == nil && (conn.Phase == ConnReady || conn.Phase == ConnRetiring):
 			return nil
 		case conn.Phase != ConnReconnecting || conn.Pending == nil:
 			return &ConflictError{Message: "AWS account connection has no pending replacement"}
 		case conn.Active == nil:
 			return &ConflictError{Message: "AWS authorization replacement state is incomplete"}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetired)}); err != nil {
-			return fmt.Errorf("retire pending authorization: %w", err)
-		}
-		return setPhase(ctx, q, row.ID, ConnReady, nil, 0, [2]string{})
+		return retirePending(ctx, tx, q, conn)
 	})
 	if err != nil {
 		return Connection{}, fmt.Errorf("cancel reconnect: %w", err)
@@ -608,11 +688,12 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 	return c.connectionByID(ctx, id)
 }
 
-// Disconnect removes the account's connection. An unfinished setup goes at
-// once; a connected account first drains its instances, then the platform
-// deletes the stack and verifies the role is gone. It is refused while a
+// Disconnect removes the account's connection: the platform terminates its
+// instances in the account, deletes every connection stack it asked the
+// customer to create, then deletes the connection. It is refused while a
 // workspace lives in the account; a workspace's bucket there, which holds
-// its volumes and disks, goes before the workspace does.
+// its volumes and disks, goes before the workspace does. A removal under
+// way, or waiting on the customer, is left as it is.
 func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Connection, error) {
 	var id uuid.UUID
 	removed := false
@@ -639,24 +720,8 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 		if len(workspaces) > 0 {
 			return &ConflictError{Message: "delete the workspaces that live in this AWS account, with their volumes and disks, before disconnecting it: " + strings.Join(workspaces, ", ")}
 		}
-		if conn.Active == nil {
-			removed = true
-			if err := q.DeleteConnection(ctx, row.ID); err != nil {
-				return fmt.Errorf("delete connection: %w", err)
-			}
-			return nil
-		}
-		for _, a := range []*Authorization{conn.Pending, conn.Retiring} {
-			if a != nil {
-				if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: a.ID, Phase: string(AuthRetired)}); err != nil {
-					return fmt.Errorf("retire authorization: %w", err)
-				}
-			}
-		}
-		if err := setPhase(ctx, q, row.ID, ConnDraining, now(), 0, [2]string{}); err != nil {
-			return err
-		}
-		return notifyCompute(ctx, tx, row.ID)
+		removed, err = beginRemoval(ctx, tx, q, conn)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("disconnect AWS: %w", err)
@@ -669,6 +734,125 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 		return nil, err
 	}
 	return &conn, nil
+}
+
+// beginRemoval starts removing conn, in the caller's transaction holding
+// its lock, and reports whether the connection went at once. A connected
+// account drains its instances first; its pending and retiring
+// authorizations leave their slots, and their stacks go with the active
+// one's. A setup that never finished launched nothing, so its removal
+// starts at its stacks, and one with no stack goes at once.
+func beginRemoval(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) (bool, error) {
+	phase := ConnDraining
+	if conn.Active == nil {
+		stacks, err := q.RemainingStacks(ctx, conn.ID)
+		if err != nil {
+			return false, fmt.Errorf("read stacks: %w", err)
+		}
+		if len(stacks) == 0 {
+			if err := q.DeleteConnection(ctx, conn.ID); err != nil {
+				return false, fmt.Errorf("delete connection: %w", err)
+			}
+			return true, nil
+		}
+		phase = ConnRevoking
+	} else {
+		for _, a := range []*Authorization{conn.Pending, conn.Retiring} {
+			if a != nil {
+				if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: a.ID, Phase: string(AuthRetired)}); err != nil {
+					return false, fmt.Errorf("retire authorization: %w", err)
+				}
+			}
+		}
+	}
+	if err := q.RequestRemoval(ctx, conn.ID); err != nil {
+		return false, fmt.Errorf("record removal: %w", err)
+	}
+	if err := setPhase(ctx, q, conn.ID, phase, now(), 0, nil); err != nil {
+		return false, err
+	}
+	return false, notifyChannel(ctx, tx, conn.ID)
+}
+
+// LeftoverKind is what the platform could not confirm deleted.
+type LeftoverKind string
+
+const (
+	LeftoverStack    LeftoverKind = "stack"
+	LeftoverInstance LeftoverKind = "instance"
+)
+
+// Leftover is a resource that may remain in the customer's AWS account.
+type Leftover struct {
+	Kind       LeftoverKind
+	ID         string
+	Region     string
+	ConsoleURL string
+}
+
+// Forget stops managing an account whose removal waits on the customer. It
+// removes the account's launch permission on the fleet's images, deletes the
+// connection's rows and returns what may remain in AWS for the customer to
+// delete: every stack and every host instance not confirmed gone.
+func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftover, error) {
+	stuck := func(conn Connection) error {
+		if conn.Phase != ConnActionRequire || conn.Retiring != nil {
+			return &ConflictError{Message: "only a disconnect that needs attention in AWS can be forgotten"}
+		}
+		return nil
+	}
+	conn, err := c.AccountConnection(ctx, account)
+	switch {
+	case err != nil:
+		return nil, err
+	case conn == nil:
+		return nil, &NotFoundError{Message: "AWS account connection not found"}
+	}
+	if err := stuck(*conn); err != nil {
+		return nil, err
+	}
+	if err := c.unshareImages(ctx, *conn); err != nil {
+		return nil, fmt.Errorf("forget AWS connection: %w", err)
+	}
+	left := []Leftover{}
+	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		row, auths, err := lockAccountConnection(ctx, q, account)
+		if err != nil {
+			return err
+		}
+		if err := stuck(connectionOf(row, auths)); err != nil {
+			return err
+		}
+		stacks, err := q.RemainingStacks(ctx, row.ID)
+		if err != nil {
+			return fmt.Errorf("read stacks: %w", err)
+		}
+		for _, s := range stacks {
+			left = append(left, Leftover{
+				Kind: LeftoverStack, ID: cmp.Or(deref(s.StackID), s.StackName), Region: s.Region,
+				ConsoleURL: stackURL(s.Region, deref(s.StackID), s.StackName),
+			})
+		}
+		instances, err := q.LiveConnectionInstances(ctx, &row.ID)
+		if err != nil {
+			return fmt.Errorf("read instances: %w", err)
+		}
+		for _, i := range instances {
+			left = append(left, Leftover{Kind: LeftoverInstance, ID: i.InstanceID, Region: i.Region, ConsoleURL: instanceURL(i.Region, i.InstanceID)})
+		}
+		if err := q.AbandonConnectionHosts(ctx, &row.ID); err != nil {
+			return fmt.Errorf("end hosts: %w", err)
+		}
+		if err := q.DeleteConnection(ctx, row.ID); err != nil {
+			return fmt.Errorf("delete connection: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("forget AWS connection: %w", err)
+	}
+	return left, nil
 }
 
 // Retry reruns the step the connection waits on now.
@@ -684,13 +868,20 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 		conn := connectionOf(row, auths)
 		switch conn.Phase {
 		case ConnActionRequire:
-			next := ConnRevoking
+			// A removal starts over from its drain, which passes at once
+			// without hosts.
+			next := ConnDraining
 			if conn.Retiring != nil {
 				next = ConnRetiring
+			} else if err := q.RequestRemoval(ctx, row.ID); err != nil {
+				return fmt.Errorf("record removal: %w", err)
 			}
-			return setPhase(ctx, q, row.ID, next, now(), 0, [2]string{})
+			if err := setPhase(ctx, q, row.ID, next, now(), 0, nil); err != nil {
+				return err
+			}
+			return notifyChannel(ctx, tx, row.ID)
 		case ConnDegraded, ConnAwaiting, ConnReconnecting:
-			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, [2]string{})
+			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, nil)
 		case ConnValidating, ConnReady, ConnRetiring, ConnDraining, ConnRevoking, ConnVerifying:
 		}
 		return nil
@@ -716,21 +907,29 @@ func lockAccountConnection(ctx context.Context, q *Queries, account identity.Use
 	return row, auths, nil
 }
 
-// WorkspaceConnection returns the connection a new workspace of account is
-// created in. It must be ready.
-func (c *Compute) WorkspaceConnection(ctx context.Context, account identity.UserID) (uuid.UUID, error) {
-	conn, err := c.AccountConnection(ctx, account)
-	if err != nil {
-		return uuid.UUID{}, err
-	}
-	if conn == nil {
+// PlaceWorkspace returns the connection a new workspace of account goes
+// into, inside the transaction that creates the workspace. The connection
+// must accept new work. Its row stays share-locked until that transaction
+// ends, so a concurrent Disconnect, which locks the row for update, either
+// sees the workspace or the workspace sees the removal.
+func (c *Compute) PlaceWorkspace(ctx context.Context, tx pgx.Tx, account identity.UserID) (uuid.UUID, error) {
+	q := c.queries.WithTx(tx)
+	row, err := q.LockWorkspaceConnection(ctx, uuid.UUID(account))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.UUID{}, &ConflictError{Message: "no AWS account is connected; run `lazycloud cloud connect aws` first"}
 	}
-	if !conn.HostsWorkloads() {
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("lock connection: %w", err)
+	}
+	auths, err := q.ConnectionAuthorizations(ctx, row.ID)
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("read authorizations: %w", err)
+	}
+	if conn := connectionOf(row, auths); !conn.HostsWorkloads() {
 		return uuid.UUID{}, &ConflictError{Message: fmt.Sprintf(
 			"the connected AWS account is %s; a workspace can be created there once `lazycloud cloud status` reports ready", conn.Phase)}
 	}
-	return conn.ID, nil
+	return row.ID, nil
 }
 
 // ConnectedAccount is a connected AWS account as storage reaches it: the
@@ -752,6 +951,9 @@ func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (C
 	}
 	if err != nil {
 		return ConnectedAccount{}, fmt.Errorf("read connection access: %w", err)
+	}
+	if AuthorizationPhase(row.Phase) == AuthDegraded && deref(row.ErrorCode) == string(ErrAssumeRoleDenied) {
+		return ConnectedAccount{}, &ConflictError{Message: "the connected AWS account refuses LazyCloud its role: " + deref(row.ErrorMessage)}
 	}
 	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
 }
@@ -777,25 +979,29 @@ func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAcc
 	return creds, nil
 }
 
-func notifyCompute(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
-	return notifyChannel(ctx, tx, id)
-}
-
-// ConnectionLoop advances connections whose background step is due: it
+// AdvanceConnections runs the background steps that are due: it
 // revalidates waiting authorizations, retires replaced ones and removes
-// disconnected accounts. Each connection commits on its own.
+// disconnected accounts. Each due connection is claimed for one step, so
+// scheduler replicas never run the same one at once, and each step commits
+// on its own.
 func (c *Compute) AdvanceConnections(ctx context.Context, logger *slog.Logger) (int, error) {
-	due, err := c.queries.DueConnections(ctx, 50)
-	if err != nil {
-		return 0, fmt.Errorf("list due connections: %w", err)
-	}
-	for _, id := range due {
-		if err := c.advanceConnection(ctx, id); err != nil {
+	for n := range connectionStepsPerPass {
+		id, err := c.queries.ClaimDueConnection(ctx, connectionStepLease.Seconds())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return n, nil
+		}
+		if err != nil {
+			return n, fmt.Errorf("claim a due connection: %w", err)
+		}
+		step, cancel := context.WithTimeout(ctx, connectionStepDeadline)
+		err = c.advanceConnection(step, id)
+		cancel()
+		if err != nil {
 			if ctx.Err() != nil {
-				return 0, err
+				return n, err
 			}
 			logger.ErrorContext(ctx, "advance connection", "connection_id", id, "error", err)
 		}
 	}
-	return len(due), nil
+	return connectionStepsPerPass, nil
 }

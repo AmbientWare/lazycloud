@@ -39,25 +39,33 @@ instances, containers, and an S3 bucket per workspace holding its volumes and
 disks all live in your account. AWS bills the machines and the bucket, and
 LazyCloud charges a management fee based on compute rates.
 
+Connect from the dashboard under Settings, then Compute, with Connect AWS. Or
+from the CLI:
+
 ```bash
 uv run lazycloud cloud connect aws --account-id 123456789012
-uv run lazycloud cloud authorize --profile YOUR_AWS_PROFILE
-uv run lazycloud cloud validate
-uv run lazycloud cloud status
+uv run lazycloud cloud status --watch --until ready
 ```
 
-`authorize` submits a CloudFormation stack that creates the management role and
-network, and your AWS credentials never leave your machine. If it stalls, the
-stack's events in AWS show why. `validate` checks the result once the stack
-finishes. The dashboard shows the connection under Settings, then Compute.
+Either way you get an AWS Console link that opens a CloudFormation stack ready
+to create. The stack makes the management role and network. After a look at what it
+creates, tick the IAM acknowledgement and choose Create stack. You don't need the AWS CLI, and
+LazyCloud never sees your AWS keys. The connection turns ready on its own once
+the stack finishes. If it stalls, the stack's events in AWS show why.
 
 LazyCloud picks instance types, regions, and warm capacity. Each workload still
 sets its own CPU, memory, and GPU.
 
 `cloud status` reports a broken authorization, for example after a role change.
-`cloud reconnect` starts a replacement, and `cloud disconnect --wait` drains and
-removes the connection once every workspace in the account is deleted.
-Deleting a workspace empties and deletes its bucket.
+`cloud reconnect` starts a replacement. Deleting a workspace empties and
+deletes its bucket.
+
+Disconnecting needs every workspace in the account deleted first. LazyCloud
+then terminates its instances, deletes the stacks it asked you to create and
+removes the connection. If a step can't finish, for example a stack AWS
+refuses to delete, the connection shows Action required. Retry once the
+cause is fixed, or forget the connection. Forgetting removes it at once and lists what
+stayed in AWS, each with a Console link, for you to delete.
 
 ## Your own machines
 

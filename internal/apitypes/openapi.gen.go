@@ -203,6 +203,7 @@ func (e AwsAuthorizationPhase) Valid() bool {
 const (
 	AwsAuthorize       AwsConnectionAction = "authorize"
 	AwsCancelReconnect AwsConnectionAction = "cancel_reconnect"
+	AwsForget          AwsConnectionAction = "forget"
 	AwsReconnect       AwsConnectionAction = "reconnect"
 	AwsRemove          AwsConnectionAction = "remove"
 	AwsRetry           AwsConnectionAction = "retry"
@@ -215,6 +216,8 @@ func (e AwsConnectionAction) Valid() bool {
 	case AwsAuthorize:
 		return true
 	case AwsCancelReconnect:
+		return true
+	case AwsForget:
 		return true
 	case AwsReconnect:
 		return true
@@ -271,30 +274,18 @@ func (e AwsConnectionPhase) Valid() bool {
 	}
 }
 
-// Defines values for AwsStackActionRequestCapabilities.
+// Defines values for AwsLeftoverKind.
 const (
-	CAPABILITYNAMEDIAM AwsStackActionRequestCapabilities = "CAPABILITY_NAMED_IAM"
+	AwsLeftoverKindInstance AwsLeftoverKind = "instance"
+	AwsLeftoverKindStack    AwsLeftoverKind = "stack"
 )
 
-// Valid indicates whether the value is a known member of the AwsStackActionRequestCapabilities enum.
-func (e AwsStackActionRequestCapabilities) Valid() bool {
+// Valid indicates whether the value is a known member of the AwsLeftoverKind enum.
+func (e AwsLeftoverKind) Valid() bool {
 	switch e {
-	case CAPABILITYNAMEDIAM:
+	case AwsLeftoverKindInstance:
 		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AwsStackActionRequestOnFailure.
-const (
-	AwsStackActionRequestOnFailureDELETE AwsStackActionRequestOnFailure = "DELETE"
-)
-
-// Valid indicates whether the value is a known member of the AwsStackActionRequestOnFailure enum.
-func (e AwsStackActionRequestOnFailure) Valid() bool {
-	switch e {
-	case AwsStackActionRequestOnFailureDELETE:
+	case AwsLeftoverKindStack:
 		return true
 	default:
 		return false
@@ -2533,8 +2524,10 @@ type AwsConnection struct {
 	AvailableActions          []AwsConnectionAction       `json:"available_actions"`
 	CanManageExistingCapacity bool                        `json:"can_manage_existing_capacity"`
 	CreatedAt                 time.Time                   `json:"created_at"`
-	CustomerAction            *AwsCustomerAction          `json:"customer_action,omitempty"`
-	Detail                    string                      `json:"detail"`
+
+	// CustomerAction A step the customer takes in the AWS Console.
+	CustomerAction *AwsCustomerAction `json:"customer_action,omitempty"`
+	Detail         string             `json:"detail"`
 
 	// HostsWorkloads New workloads can be placed in the account.
 	HostsWorkloads        bool                        `json:"hosts_workloads"`
@@ -2553,10 +2546,11 @@ type AwsConnectionAction string
 // AwsConnectionAuthorization defines model for AwsConnectionAuthorization.
 type AwsConnectionAuthorization struct {
 	Authorization struct {
-		ExternalId *string `json:"external_id,omitempty"`
+		// ConsoleUrl Opens the connection stack, ready to create, in the AWS Console.
+		ConsoleUrl *string `json:"console_url,omitempty"`
 
-		// Stack A CloudFormation CreateStack request the customer submits with their own credentials.
-		Stack *AwsStackAction `json:"stack,omitempty"`
+		// ExternalId The external ID an existing role must require.
+		ExternalId *string `json:"external_id,omitempty"`
 	} `json:"authorization"`
 	Connection AwsConnection `json:"connection"`
 }
@@ -2583,14 +2577,27 @@ type AwsConnectionRequest struct {
 	RoleArn *string `json:"role_arn,omitempty"`
 }
 
-// AwsCustomerAction defines model for AwsCustomerAction.
+// AwsCustomerAction A step the customer takes in the AWS Console.
 type AwsCustomerAction struct {
 	Label string `json:"label"`
-
-	// Stack A CloudFormation CreateStack request the customer submits with their own credentials.
-	Stack *AwsStackAction `json:"stack,omitempty"`
-	Url   *string         `json:"url,omitempty"`
+	Url   string `json:"url"`
 }
+
+// AwsForgetResult defines model for AwsForgetResult.
+type AwsForgetResult struct {
+	LeftInAws []AwsLeftover `json:"left_in_aws"`
+}
+
+// AwsLeftover A resource in the customer's AWS account the platform could not delete.
+type AwsLeftover struct {
+	ConsoleUrl string          `json:"console_url"`
+	Id         string          `json:"id"`
+	Kind       AwsLeftoverKind `json:"kind"`
+	Region     string          `json:"region"`
+}
+
+// AwsLeftoverKind defines model for AwsLeftover.Kind.
+type AwsLeftoverKind string
 
 // AwsNetwork defines model for AwsNetwork.
 type AwsNetwork struct {
@@ -2602,32 +2609,6 @@ type AwsNetwork struct {
 // AwsReconnectRequest defines model for AwsReconnectRequest.
 type AwsReconnectRequest struct {
 	RoleArn *string `json:"role_arn,omitempty"`
-}
-
-// AwsStackAction A CloudFormation CreateStack request the customer submits with their own credentials.
-type AwsStackAction struct {
-	AccountId string `json:"account_id"`
-	Region    string `json:"region"`
-	Request   struct {
-		Capabilities []AwsStackActionRequestCapabilities `json:"Capabilities"`
-		OnFailure    AwsStackActionRequestOnFailure      `json:"OnFailure"`
-		Parameters   []AwsStackParameter                 `json:"Parameters"`
-		StackName    string                              `json:"StackName"`
-		TemplateBody string                              `json:"TemplateBody"`
-	} `json:"request"`
-	TemplateSha256 string `json:"template_sha256"`
-}
-
-// AwsStackActionRequestCapabilities defines model for AwsStackAction.Request.Capabilities.
-type AwsStackActionRequestCapabilities string
-
-// AwsStackActionRequestOnFailure defines model for AwsStackAction.Request.OnFailure.
-type AwsStackActionRequestOnFailure string
-
-// AwsStackParameter defines model for AwsStackParameter.
-type AwsStackParameter struct {
-	ParameterKey   string `json:"ParameterKey"`
-	ParameterValue string `json:"ParameterValue"`
 }
 
 // BilledDimension The invoice line a component rolls up into.

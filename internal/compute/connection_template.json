@@ -10,27 +10,9 @@
     "BucketPrefix": {"Type": "String", "AllowedPattern": "^[a-z0-9][a-z0-9-]{0,23}$"},
     "FleetName": {"Type": "String"},
     "NodeRoleName": {"Type": "String"},
-    "NodeInstanceProfileName": {"Type": "String"},
-    "AvailabilityZoneA": {"Type": "AWS::EC2::AvailabilityZone::Name"},
-    "AvailabilityZoneB": {"Type": "AWS::EC2::AvailabilityZone::Name"},
-    "AvailabilityZoneC": {"Type": "String", "Default": ""},
-    "AvailabilityZoneD": {"Type": "String", "Default": ""},
-    "AvailabilityZoneE": {"Type": "String", "Default": ""},
-    "AvailabilityZoneF": {"Type": "String", "Default": ""}
-  },
-  "Conditions": {
-    "HasSubnetC": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AvailabilityZoneC"}, ""]}]},
-    "HasSubnetD": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AvailabilityZoneD"}, ""]}]},
-    "HasSubnetE": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AvailabilityZoneE"}, ""]}]},
-    "HasSubnetF": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AvailabilityZoneF"}, ""]}]}
+    "NodeInstanceProfileName": {"Type": "String"}
   },
   "Rules": {
-    "AvailabilityZonesMustDiffer": {
-      "Assertions": [{
-        "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AvailabilityZoneA"}, {"Ref": "AvailabilityZoneB"}]}]},
-        "AssertDescription": "Select two different availability zones."
-      }]
-    },
     "TargetAccountMustMatch": {
       "Assertions": [{
         "Assert": {"Fn::Equals": [{"Ref": "TargetAccountId"}, {"Ref": "AWS::AccountId"}]},
@@ -211,34 +193,28 @@
     },
     "SubnetA": {
       "Type": "AWS::EC2::Subnet",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.1.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneA"}}
+      "Properties": {
+        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.1.0/24", "MapPublicIpOnLaunch": true,
+        "AvailabilityZoneId": "use2-az1"
+      }
     },
     "SubnetB": {
       "Type": "AWS::EC2::Subnet",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.2.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneB"}}
+      "Properties": {
+        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.2.0/24", "MapPublicIpOnLaunch": true,
+        "AvailabilityZoneId": "use2-az2"
+      }
     },
     "SubnetC": {
-      "Type": "AWS::EC2::Subnet", "Condition": "HasSubnetC",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.3.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneC"}}
-    },
-    "SubnetD": {
-      "Type": "AWS::EC2::Subnet", "Condition": "HasSubnetD",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.4.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneD"}}
-    },
-    "SubnetE": {
-      "Type": "AWS::EC2::Subnet", "Condition": "HasSubnetE",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.5.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneE"}}
-    },
-    "SubnetF": {
-      "Type": "AWS::EC2::Subnet", "Condition": "HasSubnetF",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.6.0/24", "MapPublicIpOnLaunch": true, "AvailabilityZone": {"Ref": "AvailabilityZoneF"}}
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.3.0/24", "MapPublicIpOnLaunch": true,
+        "AvailabilityZoneId": "use2-az3"
+      }
     },
     "SubnetARoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetA"}, "RouteTableId": {"Ref": "RouteTable"}}},
     "SubnetBRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetB"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetCRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Condition": "HasSubnetC", "Properties": {"SubnetId": {"Ref": "SubnetC"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetDRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Condition": "HasSubnetD", "Properties": {"SubnetId": {"Ref": "SubnetD"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetERoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Condition": "HasSubnetE", "Properties": {"SubnetId": {"Ref": "SubnetE"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetFRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Condition": "HasSubnetF", "Properties": {"SubnetId": {"Ref": "SubnetF"}, "RouteTableId": {"Ref": "RouteTable"}}},
+    "SubnetCRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetC"}, "RouteTableId": {"Ref": "RouteTable"}}},
     "ObjectStorageEndpoint": {
       "Type": "AWS::EC2::VPCEndpoint",
       "Properties": {
@@ -262,14 +238,6 @@
     "NodeInstanceProfileName": {"Value": {"Ref": "NodeInstanceProfile"}},
     "VpcId": {"Value": {"Ref": "Vpc"}},
     "SecurityGroupId": {"Value": {"Fn::GetAtt": ["NodeSecurityGroup", "GroupId"]}},
-    "SubnetIds": {
-      "Value": {"Fn::Join": ["", [
-        {"Ref": "SubnetA"}, ",", {"Ref": "SubnetB"},
-        {"Fn::If": ["HasSubnetC", {"Fn::Join": ["", [",", {"Ref": "SubnetC"}]]}, ""]},
-        {"Fn::If": ["HasSubnetD", {"Fn::Join": ["", [",", {"Ref": "SubnetD"}]]}, ""]},
-        {"Fn::If": ["HasSubnetE", {"Fn::Join": ["", [",", {"Ref": "SubnetE"}]]}, ""]},
-        {"Fn::If": ["HasSubnetF", {"Fn::Join": ["", [",", {"Ref": "SubnetF"}]]}, ""]}
-      ]]}
-    }
+    "SubnetIds": {"Value": {"Fn::Join": [",", [{"Ref": "SubnetA"}, {"Ref": "SubnetB"}, {"Ref": "SubnetC"}]]}}
   }
 }
