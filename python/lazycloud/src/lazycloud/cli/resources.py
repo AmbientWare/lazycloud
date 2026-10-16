@@ -303,8 +303,10 @@ def cloud_disconnect(
             help="Wait until the connection is removed or needs your action.",
         ),
     ] = False,
-    interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 2.0,
-    timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 600.0,
+    interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 5.0,
+    # A removal may wait an hour for its instances to end, then retry stack
+    # deletion for about 40 minutes before it needs the customer.
+    timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 7200.0,
 ) -> None:
     """Disconnect the cloud account and remove its managed compute."""
     compute = _compute()
