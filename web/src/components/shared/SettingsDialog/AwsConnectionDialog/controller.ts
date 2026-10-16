@@ -5,6 +5,7 @@ import type { Schemas } from "@/lib/api/client";
 import {
   cancelAwsConnectionReconnect,
   createAwsConnection,
+  forgetAwsConnection,
   reconnectAwsConnection,
   removeAwsConnection,
   retryAwsConnection,
@@ -14,30 +15,39 @@ import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import type { AwsConnectionDialogRecoveryAction } from "./lifecycle";
 
-export type AwsConnectionDialogAction = "create" | AwsConnectionDialogRecoveryAction | "remove";
+/** The actions the dialog confirms before running. */
+export type AwsConnectionConfirmedAction = "remove" | "forget";
+
+export type AwsConnectionDialogAction =
+  "create" | AwsConnectionDialogRecoveryAction | AwsConnectionConfirmedAction;
 
 type AwsConnectionCommand =
   | { action: "create"; accountId: string }
   | { action: Exclude<AwsConnectionDialogAction, "create"> };
 
-type AwsConnectionMutationOutcome = {
-  action: AwsConnectionDialogAction;
-  connection: Schemas["AwsConnection"] | null;
-};
+type AwsConnectionMutationOutcome =
+  | { action: "forget"; leftInAws: Schemas["AwsLeftover"][] }
+  | {
+      action: Exclude<AwsConnectionDialogAction, "forget">;
+      connection: Schemas["AwsConnection"] | null;
+    };
 
 export type AwsConnectionController = {
   activeAction: AwsConnectionDialogAction | null;
   createError: Error | null;
   recoveryError: Error | null;
-  removalError: Error | null;
-  removeOpen: boolean;
-  setRemoveOpen: (open: boolean) => void;
+  confirmError: Error | null;
+  confirming: AwsConnectionConfirmedAction | null;
+  setConfirming: (action: AwsConnectionConfirmedAction | null) => void;
+  /** What a forgotten connection left in AWS; null until a forget succeeds. */
+  leftInAws: Schemas["AwsLeftover"][] | null;
   create: (accountId: string) => void;
   validate: () => void;
   reconnect: () => void;
   cancelReconnect: () => void;
   retry: () => void;
   remove: () => void;
+  forget: () => void;
 };
 
 export function useAwsConnectionController({
@@ -49,7 +59,8 @@ export function useAwsConnectionController({
   const activeActionRef = useRef<AwsConnectionDialogAction | null>(null);
   const [activeAction, setActiveAction] = useState<AwsConnectionDialogAction | null>(null);
   const [lastAction, setLastAction] = useState<AwsConnectionDialogAction | null>(null);
-  const [removeOpen, setRemoveOpen] = useState(false);
+  const [confirming, setConfirming] = useState<AwsConnectionConfirmedAction | null>(null);
+  const [leftInAws, setLeftInAws] = useState<Schemas["AwsLeftover"][] | null>(null);
 
   const mutation = useMutation({
     mutationFn: async (command: AwsConnectionCommand): Promise<AwsConnectionMutationOutcome> => {
@@ -67,18 +78,27 @@ export function useAwsConnectionController({
           return { action, connection: await retryAwsConnection() };
         case "remove":
           return { action, connection: await removeAwsConnection() };
+        case "forget":
+          return { action, leftInAws: (await forgetAwsConnection()).left_in_aws };
       }
     },
     onSuccess: (outcome) => {
-      queryClient.setQueryData(accountQueryKeys.compute.awsConnection(), outcome.connection);
-
-      if (outcome.action === "remove") {
-        setRemoveOpen(false);
-        // The whole account-level compute root: the connection is gone, and so is
-        // the capacity, the inventory, and the catalog that were read through it.
+      queryClient.setQueryData(
+        accountQueryKeys.compute.awsConnection(),
+        outcome.action === "forget" ? null : outcome.connection,
+      );
+      if (outcome.action === "remove" || outcome.action === "forget") {
+        setConfirming(null);
+        // The whole account-level compute root: the connection is gone or going,
+        // and so is the capacity, the inventory, and the catalog read through it.
         void queryClient.invalidateQueries({ queryKey: accountQueryKeys.compute.root() });
       }
-
+      if (outcome.action === "forget") {
+        // The dialog stays open to list what the customer deletes in AWS.
+        setLeftInAws(outcome.leftInAws);
+        return;
+      }
+      // Creating and reconnecting leave the dialog open on the AWS Console link.
       if (outcome.action !== "create" && outcome.action !== "reconnect") onClose();
     },
     onSettled: () => {
@@ -96,21 +116,22 @@ export function useAwsConnectionController({
     mutation.mutate(command);
   };
 
+  const confirmed = lastAction === "remove" || lastAction === "forget";
   return {
     activeAction,
     createError: lastAction === "create" ? mutation.error : null,
     recoveryError:
-      lastAction !== null && lastAction !== "create" && lastAction !== "remove"
-        ? mutation.error
-        : null,
-    removalError: lastAction === "remove" ? mutation.error : null,
-    removeOpen,
-    setRemoveOpen,
+      lastAction !== null && lastAction !== "create" && !confirmed ? mutation.error : null,
+    confirmError: confirmed ? mutation.error : null,
+    confirming,
+    setConfirming,
+    leftInAws,
     create: (accountId) => run({ action: "create", accountId: accountId.trim() }),
     validate: () => run({ action: "validate" }),
     reconnect: () => run({ action: "reconnect" }),
     cancelReconnect: () => run({ action: "cancel_reconnect" }),
     retry: () => run({ action: "retry" }),
     remove: () => run({ action: "remove" }),
+    forget: () => run({ action: "forget" }),
   };
 }
