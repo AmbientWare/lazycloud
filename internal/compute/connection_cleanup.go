@@ -52,14 +52,10 @@ func notifyChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return database.Notify(ctx, tx, ChannelCompute, id.String())
 }
 
-// customerStep is what the customer does in AWS: label, at url.
-type customerStep struct {
-	url, label string
-}
-
-// customerAction is a step AWS refused that only the customer can unblock.
+// customerAction is a step AWS refused that only the customer can unblock;
+// the step's outcome names where in AWS.
 type customerAction struct {
-	customerStep
+	label string
 	cause error
 }
 
@@ -75,7 +71,7 @@ type outcome struct {
 	// err is why the step failed; a *customerAction waits on the customer.
 	err error
 	// action is where the customer finishes a step that never does.
-	action *customerStep
+	action *CustomerStep
 	// until holds a wait, uncounted, while the step can still pass by then.
 	until *time.Time
 }
@@ -88,9 +84,9 @@ func moveTo(conn Connection, phase ConnectionPhase, next *time.Time) outcome {
 
 // roleRefused ends a step whose role AWS would not let the platform assume.
 // With err the step runs again; without one, the customer has to act.
-func roleRefused(err error, action *customerStep) outcome {
+func roleRefused(err error, action *CustomerStep) outcome {
 	if err == nil {
-		err = &customerAction{customerStep: *action, cause: errRoleGone}
+		err = &customerAction{label: action.Label, cause: errRoleGone}
 	}
 	return outcome{err: err, action: action}
 }
@@ -117,11 +113,8 @@ func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error 
 		case o.done != nil:
 			return o.done(ctx, tx, q)
 		case errors.As(o.err, &refused):
-			step := refused.customerStep
-			if step.url == "" && o.action != nil {
-				step.url = o.action.url
-			}
-			step.label = truncate(step.label)
+			step := *o.action
+			step.Label = truncate(refused.label)
 			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts, &step)
 		case o.until != nil:
 			next := time.Now().Add(time.Minute)
@@ -131,7 +124,7 @@ func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error 
 			return setPhase(ctx, q, conn.ID, conn.Phase, &next, attempts, nil)
 		case attempts >= cleanupAttempts:
 			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts+1,
-				cmp.Or(o.action, &customerStep{url: stacksURL(connectionRegion), label: "Review LazyCloud's resources in AWS"}))
+				cmp.Or(o.action, &CustomerStep{URL: stacksURL(connectionRegion), Label: "Review LazyCloud's resources in AWS"}))
 		}
 		delay := min(time.Duration(10<<min(attempts, 5))*time.Second, 5*time.Minute)
 		return setPhase(ctx, q, conn.ID, conn.Phase, ptr(time.Now().Add(delay)), attempts+1, nil)
@@ -191,7 +184,7 @@ func (c *Compute) drain(ctx context.Context, conn Connection) outcome {
 	if deadline := conn.removalRequested.Add(c.fleet.DrainWait); time.Now().Before(deadline) {
 		return outcome{until: &deadline, action: action}
 	}
-	return outcome{err: &customerAction{customerStep: *action, cause: errDrainTimeout}, action: action}
+	return outcome{err: &customerAction{label: action.Label, cause: errDrainTimeout}, action: action}
 }
 
 var errDrainTimeout = errors.New("the instances did not end within the drain's bound")
@@ -208,9 +201,10 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 		return c.finishRevoke(ctx, conn)
 	}
 	scope := c.roleScope(conn, access)
-	if ok, err := assumable(ctx, scope); !ok {
+	if ok, err := assumable(ctx, scope); err != nil {
+		return outcome{err: err}
+	} else if !ok {
 		switch {
-		case err != nil:
 		case access.deleteRequested != nil:
 			// The stack removes its role last: once the platform asked to
 			// delete it, the role going is the stack going.
@@ -222,10 +216,10 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 			// The customer may still be creating the setup's stack, which
 			// makes the role.
 			return outcome{until: setupWait(conn, access)}
-		case conn.Active == nil:
-			return c.finishRevoke(ctx, conn)
 		}
-		return roleRefused(err, &customerStep{url: stacksURL(access.Region), label: "Delete the LazyCloud connection stacks in AWS"})
+		// Without the role the platform reaches nothing in the account, and
+		// nothing there trusts it any more.
+		return c.finishRevoke(ctx, conn)
 	}
 	if conn.Active != nil && conn.Phase == ConnRevoking {
 		left, err := c.sweepInstances(ctx, scope, conn)
@@ -335,11 +329,14 @@ type connectionStack struct {
 	authorization uuid.UUID
 	region, name  string
 	id            string
+	// creatingUntil is when a name with no stack counts as gone, while the
+	// customer may still be creating it.
+	creatingUntil *time.Time
 }
 
 // action shows the customer the stack in the CloudFormation console.
-func (s connectionStack) action() *customerStep {
-	return &customerStep{url: stackURL(s.region, s.id, s.name), label: "Delete the stack " + s.name + " in AWS"}
+func (s connectionStack) action() *CustomerStep {
+	return &CustomerStep{URL: stackURL(s.region, s.id, s.name), Label: "Delete the stack " + s.name + " in AWS"}
 }
 
 // deleteStack asks CloudFormation to delete a connection stack and reports
@@ -354,6 +351,8 @@ func (c *Compute) deleteStack(ctx context.Context, scope awsScope, s *connection
 	out, err := cf.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: aws.String(cmp.Or(s.id, s.name))})
 	gone := s.id == "" && awsCode(err) == "ValidationError"
 	switch {
+	case gone && s.creatingUntil != nil && time.Now().Before(*s.creatingUntil):
+		return false, nil
 	case gone:
 	case err != nil:
 		return false, refusedOr(err, "describe stack %s", s.name)
@@ -494,6 +493,11 @@ func (c *Compute) retire(ctx context.Context, conn Connection) outcome {
 		}
 		if a.Mode == ModeManagedStack {
 			s := connectionStack{authorization: a.ID, region: a.Region, name: a.StackName, id: a.StackID}
+			if a.StackID == "" {
+				// A generation never validated retired when its reconnect was
+				// cancelled or lapsed, and its stack may still be being created.
+				s.creatingUntil = ptr(a.UpdatedAt.Add(setupStackWait))
+			}
 			scope := c.roleScope(conn, conn.Active)
 			if ok, err := assumable(ctx, scope); !ok {
 				return roleRefused(err, s.action())
@@ -540,14 +544,14 @@ func (c *Compute) drainAuthorization(ctx context.Context, authorization uuid.UUI
 
 // instancesAction shows the customer the fleet's instances in the EC2
 // console of the connection's region.
-func (c *Compute) instancesAction(conn Connection) *customerStep {
+func (c *Compute) instancesAction(conn Connection) *CustomerStep {
 	region := connectionRegion
 	if conn.Active != nil {
 		region = conn.Active.Region
 	}
-	return &customerStep{
-		url:   fmt.Sprintf("https://%s.console.aws.amazon.com/ec2/home?region=%s#Instances:tag:%s=%s", region, region, tagFleet, url.QueryEscape(c.fleet.Name)),
-		label: "Terminate LazyCloud's instances in AWS",
+	return &CustomerStep{
+		URL:   fmt.Sprintf("https://%s.console.aws.amazon.com/ec2/home?region=%s#Instances:tag:%s=%s", region, region, tagFleet, url.QueryEscape(c.fleet.Name)),
+		Label: "Terminate LazyCloud's instances in AWS",
 	}
 }
 

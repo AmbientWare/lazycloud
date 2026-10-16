@@ -370,10 +370,10 @@ func connectionView(conn compute.Connection) apitypes.AwsConnection {
 		out.AvailableActions = append(out.AvailableActions, apitypes.AwsConnectionAction(a))
 	}
 	switch {
-	case conn.ConsoleURL != "":
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: conn.ConsoleURL}
-	case conn.ActionLabel != "" && conn.ActionURL != "":
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.ActionLabel, Url: conn.ActionURL}
+	case conn.ConsoleURL != nil:
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: *conn.ConsoleURL}
+	case conn.Customer != nil:
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.Customer.Label, Url: conn.Customer.URL}
 	}
 	return out
 }
@@ -385,8 +385,8 @@ func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConn
 		if view.Pending.Mode == compute.ModeExistingRole {
 			id := view.Pending.ExternalID()
 			out.Authorization.ExternalId = &id
-		} else if view.ConsoleURL != "" {
-			out.Authorization.ConsoleUrl = &view.ConsoleURL
+		} else {
+			out.Authorization.ConsoleUrl = view.ConsoleURL
 		}
 	}
 	return out

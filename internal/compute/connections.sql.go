@@ -124,7 +124,7 @@ func (q *Queries) ClaimDueConnection(ctx context.Context, leaseSeconds float64) 
 }
 
 const connectionAccess = `-- name: ConnectionAccess :one
-select cc.aws_account_id, a.region, a.role_arn, a.external_id
+select cc.aws_account_id, a.region, a.role_arn, a.external_id, a.phase, a.error_code, a.error_message
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = $1
@@ -135,9 +135,13 @@ type ConnectionAccessRow struct {
 	Region       string
 	RoleArn      string
 	ExternalID   string
+	Phase        string
+	ErrorCode    *string
+	ErrorMessage *string
 }
 
-// The connected account and the role its active authorization grants.
+// The connected account, the role its active authorization grants and how
+// that authorization last validated.
 func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (ConnectionAccessRow, error) {
 	row := q.db.QueryRow(ctx, connectionAccess, id)
 	var i ConnectionAccessRow
@@ -146,6 +150,9 @@ func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (Connectio
 		&i.Region,
 		&i.RoleArn,
 		&i.ExternalID,
+		&i.Phase,
+		&i.ErrorCode,
+		&i.ErrorMessage,
 	)
 	return i, err
 }
@@ -744,10 +751,12 @@ func (q *Queries) StackDeleted(ctx context.Context, id uuid.UUID) error {
 
 const startValidation = `-- name: StartValidation :exec
 update cloud_authorizations
-set phase = 'validating', last_validation_started_at = now(), updated_at = now()
+set phase = case when slot = 'active' then phase else 'validating' end, last_validation_started_at = now(), updated_at = now()
 where id = $1
 `
 
+// An active authorization keeps its phase, and its connection keeps taking
+// work, until the check decides.
 func (q *Queries) StartValidation(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, startValidation, id)
 	return err

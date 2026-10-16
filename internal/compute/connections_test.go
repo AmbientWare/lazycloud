@@ -162,10 +162,10 @@ func quickCreateOf(t *testing.T, consoleURL string) quickCreate {
 func (c *customerAWS) authorize(t *testing.T, o owners, conn compute.Connection, r role) {
 	t.Helper()
 	view := o.compute.View(conn)
-	if view.ConsoleURL == "" || conn.Pending == nil {
+	if view.ConsoleURL == nil || conn.Pending == nil {
 		t.Fatalf("connection %s waits for no stack", conn.Phase)
 	}
-	stack := quickCreateOf(t, view.ConsoleURL)
+	stack := quickCreateOf(t, *view.ConsoleURL)
 	account := stack.params["TargetAccountId"]
 	if r.externalID == "" && !r.open {
 		r.externalID = stack.params["ExternalId"]
@@ -365,7 +365,7 @@ func TestConnectLinksTheConsoleToThePublishedTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := connect(t, o, newUser(t, o.pool, "alice@example.com"), "111111111111")
-	stack := quickCreateOf(t, o.compute.View(conn).ConsoleURL)
+	stack := quickCreateOf(t, *o.compute.View(conn).ConsoleURL)
 
 	key := "connection/" + compute.TemplateSHA256() + ".json"
 	if want := "https://" + store.Bucket + ".s3." + store.Region + ".amazonaws.com/" + key; stack.templateURL != want {
@@ -454,7 +454,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existing.Pending == nil || existing.Pending.Mode != compute.ModeExistingRole || len(existing.Pending.ExternalID()) < 32 || o.compute.View(existing).ConsoleURL != "" {
+	if existing.Pending == nil || existing.Pending.Mode != compute.ModeExistingRole || len(existing.Pending.ExternalID()) < 32 || o.compute.View(existing).ConsoleURL != nil {
 		t.Fatalf("existing-role connection %+v, want a pending role with a generated external ID and no stack", existing.Pending)
 	}
 }
@@ -556,6 +556,15 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 	if conn := current(t, o, alice); conn == nil || conn.Phase != compute.ConnReady || conn.Retiring != nil || conn.Active.Generation != 2 {
 		t.Fatalf("after the old stack is gone: %+v, want ready on the second generation", conn)
 	}
+}
+
+// customerURL is where the connection sends the customer, or "" when it
+// waits on no one.
+func customerURL(c *compute.Connection) string {
+	if c.Customer == nil {
+		return ""
+	}
+	return c.Customer.URL
 }
 
 // phaseOf is the connection's phase, or "" once it is gone.
@@ -733,7 +742,7 @@ func TestAStackThatKeepsFailingToDeleteGoesToTheCustomer(t *testing.T) {
 	}
 	stuck := current(t, o, alice)
 	if stuck == nil || stuck.Phase != compute.ConnActionRequire ||
-		!strings.Contains(stuck.ActionURL, "console.aws.amazon.com/cloudformation") || !strings.Contains(stuck.ActionURL, "stackId=") {
+		!strings.Contains(customerURL(stuck), "console.aws.amazon.com/cloudformation") || !strings.Contains(customerURL(stuck), "stackId=") {
 		t.Fatalf("after DELETE_FAILED: %+v, want action_required with the stack's console URL", stuck)
 	}
 	if deletes := deletedStacks(emulator); len(deletes) < 3 {
@@ -781,7 +790,7 @@ func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 	}
 	advance(t, o)
 	stuck := current(t, o, alice)
-	if stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(stuck.ActionURL, "console.aws.amazon.com/ec2") ||
+	if stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(customerURL(stuck), "console.aws.amazon.com/ec2") ||
 		!slices.Equal(stuck.Actions(), []compute.ConnectionAction{compute.ActionRetry, compute.ActionForget}) {
 		t.Fatalf("with the role gone mid-drain: %+v, want action_required showing the instances, with retry and forget", stuck)
 	}
@@ -995,7 +1004,7 @@ func TestADrainWaitsForItsInstancesUntilItsBound(t *testing.T) {
 	if _, err := short.AdvanceConnections(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
-	if stuck := current(t, o, alice); stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(stuck.ActionURL, "console.aws.amazon.com/ec2") {
+	if stuck := current(t, o, alice); stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(customerURL(stuck), "console.aws.amazon.com/ec2") {
 		t.Fatalf("past the drain bound: %+v, want action_required showing the instances", stuck)
 	}
 }
@@ -1124,5 +1133,112 @@ func TestAWorkspaceCreatedDuringADisconnectBlocksIt(t *testing.T) {
 	var conflict *compute.ConflictError
 	if err := <-disconnected; !errors.As(err, &conflict) {
 		t.Fatalf("disconnect racing the workspace: %v, want ConflictError", err)
+	}
+}
+
+// A disconnect whose role AWS refuses before the platform asked to delete
+// its stack, as once the customer deleted the stack themselves, finishes:
+// the platform can reach nothing there, so nothing is left for it to ask.
+func TestARemovalWhoseRoleIsGoneFinishes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := imagedConnectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	customer.deleteStack(conn.Active.StackName)
+
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, o)
+	if phase := phaseOf(t, o, alice); phase != "" || len(emulator.calls("DeleteStack")) != 0 || !unshared(emulator) {
+		t.Fatalf("connection %q with %d DeleteStack calls and image calls %v, want it removed with the launch permission",
+			phase, len(emulator.calls("DeleteStack")), emulator.calls("ModifyImageAttribute"))
+	}
+}
+
+// A reconnect cancelled while the customer is still creating its stack
+// waits for the stack, then deletes it.
+func TestACancelledReconnectWaitsForAStackStillBeingCreated(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	first := connected(t, o, customer, alice)
+	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.compute.CancelReconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, o)
+	if phase := phaseOf(t, o, alice); phase != compute.ConnRetiring {
+		t.Fatalf("with no stack yet the connection is %s, want still retiring the cancelled generation", phase)
+	}
+
+	customer.authorize(t, o, reconnecting, role{})
+	for n := 0; n < 5 && phaseOf(t, o, alice) != compute.ConnReady; n++ {
+		due(t, o, first)
+		advance(t, o)
+	}
+	if got := deletedStacks(emulator); phaseOf(t, o, alice) != compute.ConnReady || !slices.Equal(got, []string{reconnecting.Pending.StackName}) {
+		t.Fatalf("connection %s with DeleteStack calls %v, want ready after the late stack was deleted", phaseOf(t, o, alice), got)
+	}
+}
+
+// Revalidating a working connection keeps it taking work: a launch and a
+// new workspace go ahead while the check runs.
+func TestAConnectionTakesWorkWhileItsRoleIsRevalidated(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	emulator := newAWS(t)
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal})))
+	publish(t, o.compute)
+	customer := newCustomerAWS(emulator)
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+
+	identify := emulator.handler("GetCallerIdentity")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enter, leave sync.Once
+	defer leave.Do(func() { close(release) })
+	emulator.on("GetCallerIdentity", func(call awsCall) awsReply {
+		enter.Do(func() {
+			close(entered)
+			<-release
+		})
+		return identify(call)
+	})
+	validated := make(chan error, 1)
+	go func() {
+		_, err := o.compute.Validate(ctx, alice)
+		validated <- err
+	}()
+	<-entered
+	if phase := phaseOf(t, o, alice); phase != compute.ConnValidating {
+		t.Fatalf("while the check runs the connection is %s, want validating", phase)
+	}
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseRequested,
+		Market: compute.MarketSpot, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", Unenrolled: true})
+	run(t, o.pool, "update hosts set connection_id = $1, instance_type = 'm7i.large' where id = $2", conn.ID, uuid.UUID(host))
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d while the role was revalidated, want 1", n)
+	}
+	tx, err := o.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, placed := o.compute.PlaceWorkspace(ctx, tx, alice)
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if placed != nil {
+		t.Fatalf("place a workspace while the role was revalidated: %v", placed)
+	}
+	leave.Do(func() { close(release) })
+	if err := <-validated; err != nil {
+		t.Fatal(err)
 	}
 }

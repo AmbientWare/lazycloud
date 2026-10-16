@@ -119,6 +119,13 @@ func (a *awsEmulator) on(action string, h awsHandler) {
 	a.handlers[action] = h
 }
 
+// handler is the handler action answers with now.
+func (a *awsEmulator) handler(action string) awsHandler {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.handlers[action]
+}
+
 // calls returns the recorded calls of action in arrival order.
 func (a *awsEmulator) calls(action string) []awsCall {
 	a.mu.Lock()

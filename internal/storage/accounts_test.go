@@ -395,6 +395,10 @@ func TestARevokedConnectionRefusesStorageAndKeepsItsBuckets(t *testing.T) {
 	c.mu.Lock()
 	c.roleDeleted = true
 	c.mu.Unlock()
+	// Validation finds the role refused, which compute records.
+	if _, err := c.compute.Validate(ctx, c.user); err != nil {
+		t.Fatal(err)
+	}
 	for name, ws := range map[string]identity.WorkspaceID{"new": fresh, "existing": used} {
 		var refused *ConflictError
 		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {

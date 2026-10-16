@@ -44,8 +44,10 @@ set phase = @phase, slot = sqlc.narg(slot), updated_at = now()
 where id = @id;
 
 -- name: StartValidation :exec
+-- An active authorization keeps its phase, and its connection keeps taking
+-- work, until the check decides.
 update cloud_authorizations
-set phase = 'validating', last_validation_started_at = now(), updated_at = now()
+set phase = case when slot = 'active' then phase else 'validating' end, last_validation_started_at = now(), updated_at = now()
 where id = @id;
 
 -- name: AuthorizationValidated :exec
@@ -112,8 +114,9 @@ where authorization_id = @authorization_id and phase in ('ready', 'joining')
 returning id;
 
 -- name: ConnectionAccess :one
--- The connected account and the role its active authorization grants.
-select cc.aws_account_id, a.region, a.role_arn, a.external_id
+-- The connected account, the role its active authorization grants and how
+-- that authorization last validated.
+select cc.aws_account_id, a.region, a.role_arn, a.external_id, a.phase, a.error_code, a.error_message
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = @id;
