@@ -103,42 +103,24 @@ func (q *Queries) AuthorizationValidated(ctx context.Context, arg AuthorizationV
 	return err
 }
 
-const claimDueConnections = `-- name: ClaimDueConnections :many
+const claimDueConnection = `-- name: ClaimDueConnection :one
 update cloud_connections set next_step_at = now() + make_interval(secs => $1::float8)
-where id in (
+where id = (
     select id from cloud_connections where next_step_at <= now()
-    order by next_step_at, id limit $2
+    order by next_step_at, id limit 1
     for update skip locked
 )
 returning id
 `
 
-type ClaimDueConnectionsParams struct {
-	LeaseSeconds float64
-	BatchSize    int32
-}
-
-// Connections whose background step is due, each leased for
-// @lease_seconds so one scheduler replica runs a connection's step at a
-// time; the step's outcome sets when the next one is due.
-func (q *Queries) ClaimDueConnections(ctx context.Context, arg ClaimDueConnectionsParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, claimDueConnections, arg.LeaseSeconds, arg.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// The connection whose background step is due longest, leased for
+// @lease_seconds so one scheduler replica runs its step at a time; the
+// step's outcome sets when the next one is due.
+func (q *Queries) ClaimDueConnection(ctx context.Context, leaseSeconds float64) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, claimDueConnection, leaseSeconds)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const connectionAccess = `-- name: ConnectionAccess :one

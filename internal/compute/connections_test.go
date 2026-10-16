@@ -591,15 +591,29 @@ func imagedConnectionFleet(t *testing.T) (owners, *awsEmulator, *customerAWS) {
 		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
 	})))
 	emulator.on("ModifyImageAttribute", func(awsCall) awsReply { return modifyImageAttributeReply() })
+	// The platform owns the current bake and an older one in us-east-2,
+	// both shared with 111111111111.
+	emulator.on("DescribeImages", func(call awsCall) awsReply {
+		if call.Form.Get("Owner.1") != "self" || call.Form.Get("ExecutableBy.1") != "111111111111" ||
+			!strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+			return describeImagesReply()
+		}
+		return describeImagesReply("ami-0baked", "ami-0older")
+	})
 	return o, emulator, newCustomerAWS(emulator)
 }
 
 // unshared reports whether the platform removed 111111111111's launch
-// permission on the baked image, once.
+// permission on every image it shared, current and older bakes alike.
 func unshared(e *awsEmulator) bool {
-	calls := e.calls("ModifyImageAttribute")
-	return len(calls) == 1 && calls[0].AccessKey == platformAccessKey && calls[0].Form.Get("ImageId") == "ami-0baked" &&
-		calls[0].Form.Get("LaunchPermission.Remove.1.UserId") == "111111111111"
+	var removed []string
+	for _, c := range e.calls("ModifyImageAttribute") {
+		if c.AccessKey == platformAccessKey && c.Form.Get("LaunchPermission.Remove.1.UserId") == "111111111111" {
+			removed = append(removed, c.Form.Get("ImageId"))
+		}
+	}
+	slices.Sort(removed)
+	return slices.Equal(removed, []string{"ami-0baked", "ami-0older"})
 }
 
 func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
@@ -659,13 +673,9 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 		t.Fatalf("terminated connection host is %s, want deleted", phase)
 	}
 	due(t, o, conn)
-	advance(t, o)
-	if phase := phaseOf(t, o, alice); phase != compute.ConnRevoking {
-		t.Fatalf("without instances the connection is %s, want revoking", phase)
-	}
-	advance(t, o)
+	advance(t, o) // the drain ends, and revoking asks CloudFormation to delete the stack
 	if phase := phaseOf(t, o, alice); phase != compute.ConnVerifying {
-		t.Fatalf("after DeleteStack the connection is %s, want verifying_revocation", phase)
+		t.Fatalf("without instances, after DeleteStack the connection is %s, want verifying_revocation", phase)
 	}
 	if deletes := deletedStacks(emulator); len(deletes) != 1 || deletes[0] != conn.Active.StackName {
 		t.Fatalf("DeleteStack calls %v, want the active stack", deletes)
@@ -912,41 +922,138 @@ func TestACancelledReconnectDeletesTheReplacementsStack(t *testing.T) {
 	}
 }
 
-// Two scheduler passes over one due connection run its step once: the
-// first claims it, and the second finds nothing due while the step runs.
-func TestConcurrentPassesRunAConnectionStepOnce(t *testing.T) {
+// Scheduler passes claim one due connection at a time, so each step runs
+// once under its own lease: while one pass runs a step, another runs the
+// next connection's and never the same one.
+func TestConcurrentPassesRunEachConnectionStepOnce(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
-	alice := newUser(t, o.pool, "alice@example.com")
-	connected(t, o, customer, alice)
-	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
-		t.Fatal(err)
+	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
+	customer.authorize(t, o, connect(t, o, alice, "111111111111"), role{})
+	validate(t, o, alice)
+	customer.authorize(t, o, connect(t, o, bob, "222222222222"), role{})
+	validate(t, o, bob)
+	for _, account := range []identity.UserID{alice, bob} {
+		if _, err := o.compute.Disconnect(ctx, account); err != nil {
+			t.Fatal(err)
+		}
 	}
-	advance(t, o) // drained: nothing runs there, so revoking is due at once
 
 	entered, release := make(chan struct{}), make(chan struct{})
-	var reads atomic.Int32
+	var mu sync.Mutex
+	var read []string
 	emulator.on("DescribeStacks", func(call awsCall) awsReply {
-		if reads.Add(1) == 1 {
+		mu.Lock()
+		read = append(read, call.Form.Get("StackName"))
+		first := len(read) == 1
+		mu.Unlock()
+		if first {
 			close(entered)
 			<-release
 		}
 		return queryError(http.StatusBadRequest, "ValidationError", "Stack with id "+call.Form.Get("StackName")+" does not exist")
 	})
-	first := make(chan error, 1)
+	done := make(chan error, 1)
 	go func() {
 		_, err := o.compute.AdvanceConnections(ctx, discard())
-		first <- err
+		done <- err
 	}()
 	<-entered
 	second, err := o.compute.AdvanceConnections(ctx, discard())
 	close(release)
-	if err := <-first; err != nil {
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err != nil || second != 0 || reads.Load() != 1 {
-		t.Fatalf("the second pass claimed %d (%v) and the stack was read %d times, want the step run once", second, err, reads.Load())
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil || second != 1 || len(read) != 2 || read[0] == read[1] {
+		t.Fatalf("the second pass ran %d steps (%v) and the stacks read were %v, want it to run the other connection's step once",
+			second, err, read)
+	}
+}
+
+// A drain whose role still works waits for its instances without asking
+// the customer, until an hour after the disconnect.
+func TestADrainWaitsForItsInstancesForAnHour(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
+		Region: "us-east-2", InstanceID: "i-0000000000000e001"})
+	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(host))
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		due(t, o, conn)
+		advance(t, o)
+	}
+	if phase := phaseOf(t, o, alice); phase != compute.ConnDraining {
+		t.Fatalf("after 20 steps with an instance ending the connection is %s, want still draining", phase)
+	}
+	run(t, o.pool, "update cloud_connections set removal_requested_at = now() - interval '61 minutes', next_step_at = now() where id = $1", conn.ID)
+	advance(t, o)
+	if stuck := current(t, o, alice); stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(stuck.ActionURL, "console.aws.amazon.com/ec2") {
+		t.Fatalf("an hour into the drain: %+v, want action_required showing the instances", stuck)
+	}
+}
+
+// Connecting again while the account's connection is being removed is
+// refused rather than handed the connection being deleted.
+func TestConnectingWhileTheConnectionIsRemovedIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, _ := connectionFleet(t)
+	bob := newUser(t, o.pool, "bob@example.com")
+	connect(t, o, bob, "222222222222")
+	if conn, err := o.compute.Disconnect(ctx, bob); err != nil || conn == nil {
+		t.Fatalf("disconnect: %+v %v, want the removal under way", conn, err)
+	}
+	var conflict *compute.ConflictError
+	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222"}); !errors.As(err, &conflict) {
+		t.Fatalf("connect while removing: %v, want ConflictError", err)
+	}
+}
+
+// A connection whose retirement waits on the customer takes no new work:
+// no workspace is placed there and no host launches into it.
+func TestAStuckRetirementTakesNoNewWork(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	connected(t, o, customer, alice)
+	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer.authorize(t, o, reconnecting, role{})
+	replaced := validate(t, o, alice)
+	customer.deleteRole(replaced.Active.RoleARN)
+	advance(t, o)
+	stuck := current(t, o, alice)
+	if stuck == nil || stuck.Phase != compute.ConnActionRequire || stuck.Retiring == nil || stuck.HostsWorkloads() {
+		t.Fatalf("with the new role gone mid-retirement: %+v, want action_required taking no new work", stuck)
+	}
+
+	tx, err := o.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var conflict *compute.ConflictError
+	if _, err := o.compute.PlaceWorkspace(ctx, tx, alice); !errors.As(err, &conflict) {
+		t.Fatalf("place a workspace: %v, want ConflictError", err)
+	}
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseRequested,
+		Market: compute.MarketSpot, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", Unenrolled: true})
+	run(t, o.pool, "update hosts set connection_id = $1, instance_type = 'm7i.large' where id = $2", stuck.ID, uuid.UUID(host))
+	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 0 {
+		t.Fatalf("launched %d into a connection taking no new work", n)
 	}
 }
 
@@ -973,8 +1080,8 @@ func TestALaunchRacingADisconnectDoesNotLaunch(t *testing.T) {
 		t.Fatalf("launched %d with %d RunInstances calls into a disconnecting account", n, len(emulator.calls("RunInstances")))
 	}
 	advance(t, o)
-	if phase := phaseOf(t, o, alice); phase != compute.ConnRevoking {
-		t.Fatalf("the connection is %s, want its drain past the host that never launched", phase)
+	if phase := phaseOf(t, o, alice); phase == compute.ConnDraining {
+		t.Fatal("the drain still waits on the host that never launched")
 	}
 }
 

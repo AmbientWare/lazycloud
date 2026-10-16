@@ -736,7 +736,7 @@ func (c *Compute) launchTarget(ctx context.Context, connection *uuid.UUID, regio
 	// A disconnect waits on every host the connection requested, so a
 	// launch that read the connection hosting ends under its drain; none
 	// starts once the connection reads otherwise.
-	if !hosting(ConnectionPhase(row.Phase)) {
+	if !acceptsWork(ConnectionPhase(row.Phase), AuthorizationPhase(row.AuthorizationPhase)) {
 		return launchTarget{}, fmt.Errorf("the connection is %s and takes no new hosts", row.Phase)
 	}
 	var networks map[string]Network

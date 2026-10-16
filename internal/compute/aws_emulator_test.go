@@ -356,6 +356,17 @@ func deleteStackReply() awsReply {
 	return ok(`<DeleteStackResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"><ResponseMetadata><RequestId>req-0000</RequestId></ResponseMetadata></DeleteStackResponse>`)
 }
 
+// describeImagesReply is EC2's DescribeImages answer listing ids.
+func describeImagesReply(ids ...string) awsReply {
+	var b strings.Builder
+	b.WriteString(`<DescribeImagesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><imagesSet>`)
+	for _, id := range ids {
+		fmt.Fprintf(&b, `<item><imageId>%s</imageId><imageOwnerId>111122223333</imageOwnerId><imageState>available</imageState></item>`, esc(id))
+	}
+	b.WriteString(`</imagesSet></DescribeImagesResponse>`)
+	return ok(b.String())
+}
+
 func modifyImageAttributeReply() awsReply {
 	return ok(`<ModifyImageAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><return>true</return></ModifyImageAttributeResponse>`)
 }

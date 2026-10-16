@@ -28,6 +28,14 @@ const (
 	// connectionStepLease bounds one connection step and holds the
 	// connection for it against other scheduler replicas.
 	connectionStepLease = 2 * time.Minute
+	// connectionStepsPerPass bounds the steps one pass runs.
+	connectionStepsPerPass = 50
+	// settleTimeout bounds writing a step's outcome, which goes on after
+	// the step's own deadline.
+	settleTimeout = 10 * time.Second
+	// drainWait bounds a disconnect's wait for its instances to end while
+	// the role still works.
+	drainWait = time.Hour
 )
 
 func (c *Compute) aws() awsClients {
@@ -90,6 +98,8 @@ func roleRefused(err error, action [2]string) outcome {
 // read it. A step neither done nor refused runs again with backoff, and
 // after cleanupAttempts waits on the customer.
 func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+	defer cancel()
 	var refused *customerAction
 	err := inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -168,8 +178,16 @@ func (c *Compute) drain(ctx context.Context, conn Connection) outcome {
 			return roleRefused(err, action)
 		}
 	}
-	return outcome{action: action}
+	if conn.removalRequested == nil {
+		return outcome{action: action}
+	}
+	if deadline := conn.removalRequested.Add(drainWait); time.Now().Before(deadline) {
+		return outcome{until: &deadline, action: action}
+	}
+	return outcome{err: &customerAction{url: action[0], label: action[1], cause: errDrainTimeout}, action: action}
 }
+
+var errDrainTimeout = fmt.Errorf("the instances did not end within %s", drainWait)
 
 // revoke removes a disconnected account from AWS through its access
 // authorization: the active one, or for a setup that never finished, the
@@ -418,19 +436,37 @@ func (c *Compute) unshareImages(ctx context.Context, conn Connection) error {
 	if shared {
 		return nil
 	}
+	// Every image the platform owns that the account may launch, from any
+	// bake, in each region the fleet bakes or runs in.
+	regions := map[string]bool{}
 	for _, byRegion := range []map[string]string{c.fleet.Images.CPU, c.fleet.Images.GPU} {
-		for region, image := range byRegion {
-			if image == "" || strings.HasPrefix(image, "resolve:ssm:") {
-				continue
+		for region := range byRegion {
+			regions[region] = true
+		}
+	}
+	for region := range c.fleet.Networks {
+		regions[region] = true
+	}
+	for region := range regions {
+		client := c.aws().ec2(awsScope{key: string(KindPlatform)}, region)
+		pages := ec2.NewDescribeImagesPaginator(client, &ec2.DescribeImagesInput{
+			Owners: []string{"self"}, ExecutableUsers: []string{conn.AWSAccountID},
+		})
+		for pages.HasMorePages() {
+			page, err := pages.NextPage(ctx)
+			if err != nil {
+				return fmt.Errorf("describe images shared in %s: %w", region, err)
 			}
-			_, err := c.aws().ec2(awsScope{key: string(KindPlatform)}, region).ModifyImageAttribute(ctx, &ec2.ModifyImageAttributeInput{
-				ImageId: aws.String(image),
-				LaunchPermission: &ec2types.LaunchPermissionModifications{
-					Remove: []ec2types.LaunchPermission{{UserId: aws.String(conn.AWSAccountID)}},
-				},
-			})
-			if err != nil && !strings.HasPrefix(awsCode(err), "InvalidAMIID") {
-				return fmt.Errorf("remove launch permission on %s: %w", image, err)
+			for _, image := range page.Images {
+				_, err := client.ModifyImageAttribute(ctx, &ec2.ModifyImageAttributeInput{
+					ImageId: image.ImageId,
+					LaunchPermission: &ec2types.LaunchPermissionModifications{
+						Remove: []ec2types.LaunchPermission{{UserId: aws.String(conn.AWSAccountID)}},
+					},
+				})
+				if err != nil && !strings.HasPrefix(awsCode(err), "InvalidAMIID") {
+					return fmt.Errorf("remove launch permission on %s: %w", aws.ToString(image.ImageId), err)
+				}
 			}
 		}
 	}
@@ -527,7 +563,7 @@ func stackURL(region, id, name string) string {
 // setupStackWait bounds how long removing an unfinished setup waits for a
 // stack the customer may still be creating; CloudFormation makes the role
 // within minutes of the create.
-const setupStackWait = 15 * time.Minute
+const setupStackWait = 5 * time.Minute
 
 // setupWait is when removing an unfinished setup stops waiting for its
 // role, or nil once that time has passed.

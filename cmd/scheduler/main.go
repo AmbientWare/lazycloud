@@ -248,6 +248,8 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	defer cancelFleetWake()
 	launchWake, cancelLaunchWake := listener.Subscribe(compute.ChannelCompute, "")
 	defer cancelLaunchWake()
+	connectionWake, cancelConnectionWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelConnectionWake()
 	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelCapacityWake()
 	capacityFleetWake, cancelCapacityFleetWake := listener.Subscribe(compute.ChannelCompute, "")
@@ -444,6 +446,13 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 			if _, err := comp.Preempt(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "preempt pass", "error", err)
 			}
+			return false
+		}))
+	})
+	// Connection steps wait on AWS calls in customer accounts, so they run
+	// on a loop of their own and hold up no actuation.
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: t.fleet}, connectionWake, nil, timed("connections", func(ctx context.Context) bool {
 			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "connection pass", "error", err)
 			}

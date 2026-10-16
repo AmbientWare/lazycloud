@@ -166,7 +166,7 @@ where id = @id and phase = @from_phase;
 
 -- name: ConnectionScope :one
 select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
-       a.node_role_arn, cc.phase
+       a.node_role_arn, cc.phase, a.phase as authorization_phase
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = @id;

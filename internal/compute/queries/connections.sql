@@ -79,14 +79,14 @@ select name from workspaces where connection_id = @connection_id order by name l
 select count(*)::int from hosts
 where connection_id = @connection_id and kind = 'connection' and phase not in ('deleted', 'failed');
 
--- name: ClaimDueConnections :many
--- Connections whose background step is due, each leased for
--- @lease_seconds so one scheduler replica runs a connection's step at a
--- time; the step's outcome sets when the next one is due.
+-- name: ClaimDueConnection :one
+-- The connection whose background step is due longest, leased for
+-- @lease_seconds so one scheduler replica runs its step at a time; the
+-- step's outcome sets when the next one is due.
 update cloud_connections set next_step_at = now() + make_interval(secs => @lease_seconds::float8)
-where id in (
+where id = (
     select id from cloud_connections where next_step_at <= now()
-    order by next_step_at, id limit @batch_size
+    order by next_step_at, id limit 1
     for update skip locked
 )
 returning id;

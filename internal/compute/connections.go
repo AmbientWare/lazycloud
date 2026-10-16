@@ -184,17 +184,7 @@ type Connection struct {
 
 // HostsWorkloads reports whether new workloads can be placed in the account.
 func (c Connection) HostsWorkloads() bool {
-	if c.Active == nil || c.Active.Phase != AuthReady {
-		return false
-	}
-	switch c.Phase {
-	case ConnReady, ConnReconnecting, ConnRetiring:
-		return true
-	case ConnActionRequire:
-		return c.Retiring != nil
-	case ConnAwaiting, ConnValidating, ConnDegraded, ConnDraining, ConnRevoking, ConnVerifying:
-	}
-	return false
+	return c.Active != nil && acceptsWork(c.Phase, c.Active.Phase)
 }
 
 // removing reports whether the connection is being disconnected, or its
@@ -204,16 +194,18 @@ func (c Connection) removing() bool {
 		(c.Phase == ConnActionRequire && c.Retiring == nil)
 }
 
-// hosting reports whether a connection in phase takes new hosts, as the
-// planning pass reads it in HostingConnections.
-func hosting(phase ConnectionPhase) bool {
-	return phase == ConnReady || phase == ConnReconnecting || phase == ConnRetiring
+// acceptsWork decides whether a connection in phase, whose active
+// authorization is in active, takes new workspaces and hosts.
+// HostingConnections applies the same rule in SQL.
+func acceptsWork(phase ConnectionPhase, active AuthorizationPhase) bool {
+	return active == AuthReady && (phase == ConnReady || phase == ConnReconnecting || phase == ConnRetiring)
 }
 
 // ManagesCapacity reports whether the platform still runs the account's
 // existing instances.
 func (c Connection) ManagesCapacity() bool {
-	return c.HostsWorkloads() || (c.Phase == ConnDraining && c.Active != nil && c.Active.Phase == AuthReady)
+	return c.HostsWorkloads() || c.Active != nil && c.Active.Phase == AuthReady &&
+		(c.Phase == ConnDraining || c.Phase == ConnActionRequire && c.Retiring != nil)
 }
 
 // Actions lists what the user may do in the current phase.
@@ -295,6 +287,9 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 				return fmt.Errorf("read authorizations: %w", err)
 			}
 			view := connectionOf(existing, auths)
+			if view.removing() {
+				return &ConflictError{Message: "this account's AWS connection is being removed; connect again once `lazycloud cloud status` shows none"}
+			}
 			if view.Active == nil && view.Pending != nil && existing.AwsAccountID == req.AWSAccountID &&
 				(view.Pending.Mode == ModeExistingRole) == (req.RoleARN != "") &&
 				(req.RoleARN == "" || view.Pending.RoleARN == req.RoleARN) {
@@ -829,6 +824,8 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 			next := ConnDraining
 			if conn.Retiring != nil {
 				next = ConnRetiring
+			} else if err := q.RequestRemoval(ctx, row.ID); err != nil {
+				return fmt.Errorf("record removal: %w", err)
 			}
 			if err := setPhase(ctx, q, row.ID, next, now(), 0, [2]string{}); err != nil {
 				return err
@@ -939,20 +936,23 @@ func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAcc
 // scheduler replicas never run the same one at once, and each step commits
 // on its own.
 func (c *Compute) AdvanceConnections(ctx context.Context, logger *slog.Logger) (int, error) {
-	due, err := c.queries.ClaimDueConnections(ctx, ClaimDueConnectionsParams{LeaseSeconds: connectionStepLease.Seconds(), BatchSize: 50})
-	if err != nil {
-		return 0, fmt.Errorf("claim due connections: %w", err)
-	}
-	for _, id := range due {
+	for n := range connectionStepsPerPass {
+		id, err := c.queries.ClaimDueConnection(ctx, connectionStepLease.Seconds())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return n, nil
+		}
+		if err != nil {
+			return n, fmt.Errorf("claim a due connection: %w", err)
+		}
 		step, cancel := context.WithTimeout(ctx, connectionStepLease)
-		err := c.advanceConnection(step, id)
+		err = c.advanceConnection(step, id)
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
-				return 0, err
+				return n, err
 			}
 			logger.ErrorContext(ctx, "advance connection", "connection_id", id, "error", err)
 		}
 	}
-	return len(due), nil
+	return connectionStepsPerPass, nil
 }
