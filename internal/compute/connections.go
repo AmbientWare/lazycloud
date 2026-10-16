@@ -612,8 +612,9 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 	return c.connectionByID(ctx, id)
 }
 
-// CancelReconnect drops a pending replacement; the active authorization
-// keeps serving.
+// CancelReconnect drops a pending replacement, which retires as a replaced
+// authorization does, deleting its stack; the active authorization keeps
+// serving.
 func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) (Connection, error) {
 	var id uuid.UUID
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
@@ -625,17 +626,14 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 		id = row.ID
 		conn := connectionOf(row, auths)
 		switch {
-		case conn.Phase == ConnReady:
+		case conn.Pending == nil && (conn.Phase == ConnReady || conn.Phase == ConnRetiring):
 			return nil
 		case conn.Phase != ConnReconnecting || conn.Pending == nil:
 			return &ConflictError{Message: "AWS account connection has no pending replacement"}
 		case conn.Active == nil:
 			return &ConflictError{Message: "AWS authorization replacement state is incomplete"}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetired)}); err != nil {
-			return fmt.Errorf("retire pending authorization: %w", err)
-		}
-		return setPhase(ctx, q, row.ID, ConnReady, nil, 0, [2]string{})
+		return retirePending(ctx, tx, q, conn)
 	})
 	if err != nil {
 		return Connection{}, fmt.Errorf("cancel reconnect: %w", err)
@@ -723,7 +721,7 @@ func beginRemoval(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) (
 	if err := setPhase(ctx, q, conn.ID, phase, now(), 0, [2]string{}); err != nil {
 		return false, err
 	}
-	return false, notifyCompute(ctx, tx, conn.ID)
+	return false, notifyChannel(ctx, tx, conn.ID)
 }
 
 // LeftoverKind is what the platform could not confirm deleted.
@@ -743,20 +741,40 @@ type Leftover struct {
 }
 
 // Forget stops managing an account whose removal waits on the customer: it
-// deletes the connection's rows and returns what may remain in AWS, every
-// stack not confirmed deleted and every instance of a host not confirmed
-// gone, for the customer to delete there.
+// removes the account's launch permission on the fleet's images as removal
+// does, deletes the connection's rows and returns what may remain in AWS,
+// every stack not confirmed deleted and every instance of a host not
+// confirmed gone, for the customer to delete there.
 func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftover, error) {
+	stuck := func(conn Connection) error {
+		if conn.Phase != ConnActionRequire || conn.Retiring != nil {
+			return &ConflictError{Message: "only a disconnect that needs attention in AWS can be forgotten"}
+		}
+		return nil
+	}
+	conn, err := c.AccountConnection(ctx, account)
+	switch {
+	case err != nil:
+		return nil, err
+	case conn == nil:
+		return nil, &NotFoundError{Message: "AWS account connection not found"}
+	}
+	if err := stuck(*conn); err != nil {
+		return nil, err
+	}
+	if err := c.unshareImages(ctx, *conn); err != nil {
+		return nil, fmt.Errorf("forget AWS connection: %w", err)
+	}
 	left := []Leftover{}
-	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		left = left[:0]
 		q := c.queries.WithTx(tx)
 		row, auths, err := lockAccountConnection(ctx, q, account)
 		if err != nil {
 			return err
 		}
-		if conn := connectionOf(row, auths); conn.Phase != ConnActionRequire || conn.Retiring != nil {
-			return &ConflictError{Message: "only a disconnect that needs attention in AWS can be forgotten"}
+		if err := stuck(connectionOf(row, auths)); err != nil {
+			return err
 		}
 		stacks, err := q.RemainingStacks(ctx, row.ID)
 		if err != nil {
@@ -811,7 +829,7 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 			if err := setPhase(ctx, q, row.ID, next, now(), 0, [2]string{}); err != nil {
 				return err
 			}
-			return notifyCompute(ctx, tx, row.ID)
+			return notifyChannel(ctx, tx, row.ID)
 		case ConnDegraded, ConnAwaiting, ConnReconnecting:
 			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, [2]string{})
 		case ConnValidating, ConnReady, ConnRetiring, ConnDraining, ConnRevoking, ConnVerifying:
@@ -909,10 +927,6 @@ func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAcc
 		return aws.Credentials{}, fmt.Errorf("assume the connection role %s: %w", account.role, err)
 	}
 	return creds, nil
-}
-
-func notifyCompute(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
-	return notifyChannel(ctx, tx, id)
 }
 
 // AdvanceConnections runs the background steps that are due: it

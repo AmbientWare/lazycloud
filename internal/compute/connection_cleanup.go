@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,8 +22,8 @@ import (
 
 const (
 	// cleanupAttempts bounds the steps a draining, removal or retirement
-	// phase repeats before the customer is asked to finish it; with the
-	// backoff of cleanupLater they span about forty minutes.
+	// phase repeats before the customer is asked to finish it; with
+	// settle's backoff they span about forty minutes.
 	cleanupAttempts = 12
 	// connectionStepLease bounds one connection step and holds the
 	// connection for it against other scheduler replicas.
@@ -55,124 +56,161 @@ type customerAction struct {
 func (e *customerAction) Error() string { return e.label + ": " + describeAWSError(e.cause) }
 func (e *customerAction) Unwrap() error { return e.cause }
 
-// lockStep locks the connection a step read and reports whether the step
-// may still write its outcome: false once the connection is gone or another
-// change moved it on, which bumps the revision.
-func lockStep(ctx context.Context, q *Queries, conn Connection) (CloudConnection, bool, error) {
-	row, err := q.LockConnection(ctx, conn.ID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return CloudConnection{}, false, nil
+var errRoleGone = errors.New("AWS refused AssumeRole on the connection role")
+
+// outcome is how a connection step ended, for settle to write.
+type outcome struct {
+	// done moves the connection on in settle's transaction.
+	done func(ctx context.Context, tx pgx.Tx, q *Queries) error
+	// err is why the step failed; a *customerAction waits on the customer.
+	err error
+	// action is where the customer finishes a step that never does.
+	action [2]string
+	// until holds a wait, uncounted, while the step can still pass by then.
+	until *time.Time
+}
+
+func moveTo(conn Connection, phase ConnectionPhase, next *time.Time) outcome {
+	return outcome{done: func(ctx context.Context, _ pgx.Tx, q *Queries) error {
+		return setPhase(ctx, q, conn.ID, phase, next, 0, [2]string{})
+	}}
+}
+
+// roleRefused is a step whose role AWS would not let the platform assume:
+// tried again after err, and without one, left to the customer.
+func roleRefused(err error, action [2]string) outcome {
+	if err == nil {
+		err = &customerAction{url: action[0], label: action[1], cause: errRoleGone}
 	}
-	if err != nil {
-		return CloudConnection{}, false, fmt.Errorf("lock connection: %w", err)
+	return outcome{err: err, action: action}
+}
+
+// settle writes a step's outcome under the connection's lock, unless the
+// connection is gone or another change bumped its revision since the step
+// read it. A step neither done nor refused runs again with backoff, and
+// after cleanupAttempts waits on the customer.
+func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error {
+	var refused *customerAction
+	err := inTx(ctx, c, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		row, err := q.LockConnection(ctx, conn.ID)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && int(row.Revision) != conn.Revision {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lock connection: %w", err)
+		}
+		attempts := int(row.StepAttempts)
+		switch {
+		case o.done != nil:
+			return o.done(ctx, tx, q)
+		case errors.As(o.err, &refused):
+			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts, [2]string{cmp.Or(refused.url, o.action[0]), truncate(refused.label)})
+		case o.until != nil:
+			next := time.Now().Add(time.Minute)
+			if o.until.Before(next) {
+				next = *o.until
+			}
+			return setPhase(ctx, q, conn.ID, conn.Phase, &next, attempts, [2]string{})
+		case attempts >= cleanupAttempts:
+			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts+1,
+				cmp.Or(o.action, [2]string{stacksURL(connectionRegion), "Review LazyCloud's resources in AWS"}))
+		}
+		delay := min(time.Duration(10<<min(attempts, 5))*time.Second, 5*time.Minute)
+		return setPhase(ctx, q, conn.ID, conn.Phase, ptr(time.Now().Add(delay)), attempts+1, [2]string{})
+	})
+	if err == nil && o.err != nil && refused == nil {
+		err = fmt.Errorf("connection step: %w", o.err)
 	}
-	return row, int(row.Revision) == conn.Revision, nil
+	return err
 }
 
 // expirePending drops a setup the customer never finished: without an
-// active authorization the connection is removed, otherwise the active one
-// keeps serving.
-func (c *Compute) expirePending(ctx context.Context, conn Connection) error {
-	return inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-			return err
-		}
+// active authorization the connection is removed, otherwise the pending
+// one is retired while the active one keeps serving.
+func (c *Compute) expirePending(conn Connection) outcome {
+	return outcome{done: func(ctx context.Context, tx pgx.Tx, q *Queries) error {
 		if conn.Active == nil {
 			_, err := beginRemoval(ctx, tx, q, conn)
 			return err
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetired)}); err != nil {
-			return fmt.Errorf("retire pending authorization: %w", err)
-		}
-		return setPhase(ctx, q, conn.ID, ConnReady, nil, 0, [2]string{})
-	})
+		return retirePending(ctx, tx, q, conn)
+	}}
 }
 
-// finishDrain moves a disconnecting connection to revoking once its hosts
-// are gone; retirement drains them and the actuator terminates them
-// meanwhile, through the active role. A role AWS no longer lets the
-// platform assume leaves the instances to the customer.
-func (c *Compute) finishDrain(ctx context.Context, conn Connection) error {
-	var live int32
-	err := inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-			return err
-		}
-		var err error
-		if live, err = q.ConnectionLiveHosts(ctx, &conn.ID); err != nil {
-			return fmt.Errorf("count live hosts: %w", err)
-		}
-		if live > 0 {
-			return nil
-		}
-		return setPhase(ctx, q, conn.ID, ConnRevoking, now(), 0, [2]string{})
-	})
-	if err != nil || live == 0 {
+// retirePending moves the pending authorization to the retiring slot:
+// retirement deletes its stack, if the customer created one, while the
+// active authorization keeps serving.
+func retirePending(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) error {
+	if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetiring), Slot: ptr("retiring")}); err != nil {
+		return fmt.Errorf("retire pending authorization: %w", err)
+	}
+	if err := setPhase(ctx, q, conn.ID, ConnRetiring, now(), 0, [2]string{}); err != nil {
 		return err
+	}
+	return notifyChannel(ctx, tx, conn.ID)
+}
+
+// drain waits for a disconnecting connection's hosts to go: retirement
+// drains them and the actuator terminates them through the active role. A
+// role AWS refuses leaves them to the customer.
+func (c *Compute) drain(ctx context.Context, conn Connection) outcome {
+	live, err := c.queries.ConnectionLiveHosts(ctx, &conn.ID)
+	if err != nil {
+		return outcome{err: fmt.Errorf("count live hosts: %w", err)}
+	}
+	if live == 0 {
+		return moveTo(conn, ConnRevoking, now())
 	}
 	action := c.instancesAction(conn)
 	if conn.Active != nil {
-		if ok, err := assumable(ctx, c.roleScope(conn, conn.Active)); err != nil {
-			return c.cleanupLater(ctx, conn, err, action)
-		} else if !ok {
-			return c.needsCustomer(ctx, conn, &customerAction{url: action[0], label: action[1], cause: errRoleGone})
+		if ok, err := assumable(ctx, c.roleScope(conn, conn.Active)); !ok {
+			return roleRefused(err, action)
 		}
 	}
-	return c.cleanupLater(ctx, conn, nil, action)
+	return outcome{action: action}
 }
 
-// errRoleGone is STS refusing the connection role.
-var errRoleGone = errors.New("AWS refused AssumeRole on the connection role")
-
-// revoke runs one step of removing a disconnected account from AWS through
-// its access authorization: the active one, or for a setup that never
-// finished, the pending one. Revoking terminates every instance tagged as
-// one of the connection's hosts, then deletes each stack of every
-// generation not confirmed deleted, the access stack last since it holds
-// the role; once that one is asked to go the connection verifies it. The
-// connection is deleted when every stack is confirmed gone.
-func (c *Compute) revoke(ctx context.Context, conn Connection) error {
-	access := conn.Active
-	if access == nil {
-		access = conn.Pending
-	}
+// revoke removes a disconnected account from AWS through its access
+// authorization: the active one, or for a setup that never finished, the
+// pending one. It terminates every instance tagged as one of the
+// connection's hosts, then deletes each stack of every generation not
+// confirmed deleted, the access stack last since it holds the role, and
+// deletes the connection once every stack is confirmed gone.
+func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
+	access := cmp.Or(conn.Active, conn.Pending)
 	if access == nil {
 		return c.finishRevoke(ctx, conn)
 	}
-	stacksAction := [2]string{stacksURL(access.Region), "Delete the LazyCloud connection stacks in AWS"}
 	scope := c.roleScope(conn, access)
-	ok, err := assumable(ctx, scope)
-	switch {
-	case err != nil:
-		return c.cleanupLater(ctx, conn, err, stacksAction)
-	case !ok && access.deleteRequested != nil:
-		// The stack removes its role last: once the platform asked to
-		// delete it, the role going is the stack going.
-		if err := c.queries.StackDeleted(ctx, access.ID); err != nil {
-			return fmt.Errorf("record stack deleted: %w", err)
+	if ok, err := assumable(ctx, scope); !ok {
+		switch {
+		case err != nil:
+		case access.deleteRequested != nil:
+			// The stack removes its role last: once the platform asked to
+			// delete it, the role going is the stack going.
+			if err := c.queries.StackDeleted(ctx, access.ID); err != nil {
+				return outcome{err: fmt.Errorf("record stack deleted: %w", err)}
+			}
+			return c.finishRevoke(ctx, conn)
+		case conn.Active == nil && access.expiresAt != nil && time.Now().Before(*access.expiresAt):
+			// The customer may still be creating the setup's stack, which
+			// makes the role.
+			return outcome{until: access.expiresAt}
+		case conn.Active == nil:
+			return c.finishRevoke(ctx, conn)
 		}
-		return c.finishRevoke(ctx, conn)
-	case !ok && conn.Active == nil:
-		// The role of a setup that never validated does not exist, so its
-		// stack never finished creating it.
-		return c.finishRevoke(ctx, conn)
-	case !ok:
-		return c.needsCustomer(ctx, conn, &customerAction{url: stacksAction[0], label: stacksAction[1], cause: errRoleGone})
+		return roleRefused(err, [2]string{stacksURL(access.Region), "Delete the LazyCloud connection stacks in AWS"})
 	}
 	if conn.Active != nil && conn.Phase == ConnRevoking {
 		left, err := c.sweepInstances(ctx, scope, conn)
-		if err != nil {
-			return c.stepFailed(ctx, conn, err, c.instancesAction(conn))
-		}
-		if left > 0 {
-			return c.cleanupLater(ctx, conn, nil, c.instancesAction(conn))
+		if err != nil || left > 0 {
+			return outcome{err: err, action: c.instancesAction(conn)}
 		}
 	}
 	stacks, err := c.queries.RemainingStacks(ctx, conn.ID)
 	if err != nil {
-		return fmt.Errorf("read stacks: %w", err)
+		return outcome{err: fmt.Errorf("read stacks: %w", err)}
 	}
 	var last, waiting *connectionStack
 	for _, row := range stacks {
@@ -183,46 +221,31 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) error {
 		}
 		gone, err := c.deleteStack(ctx, scope, &s)
 		if err != nil {
-			return c.stepFailed(ctx, conn, err, s.action())
+			return outcome{err: err, action: s.action()}
 		}
 		if !gone {
 			waiting = &s
-			continue
-		}
-		if err := c.queries.StackDeleted(ctx, s.authorization); err != nil {
-			return fmt.Errorf("record stack deleted: %w", err)
 		}
 	}
-	if waiting != nil {
-		return c.cleanupLater(ctx, conn, nil, waiting.action())
-	}
-	if last == nil {
+	switch {
+	case waiting != nil:
+		return outcome{action: waiting.action()}
+	case last == nil:
 		return c.finishRevoke(ctx, conn)
 	}
 	gone, err := c.deleteStack(ctx, scope, last)
 	var refused *customerAction
 	switch {
 	case errors.As(err, &refused) && access.deleteRequested != nil:
-		// CloudFormation removes the role's policies just before the
-		// role; a later step finds the role gone.
-		return c.cleanupLater(ctx, conn, err, last.action())
-	case err != nil:
-		return c.stepFailed(ctx, conn, err, last.action())
-	case gone:
-		if err := c.queries.StackDeleted(ctx, last.authorization); err != nil {
-			return fmt.Errorf("record stack deleted: %w", err)
-		}
-		return c.finishRevoke(ctx, conn)
-	case conn.Phase == ConnRevoking:
-		return inTx(ctx, c, func(tx pgx.Tx) error {
-			q := c.queries.WithTx(tx)
-			if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-				return err
-			}
-			return setPhase(ctx, q, conn.ID, ConnVerifying, ptr(time.Now().Add(10*time.Second)), 0, [2]string{})
-		})
+		// CloudFormation removes the role's policies just before the role;
+		// a later step finds the role gone.
+		return outcome{err: refused.cause, action: last.action()}
+	case err != nil || !gone && conn.Phase == ConnVerifying:
+		return outcome{err: err, action: last.action()}
+	case !gone:
+		return moveTo(conn, ConnVerifying, ptr(time.Now().Add(10*time.Second)))
 	}
-	return c.cleanupLater(ctx, conn, nil, last.action())
+	return c.finishRevoke(ctx, conn)
 }
 
 // sweepInstances terminates the running instances tagged as hosts of conn
@@ -257,9 +280,6 @@ func (c *Compute) sweepInstances(ctx context.Context, scope awsScope, conn Conne
 					}
 				}
 			}
-		}
-		if len(hosts) == 0 {
-			continue
 		}
 		ids := make([]uuid.UUID, 0, len(hosts))
 		for id := range hosts {
@@ -298,28 +318,32 @@ func (s connectionStack) action() [2]string {
 }
 
 // deleteStack moves a connection stack toward deleted and reports whether
-// CloudFormation no longer has it: only a stack it does not know or one
-// whose deletion completed is gone. A failed deletion is asked again, so
-// the caller's attempts bound it. AWS refusing the role's authority
-// is a *customerAction. s takes the stack id CloudFormation reports.
+// CloudFormation no longer has it, which it records: only a stack it does
+// not know or one whose deletion completed is gone. A failed deletion is
+// asked again, so the caller's attempts bound it. AWS refusing the role's
+// authority is a *customerAction. s takes the stack id CloudFormation
+// reports.
 func (c *Compute) deleteStack(ctx context.Context, scope awsScope, s *connectionStack) (bool, error) {
 	cf := c.aws().cloudFormation(scope, s.region)
 	out, err := cf.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: aws.String(s.name)})
+	gone := awsCode(err) == "ValidationError" // CloudFormation's answer for a name it has no live stack of
 	switch {
-	case awsCode(err) == "ValidationError":
-		// CloudFormation's answer for a stack name it has no live stack of.
-		return true, nil
+	case gone:
 	case err != nil:
 		return false, refusedOr(err, "describe stack %s", s.name)
 	case len(out.Stacks) != 1:
 		return false, fmt.Errorf("describe stack %s: CloudFormation listed %d stacks", s.name, len(out.Stacks))
+	default:
+		s.id = aws.ToString(out.Stacks[0].StackId)
+		gone = out.Stacks[0].StackStatus == cftypes.StackStatusDeleteComplete
 	}
-	stack := out.Stacks[0]
-	s.id = aws.ToString(stack.StackId)
-	if stack.StackStatus == cftypes.StackStatusDeleteComplete {
+	if gone {
+		if err := c.queries.StackDeleted(ctx, s.authorization); err != nil {
+			return false, fmt.Errorf("record stack deleted: %w", err)
+		}
 		return true, nil
 	}
-	if stack.StackStatus == cftypes.StackStatusDeleteInProgress {
+	if out.Stacks[0].StackStatus == cftypes.StackStatusDeleteInProgress {
 		return false, nil
 	}
 	if _, err := cf.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(s.name)}); err != nil {
@@ -358,38 +382,28 @@ func assumable(ctx context.Context, scope awsScope) (bool, error) {
 	return true, nil
 }
 
-// finishRevoke removes a revoked connection once it has no live host: the
-// launch permission on the fleet's images goes first, then in one
-// transaction the connection's rows.
-func (c *Compute) finishRevoke(ctx context.Context, conn Connection) error {
+// finishRevoke deletes a revoked connection once it has no live host,
+// after the launch permission on the fleet's images.
+func (c *Compute) finishRevoke(ctx context.Context, conn Connection) outcome {
 	if err := c.unshareImages(ctx, conn); err != nil {
-		return c.stepFailed(ctx, conn, err, [2]string{})
+		return outcome{err: err}
 	}
-	var live int32
-	err := inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-			return err
-		}
-		var err error
-		if live, err = q.ConnectionLiveHosts(ctx, &conn.ID); err != nil {
-			return fmt.Errorf("count live hosts: %w", err)
-		}
-		if live > 0 {
-			return nil
-		}
+	live, err := c.queries.ConnectionLiveHosts(ctx, &conn.ID)
+	if err == nil && live > 0 {
+		err = fmt.Errorf("the connection still has %d live hosts", live)
+	}
+	if err != nil {
+		return outcome{err: err, action: c.instancesAction(conn)}
+	}
+	return outcome{done: func(ctx context.Context, _ pgx.Tx, q *Queries) error {
 		if err := q.DeleteConnection(ctx, conn.ID); err != nil {
 			return fmt.Errorf("delete connection: %w", err)
 		}
 		return nil
-	})
-	if err != nil || live == 0 {
-		return err
-	}
-	return c.cleanupLater(ctx, conn, fmt.Errorf("the connection still has %d live hosts", live), c.instancesAction(conn))
+	}}
 }
 
-// unshareImages removes the launch permission shareImage granted a removed
+// unshareImages removes the launch permission shareImage granted a
 // connection's account on the fleet's baked images, unless another
 // connection still reaches that account. A connection that never had an
 // active authorization launched nothing.
@@ -423,38 +437,36 @@ func (c *Compute) unshareImages(ctx context.Context, conn Connection) error {
 	return nil
 }
 
-// retire removes a replaced authorization once the hosts launched under it
-// are gone: its stack holds the role they run as. The stack is deleted
-// through the active role; an existing role has no stack and is left to
-// its owner.
-func (c *Compute) retire(ctx context.Context, conn Connection) error {
+// retire removes a replaced or cancelled authorization once the hosts
+// launched under it are gone, since its stack holds the role they run as.
+// The stack is deleted through the active role; an existing role has no
+// stack and is left to its owner.
+func (c *Compute) retire(ctx context.Context, conn Connection) outcome {
 	a := conn.Retiring
-	if a == nil || conn.Active == nil {
-		return c.finishRetire(ctx, conn, a)
+	if a != nil && conn.Active != nil {
+		live, err := c.drainAuthorization(ctx, a.ID)
+		if err != nil || live > 0 {
+			return outcome{err: err, action: c.instancesAction(conn)}
+		}
+		if a.Mode == ModeManagedStack {
+			s := connectionStack{authorization: a.ID, region: a.Region, name: a.StackName, id: a.StackID}
+			scope := c.roleScope(conn, conn.Active)
+			if ok, err := assumable(ctx, scope); !ok {
+				return roleRefused(err, s.action())
+			}
+			if gone, err := c.deleteStack(ctx, scope, &s); err != nil || !gone {
+				return outcome{err: err, action: s.action()}
+			}
+		}
 	}
-	live, err := c.drainAuthorization(ctx, a.ID)
-	if err != nil {
-		return err
-	}
-	if live > 0 {
-		return c.cleanupLater(ctx, conn, nil, c.instancesAction(conn))
-	}
-	if a.Mode == ModeExistingRole || a.StackName == "" {
-		return c.finishRetire(ctx, conn, a)
-	}
-	s := connectionStack{authorization: a.ID, region: a.Region, name: a.StackName, id: a.StackID}
-	scope := c.roleScope(conn, conn.Active)
-	if ok, err := assumable(ctx, scope); err != nil {
-		return c.cleanupLater(ctx, conn, err, s.action())
-	} else if !ok {
-		action := s.action()
-		return c.needsCustomer(ctx, conn, &customerAction{url: action[0], label: action[1], cause: errRoleGone})
-	}
-	gone, err := c.deleteStack(ctx, scope, &s)
-	if err != nil || !gone {
-		return c.stepFailed(ctx, conn, err, s.action())
-	}
-	return c.finishRetire(ctx, conn, a)
+	return outcome{done: func(ctx context.Context, _ pgx.Tx, q *Queries) error {
+		if a != nil {
+			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: a.ID, Phase: string(AuthRetired)}); err != nil {
+				return fmt.Errorf("retire authorization: %w", err)
+			}
+		}
+		return setPhase(ctx, q, conn.ID, ConnReady, nil, 0, [2]string{})
+	}}
 }
 
 // drainAuthorization drains the hosts launched under an authorization and
@@ -480,80 +492,6 @@ func (c *Compute) drainAuthorization(ctx context.Context, authorization uuid.UUI
 		return nil
 	})
 	return live, err
-}
-
-// finishRetire retires a replaced authorization, its stack confirmed gone,
-// and returns the connection to ready.
-func (c *Compute) finishRetire(ctx context.Context, conn Connection, a *Authorization) error {
-	return inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-			return err
-		}
-		if a != nil {
-			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: a.ID, Phase: string(AuthRetired)}); err != nil {
-				return fmt.Errorf("retire authorization: %w", err)
-			}
-			if err := q.StackDeleted(ctx, a.ID); err != nil {
-				return fmt.Errorf("record stack deleted: %w", err)
-			}
-		}
-		return setPhase(ctx, q, conn.ID, ConnReady, nil, 0, [2]string{})
-	})
-}
-
-// stepFailed settles a step that did not finish: AWS refusing it waits on
-// the customer, shown action unless the refusal names its own place; any
-// other failure, or none while the step waits, is tried again later.
-func (c *Compute) stepFailed(ctx context.Context, conn Connection, err error, action [2]string) error {
-	var refused *customerAction
-	if errors.As(err, &refused) {
-		if refused.url == "" {
-			refused.url = action[0]
-		}
-		return c.needsCustomer(ctx, conn, refused)
-	}
-	return c.cleanupLater(ctx, conn, err, action)
-}
-
-// cleanupLater schedules the step again with backoff and, after
-// cleanupAttempts, asks the customer to finish it in AWS at action.
-func (c *Compute) cleanupLater(ctx context.Context, conn Connection, cause error, action [2]string) error {
-	err := inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		row, current, err := lockStep(ctx, q, conn)
-		if err != nil || !current {
-			return err
-		}
-		attempts := int(row.StepAttempts) + 1
-		if attempts > cleanupAttempts {
-			if action[0] == "" {
-				action = [2]string{stacksURL(connectionRegion), "Review LazyCloud's resources in AWS"}
-			}
-			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts, action)
-		}
-		delay := min(time.Duration(10<<min(attempts-1, 5))*time.Second, 5*time.Minute)
-		return setPhase(ctx, q, conn.ID, ConnectionPhase(row.Phase), ptr(time.Now().Add(delay)), attempts, [2]string{})
-	})
-	if err != nil {
-		return err
-	}
-	if cause != nil {
-		return fmt.Errorf("connection cleanup: %w", cause)
-	}
-	return nil
-}
-
-// needsCustomer asks the customer to act in AWS before the step can
-// finish.
-func (c *Compute) needsCustomer(ctx context.Context, conn Connection, action *customerAction) error {
-	return inTx(ctx, c, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if _, current, err := lockStep(ctx, q, conn); err != nil || !current {
-			return err
-		}
-		return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, 0, [2]string{action.url, truncate(action.label)})
-	})
 }
 
 // instancesAction shows the customer the fleet's instances in the EC2

@@ -45,80 +45,6 @@ func (q *Queries) AccountConnectedElsewhere(ctx context.Context, arg AccountConn
 	return column_1, err
 }
 
-const activeAuthorizationOfConnection = `-- name: ActiveAuthorizationOfConnection :one
-select a.id, a.connection_id, a.generation, a.mode, a.slot, a.phase, a.role_arn, a.external_id, a.region, a.stack_name, a.stack_id, a.template_version, a.template_sha256, a.node_role_arn, a.node_instance_profile, a.networks, a.error_code, a.error_message, a.last_validation_started_at, a.last_validated_at, a.expires_at, a.created_at, a.updated_at, a.stack_delete_requested_at, a.stack_deleted_at, cc.aws_account_id, cc.phase as connection_phase
-from cloud_authorizations a
-join cloud_connections cc on cc.id = a.connection_id
-where a.connection_id = $1 and a.slot = 'active' and a.phase = 'ready'
-`
-
-type ActiveAuthorizationOfConnectionRow struct {
-	ID                      uuid.UUID
-	ConnectionID            uuid.UUID
-	Generation              int32
-	Mode                    string
-	Slot                    *string
-	Phase                   string
-	RoleArn                 string
-	ExternalID              string
-	Region                  string
-	StackName               *string
-	StackID                 *string
-	TemplateVersion         *string
-	TemplateSha256          *string
-	NodeRoleArn             *string
-	NodeInstanceProfile     *string
-	Networks                []byte
-	ErrorCode               *string
-	ErrorMessage            *string
-	LastValidationStartedAt *time.Time
-	LastValidatedAt         *time.Time
-	ExpiresAt               *time.Time
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	StackDeleteRequestedAt  *time.Time
-	StackDeletedAt          *time.Time
-	AwsAccountID            string
-	ConnectionPhase         string
-}
-
-// The authorization the fleet launches with while the connection hosts
-// workloads or still manages its instances.
-func (q *Queries) ActiveAuthorizationOfConnection(ctx context.Context, connectionID uuid.UUID) (ActiveAuthorizationOfConnectionRow, error) {
-	row := q.db.QueryRow(ctx, activeAuthorizationOfConnection, connectionID)
-	var i ActiveAuthorizationOfConnectionRow
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectionID,
-		&i.Generation,
-		&i.Mode,
-		&i.Slot,
-		&i.Phase,
-		&i.RoleArn,
-		&i.ExternalID,
-		&i.Region,
-		&i.StackName,
-		&i.StackID,
-		&i.TemplateVersion,
-		&i.TemplateSha256,
-		&i.NodeRoleArn,
-		&i.NodeInstanceProfile,
-		&i.Networks,
-		&i.ErrorCode,
-		&i.ErrorMessage,
-		&i.LastValidationStartedAt,
-		&i.LastValidatedAt,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.StackDeleteRequestedAt,
-		&i.StackDeletedAt,
-		&i.AwsAccountID,
-		&i.ConnectionPhase,
-	)
-	return i, err
-}
-
 const authorizationFailed = `-- name: AuthorizationFailed :exec
 update cloud_authorizations
 set phase = 'degraded', error_code = $1, error_message = $2, updated_at = now()
@@ -670,22 +596,6 @@ func (q *Queries) NextGeneration(ctx context.Context, connectionID uuid.UUID) (i
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const readyConnectionOfAccount = `-- name: ReadyConnectionOfAccount :one
-select cc.id, cc.phase from cloud_connections cc where cc.account_id = $1
-`
-
-type ReadyConnectionOfAccountRow struct {
-	ID    uuid.UUID
-	Phase string
-}
-
-func (q *Queries) ReadyConnectionOfAccount(ctx context.Context, accountID uuid.UUID) (ReadyConnectionOfAccountRow, error) {
-	row := q.db.QueryRow(ctx, readyConnectionOfAccount, accountID)
-	var i ReadyConnectionOfAccountRow
-	err := row.Scan(&i.ID, &i.Phase)
-	return i, err
 }
 
 const remainingStacks = `-- name: RemainingStacks :many

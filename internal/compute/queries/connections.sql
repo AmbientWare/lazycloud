@@ -91,17 +91,6 @@ where id in (
 )
 returning id;
 
--- name: ReadyConnectionOfAccount :one
-select cc.id, cc.phase from cloud_connections cc where cc.account_id = @account_id;
-
--- name: ActiveAuthorizationOfConnection :one
--- The authorization the fleet launches with while the connection hosts
--- workloads or still manages its instances.
-select a.*, cc.aws_account_id, cc.phase as connection_phase
-from cloud_authorizations a
-join cloud_connections cc on cc.id = a.connection_id
-where a.connection_id = @connection_id and a.slot = 'active' and a.phase = 'ready';
-
 -- name: RoleBoundElsewhere :one
 -- Whether another connection holds an authorization for this role.
 select exists (

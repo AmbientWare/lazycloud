@@ -582,15 +582,30 @@ func deletedStacks(e *awsEmulator) []string {
 	return out
 }
 
-func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
+// imagedConnectionFleet is connectionFleet with a baked node image in
+// us-east-2, whose launch permission the platform grants and removes.
+func imagedConnectionFleet(t *testing.T) (owners, *awsEmulator, *customerAWS) {
+	t.Helper()
 	emulator := newAWS(t)
 	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{
 		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
 	})))
-	customer := newCustomerAWS(emulator)
 	emulator.on("ModifyImageAttribute", func(awsCall) awsReply { return modifyImageAttributeReply() })
+	return o, emulator, newCustomerAWS(emulator)
+}
+
+// unshared reports whether the platform removed 111111111111's launch
+// permission on the baked image, once.
+func unshared(e *awsEmulator) bool {
+	calls := e.calls("ModifyImageAttribute")
+	return len(calls) == 1 && calls[0].AccessKey == platformAccessKey && calls[0].Form.Get("ImageId") == "ami-0baked" &&
+		calls[0].Form.Get("LaunchPermission.Remove.1.UserId") == "111111111111"
+}
+
+func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := imagedConnectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	ws := newWorkspace(t, o.pool, "prod", alice)
@@ -660,10 +675,9 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	if phase := phaseOf(t, o, alice); phase != "" {
 		t.Fatalf("after the stack is gone the connection is %s, want deleted", phase)
 	}
-	unshares := emulator.calls("ModifyImageAttribute")
-	if len(unshares) != 1 || unshares[0].AccessKey != platformAccessKey || unshares[0].Form.Get("ImageId") != "ami-0baked" ||
-		unshares[0].Form.Get("LaunchPermission.Remove.1.UserId") != "111111111111" {
-		t.Fatalf("ModifyImageAttribute calls %v, want the platform removing 111111111111's launch permission on ami-0baked", unshares)
+	if !unshared(emulator) {
+		t.Fatalf("ModifyImageAttribute calls %v, want the platform removing 111111111111's launch permission on ami-0baked",
+			emulator.calls("ModifyImageAttribute"))
 	}
 	if n := scan[int](t, o.pool, `select (select count(*) from capacity_cooldowns where connection_key = $1::text) +
 (select count(*) from fleet_markets where starts_with(market, $1::text))`, conn.ID); n != 0 {
@@ -739,11 +753,12 @@ func TestAStackThatKeepsFailingToDeleteGoesToTheCustomer(t *testing.T) {
 }
 
 // A role the customer deleted while instances still run leaves them to the
-// customer; forgetting the connection then lists what may remain in AWS.
+// customer; forgetting the connection then removes the image's launch
+// permission and lists what may remain in AWS.
 func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	o, _, customer := connectionFleet(t)
+	o, emulator, customer := imagedConnectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
@@ -781,8 +796,9 @@ func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 			t.Errorf("leftover %+v, want %s %s in us-east-2 with a console link", l, l.Kind, want[l.Kind])
 		}
 	}
-	if phase := phaseOf(t, o, alice); phase != "" {
-		t.Fatalf("after forget the connection is %s, want deleted", phase)
+	if phase := phaseOf(t, o, alice); phase != "" || !unshared(emulator) {
+		t.Fatalf("after forget the connection is %q with ModifyImageAttribute calls %v, want it deleted and the launch permission removed",
+			phase, emulator.calls("ModifyImageAttribute"))
 	}
 	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseFailed) {
 		t.Fatalf("the forgotten connection's host is %s, want failed", phase)
@@ -824,31 +840,113 @@ func TestDisconnectMidReconnectDeletesBothGenerationsStacks(t *testing.T) {
 	}
 }
 
-// A setup that never finished is removed: at once when the customer never
-// created its stack, and with its stack when the customer did.
-func TestAnUnfinishedSetupIsRemovedWithTheStackTheCustomerCreated(t *testing.T) {
+// A setup that never finished is removed once nothing it asked the
+// customer to create can remain: a stack the customer creates before the
+// setup would have expired is deleted, and without one the connection goes
+// at that expiry.
+func TestAnUnfinishedSetupIsRemovedWithTheStackTheCustomerCreates(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	o, emulator, customer := connectionFleet(t)
 	bob, carol := newUser(t, o.pool, "bob@example.com"), newUser(t, o.pool, "carol@example.com")
 	connect(t, o, bob, "222222222222")
-	created := connect(t, o, carol, "333333333333")
-	customer.authorize(t, o, created, role{})
-
+	creating := connect(t, o, carol, "333333333333")
 	for _, account := range []identity.UserID{bob, carol} {
 		if conn, err := o.compute.Disconnect(ctx, account); err != nil || conn == nil || conn.Phase != compute.ConnRevoking {
 			t.Fatalf("disconnect an unfinished setup: %+v %v, want revoking", conn, err)
 		}
 	}
-	for n := 0; n < 5 && (phaseOf(t, o, bob) != "" || phaseOf(t, o, carol) != ""); n++ {
+	step := func() {
 		run(t, o.pool, "update cloud_connections set next_step_at = now()")
 		advance(t, o)
+	}
+	step()
+	if bob, carol := phaseOf(t, o, bob), phaseOf(t, o, carol); bob != compute.ConnRevoking || carol != compute.ConnRevoking {
+		t.Fatalf("connections %q and %q before their setups expire, want both still revoking", bob, carol)
+	}
+
+	customer.authorize(t, o, creating, role{})
+	run(t, o.pool, "update cloud_authorizations a set expires_at = now() from cloud_connections c where c.id = a.connection_id and c.account_id = $1",
+		uuid.UUID(bob))
+	for n := 0; n < 5 && (phaseOf(t, o, bob) != "" || phaseOf(t, o, carol) != ""); n++ {
+		step()
 	}
 	if bob, carol := phaseOf(t, o, bob), phaseOf(t, o, carol); bob != "" || carol != "" {
 		t.Fatalf("connections %q and %q remain, want both removed", bob, carol)
 	}
-	if got := deletedStacks(emulator); !slices.Equal(got, []string{created.Pending.StackName}) {
+	if got := deletedStacks(emulator); !slices.Equal(got, []string{creating.Pending.StackName}) {
 		t.Fatalf("DeleteStack calls %v, want only the stack the customer created", got)
+	}
+}
+
+// Cancelling a reconnect deletes the replacement's stack the customer
+// created, through the active role, which keeps serving.
+func TestACancelledReconnectDeletesTheReplacementsStack(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	first := connected(t, o, customer, alice)
+	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer.authorize(t, o, reconnecting, role{})
+
+	cancelled, err := o.compute.CancelReconnect(ctx, alice)
+	if err != nil || !cancelled.HostsWorkloads() {
+		t.Fatalf("cancel reconnect: %+v %v, want the account still hosting", cancelled, err)
+	}
+	for n := 0; n < 5 && phaseOf(t, o, alice) != compute.ConnReady; n++ {
+		due(t, o, first)
+		advance(t, o)
+	}
+	conn := current(t, o, alice)
+	if conn == nil || conn.Phase != compute.ConnReady || conn.Active.Generation != 1 || conn.Pending != nil || conn.Retiring != nil {
+		t.Fatalf("after cancelling: %+v, want ready on the first generation", conn)
+	}
+	deletes := emulator.calls("DeleteStack")
+	if len(deletes) != 1 || deletes[0].Form.Get("StackName") != reconnecting.Pending.StackName ||
+		deletes[0].AccessKey != assumedKey(first.Active.RoleARN) {
+		t.Fatalf("DeleteStack calls %v, want the replacement's stack deleted through the active role", deletes)
+	}
+}
+
+// Two scheduler passes over one due connection run its step once: the
+// first claims it, and the second finds nothing due while the step runs.
+func TestConcurrentPassesRunAConnectionStepOnce(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	connected(t, o, customer, alice)
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, o) // drained: nothing runs there, so revoking is due at once
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var reads atomic.Int32
+	emulator.on("DescribeStacks", func(call awsCall) awsReply {
+		if reads.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return queryError(http.StatusBadRequest, "ValidationError", "Stack with id "+call.Form.Get("StackName")+" does not exist")
+	})
+	first := make(chan error, 1)
+	go func() {
+		_, err := o.compute.AdvanceConnections(ctx, discard())
+		first <- err
+	}()
+	<-entered
+	second, err := o.compute.AdvanceConnections(ctx, discard())
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || second != 0 || reads.Load() != 1 {
+		t.Fatalf("the second pass claimed %d (%v) and the stack was read %d times, want the step run once", second, err, reads.Load())
 	}
 }
 
