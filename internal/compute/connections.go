@@ -178,7 +178,8 @@ type Connection struct {
 	// ConsoleURL opens the pending managed authorization's stack, ready to
 	// create, in the AWS Console while it waits for the customer. View sets
 	// it.
-	ConsoleURL string
+	ConsoleURL       string
+	removalRequested *time.Time
 }
 
 // HostsWorkloads reports whether new workloads can be placed in the account.
@@ -435,7 +436,7 @@ func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	conn := Connection{
 		ID: row.ID, AWSAccountID: row.AwsAccountID, Phase: ConnectionPhase(row.Phase), Revision: int(row.Revision),
 		NextRetryAt: row.NextStepAt, ActionURL: deref(row.ActionUrl), ActionLabel: deref(row.ActionLabel),
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
 	}
 	for _, a := range auths {
 		auth := authorizationOf(a)
@@ -717,6 +718,9 @@ func beginRemoval(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) (
 				}
 			}
 		}
+	}
+	if err := q.RequestRemoval(ctx, conn.ID); err != nil {
+		return false, fmt.Errorf("record removal: %w", err)
 	}
 	if err := setPhase(ctx, q, conn.ID, phase, now(), 0, [2]string{}); err != nil {
 		return false, err

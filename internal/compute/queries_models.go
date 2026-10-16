@@ -39,15 +39,16 @@ type CloudAuthorization struct {
 }
 
 type CloudConnection struct {
-	ID           uuid.UUID
-	AccountID    uuid.UUID
-	AwsAccountID string
-	Phase        string
-	Revision     int32
-	NextStepAt   *time.Time
-	StepAttempts int32
-	ActionUrl    *string
-	ActionLabel  *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                 uuid.UUID
+	AccountID          uuid.UUID
+	AwsAccountID       string
+	Phase              string
+	Revision           int32
+	NextStepAt         *time.Time
+	StepAttempts       int32
+	ActionUrl          *string
+	ActionLabel        *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	RemovalRequestedAt *time.Time
 }

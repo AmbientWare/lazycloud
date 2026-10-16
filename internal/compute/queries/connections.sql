@@ -166,3 +166,6 @@ select * from cloud_connections where account_id = @account_id for share;
 
 -- name: StackDeleteRequested :exec
 update cloud_authorizations set stack_delete_requested_at = now(), updated_at = now() where id = @id;
+
+-- name: RequestRemoval :exec
+update cloud_connections set removal_requested_at = now() where id = @id;

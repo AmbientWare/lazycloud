@@ -6,3 +6,7 @@
 alter table cloud_authorizations
     add column stack_delete_requested_at timestamptz,
     add column stack_deleted_at timestamptz;
+
+-- When the customer asked to remove the connection. A setup that never
+-- finished waits a short while from then for a stack still being created.
+alter table cloud_connections add column removal_requested_at timestamptz;

@@ -193,10 +193,10 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 				return outcome{err: fmt.Errorf("record stack deleted: %w", err)}
 			}
 			return c.finishRevoke(ctx, conn)
-		case conn.Active == nil && access.expiresAt != nil && time.Now().Before(*access.expiresAt):
+		case conn.Active == nil && setupWait(conn, access) != nil:
 			// The customer may still be creating the setup's stack, which
 			// makes the role.
-			return outcome{until: access.expiresAt}
+			return outcome{until: setupWait(conn, access)}
 		case conn.Active == nil:
 			return c.finishRevoke(ctx, conn)
 		}
@@ -522,4 +522,25 @@ func stackURL(region, id, name string) string {
 		return stacksURL(region) + "/stackinfo?stackId=" + url.QueryEscape(id)
 	}
 	return stacksURL(region) + "?filteringText=" + url.QueryEscape(name)
+}
+
+// setupStackWait bounds how long removing an unfinished setup waits for a
+// stack the customer may still be creating; CloudFormation makes the role
+// within minutes of the create.
+const setupStackWait = 15 * time.Minute
+
+// setupWait is when removing an unfinished setup stops waiting for its
+// role, or nil once that time has passed.
+func setupWait(conn Connection, pending *Authorization) *time.Time {
+	if conn.removalRequested == nil {
+		return nil
+	}
+	until := conn.removalRequested.Add(setupStackWait)
+	if pending.expiresAt != nil && pending.expiresAt.Before(until) {
+		until = *pending.expiresAt
+	}
+	if !time.Now().Before(until) {
+		return nil
+	}
+	return &until
 }
