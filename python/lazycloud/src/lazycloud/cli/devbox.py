@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import time
 from typing import Annotated
 
@@ -7,10 +8,11 @@ import typer
 from typer._click import Command, Context
 from typer.core import TyperGroup
 from typer.main import get_group
+from typing_extensions import assert_never
 
 from lazycloud._shared.ssh import SSH_HOST_LIST_LIMIT
 from lazycloud._terminal.cards import notice_card, result_card
-from lazycloud.agent_harness import AgentHarness
+from lazycloud.agent_harness import AGENT_INSTALLATIONS, AgentHarness
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     emit,
@@ -24,7 +26,7 @@ from lazycloud.cli.disks import disk_failure
 from lazycloud.cli.ssh import AppOption, WorkspaceOption, cancel_devbox_start, ssh_connection
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.contracts.api import Devbox, DevboxPhase, DevboxState, PodRole, Resources, SshHost
-from lazycloud.session.agent_login import login_agent
+from lazycloud.session.agent_login import LoginOutcome, login_agent
 from lazycloud.session.interrupts import uninterrupted
 from lazycloud.session.ssh import run_ssh
 from lazycloud.terminal import Terminal, humanize_bytes
@@ -100,21 +102,93 @@ def login(
     app: AppOption = None,
     workspace: WorkspaceOption = None,
 ) -> None:
-    """Run native browser login with private, temporary callback forwarding."""
+    """Sign a coding agent in through your browser; the login stays on the devbox disk."""
     if json_output_enabled(ctx):
         raise ClientError("Agent login is interactive and does not support --json")
+    name = _name(ctx)
+    installation = AGENT_INSTALLATIONS[harness]
+    agent = installation.name
     if harness is AgentHarness.Pi:
         write_stream(
             "In Pi, run /login and choose your provider's browser login. Exit Pi when done.\n"
         )
     elif harness is AgentHarness.OpenCode:
         write_stream("Choose your provider and its browser login method.\n")
-    with ssh_connection(_name(ctx), app=app, workspace=workspace, role=PodRole.devbox) as (
+    with ssh_connection(name, app=app, workspace=workspace, role=PodRole.devbox) as (
         access,
         host,
     ):
-        status = login_agent(access.paths.config, host.alias, harness)
-    raise typer.Exit(status)
+        outcome = login_agent(access.paths.config, host.alias, harness)
+    options = [*(["--app", app] if app else []), *(["--workspace", workspace] if workspace else [])]
+    retry = shlex.join(["lazycloud", "devbox", name, "login", harness.value, *options])
+    match outcome:
+        case LoginOutcome.signed_in:
+            emit(
+                ctx,
+                payload={"agent": harness.value, "outcome": outcome.value},
+                view=notice_card(
+                    f"{agent} is signed in on {name}.",
+                    tone="success",
+                    hint=f"Start it on {name} with `{installation.login_command[0]}`.",
+                ),
+            )
+            try:
+                connect = typer.confirm(f"Open a shell on {name} now?", default=True, err=True)
+            except typer.Abort:
+                connect = False
+            if connect:
+                with ssh_connection(name, app=app, workspace=workspace, role=PodRole.devbox) as (
+                    access,
+                    host,
+                ):
+                    raise typer.Exit(run_ssh(access.paths.config, host.alias, []))
+        case LoginOutcome.not_signed_in:
+            raise ClientError(
+                f"{agent} did not save a new login on {name}.",
+                type="agent_login_incomplete",
+                title="Login not finished",
+                hint=f"Finish the browser sign-in, then retry: {retry}",
+            )
+        case LoginOutcome.unverified:
+            status = shlex.join(installation.status_command or ())
+            raise ClientError(
+                f"{agent} on {name} did not report whether it is signed in.",
+                type="agent_login_unverified",
+                title="Login not verified",
+                hint=f"Run `{status}` inside the devbox, or retry: {retry}",
+            )
+        case LoginOutcome.missing_tools:
+            raise ClientError(
+                f"{agent} cannot log in on {name} until the tools above are installed.",
+                type="agent_login_missing_tools",
+                title="Login not started",
+                hint=f"Install them inside the devbox, then retry: {retry}",
+            )
+        case LoginOutcome.interrupted:
+            raise ClientError(
+                f"Login for {agent} on {name} was cancelled.",
+                type="agent_login_cancelled",
+                title="Login cancelled",
+                hint=f"Retry: {retry}",
+                exit_code=130,
+            )
+        case LoginOutcome.disconnected:
+            status_command = shlex.join(["lazycloud", "devbox", name, "status", *options])
+            raise ClientError(
+                f"The connection to {name} closed before {agent} finished logging in.",
+                type="agent_login_disconnected",
+                title="Connection lost",
+                hint=f"Check `{status_command}`, then retry: {retry}",
+            )
+        case LoginOutcome.failed:
+            raise ClientError(
+                f"The login script for {agent} failed on {name}.",
+                type="agent_login_failed",
+                title="Login failed",
+                hint=f"Check the messages above, then retry: {retry}",
+            )
+        case _:
+            assert_never(outcome)
 
 
 @_named_devbox.command("ssh", context_settings={"allow_extra_args": True})

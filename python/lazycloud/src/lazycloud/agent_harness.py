@@ -27,22 +27,45 @@ class AgentSystemDependency:
 
 @dataclass(frozen=True)
 class AgentInstallation:
+    name: str
     package: str
     login_command: tuple[str, ...]
+    # The file the agent writes when it saves a login.
+    credentials: str
+    # Exits 0 when signed in and 1 when not. Agents that have one stay open
+    # after saving a login, so the devbox login ends them.
+    status_command: tuple[str, ...] | None = None
     system_dependencies: tuple[AgentSystemDependency, ...] = ()
 
 
 AGENT_INSTALLATIONS = {
     AgentHarness.Codex: AgentInstallation(
-        "@openai/codex", ("codex", "login"), (AgentSystemDependency("ps", "procps"),)
+        "Codex",
+        "@openai/codex",
+        ("codex", "login"),
+        "${CODEX_HOME:-$HOME/.codex}/auth.json",
+        ("codex", "login", "status"),
+        (AgentSystemDependency("ps", "procps"),),
     ),
     AgentHarness.ClaudeCode: AgentInstallation(
+        "Claude Code",
         "@anthropic-ai/claude-code",
         ("claude", "auth", "login"),
-        (AgentSystemDependency("script", "util-linux"),),
+        "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json",
+        ("claude", "auth", "status"),
     ),
-    AgentHarness.OpenCode: AgentInstallation("opencode-ai", ("opencode", "auth", "login")),
-    AgentHarness.Pi: AgentInstallation("@earendil-works/pi-coding-agent", ("pi",)),
+    AgentHarness.OpenCode: AgentInstallation(
+        "OpenCode",
+        "opencode-ai",
+        ("opencode", "auth", "login"),
+        "${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json",
+    ),
+    AgentHarness.Pi: AgentInstallation(
+        "Pi",
+        "@earendil-works/pi-coding-agent",
+        ("pi",),
+        "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/auth.json",
+    ),
 }
 
 _NODE_VERSION = "22.23.3"

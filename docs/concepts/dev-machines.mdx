@@ -75,23 +75,26 @@ lazycloud devbox box login pi
 
 The command checks that the agent and the system commands it needs are on the
 devbox. If any is missing, it stops and prints the install instructions to run
-there; it installs nothing itself. It then starts the agent's login on the
+there; it installs nothing itself. It then runs the agent's own login on the
 devbox and opens your laptop's browser, with SSH carrying the localhost
 callback back, so no public `ports` entry or device code is needed. The agent
 saves its credentials on the devbox disk, outside the image.
 
-For Claude Code, the command verifies the saved login and completes first-run
-configuration before closing the connection. It reuses an existing login;
-`claude auth logout` inside the devbox switches accounts. Project trust and
-permission prompts still appear when Claude starts.
+When the login ends, the command says whether the agent saved a new login
+and, if not, the command to retry. After a login it offers to open a shell on
+the devbox. Running it again signs the agent in again, which is how you switch
+accounts. Codex and Claude Code stay open after you sign in, so the command
+closes them. For Claude Code it also skips the first-run setup. Project trust
+and permission prompts still appear when Claude starts.
 
 OpenCode prompts for a provider and login method; pick browser login. In Pi,
 run `/login`, pick the provider's browser login, and exit Pi. Methods depend
-on the provider, and API keys can come through [secrets](/concepts/secrets)
-instead.
+on the provider, and API keys can come through [secrets](/concepts/secrets) instead.
 
-Browser login needs OpenSSH and a browser on a macOS, Linux, or WSL computer,
-so it runs locally, not in a dashboard terminal. One login at a time per port;
+Browser login needs OpenSSH on a macOS, Linux, or WSL computer, so it runs
+locally, not in a dashboard terminal. Where no browser opens, such as over
+SSH, open the link the agent prints in any browser; Claude Code then shows a
+code to paste at its prompt. One login at a time per port;
 a port a local service already holds fails the command before the browser
 opens.
 
