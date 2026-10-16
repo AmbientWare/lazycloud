@@ -508,3 +508,23 @@ func (s *Server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionReq
 	}
 	return RetryAwsConnection200JSONResponse(s.connectionOut(conn)), nil
 }
+
+// ForgetAwsConnection stops managing an account whose disconnect needs
+// attention, and returns what remains in AWS.
+func (s *Server) ForgetAwsConnection(ctx context.Context, _ ForgetAwsConnectionRequestObject) (ForgetAwsConnectionResponseObject, error) {
+	p, err := s.account(ctx, "forget the AWS connection")
+	if err != nil {
+		return nil, err
+	}
+	left, err := s.owners.Compute.Forget(ctx, p.User)
+	if err != nil {
+		return nil, err
+	}
+	out := ForgetAwsConnection200JSONResponse{LeftInAws: []apitypes.AwsLeftover{}}
+	for _, l := range left {
+		out.LeftInAws = append(out.LeftInAws, apitypes.AwsLeftover{
+			Kind: apitypes.AwsLeftoverKind(l.Kind), Id: l.ID, Region: l.Region, ConsoleUrl: l.ConsoleURL,
+		})
+	}
+	return out, nil
+}

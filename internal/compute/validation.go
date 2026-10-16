@@ -369,11 +369,11 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 		}
 		return err
 	case ConnRetiring:
-		return c.removeStack(ctx, conn, conn.Retiring, ConnReady)
+		return c.retire(ctx, conn)
 	case ConnDraining:
 		return c.finishDrain(ctx, conn)
 	case ConnRevoking, ConnVerifying:
-		return c.removeStack(ctx, conn, conn.Active, "")
+		return c.revoke(ctx, conn)
 	case ConnReady, ConnActionRequire:
 	}
 	return nil

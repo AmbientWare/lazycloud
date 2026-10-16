@@ -34,6 +34,8 @@ type CloudAuthorization struct {
 	ExpiresAt               *time.Time
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	StackDeleteRequestedAt  *time.Time
+	StackDeletedAt          *time.Time
 }
 
 type CloudConnection struct {

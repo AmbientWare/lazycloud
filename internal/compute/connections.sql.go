@@ -12,8 +12,41 @@ import (
 	"github.com/google/uuid"
 )
 
+const abandonConnectionHosts = `-- name: AbandonConnectionHosts :exec
+update hosts
+set phase = 'failed', state = 'retired', failure = 'unknown', launch_lease_until = null,
+    phase_message = 'Left in the AWS account when its connection was forgotten', phase_at = now(), updated_at = now()
+where connection_id = $1 and phase not in ('deleted', 'failed')
+`
+
+// A forgotten connection's hosts end with it; their instances, if any
+// remain, are the customer's to remove.
+func (q *Queries) AbandonConnectionHosts(ctx context.Context, connectionID *uuid.UUID) error {
+	_, err := q.db.Exec(ctx, abandonConnectionHosts, connectionID)
+	return err
+}
+
+const accountConnectedElsewhere = `-- name: AccountConnectedElsewhere :one
+select exists (
+    select 1 from cloud_connections where aws_account_id = $1 and id <> $2
+)::bool
+`
+
+type AccountConnectedElsewhereParams struct {
+	AwsAccountID string
+	ID           uuid.UUID
+}
+
+// Whether another connection reaches the same AWS account.
+func (q *Queries) AccountConnectedElsewhere(ctx context.Context, arg AccountConnectedElsewhereParams) (bool, error) {
+	row := q.db.QueryRow(ctx, accountConnectedElsewhere, arg.AwsAccountID, arg.ID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const activeAuthorizationOfConnection = `-- name: ActiveAuthorizationOfConnection :one
-select a.id, a.connection_id, a.generation, a.mode, a.slot, a.phase, a.role_arn, a.external_id, a.region, a.stack_name, a.stack_id, a.template_version, a.template_sha256, a.node_role_arn, a.node_instance_profile, a.networks, a.error_code, a.error_message, a.last_validation_started_at, a.last_validated_at, a.expires_at, a.created_at, a.updated_at, cc.aws_account_id, cc.phase as connection_phase
+select a.id, a.connection_id, a.generation, a.mode, a.slot, a.phase, a.role_arn, a.external_id, a.region, a.stack_name, a.stack_id, a.template_version, a.template_sha256, a.node_role_arn, a.node_instance_profile, a.networks, a.error_code, a.error_message, a.last_validation_started_at, a.last_validated_at, a.expires_at, a.created_at, a.updated_at, a.stack_delete_requested_at, a.stack_deleted_at, cc.aws_account_id, cc.phase as connection_phase
 from cloud_authorizations a
 join cloud_connections cc on cc.id = a.connection_id
 where a.connection_id = $1 and a.slot = 'active' and a.phase = 'ready'
@@ -43,6 +76,8 @@ type ActiveAuthorizationOfConnectionRow struct {
 	ExpiresAt               *time.Time
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	StackDeleteRequestedAt  *time.Time
+	StackDeletedAt          *time.Time
 	AwsAccountID            string
 	ConnectionPhase         string
 }
@@ -76,6 +111,8 @@ func (q *Queries) ActiveAuthorizationOfConnection(ctx context.Context, connectio
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StackDeleteRequestedAt,
+		&i.StackDeletedAt,
 		&i.AwsAccountID,
 		&i.ConnectionPhase,
 	)
@@ -140,6 +177,44 @@ func (q *Queries) AuthorizationValidated(ctx context.Context, arg AuthorizationV
 	return err
 }
 
+const claimDueConnections = `-- name: ClaimDueConnections :many
+update cloud_connections set next_step_at = now() + make_interval(secs => $1::float8)
+where id in (
+    select id from cloud_connections where next_step_at <= now()
+    order by next_step_at, id limit $2
+    for update skip locked
+)
+returning id
+`
+
+type ClaimDueConnectionsParams struct {
+	LeaseSeconds float64
+	BatchSize    int32
+}
+
+// Connections whose background step is due, each leased for
+// @lease_seconds so one scheduler replica runs a connection's step at a
+// time; the step's outcome sets when the next one is due.
+func (q *Queries) ClaimDueConnections(ctx context.Context, arg ClaimDueConnectionsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, claimDueConnections, arg.LeaseSeconds, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const connectionAccess = `-- name: ConnectionAccess :one
 select cc.aws_account_id, a.region, a.role_arn, a.external_id
 from cloud_connections cc
@@ -168,7 +243,7 @@ func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (Connectio
 }
 
 const connectionAuthorizations = `-- name: ConnectionAuthorizations :many
-select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at from cloud_authorizations where connection_id = $1 and slot is not null order by generation
+select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at from cloud_authorizations where connection_id = $1 and slot is not null order by generation
 `
 
 // The connection's authorizations that hold a slot.
@@ -205,10 +280,42 @@ func (q *Queries) ConnectionAuthorizations(ctx context.Context, connectionID uui
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StackDeleteRequestedAt,
+			&i.StackDeletedAt,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const connectionHostsAmong = `-- name: ConnectionHostsAmong :many
+select id from hosts where id = any($1::uuid[]) and connection_id = $2
+`
+
+type ConnectionHostsAmongParams struct {
+	Ids          []uuid.UUID
+	ConnectionID *uuid.UUID
+}
+
+// Which of these hosts the connection launched.
+func (q *Queries) ConnectionHostsAmong(ctx context.Context, arg ConnectionHostsAmongParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, connectionHostsAmong, arg.Ids, arg.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -251,6 +358,35 @@ func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) 
 	return i, err
 }
 
+const connectionRegions = `-- name: ConnectionRegions :many
+select h.region::text from hosts h where h.connection_id = $1::uuid and h.region <> ''
+union
+select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = $1::uuid
+order by 1
+`
+
+// The regions the connection's instances may run in: its networks' and
+// any its hosts record.
+func (q *Queries) ConnectionRegions(ctx context.Context, connection uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, connectionRegions, connection)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var h_region string
+		if err := rows.Scan(&h_region); err != nil {
+			return nil, err
+		}
+		items = append(items, h_region)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const connectionWorkspaces = `-- name: ConnectionWorkspaces :many
 select name from workspaces where connection_id = $1 order by name limit 20
 `
@@ -276,9 +412,16 @@ func (q *Queries) ConnectionWorkspaces(ctx context.Context, connectionID *uuid.U
 }
 
 const deleteConnection = `-- name: DeleteConnection :exec
-delete from cloud_connections where id = $1
+with markets as (
+    delete from fleet_markets where starts_with(market, $1::uuid::text || '/')
+), cooldowns as (
+    delete from capacity_cooldowns where connection_key = $1::uuid::text
+)
+delete from cloud_connections where id = $1::uuid
 `
 
+// The connection goes with the fleet state keyed by it: its published
+// markets and its pools' cooldowns.
 func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConnection, id)
 	return err
@@ -314,30 +457,6 @@ func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *
 	return items, nil
 }
 
-const dueConnections = `-- name: DueConnections :many
-select id from cloud_connections where next_step_at <= now() order by next_step_at, id limit $1
-`
-
-func (q *Queries) DueConnections(ctx context.Context, batchSize int32) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, dueConnections, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const insertAuthorization = `-- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
@@ -345,7 +464,7 @@ insert into cloud_authorizations (connection_id, generation, mode, slot, phase, 
 values ($1, $2, $3, 'pending', 'awaiting_authorization', $4, $5, $6,
         $7, $8, $9, $10,
         $11, $12, now() + interval '1 day')
-returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at
+returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at
 `
 
 type InsertAuthorizationParams struct {
@@ -403,6 +522,8 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StackDeleteRequestedAt,
+		&i.StackDeletedAt,
 	)
 	return i, err
 }
@@ -435,6 +556,38 @@ func (q *Queries) InsertConnection(ctx context.Context, arg InsertConnectionPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const liveConnectionInstances = `-- name: LiveConnectionInstances :many
+select instance_id::text as instance_id, region from hosts
+where connection_id = $1 and phase not in ('deleted', 'failed') and instance_id is not null
+order by instance_id
+`
+
+type LiveConnectionInstancesRow struct {
+	InstanceID string
+	Region     string
+}
+
+// The instances of the connection's hosts not confirmed gone.
+func (q *Queries) LiveConnectionInstances(ctx context.Context, connectionID *uuid.UUID) ([]LiveConnectionInstancesRow, error) {
+	rows, err := q.db.Query(ctx, liveConnectionInstances, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LiveConnectionInstancesRow
+	for rows.Next() {
+		var i LiveConnectionInstancesRow
+		if err := rows.Scan(&i.InstanceID, &i.Region); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockConnection = `-- name: LockConnection :one
@@ -483,6 +636,31 @@ func (q *Queries) LockConnectionOfAccount(ctx context.Context, accountID uuid.UU
 	return i, err
 }
 
+const lockWorkspaceConnection = `-- name: LockWorkspaceConnection :one
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at from cloud_connections where account_id = $1 for share
+`
+
+// The account's connection, share-locked so its phase holds until the
+// caller's transaction commits.
+func (q *Queries) LockWorkspaceConnection(ctx context.Context, accountID uuid.UUID) (CloudConnection, error) {
+	row := q.db.QueryRow(ctx, lockWorkspaceConnection, accountID)
+	var i CloudConnection
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.AwsAccountID,
+		&i.Phase,
+		&i.Revision,
+		&i.NextStepAt,
+		&i.StepAttempts,
+		&i.ActionUrl,
+		&i.ActionLabel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const nextGeneration = `-- name: NextGeneration :one
 select coalesce(max(generation), 0)::int + 1 from cloud_authorizations where connection_id = $1
 `
@@ -508,6 +686,45 @@ func (q *Queries) ReadyConnectionOfAccount(ctx context.Context, accountID uuid.U
 	var i ReadyConnectionOfAccountRow
 	err := row.Scan(&i.ID, &i.Phase)
 	return i, err
+}
+
+const remainingStacks = `-- name: RemainingStacks :many
+select id, region, stack_name::text as stack_name, stack_id from cloud_authorizations
+where connection_id = $1 and mode = 'managed_stack' and stack_name is not null and stack_deleted_at is null
+order by generation
+`
+
+type RemainingStacksRow struct {
+	ID        uuid.UUID
+	Region    string
+	StackName string
+	StackID   *string
+}
+
+// The connection's stacks, of every generation, not confirmed deleted.
+func (q *Queries) RemainingStacks(ctx context.Context, connectionID uuid.UUID) ([]RemainingStacksRow, error) {
+	rows, err := q.db.Query(ctx, remainingStacks, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RemainingStacksRow
+	for rows.Next() {
+		var i RemainingStacksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Region,
+			&i.StackName,
+			&i.StackID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const roleBoundElsewhere = `-- name: RoleBoundElsewhere :one
@@ -591,6 +808,24 @@ func (q *Queries) SetConnectionPhase(ctx context.Context, arg SetConnectionPhase
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const stackDeleteRequested = `-- name: StackDeleteRequested :exec
+update cloud_authorizations set stack_delete_requested_at = now(), updated_at = now() where id = $1
+`
+
+func (q *Queries) StackDeleteRequested(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, stackDeleteRequested, id)
+	return err
+}
+
+const stackDeleted = `-- name: StackDeleted :exec
+update cloud_authorizations set stack_deleted_at = now(), updated_at = now() where id = $1
+`
+
+func (q *Queries) StackDeleted(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, stackDeleted, id)
+	return err
 }
 
 const startValidation = `-- name: StartValidation :exec
