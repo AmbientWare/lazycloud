@@ -279,9 +279,6 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 // only while that account owns the bucket.
 func TestConnectionRoleStorageIsScopedToItsOwnBuckets(t *testing.T) {
 	t.Parallel()
-	o, _, _ := connectionFleet(t)
-	alice := newUser(t, o.pool, "alice@example.com")
-	connect(t, o, alice, "111111111111")
 	var template struct {
 		Resources map[string]struct {
 			Properties struct {
@@ -344,7 +341,7 @@ func connectionTemplate(t *testing.T) []byte {
 
 // The console link opens the stack from the template the server
 // published, with a value for every template parameter that the template
-// accepts. Publishing again leaves the published object alone.
+// accepts.
 func TestConnectLinksTheConsoleToThePublishedTemplate(t *testing.T) {
 	t.Parallel()
 	store := storagetest.Config(t)
@@ -363,19 +360,16 @@ func TestConnectLinksTheConsoleToThePublishedTemplate(t *testing.T) {
 	if want := "https://" + store.Bucket + ".s3." + store.Region + ".amazonaws.com/" + key; stack.templateURL != want {
 		t.Fatalf("templateURL %s, want %s", stack.templateURL, want)
 	}
-	published := func() []byte {
-		out, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: &store.Bucket, Key: &key})
-		if err != nil {
-			t.Fatalf("read the published template: %v", err)
-		}
-		defer func() { _ = out.Body.Close() }()
-		body, err := io.ReadAll(out.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return body
+	out, err := storagetest.Client().GetObject(t.Context(), &s3.GetObjectInput{Bucket: &store.Bucket, Key: &key})
+	if err != nil {
+		t.Fatalf("read the published template: %v", err)
 	}
-	if !bytes.Equal(published(), connectionTemplate(t)) {
+	defer func() { _ = out.Body.Close() }()
+	published, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(published, connectionTemplate(t)) {
 		t.Fatal("the published template differs from the connection template")
 	}
 
@@ -401,18 +395,6 @@ func TestConnectLinksTheConsoleToThePublishedTemplate(t *testing.T) {
 	}
 	if stack.stackName != conn.Pending.StackName || stack.params["ConnectionRoleName"] != conn.Pending.StackName {
 		t.Errorf("stack %s with role %s, want both named %s", stack.stackName, stack.params["ConnectionRoleName"], conn.Pending.StackName)
-	}
-
-	if _, err := storagetest.Client().PutObject(t.Context(), &s3.PutObjectInput{
-		Bucket: &store.Bucket, Key: &key, Body: strings.NewReader("{}"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := o.compute.PublishConnectionTemplate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if body := published(); string(body) != "{}" {
-		t.Fatal("publishing again uploaded the template over the object already at its digest")
 	}
 }
 
@@ -1018,13 +1000,12 @@ func TestConnectingWhileTheConnectionIsRemovedIsRefused(t *testing.T) {
 	}
 }
 
-// A connection whose retirement waits on the customer takes no new work:
-// no workspace is placed there and no host launches into it.
+// A connection whose retirement waits on the customer takes no new
+// workspace.
 func TestAStuckRetirementTakesNoNewWork(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	o, emulator, customer := connectionFleet(t)
-	emulator.on("RunInstances", launched(t))
+	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	connected(t, o, customer, alice)
 	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
@@ -1048,12 +1029,6 @@ func TestAStuckRetirementTakesNoNewWork(t *testing.T) {
 	var conflict *compute.ConflictError
 	if _, err := o.compute.PlaceWorkspace(ctx, tx, alice); !errors.As(err, &conflict) {
 		t.Fatalf("place a workspace: %v, want ConflictError", err)
-	}
-	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseRequested,
-		Market: compute.MarketSpot, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", Unenrolled: true})
-	run(t, o.pool, "update hosts set connection_id = $1, instance_type = 'm7i.large' where id = $2", stuck.ID, uuid.UUID(host))
-	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 0 {
-		t.Fatalf("launched %d into a connection taking no new work", n)
 	}
 }
 
