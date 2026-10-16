@@ -578,9 +578,6 @@ func (c *Compute) PublishConnectionTemplate(ctx context.Context) error {
 	if c.fleet.PrincipalARN == "" {
 		return nil
 	}
-	if c.fleet.TemplateBucket == "" {
-		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
-	}
 	client := c.aws().s3(awsScope{key: string(KindPlatform)}, "")
 	bucket, key := aws.String(c.fleet.TemplateBucket), aws.String(templateKey())
 	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: bucket, Key: key})

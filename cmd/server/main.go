@@ -247,6 +247,9 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if fleet.PrincipalARN != "" && fleet.TemplateBucket == "" {
+		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
+	}
 	cfg.compute.Fleet = fleet
 	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
 	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
