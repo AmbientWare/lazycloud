@@ -21,10 +21,10 @@ import (
 // store or its connected account. Once that bucket is empty it deletes the
 // bucket and its row. It reports whether everything is gone; the caller
 // repeats until it is, then removes the workspace's rows. Bounding each
-// call keeps a pass short however many objects a workspace holds. A
-// connected account the platform can no longer act in, one without an
-// active authorization or refusing its role, keeps the bucket, which is
-// the customer's to delete; only its row goes.
+// call keeps a pass short however many objects a workspace holds. When
+// the platform can no longer act in a connected account, because it has
+// no active authorization or refuses the role, the bucket stays for the
+// customer to delete and only its row goes.
 func (s *Storage) DeleteWorkspaceStorage(ctx context.Context, logger *slog.Logger, workspace identity.WorkspaceID) (bool, error) {
 	empty, err := s.deletePrefixChunk(ctx, s.platform, fmt.Sprintf("workspaces/%s/", workspace))
 	if err != nil {

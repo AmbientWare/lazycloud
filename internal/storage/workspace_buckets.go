@@ -178,9 +178,9 @@ func (s *Storage) providerOf(ctx context.Context, store bucketClient) (bucketPro
 	}}, nil
 }
 
-// assumeRole assumes the connection role of account. The account refusing
-// it, as once the customer deleted the role, is a *ConflictError like a
-// connection without an active authorization.
+// assumeRole assumes the connection role of account. AWS refusing it, as it
+// does once the customer deletes the role, is a *ConflictError, the same as
+// a connection without an active authorization.
 func (s *Storage) assumeRole(ctx context.Context, connection uuid.UUID, account compute.ConnectedAccount, session, policy string,
 	lifetime time.Duration) (aws.Credentials, error) {
 	creds, err := s.connections.AssumeConnectionRole(ctx, account, session, policy, lifetime)

@@ -57,8 +57,7 @@ type customerStep struct {
 	url, label string
 }
 
-// customerAction is AWS refusing a step: only the customer can let it
-// finish.
+// customerAction is a step AWS refused that only the customer can unblock.
 type customerAction struct {
 	customerStep
 	cause error
@@ -87,8 +86,8 @@ func moveTo(conn Connection, phase ConnectionPhase, next *time.Time) outcome {
 	}}
 }
 
-// roleRefused is a step whose role AWS would not let the platform assume:
-// tried again after err, and without one, left to the customer.
+// roleRefused ends a step whose role AWS would not let the platform assume.
+// With err the step runs again; without one, the customer has to act.
 func roleRefused(err error, action *customerStep) outcome {
 	if err == nil {
 		err = &customerAction{customerStep: *action, cause: errRoleGone}
@@ -198,11 +197,11 @@ func (c *Compute) drain(ctx context.Context, conn Connection) outcome {
 var errDrainTimeout = errors.New("the instances did not end within the drain's bound")
 
 // revoke removes a disconnected account from AWS through its access
-// authorization: the active one, or for a setup that never finished, the
-// pending one. It terminates every instance tagged as one of the
-// connection's hosts, then deletes each stack of every generation not
-// confirmed deleted, the access stack last since it holds the role, and
-// deletes the connection once every stack is confirmed gone.
+// authorization: the active one, or the pending one for a setup that never
+// finished. It terminates every instance tagged as one of the connection's
+// hosts, then deletes every generation's stack not yet confirmed deleted.
+// The access stack goes last because it holds the role. The connection is
+// deleted once every stack is gone.
 func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	access := cmp.Or(conn.Active, conn.Pending)
 	if access == nil {
@@ -343,14 +342,13 @@ func (s connectionStack) action() *customerStep {
 	return &customerStep{url: stackURL(s.region, s.id, s.name), label: "Delete the stack " + s.name + " in AWS"}
 }
 
-// deleteStack moves a connection stack toward deleted and reports whether
-// CloudFormation no longer has it, which it records. Once the stack's id is
-// known the stack is read by id, which CloudFormation answers with
-// DELETE_COMPLETE after a deletion; before, a name it has no live stack of
-// is gone. A failed deletion is asked again, so the caller's attempts bound
-// it. AWS refusing the role's authority is a *customerAction. s takes the
-// stack id CloudFormation reports, and asking to delete the stack records
-// it.
+// deleteStack asks CloudFormation to delete a connection stack and reports
+// whether it is gone, recording that when it is. Once the stack's id is
+// known it is read by id, which CloudFormation answers with DELETE_COMPLETE
+// after a deletion. Before that, a name with no live stack counts as gone.
+// A failed deletion is requested again, bounded by the caller's attempts.
+// AWS refusing the role is a *customerAction. Requesting the deletion
+// records the stack id CloudFormation reports in s.
 func (c *Compute) deleteStack(ctx context.Context, scope awsScope, s *connectionStack) (bool, error) {
 	cf := c.aws().cloudFormation(scope, s.region)
 	out, err := cf.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: aws.String(cmp.Or(s.id, s.name))})
@@ -398,8 +396,8 @@ func (c *Compute) roleScope(conn Connection, a *Authorization) awsScope {
 	return c.aws().assume(a.RoleARN, a.externalID, "lazycloud-cleanup-"+conn.ID.String()[:8], conn.ID.String())
 }
 
-// assumable reports whether AWS lets the platform assume scope's role. STS
-// refusing it, as it does once the customer deleted the role, is false.
+// assumable reports whether AWS lets the platform assume scope's role. It
+// is false when STS refuses, as it does once the customer deletes the role.
 func assumable(ctx context.Context, scope awsScope) (bool, error) {
 	if _, err := scope.credentials.Retrieve(ctx); err != nil {
 		if accessDenied(err) {
@@ -410,8 +408,8 @@ func assumable(ctx context.Context, scope awsScope) (bool, error) {
 	return true, nil
 }
 
-// finishRevoke deletes a revoked connection once it has no live host,
-// after the launch permission on the fleet's images.
+// finishRevoke removes the account's launch permission on the fleet's
+// images, then deletes the revoked connection once it has no live host.
 func (c *Compute) finishRevoke(ctx context.Context, conn Connection) outcome {
 	if err := c.unshareImages(ctx, conn); err != nil {
 		return outcome{err: err}

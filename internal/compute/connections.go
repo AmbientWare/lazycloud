@@ -749,11 +749,10 @@ type Leftover struct {
 	ConsoleURL string
 }
 
-// Forget stops managing an account whose removal waits on the customer: it
-// removes the account's launch permission on the fleet's images as removal
-// does, deletes the connection's rows and returns what may remain in AWS,
-// every stack not confirmed deleted and every instance of a host not
-// confirmed gone, for the customer to delete there.
+// Forget stops managing an account whose removal waits on the customer. It
+// removes the account's launch permission on the fleet's images, deletes the
+// connection's rows and returns what may remain in AWS for the customer to
+// delete: every stack and every host instance not confirmed gone.
 func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftover, error) {
 	stuck := func(conn Connection) error {
 		if conn.Phase != ConnActionRequire || conn.Retiring != nil {
@@ -867,11 +866,11 @@ func lockAccountConnection(ctx context.Context, q *Queries, account identity.Use
 	return row, auths, nil
 }
 
-// PlaceWorkspace returns the connection a new workspace of account is
-// created in, in the transaction that creates it; the connection must take
-// new workloads. Its row stays share-locked until that transaction ends,
-// so Disconnect, which locks it for update, either finds the workspace or
-// is found removing the connection.
+// PlaceWorkspace returns the connection a new workspace of account goes
+// into, inside the transaction that creates the workspace. The connection
+// must accept new work. Its row stays share-locked until that transaction
+// ends, so a concurrent Disconnect, which locks the row for update, either
+// sees the workspace or the workspace sees the removal.
 func (c *Compute) PlaceWorkspace(ctx context.Context, tx pgx.Tx, account identity.UserID) (uuid.UUID, error) {
 	q := c.queries.WithTx(tx)
 	row, err := q.LockWorkspaceConnection(ctx, uuid.UUID(account))
@@ -922,7 +921,7 @@ func (c *Compute) S3Endpoint() string { return c.fleet.Endpoints.S3 }
 // AssumeConnectionRole returns credentials of the account's role for
 // lifetime, assumed through the platform principal with the external ID. A
 // non-empty policy narrows the session to what it allows. AWS refusing the
-// role, as once the customer deleted it, is a *ConflictError.
+// role, as it does once the customer deletes it, is a *ConflictError.
 func (c *Compute) AssumeConnectionRole(ctx context.Context, account ConnectedAccount, session, policy string, lifetime time.Duration) (aws.Credentials, error) {
 	creds, err := stscreds.NewAssumeRoleProvider(c.sts, account.role, func(o *stscreds.AssumeRoleOptions) {
 		o.ExternalID, o.RoleSessionName, o.Duration = aws.String(account.externalID), session, lifetime
