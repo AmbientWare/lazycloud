@@ -354,7 +354,11 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 }
 
 func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
-	conn = s.owners.Compute.View(conn)
+	return connectionView(s.owners.Compute.View(conn))
+}
+
+// connectionView maps a connection as its account sees it, from View.
+func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	out := apitypes.AwsConnection{
 		Id: conn.ID, AccountId: conn.AWSAccountID, Phase: apitypes.AwsConnectionPhase(conn.Phase), Revision: conn.Revision,
 		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(),
@@ -368,20 +372,21 @@ func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 	switch {
 	case conn.ConsoleURL != "":
 		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: conn.ConsoleURL}
-	case conn.ActionLabel != "":
+	case conn.ActionLabel != "" && conn.ActionURL != "":
 		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.ActionLabel, Url: conn.ActionURL}
 	}
 	return out
 }
 
 func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConnectionAuthorization {
-	out := apitypes.AwsConnectionAuthorization{Connection: s.connectionOut(conn)}
-	if conn.Pending != nil {
-		if conn.Pending.Mode == compute.ModeExistingRole {
-			id := conn.Pending.ExternalID()
+	view := s.owners.Compute.View(conn)
+	out := apitypes.AwsConnectionAuthorization{Connection: connectionView(view)}
+	if view.Pending != nil {
+		if view.Pending.Mode == compute.ModeExistingRole {
+			id := view.Pending.ExternalID()
 			out.Authorization.ExternalId = &id
-		} else if url := s.owners.Compute.View(conn).ConsoleURL; url != "" {
-			out.Authorization.ConsoleUrl = &url
+		} else if view.ConsoleURL != "" {
+			out.Authorization.ConsoleUrl = &view.ConsoleURL
 		}
 	}
 	return out

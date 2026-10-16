@@ -133,6 +133,16 @@ const (
 	ActionForget          ConnectionAction = "forget"
 )
 
+// authorizationSlot is the place an authorization holds in its connection;
+// a retired one holds none.
+type authorizationSlot string
+
+const (
+	slotActive   authorizationSlot = "active"
+	slotPending  authorizationSlot = "pending"
+	slotRetiring authorizationSlot = "retiring"
+)
+
 // Authorization is one role generation of a connection.
 type Authorization struct {
 	ID                 uuid.UUID
@@ -435,12 +445,12 @@ func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	}
 	for _, a := range auths {
 		auth := authorizationOf(a)
-		switch deref(a.Slot) {
-		case "active":
+		switch authorizationSlot(deref(a.Slot)) {
+		case slotActive:
 			conn.Active = &auth
-		case "pending":
+		case slotPending:
 			conn.Pending = &auth
-		case "retiring":
+		case slotRetiring:
 			conn.Retiring = &auth
 		}
 	}
@@ -527,7 +537,7 @@ func (c *Compute) PublishConnectionTemplate(ctx context.Context) error {
 	if c.fleet.TemplateBucket == "" {
 		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
 	}
-	client := awsClients{base: c.fleet.AWS, endpoints: c.fleet.Endpoints}.s3(awsScope{}, "")
+	client := c.aws().s3(awsScope{key: string(KindPlatform)}, "")
 	bucket, key := aws.String(c.fleet.TemplateBucket), aws.String(templateKey())
 	_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: bucket, Key: key})
 	var missing *s3types.NotFound
@@ -546,10 +556,10 @@ func (c *Compute) PublishConnectionTemplate(ctx context.Context) error {
 }
 
 // setPhase moves the connection to phase, scheduling its background step.
-func setPhase(ctx context.Context, q *Queries, id uuid.UUID, phase ConnectionPhase, next *time.Time, attempts int, action [2]string) error {
+func setPhase(ctx context.Context, q *Queries, id uuid.UUID, phase ConnectionPhase, next *time.Time, attempts int, action *customerStep) error {
 	params := SetConnectionPhaseParams{ID: id, Phase: string(phase), NextStepAt: next, StepAttempts: int32(attempts)} //nolint:gosec // Attempts are bounded.
-	if action[0] != "" || action[1] != "" {
-		params.ActionUrl, params.ActionLabel = ptr(action[0]), ptr(action[1])
+	if action != nil {
+		params.ActionUrl, params.ActionLabel = &action.url, &action.label
 	}
 	if _, err := q.SetConnectionPhase(ctx, params); err != nil {
 		return fmt.Errorf("set connection phase: %w", err)
@@ -600,7 +610,7 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 		if err := c.insertAuthorization(ctx, q, row, int(gen), req); err != nil {
 			return err
 		}
-		return setPhase(ctx, q, row.ID, ConnReconnecting, now(), 0, [2]string{})
+		return setPhase(ctx, q, row.ID, ConnReconnecting, now(), 0, nil)
 	})
 	if err != nil {
 		return Connection{}, fmt.Errorf("reconnect AWS: %w", err)
@@ -717,7 +727,7 @@ func beginRemoval(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) (
 	if err := q.RequestRemoval(ctx, conn.ID); err != nil {
 		return false, fmt.Errorf("record removal: %w", err)
 	}
-	if err := setPhase(ctx, q, conn.ID, phase, now(), 0, [2]string{}); err != nil {
+	if err := setPhase(ctx, q, conn.ID, phase, now(), 0, nil); err != nil {
 		return false, err
 	}
 	return false, notifyChannel(ctx, tx, conn.ID)
@@ -766,7 +776,6 @@ func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftov
 	}
 	left := []Leftover{}
 	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
-		left = left[:0]
 		q := c.queries.WithTx(tx)
 		row, auths, err := lockAccountConnection(ctx, q, account)
 		if err != nil {
@@ -827,12 +836,12 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 			} else if err := q.RequestRemoval(ctx, row.ID); err != nil {
 				return fmt.Errorf("record removal: %w", err)
 			}
-			if err := setPhase(ctx, q, row.ID, next, now(), 0, [2]string{}); err != nil {
+			if err := setPhase(ctx, q, row.ID, next, now(), 0, nil); err != nil {
 				return err
 			}
 			return notifyChannel(ctx, tx, row.ID)
 		case ConnDegraded, ConnAwaiting, ConnReconnecting:
-			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, [2]string{})
+			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, nil)
 		case ConnValidating, ConnReady, ConnRetiring, ConnDraining, ConnRevoking, ConnVerifying:
 		}
 		return nil
@@ -944,7 +953,7 @@ func (c *Compute) AdvanceConnections(ctx context.Context, logger *slog.Logger) (
 		if err != nil {
 			return n, fmt.Errorf("claim a due connection: %w", err)
 		}
-		step, cancel := context.WithTimeout(ctx, connectionStepLease)
+		step, cancel := context.WithTimeout(ctx, connectionStepDeadline)
 		err = c.advanceConnection(step, id)
 		cancel()
 		if err != nil {

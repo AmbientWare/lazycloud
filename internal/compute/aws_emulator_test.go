@@ -187,7 +187,10 @@ func esc(s string) string { return html.EscapeString(s) }
 func ok(body string) awsReply { return awsReply{status: http.StatusOK, body: body} }
 
 // dropped closes the connection without an answer, as a network failure or
-// a timeout leaves a call: the SDK's error carries no AWS error code.
+// a timeout leaves a call. net/http reports the closed connection as
+// io.EOF, which the SDK wraps in its operation error with no AWS error
+// code, and the emulator's fleet uses aws.NopRetryer, so the step sees it
+// at once.
 func dropped() awsReply { return awsReply{} }
 
 // ec2Error is EC2's error document.
