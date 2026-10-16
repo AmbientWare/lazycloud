@@ -46,6 +46,9 @@ type Fleet struct {
 	BootTimeout time.Duration
 	// CapacityCooldown is how long an offer that lacked capacity is skipped.
 	CapacityCooldown time.Duration
+	// DrainWait bounds how long a disconnect waits for the account's
+	// instances to end while its role still works.
+	DrainWait time.Duration
 	// Endpoints override AWS service endpoints; tests point them at
 	// recorded responses.
 	Endpoints Endpoints
@@ -95,6 +98,9 @@ func (f Fleet) withDefaults() Fleet {
 	}
 	if f.CapacityCooldown == 0 {
 		f.CapacityCooldown = 10 * time.Minute
+	}
+	if f.DrainWait == 0 {
+		f.DrainWait = time.Hour
 	}
 	return f
 }

@@ -2,8 +2,10 @@ package compute_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -79,12 +82,20 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 		}
 		return callerIdentityReply(parts[1], "arn:aws:sts::"+parts[1]+":assumed-role/"+parts[2]+"/lazycloud", "AROAEXAMPLE:lazycloud")
 	})
+	// CloudFormation reads a deleted stack by its id, as DELETE_COMPLETE,
+	// but not by its name.
 	e.on("DescribeStacks", func(call awsCall) awsReply {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		s, ok := c.stacks[call.Form.Get("StackName")]
-		if !ok || !strings.HasPrefix(call.AccessKey, "ASIA-") {
-			return queryError(http.StatusBadRequest, "ValidationError", "Stack with id "+call.Form.Get("StackName")+" does not exist")
+		named := call.Form.Get("StackName")
+		s, ok := c.stacks[named]
+		for _, byID := range c.stacks {
+			if byID.ID == named {
+				s, ok = byID, true
+			}
+		}
+		if !ok || !strings.HasPrefix(call.AccessKey, "ASIA-") || s.Name == named && s.Status == "DELETE_COMPLETE" {
+			return queryError(http.StatusBadRequest, "ValidationError", "Stack with id "+named+" does not exist")
 		}
 		return describeStacksReply(*s)
 	})
@@ -956,11 +967,11 @@ func TestConcurrentPassesRunEachConnectionStepOnce(t *testing.T) {
 }
 
 // A drain whose role still works waits for its instances without asking
-// the customer, until an hour after the disconnect.
-func TestADrainWaitsForItsInstancesForAnHour(t *testing.T) {
+// the customer, until the fleet's drain bound after the disconnect.
+func TestADrainWaitsForItsInstancesUntilItsBound(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	o, _, customer := connectionFleet(t)
+	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
@@ -976,10 +987,16 @@ func TestADrainWaitsForItsInstancesForAnHour(t *testing.T) {
 	if phase := phaseOf(t, o, alice); phase != compute.ConnDraining {
 		t.Fatalf("after 20 steps with an instance ending the connection is %s, want still draining", phase)
 	}
-	run(t, o.pool, "update cloud_connections set removal_requested_at = now() - interval '61 minutes', next_step_at = now() where id = $1", conn.ID)
-	advance(t, o)
+	// A replica whose drain bound has passed asks the customer.
+	short := compute.NewCompute(o.pool, o.execution, fleetConfig(emulator.fleet(compute.Fleet{
+		PrincipalARN: platformPrincipal, BucketPrefix: "lazycloud-ws-test", DrainWait: time.Nanosecond,
+	})))
+	due(t, o, conn)
+	if _, err := short.AdvanceConnections(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
 	if stuck := current(t, o, alice); stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(stuck.ActionURL, "console.aws.amazon.com/ec2") {
-		t.Fatalf("an hour into the drain: %+v, want action_required showing the instances", stuck)
+		t.Fatalf("past the drain bound: %+v, want action_required showing the instances", stuck)
 	}
 }
 
@@ -1070,30 +1087,38 @@ func TestAWorkspaceCreatedDuringADisconnectBlocksIt(t *testing.T) {
 	alice := newUser(t, o.pool, "alice@example.com")
 	connected(t, o, customer, alice)
 
-	tx, err := o.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	id, err := o.compute.PlaceWorkspace(ctx, tx, alice)
-	if err != nil {
-		t.Fatal(err)
-	}
 	disconnected := make(chan error, 1)
-	go func() {
-		_, err := o.compute.Disconnect(ctx, alice)
-		disconnected <- err
-	}()
-	for deadline := time.Now().Add(time.Minute); !scan[bool](t, o.pool,
-		"select exists (select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock')"); {
-		if time.Now().After(deadline) {
-			t.Fatal("the disconnect never waited for the workspace being created")
+	place := func(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
+		id, err := o.compute.PlaceWorkspace(ctx, tx, alice)
+		if err != nil {
+			return id, err
+		}
+		go func() {
+			_, err := o.compute.Disconnect(ctx, alice)
+			disconnected <- err
+		}()
+		// The workspace is created once the disconnect waits on its lock.
+		waiting, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			var blocked bool
+			if err := o.pool.QueryRow(waiting, "select exists (select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock')").Scan(&blocked); err != nil {
+				return id, fmt.Errorf("read lock waits: %w", err)
+			}
+			if blocked {
+				return id, nil
+			}
+			select {
+			case <-waiting.Done():
+				return id, errors.New("the disconnect never waited for the workspace being created")
+			case <-tick.C:
+			}
 		}
 	}
-	if _, err := tx.Exec(ctx, "insert into workspaces (name, connection_id) values ('prod', $1)", id); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	admin := identity.Principal{User: alice, IsAdmin: true}
+	if _, err := identity.NewIdentity(o.pool, identity.Config{}).CreateOwnedWorkspace(ctx, admin, "prod", place); err != nil {
 		t.Fatal(err)
 	}
 	var conflict *compute.ConflictError

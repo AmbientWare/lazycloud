@@ -159,7 +159,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 				phase = ConnAwaiting
 			}
 			backoff := time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
-			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(backoff)), attempts, [2]string{})
+			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(backoff)), attempts, nil)
 		}
 		networks, err := json.Marshal(result.networks)
 		if err != nil {
@@ -172,20 +172,20 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return fmt.Errorf("record validation: %w", err)
 		}
 		if conn.Pending == nil || target.ID != conn.Pending.ID {
-			return setPhase(ctx, q, id, ConnReady, nil, 0, [2]string{})
+			return setPhase(ctx, q, id, ConnReady, nil, 0, nil)
 		}
 		if conn.Active != nil {
-			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr("retiring")}); err != nil {
+			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr(string(slotRetiring))}); err != nil {
 				return fmt.Errorf("retire active authorization: %w", err)
 			}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr("active")}); err != nil {
+		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr(string(slotActive))}); err != nil {
 			return fmt.Errorf("activate authorization: %w", err)
 		}
 		if conn.Active != nil {
-			return setPhase(ctx, q, id, ConnRetiring, now(), 0, [2]string{})
+			return setPhase(ctx, q, id, ConnRetiring, now(), 0, nil)
 		}
-		if err := setPhase(ctx, q, id, ConnReady, nil, 0, [2]string{}); err != nil {
+		if err := setPhase(ctx, q, id, ConnReady, nil, 0, nil); err != nil {
 			return err
 		}
 		return notifyChannel(ctx, tx, id)

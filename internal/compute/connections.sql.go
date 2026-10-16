@@ -718,11 +718,18 @@ func (q *Queries) SetConnectionPhase(ctx context.Context, arg SetConnectionPhase
 }
 
 const stackDeleteRequested = `-- name: StackDeleteRequested :exec
-update cloud_authorizations set stack_delete_requested_at = now(), updated_at = now() where id = $1
+update cloud_authorizations
+set stack_delete_requested_at = now(), stack_id = coalesce(nullif($1::text, ''), stack_id), updated_at = now()
+where id = $2
 `
 
-func (q *Queries) StackDeleteRequested(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, stackDeleteRequested, id)
+type StackDeleteRequestedParams struct {
+	StackID string
+	ID      uuid.UUID
+}
+
+func (q *Queries) StackDeleteRequested(ctx context.Context, arg StackDeleteRequestedParams) error {
+	_, err := q.db.Exec(ctx, stackDeleteRequested, arg.StackID, arg.ID)
 	return err
 }
 
