@@ -195,21 +195,21 @@
       "Type": "AWS::EC2::Subnet",
       "Properties": {
         "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.1.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZone": {"Fn::Select": [0, {"Fn::GetAZs": ""}]}
+        "AvailabilityZoneId": "use2-az1"
       }
     },
     "SubnetB": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
         "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.2.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZone": {"Fn::Select": [1, {"Fn::GetAZs": ""}]}
+        "AvailabilityZoneId": "use2-az2"
       }
     },
     "SubnetC": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
         "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.3.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZone": {"Fn::Select": [2, {"Fn::GetAZs": ""}]}
+        "AvailabilityZoneId": "use2-az3"
       }
     },
     "SubnetARoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetA"}, "RouteTableId": {"Ref": "RouteTable"}}},

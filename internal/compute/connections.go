@@ -34,7 +34,8 @@ var connectionTemplate string
 // made from another one.
 const TemplateVersion = "2026-10-16.v1"
 
-// connectionRegion is where connection stacks are created.
+// connectionRegion is where connection stacks are created. The template's
+// subnets name this region's zone IDs, which are the same in every account.
 const connectionRegion = "us-east-2"
 
 // TemplateSHA256 is the hex digest of the connection template.
