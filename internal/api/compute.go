@@ -353,20 +353,6 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 	return out
 }
 
-func stackOut(st *compute.StackAction) *apitypes.AwsStackAction {
-	if st == nil {
-		return nil
-	}
-	out := &apitypes.AwsStackAction{AccountId: st.AccountID, Region: st.Region, TemplateSha256: st.TemplateSHA256}
-	out.Request.StackName, out.Request.TemplateBody = st.StackName, st.TemplateBody
-	out.Request.Capabilities = []apitypes.AwsStackActionRequestCapabilities{apitypes.CAPABILITYNAMEDIAM}
-	out.Request.OnFailure = apitypes.AwsStackActionRequestOnFailureDELETE
-	for _, p := range st.Parameters {
-		out.Request.Parameters = append(out.Request.Parameters, apitypes.AwsStackParameter{ParameterKey: p[0], ParameterValue: p[1]})
-	}
-	return out
-}
-
 func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 	conn = s.owners.Compute.View(conn)
 	out := apitypes.AwsConnection{
@@ -379,14 +365,8 @@ func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 	for _, a := range conn.Actions() {
 		out.AvailableActions = append(out.AvailableActions, apitypes.AwsConnectionAction(a))
 	}
-	switch {
-	case conn.Stack != nil:
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack", Stack: stackOut(conn.Stack)}
-	case conn.ActionLabel != "":
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.ActionLabel}
-		if conn.ActionURL != "" {
-			out.CustomerAction.Url = &conn.ActionURL
-		}
+	if conn.ActionLabel != "" {
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.ActionLabel, Url: conn.ActionURL}
 	}
 	return out
 }
@@ -397,8 +377,6 @@ func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConn
 		if conn.Pending.Mode == compute.ModeExistingRole {
 			id := conn.Pending.ExternalID()
 			out.Authorization.ExternalId = &id
-		} else {
-			out.Authorization.Stack = out.Connection.CustomerAction.Stack
 		}
 	}
 	return out
@@ -524,4 +502,24 @@ func (s *Server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionReq
 		return nil, err
 	}
 	return RetryAwsConnection200JSONResponse(s.connectionOut(conn)), nil
+}
+
+// ForgetAwsConnection stops managing an account whose disconnect needs
+// attention, and returns what remains in AWS.
+func (s *Server) ForgetAwsConnection(ctx context.Context, _ ForgetAwsConnectionRequestObject) (ForgetAwsConnectionResponseObject, error) {
+	p, err := s.account(ctx, "forget the AWS connection")
+	if err != nil {
+		return nil, err
+	}
+	left, err := s.owners.Compute.Forget(ctx, p.User)
+	if err != nil {
+		return nil, err
+	}
+	out := ForgetAwsConnection200JSONResponse{LeftInAws: []apitypes.AwsLeftover{}}
+	for _, l := range left {
+		out.LeftInAws = append(out.LeftInAws, apitypes.AwsLeftover{
+			Kind: apitypes.AwsLeftoverKind(l.Kind), Id: l.ID, Region: l.Region, ConsoleUrl: l.ConsoleURL,
+		})
+	}
+	return out, nil
 }

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,7 +22,11 @@ const platformPrincipal = "arn:aws:iam::999988887777:role/lazycloud-platform"
 
 // customerAWS is what customer accounts hold, served through the emulator:
 // roles the platform may assume and the connection stacks CloudFormation
-// made.
+// made. STS answers AssumeRole on a role that does not exist, or with the
+// wrong external ID, with AccessDenied, and CloudFormation answers
+// DescribeStacks on a stack name it has no live stack of with
+// ValidationError, as their API references record. Deleting a stack
+// removes the role it made, which the connection template deletes last.
 type customerAWS struct {
 	mu sync.Mutex
 	// roles maps a role ARN to the external ID AssumeRole requires.
@@ -81,10 +87,14 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 			s.Status = "DELETE_COMPLETE"
 			if c.failDelete[name] {
 				s.Status = "DELETE_FAILED"
+			} else {
+				delete(c.roles, s.Outputs["ConnectionRoleArn"])
 			}
 		}
 		return deleteStackReply()
 	})
+	// The account runs no fleet instances unless a test says so.
+	e.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
 	e.on("DescribeSubnets", func(call awsCall) awsReply {
 		zones := map[string]compute.Subnet{
 			"subnet-a": {ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
@@ -133,6 +143,22 @@ func (c *customerAWS) externalID(roleARN string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.roles[roleARN].externalID
+}
+
+// deleteStack is the customer deleting a stack in the console, with the
+// role it made.
+func (c *customerAWS) deleteStack(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stacks[name].Status = "DELETE_COMPLETE"
+	delete(c.roles, c.stacks[name].Outputs["ConnectionRoleArn"])
+}
+
+// deleteRole is the customer deleting the connection role in IAM.
+func (c *customerAWS) deleteRole(arn string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.roles, arn)
 }
 
 func (c *customerAWS) setStatus(name, status string) {
@@ -430,11 +456,33 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 	}
 }
 
+// phaseOf is the connection's phase, or "" once it is gone.
+func phaseOf(t *testing.T, o owners, account identity.UserID) compute.ConnectionPhase {
+	t.Helper()
+	if conn := current(t, o, account); conn != nil {
+		return conn.Phase
+	}
+	return ""
+}
+
+func deletedStacks(e *awsEmulator) []string {
+	var out []string
+	for _, c := range e.calls("DeleteStack") {
+		out = append(out, c.Form.Get("StackName"))
+	}
+	return out
+}
+
 func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	o, emulator, customer := connectionFleet(t)
-	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
+	emulator := newAWS(t)
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{
+		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
+	})))
+	customer := newCustomerAWS(emulator)
+	emulator.on("ModifyImageAttribute", func(awsCall) awsReply { return modifyImageAttributeReply() })
+	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	ws := newWorkspace(t, o.pool, "prod", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
@@ -443,12 +491,10 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 		t.Fatalf("disconnect with a workspace in the account: %v, want ConflictError", err)
 	}
 	run(t, o.pool, "update workspaces set connection_id = null where id = $1", ws)
-
-	// An unfinished setup goes at once.
-	connect(t, o, bob, "222222222222")
-	if gone, err := o.compute.Disconnect(ctx, bob); err != nil || gone != nil || current(t, o, bob) != nil {
-		t.Fatalf("disconnect an unfinished setup: %+v %v, want it removed", gone, err)
-	}
+	run(t, o.pool, `insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
+values ($1::text, 'us-east-2', 'm7i.large', 'spot', now() + interval '1 hour', 'refused')`, conn.ID)
+	run(t, o.pool, `insert into fleet_markets (market, plan, generated_at, expires_at)
+values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
 		Region: "us-east-2", InstanceID: "i-0000000000000c001"})
@@ -471,8 +517,8 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 		t.Fatalf("disconnect: %+v %v, want disconnect_draining", draining, err)
 	}
 	advance(t, o)
-	if conn := current(t, o, alice); conn.Phase != compute.ConnDraining {
-		t.Fatalf("with an instance left the connection is %s, want still draining", conn.Phase)
+	if phase := phaseOf(t, o, alice); phase != compute.ConnDraining {
+		t.Fatalf("with an instance left the connection is %s, want still draining", phase)
 	}
 	if _, err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
@@ -490,27 +536,62 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	}
 	due(t, o, conn)
 	advance(t, o)
-	if conn := current(t, o, alice); conn.Phase != compute.ConnRevoking {
-		t.Fatalf("without instances the connection is %s, want revoking", conn.Phase)
+	if phase := phaseOf(t, o, alice); phase != compute.ConnRevoking {
+		t.Fatalf("without instances the connection is %s, want revoking", phase)
 	}
 	advance(t, o)
-	if conn := current(t, o, alice); conn.Phase != compute.ConnVerifying {
-		t.Fatalf("after DeleteStack the connection is %s, want verifying_revocation", conn.Phase)
+	if phase := phaseOf(t, o, alice); phase != compute.ConnVerifying {
+		t.Fatalf("after DeleteStack the connection is %s, want verifying_revocation", phase)
 	}
-	if deletes := emulator.calls("DeleteStack"); len(deletes) != 1 || deletes[0].Form.Get("StackName") != conn.Active.StackName {
+	if deletes := deletedStacks(emulator); len(deletes) != 1 || deletes[0] != conn.Active.StackName {
 		t.Fatalf("DeleteStack calls %v, want the active stack", deletes)
 	}
 	due(t, o, conn)
 	advance(t, o)
-	if conn := current(t, o, alice); conn != nil {
-		t.Fatalf("after the stack is gone the connection is %s, want deleted", conn.Phase)
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("after the stack is gone the connection is %s, want deleted", phase)
+	}
+	unshares := emulator.calls("ModifyImageAttribute")
+	if len(unshares) != 1 || unshares[0].AccessKey != platformAccessKey || unshares[0].Form.Get("ImageId") != "ami-0baked" ||
+		unshares[0].Form.Get("LaunchPermission.Remove.1.UserId") != "111111111111" {
+		t.Fatalf("ModifyImageAttribute calls %v, want the platform removing 111111111111's launch permission on ami-0baked", unshares)
+	}
+	if n := scan[int](t, o.pool, `select (select count(*) from capacity_cooldowns where connection_key = $1::text) +
+(select count(*) from fleet_markets where starts_with(market, $1::text))`, conn.ID); n != 0 {
+		t.Fatalf("%d cooldown and market rows of the removed connection remain", n)
 	}
 }
 
-func TestFailedStackDeletionAsksTheCustomerAndRetryResumes(t *testing.T) {
+// A network failure while reading a stack proves nothing about it: the
+// connection keeps the stack to delete and tries again.
+func TestAStackReadWithoutAnAnswerIsRetried(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	o, _, customer := connectionFleet(t)
+	o, emulator, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	emulator.on("DescribeStacks", func(awsCall) awsReply { return dropped() })
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, o) // drained: nothing runs there
+	advance(t, o) // DescribeStacks fails without an answer
+	after := current(t, o, alice)
+	if after == nil || after.Phase != compute.ConnRevoking || after.NextRetryAt == nil || len(emulator.calls("DescribeStacks")) == 0 {
+		t.Fatalf("after DescribeStacks failed: %+v, want still revoking with a retry scheduled", after)
+	}
+	if n := scan[int](t, o.pool, "select count(*)::int from cloud_authorizations where id = $1 and stack_deleted_at is null", conn.Active.ID); n != 1 {
+		t.Fatal("the stack was recorded deleted")
+	}
+}
+
+// CloudFormation failing to delete a stack is asked again a bounded number
+// of times, then the customer is shown the stack. Once the customer deleted
+// it, retry finishes the removal.
+func TestAStackThatKeepsFailingToDeleteGoesToTheCustomer(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	customer.mu.Lock()
@@ -520,27 +601,214 @@ func TestFailedStackDeletionAsksTheCustomerAndRetryResumes(t *testing.T) {
 	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
 		t.Fatal(err)
 	}
-	advance(t, o) // drained: nothing runs there
-	advance(t, o) // DeleteStack
-	due(t, o, conn)
-	advance(t, o)
+	for n := 0; n < 30 && phaseOf(t, o, alice) != compute.ConnActionRequire; n++ {
+		due(t, o, conn)
+		advance(t, o)
+	}
 	stuck := current(t, o, alice)
 	if stuck == nil || stuck.Phase != compute.ConnActionRequire ||
 		!strings.Contains(stuck.ActionURL, "console.aws.amazon.com/cloudformation") || !strings.Contains(stuck.ActionURL, "stackId=") {
 		t.Fatalf("after DELETE_FAILED: %+v, want action_required with the stack's console URL", stuck)
 	}
-	if actions := stuck.Actions(); len(actions) != 1 || actions[0] != compute.ActionRetry {
-		t.Fatalf("actions %v, want retry", actions)
+	if deletes := deletedStacks(emulator); len(deletes) < 3 {
+		t.Fatalf("DeleteStack calls %v, want the failed deletion asked again before the customer is", deletes)
+	}
+	if actions := stuck.Actions(); !slices.Equal(actions, []compute.ConnectionAction{compute.ActionRetry, compute.ActionForget}) {
+		t.Fatalf("actions %v, want retry and forget", actions)
 	}
 
-	// The customer deletes the stack in the console and retries.
-	customer.setStatus(conn.Active.StackName, "DELETE_COMPLETE")
+	customer.deleteStack(conn.Active.StackName)
 	retried, err := o.compute.Retry(ctx, alice)
-	if err != nil || retried.Phase != compute.ConnRevoking {
-		t.Fatalf("retry: %+v %v, want revoking", retried, err)
+	if err != nil || retried.Phase != compute.ConnDraining {
+		t.Fatalf("retry: %+v %v, want the removal started over", retried, err)
 	}
 	advance(t, o)
-	if conn := current(t, o, alice); conn != nil {
-		t.Fatalf("after retry the connection is %s, want deleted", conn.Phase)
+	advance(t, o)
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("after retry the connection is %s, want deleted", phase)
+	}
+}
+
+// A role the customer deleted while instances still run leaves them to the
+// customer; forgetting the connection then lists what may remain in AWS.
+func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Market: compute.MarketSpot,
+		Region: "us-east-2", InstanceID: "i-0000000000000d001"})
+	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(host))
+	customer.deleteRole(conn.Active.RoleARN)
+
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	var conflict *compute.ConflictError
+	if _, err := o.compute.Forget(ctx, alice); !errors.As(err, &conflict) {
+		t.Fatalf("forget while draining: %v, want ConflictError", err)
+	}
+	if _, err := o.compute.Retire(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	advance(t, o)
+	stuck := current(t, o, alice)
+	if stuck == nil || stuck.Phase != compute.ConnActionRequire || !strings.Contains(stuck.ActionURL, "console.aws.amazon.com/ec2") ||
+		!slices.Equal(stuck.Actions(), []compute.ConnectionAction{compute.ActionRetry, compute.ActionForget}) {
+		t.Fatalf("with the role gone mid-drain: %+v, want action_required showing the instances, with retry and forget", stuck)
+	}
+
+	left, err := o.compute.Forget(ctx, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[compute.LeftoverKind]string{compute.LeftoverStack: conn.Active.StackID, compute.LeftoverInstance: "i-0000000000000d001"}
+	if len(left) != 2 {
+		t.Fatalf("left in AWS %+v, want the stack and the instance", left)
+	}
+	for _, l := range left {
+		if want[l.Kind] != l.ID || l.Region != "us-east-2" || !strings.Contains(l.ConsoleURL, "console.aws.amazon.com") {
+			t.Errorf("leftover %+v, want %s %s in us-east-2 with a console link", l, l.Kind, want[l.Kind])
+		}
+	}
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("after forget the connection is %s, want deleted", phase)
+	}
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseFailed) {
+		t.Fatalf("the forgotten connection's host is %s, want failed", phase)
+	}
+}
+
+// Disconnecting mid-reconnect deletes the replacement's stack, which the
+// customer created, then the active one, through the active role.
+func TestDisconnectMidReconnectDeletesBothGenerationsStacks(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	first := connected(t, o, customer, alice)
+	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer.authorize(t, o, reconnecting, role{})
+
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < 10 && phaseOf(t, o, alice) != ""; n++ {
+		due(t, o, first)
+		advance(t, o)
+	}
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("the connection is %s, want deleted", phase)
+	}
+	deletes := emulator.calls("DeleteStack")
+	if got := deletedStacks(emulator); !slices.Equal(got, []string{reconnecting.Pending.StackName, first.Active.StackName}) {
+		t.Fatalf("DeleteStack calls %v, want the replacement's stack, then the active one", got)
+	}
+	for _, d := range deletes {
+		if d.AccessKey != assumedKey(first.Active.RoleARN) {
+			t.Errorf("DeleteStack %s through %s, want the active role", d.Form.Get("StackName"), d.AccessKey)
+		}
+	}
+}
+
+// A setup that never finished is removed: at once when the customer never
+// created its stack, and with its stack when the customer did.
+func TestAnUnfinishedSetupIsRemovedWithTheStackTheCustomerCreated(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	bob, carol := newUser(t, o.pool, "bob@example.com"), newUser(t, o.pool, "carol@example.com")
+	connect(t, o, bob, "222222222222")
+	created := connect(t, o, carol, "333333333333")
+	customer.authorize(t, o, created, role{})
+
+	for _, account := range []identity.UserID{bob, carol} {
+		if conn, err := o.compute.Disconnect(ctx, account); err != nil || conn == nil || conn.Phase != compute.ConnRevoking {
+			t.Fatalf("disconnect an unfinished setup: %+v %v, want revoking", conn, err)
+		}
+	}
+	for n := 0; n < 5 && (phaseOf(t, o, bob) != "" || phaseOf(t, o, carol) != ""); n++ {
+		run(t, o.pool, "update cloud_connections set next_step_at = now()")
+		advance(t, o)
+	}
+	if bob, carol := phaseOf(t, o, bob), phaseOf(t, o, carol); bob != "" || carol != "" {
+		t.Fatalf("connections %q and %q remain, want both removed", bob, carol)
+	}
+	if got := deletedStacks(emulator); !slices.Equal(got, []string{created.Pending.StackName}) {
+		t.Fatalf("DeleteStack calls %v, want only the stack the customer created", got)
+	}
+}
+
+// A host a planning pass requested just before the disconnect is never
+// launched into the disconnecting account.
+func TestALaunchRacingADisconnectDoesNotLaunch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	emulator := newAWS(t)
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{PrincipalARN: platformPrincipal})))
+	publish(t, o.compute)
+	customer := newCustomerAWS(emulator)
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseRequested,
+		Market: compute.MarketSpot, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1", Unenrolled: true})
+	run(t, o.pool, "update hosts set connection_id = $1, instance_type = 'm7i.large' where id = $2", conn.ID, uuid.UUID(host))
+
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	if n := launch(t, o); n != 0 || len(emulator.calls("RunInstances")) != 0 {
+		t.Fatalf("launched %d with %d RunInstances calls into a disconnecting account", n, len(emulator.calls("RunInstances")))
+	}
+	advance(t, o)
+	if phase := phaseOf(t, o, alice); phase != compute.ConnRevoking {
+		t.Fatalf("the connection is %s, want its drain past the host that never launched", phase)
+	}
+}
+
+// Creating a workspace in the connection holds the connection from the
+// check that it hosts workloads until the workspace commits, so a
+// disconnect in between waits and then finds the workspace.
+func TestAWorkspaceCreatedDuringADisconnectBlocksIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	connected(t, o, customer, alice)
+
+	tx, err := o.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	id, err := o.compute.PlaceWorkspace(ctx, tx, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disconnected := make(chan error, 1)
+	go func() {
+		_, err := o.compute.Disconnect(ctx, alice)
+		disconnected <- err
+	}()
+	for deadline := time.Now().Add(time.Minute); !scan[bool](t, o.pool,
+		"select exists (select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock')"); {
+		if time.Now().After(deadline) {
+			t.Fatal("the disconnect never waited for the workspace being created")
+		}
+	}
+	if _, err := tx.Exec(ctx, "insert into workspaces (name, connection_id) values ('prod', $1)", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var conflict *compute.ConflictError
+	if err := <-disconnected; !errors.As(err, &conflict) {
+		t.Fatalf("disconnect racing the workspace: %v, want ConflictError", err)
 	}
 }

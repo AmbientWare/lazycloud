@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -223,18 +224,13 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 	if err != nil {
 		return nil, err
 	}
-	var connection *uuid.UUID
+	var place identity.PlaceWorkspace
 	if req.Body.Cloud != nil {
-		if !p.IsAdmin {
-			return nil, identity.ErrAdminRequired
+		place = func(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
+			return s.owners.Compute.PlaceWorkspace(ctx, tx, p.User)
 		}
-		id, err := s.owners.Compute.WorkspaceConnection(ctx, p.User)
-		if err != nil {
-			return nil, err
-		}
-		connection = &id
 	}
-	ws, err := s.owners.Identity.CreateOwnedWorkspace(ctx, p, req.Body.Name, connection)
+	ws, err := s.owners.Identity.CreateOwnedWorkspace(ctx, p, req.Body.Name, place)
 	if err != nil {
 		return nil, err
 	}

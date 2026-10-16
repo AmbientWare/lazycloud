@@ -100,6 +100,12 @@ func (a *awsEmulator) serve(w http.ResponseWriter, r *http.Request) {
 	} else {
 		reply = handler(call)
 	}
+	if reply.status == 0 {
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+		return
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Amzn-Requestid", "req-0000")
 	w.WriteHeader(reply.status)
@@ -179,6 +185,10 @@ func specTags(form url.Values, kind string) map[string]string {
 func esc(s string) string { return html.EscapeString(s) }
 
 func ok(body string) awsReply { return awsReply{status: http.StatusOK, body: body} }
+
+// dropped closes the connection without an answer, as a network failure or
+// a timeout leaves a call: the SDK's error carries no AWS error code.
+func dropped() awsReply { return awsReply{} }
 
 // ec2Error is EC2's error document.
 func ec2Error(status int, code, message string) awsReply {

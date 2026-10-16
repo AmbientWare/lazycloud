@@ -61,6 +61,9 @@ type connectedStorage struct {
 
 	mu    sync.Mutex
 	calls []assumed
+	// roleDeleted makes STS refuse the role, as once the customer deleted
+	// it.
+	roleDeleted bool
 	// unowned counts requests to s3 that named no expected bucket owner,
 	// other than CreateBucket, which takes none; owners counts the ones
 	// that did, by owner.
@@ -140,8 +143,9 @@ func (c *connectedStorage) assumeRole(w http.ResponseWriter, r *http.Request) {
 	}
 	c.mu.Lock()
 	c.calls = append(c.calls, call)
+	deleted := c.roleDeleted
 	c.mu.Unlock()
-	if call.role != c.role || call.externalID != c.externalID {
+	if deleted || call.role != c.role || call.externalID != c.externalID {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = fmt.Fprint(w, `<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>not authorized</Message></Error></ErrorResponse>`)
 		return
@@ -370,7 +374,7 @@ func TestAWorkspaceUsesTheBucketRecordedFirst(t *testing.T) {
 	}
 }
 
-// A connection without an active authorization cannot hold a workspace's
+// A connection whose role the customer deleted cannot hold a workspace's
 // storage, whether its bucket exists yet or not: the refusal is a typed
 // conflict that fails the container needing it, not an error the host
 // retries. Its workspaces are still deleted: a bucket, with the data in it,
@@ -388,13 +392,13 @@ func TestARevokedConnectionRefusesStorageAndKeepsItsBuckets(t *testing.T) {
 	if _, err := c.accountClient().PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("volumes/x/kept"), Body: strings.NewReader("x")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.pool.Exec(ctx, `update cloud_authorizations set slot = null, phase = 'retired' where connection_id = $1`, c.connection); err != nil {
-		t.Fatal(err)
-	}
+	c.mu.Lock()
+	c.roleDeleted = true
+	c.mu.Unlock()
 	for name, ws := range map[string]identity.WorkspaceID{"new": fresh, "existing": used} {
 		var refused *ConflictError
 		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
-			t.Errorf("grant on the %s bucket without an authorization: %v, want a conflict", name, err)
+			t.Errorf("grant on the %s bucket with the role deleted: %v, want a conflict", name, err)
 		}
 	}
 	// The scheduler deletes workspaces with storage of its own, which holds
