@@ -2668,12 +2668,12 @@ export interface paths {
         put?: never;
         /**
          * Connect an AWS account to back the workspaces the account owns
-         * @description Without a role the response carries the CloudFormation stack the customer submits with `lazycloud cloud authorize`. With an existing role it carries the external ID the role must require. Repeating an unfinished setup for the same account returns it again.
+         * @description Without a role the response carries an AWS Console link that opens the connection stack, ready to create, in the customer's account. With an existing role it carries the external ID the role must require. Repeating an unfinished setup for the same account returns it again.
          */
         post: operations["connectAws"];
         /**
          * Disconnect the AWS account
-         * @description Refused while a workspace lives in the account. An unfinished setup is removed at once; a connected account drains its instances, then the platform deletes the stack and verifies the role is gone.
+         * @description Refused while a workspace lives in the account. The platform terminates its instances in the account, deletes every connection stack it asked the customer to create, then removes the connection. A step that cannot finish moves the connection to action_required.
          */
         delete: operations["disconnectAws"];
         options?: never;
@@ -2730,6 +2730,26 @@ export interface paths {
         put?: never;
         /** Retry the step the connection is waiting on */
         post: operations["retryAwsConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/aws-connection/forget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a connection whose cleanup cannot finish
+         * @description Allowed in action_required. The platform stops managing the account and returns what it could not delete, for the customer to remove in AWS.
+         */
+        post: operations["forgetAwsConnection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5381,7 +5401,7 @@ export interface components {
         /** @enum {string} */
         AwsConnectionPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "reconnect_pending" | "retiring_authorization" | "disconnect_draining" | "revoking" | "verifying_revocation" | "action_required";
         /** @enum {string} */
-        AwsConnectionAction: "authorize" | "validate" | "reconnect" | "cancel_reconnect" | "remove" | "retry";
+        AwsConnectionAction: "authorize" | "validate" | "reconnect" | "cancel_reconnect" | "remove" | "retry" | "forget";
         /** @enum {string} */
         AwsAuthorizationPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "retiring" | "retired";
         /** @enum {string} */
@@ -5410,28 +5430,10 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        AwsStackParameter: {
-            ParameterKey: string;
-            ParameterValue: string;
-        };
-        /** @description A CloudFormation CreateStack request the customer submits with their own credentials. */
-        AwsStackAction: {
-            account_id: string;
-            region: string;
-            template_sha256: string;
-            request: {
-                StackName: string;
-                TemplateBody: string;
-                Parameters: components["schemas"]["AwsStackParameter"][];
-                Capabilities: "CAPABILITY_NAMED_IAM"[];
-                /** @enum {string} */
-                OnFailure: "DELETE";
-            };
-        };
+        /** @description A step the customer takes in the AWS Console. */
         AwsCustomerAction: {
-            url?: string;
-            stack?: components["schemas"]["AwsStackAction"];
             label: string;
+            url: string;
         };
         AwsConnection: {
             /** Format: uuid */
@@ -5481,9 +5483,22 @@ export interface components {
         AwsConnectionAuthorization: {
             connection: components["schemas"]["AwsConnection"];
             authorization: {
-                stack?: components["schemas"]["AwsStackAction"];
+                /** @description Opens the connection stack, ready to create, in the AWS Console. */
+                console_url?: string;
+                /** @description The external ID an existing role must require. */
                 external_id?: string;
             };
+        };
+        /** @description A resource in the customer's AWS account the platform could not delete. */
+        AwsLeftover: {
+            /** @enum {string} */
+            kind: "stack" | "instance";
+            id: string;
+            region: string;
+            console_url: string;
+        };
+        AwsForgetResult: {
+            left_in_aws: components["schemas"]["AwsLeftover"][];
         };
         FleetCapacity: {
             /** Format: int64 */
@@ -10571,6 +10586,27 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    forgetAwsConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What remains in the AWS account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsForgetResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getFleet: {
         parameters: {
             query?: never;
@@ -11647,12 +11683,11 @@ export const computeInstanceProviderValues: ReadonlyArray<FlattenedDeepRequired<
 export const computeInstanceMarketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeInstance"]["market"]> = ["spot", "on_demand"];
 export const computeSummaryCostCurrencyValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ComputeSummary"]["cost"]["currency"]> = ["USD"];
 export const awsConnectionPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "reconnect_pending", "retiring_authorization", "disconnect_draining", "revoking", "verifying_revocation", "action_required"];
-export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionAction"]> = ["authorize", "validate", "reconnect", "cancel_reconnect", "remove", "retry"];
+export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsConnectionAction"]> = ["authorize", "validate", "reconnect", "cancel_reconnect", "remove", "retry", "forget"];
 export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "retiring", "retired"];
 export const awsAuthorizationErrorValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationError"]> = ["assume_role_denied", "external_id_not_enforced", "account_mismatch", "permission_drift", "stack_drift", "upstream_unavailable"];
 export const awsAuthorizationGenerationAuthorization_modeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationGeneration"]["authorization_mode"]> = ["managed_stack", "existing_role"];
-export const awsStackActionRequestCapabilitiesValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["Capabilities"]> = ["CAPABILITY_NAMED_IAM"];
-export const awsStackActionRequestOnFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsStackAction"]["request"]["OnFailure"]> = ["DELETE"];
+export const awsLeftoverKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsLeftover"]["kind"]> = ["stack", "instance"];
 export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "terminating", "stopped", "hibernate_unverified", "image_saved"];
 export const fleetNodeProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetNode"]["provider"]> = ["agent", "aws"];
 export const planIdValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PlanId"]> = ["free", "team", "business"];
