@@ -64,7 +64,9 @@ func TestRollupFoldsMinutesAndKeepsWhatIsNotFolded(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, `{}`)
 	host, container := f.placedContainer(f.release)
-	minute := time.Now().Truncate(time.Minute).Add(-20 * time.Minute)
+	// The samples end ten minutes back, well before the window's end two
+	// minutes back, so what each pass folds does not depend on the clock.
+	minute := time.Now().Truncate(time.Minute).Add(-30 * time.Minute)
 	f.exec1("update container_metric_rollup set rolled_through = $1", minute)
 	var samples []observability.MetricSample
 	// Twelve 5-second samples per minute for 20 minutes, then one more
@@ -88,9 +90,16 @@ func TestRollupFoldsMinutesAndKeepsWhatIsNotFolded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The window stops two minutes back, so 18 of 20 minutes are folded.
-	if second.Folded != 8 || second.Behind {
+	if second.Folded != 10 || !second.Behind {
 		t.Fatalf("second pass %+v", second)
+	}
+	// The last pass reaches the window's end and finds nothing more to fold.
+	third, err := f.obs.RollUp(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Folded != 0 || third.Behind {
+		t.Fatalf("third pass %+v", third)
 	}
 
 	step := time.Minute
