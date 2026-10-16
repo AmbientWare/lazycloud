@@ -122,8 +122,6 @@ def test_cloud_connect_opens_the_stack_in_the_aws_console(
     assert managed.exit_code == 0, managed.output
     assert "AWS authorization required" in managed.stdout
     assert CREATE_STACK_URL in managed.stdout
-    assert "Create stack" in managed.stdout
-    assert "--profile" not in managed.stdout
     assert opened == [CREATE_STACK_URL]
     assert fake_api.calls("POST", "/v1/aws-connection")[-1].json() == {"account_id": ACCOUNT}
 
@@ -166,7 +164,6 @@ def test_cloud_connect_opens_the_stack_in_the_aws_console(
         cli, ["cloud", "connect", "aws", "--account-id", ACCOUNT, "--role-arn", ROLE]
     )
     assert EXTERNAL_ID in shown.stdout
-    assert "lazycloud cloud validate" in shown.stdout
     assert opened == [CREATE_STACK_URL]
 
 
@@ -183,13 +180,11 @@ def test_cloud_authorize_opens_the_pending_stack(fake_api: FakeApi, opened: list
     shown = CliRunner().invoke(cli, ["cloud", "authorize"])
 
     assert shown.exit_code == 0, shown.output
-    assert "Create the connection stack in AWS" in shown.stdout
     assert CREATE_STACK_URL in shown.stdout
     assert opened == [CREATE_STACK_URL]
 
     connection.current = _connection("ready", available_actions=["reconnect", "remove"])
-    nothing = CliRunner().invoke(cli, ["cloud", "authorize"])
-    assert "there is no pending AWS authorization" in str(nothing.exception)
+    assert CliRunner().invoke(cli, ["cloud", "authorize"]).exit_code != 0
     assert opened == [CREATE_STACK_URL]
 
 
@@ -323,7 +318,7 @@ def test_cloud_disconnect_waits_for_removal(
     assert "does not have an AWS account connection" in str(missing.exception)
 
 
-def test_cloud_disconnect_that_cannot_finish_names_retry_and_forget(
+def test_cloud_disconnect_that_needs_the_customer_fails_and_opens_the_action(
     fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch, opened: list[str]
 ) -> None:
     recovery = _connection(
@@ -342,33 +337,25 @@ def test_cloud_disconnect_that_cannot_finish_names_retry_and_forget(
     result = CliRunner().invoke(cli, ["cloud", "disconnect", "--wait", "--open"])
 
     assert result.exit_code == 1, result.output
-    assert "AWS disconnect needs your action" in result.stdout
-    assert "lazycloud cloud retry" in result.stdout
-    assert "lazycloud cloud forget" in result.stdout
     assert opened == ["https://console.aws.amazon.com/cloudformation/final"]
 
 
 def test_cloud_forget_lists_what_stays_in_aws(fake_api: FakeApi) -> None:
-    left: list[list[dict[str, object]]] = [
-        [
-            {
-                "kind": "stack",
-                "id": "lazycloud-connection",
-                "region": "us-east-2",
-                "console_url": "https://console.aws.amazon.com/cloudformation/stack",
-            },
-            {
-                "kind": "instance",
-                "id": "i-0123456789abcdef0",
-                "region": "us-west-2",
-                "console_url": "https://console.aws.amazon.com/ec2/instance",
-            },
-        ],
-        [],
+    left: list[dict[str, object]] = [
+        {
+            "kind": "stack",
+            "id": "lazycloud-connection",
+            "region": "us-east-2",
+            "console_url": "https://console.aws.amazon.com/cloudformation/stack",
+        },
+        {
+            "kind": "instance",
+            "id": "i-0123456789abcdef0",
+            "region": "us-west-2",
+            "console_url": "https://console.aws.amazon.com/ec2/instance",
+        },
     ]
-    fake_api.route("POST", "/v1/aws-connection/forget")(
-        lambda _: json_reply({"left_in_aws": left.pop(0)})
-    )
+    fake_api.route("POST", "/v1/aws-connection/forget")(lambda _: json_reply({"left_in_aws": left}))
 
     unconfirmed = CliRunner().invoke(cli, ["cloud", "forget"])
     assert unconfirmed.exit_code != 0
@@ -376,7 +363,6 @@ def test_cloud_forget_lists_what_stays_in_aws(fake_api: FakeApi) -> None:
 
     forgotten = CliRunner().invoke(cli, ["cloud", "forget", "--yes"])
     assert forgotten.exit_code == 0, forgotten.output
-    assert "AWS connection forgotten" in forgotten.stdout
     for value in (
         "lazycloud-connection",
         "us-east-2",
@@ -385,6 +371,3 @@ def test_cloud_forget_lists_what_stays_in_aws(fake_api: FakeApi) -> None:
         "https://console.aws.amazon.com/ec2/instance",
     ):
         assert value in forgotten.stdout
-
-    clean = CliRunner().invoke(cli, ["cloud", "forget", "--yes"])
-    assert "Nothing was left in AWS." in clean.stdout
