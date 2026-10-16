@@ -9,7 +9,10 @@ import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./
  * account's capacity, connection and machines change slowly.
  */
 const ACCOUNT_CAPACITY_POLL_INTERVAL_MS = 30_000;
-/** While the server moves the connection between phases without the customer. */
+/**
+ * While the server moves the connection between phases, including the check
+ * that follows the customer creating the stack in the AWS Console.
+ */
 const CONNECTION_TRANSITION_POLL_INTERVAL_MS = 5_000;
 /** While the join dialog waits for a host to come up. */
 const FOLLOWED_MACHINE_POLL_INTERVAL_MS = 5_000;
@@ -78,16 +81,16 @@ export function awsConnectionQueryOptions(enabled = true) {
 
 function connectionIsTransitioning(connection: Schemas["AwsConnection"]): boolean {
   switch (connection.phase) {
+    case "awaiting_authorization":
     case "validating":
+    case "reconnect_pending":
     case "retiring_authorization":
     case "disconnect_draining":
     case "revoking":
     case "verifying_revocation":
       return true;
-    case "awaiting_authorization":
     case "ready":
     case "degraded":
-    case "reconnect_pending":
     case "action_required":
       return false;
   }
@@ -116,6 +119,11 @@ export function cancelAwsConnectionReconnect() {
 
 export function retryAwsConnection() {
   return ok(api.POST("/v1/aws-connection/retry"));
+}
+
+/** Removes a connection whose cleanup cannot finish; the result lists what stays in AWS. */
+export function forgetAwsConnection() {
+  return ok(api.POST("/v1/aws-connection/forget"));
 }
 
 export function createMachineJoinCommand(body: Schemas["MachineJoinRequest"]) {

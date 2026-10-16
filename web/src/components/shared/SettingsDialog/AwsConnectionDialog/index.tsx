@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import {
   Cloud,
+  CloudOff,
   ExternalLink,
   Loader2,
   RefreshCw,
@@ -32,11 +33,12 @@ import {
 import { Input } from "@/components/ui/input";
 import type { Schemas } from "@/lib/api/client";
 
-import { useAwsConnectionController } from "./controller";
+import { type AwsConnectionConfirmedAction, useAwsConnectionController } from "./controller";
 import {
   type AwsConnectionDialogRecoveryAction,
   awsConnectionDialogActionPlan,
   awsConnectionPresentation,
+  awsForgetConfirmation,
   awsRemovalConfirmation,
 } from "./lifecycle";
 
@@ -73,10 +75,14 @@ function AwsConnectionFlow({
   const controller = useAwsConnectionController({ onClose });
 
   const pendingAction: AwsConnectionDialogRecoveryAction | null =
-    controller.activeAction !== "create" && controller.activeAction !== "remove"
+    controller.activeAction !== "create" &&
+    controller.activeAction !== "remove" &&
+    controller.activeAction !== "forget"
       ? controller.activeAction
       : null;
   const accountValid = /^\d{12}$/.test(accountId);
+  const leftInAws = controller.leftInAws;
+  const connecting = !connection && leftInAws === null;
 
   return (
     <>
@@ -87,22 +93,27 @@ function AwsConnectionFlow({
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Cloud className="size-4 text-brand" aria-hidden="true" />
-            {connection ? "AWS connection" : "Connect AWS"}
+            {leftInAws !== null
+              ? "AWS connection forgotten"
+              : connection
+                ? "AWS connection"
+                : "Connect AWS"}
           </DialogTitle>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {connection ? (
+          {leftInAws !== null ? (
+            <LeftInAws leftovers={leftInAws} />
+          ) : connection ? (
             <ConnectionActions
               connection={connection}
               pendingAction={pendingAction}
               error={controller.recoveryError}
-              onClose={onClose}
               onValidate={controller.validate}
               onReconnect={controller.reconnect}
               onCancelReconnect={controller.cancelReconnect}
               onRetry={controller.retry}
-              onRemove={() => controller.setRemoveOpen(true)}
+              onConfirm={controller.setConfirming}
             />
           ) : (
             <ConnectForm
@@ -114,7 +125,7 @@ function AwsConnectionFlow({
           )}
         </div>
 
-        {!connection ? (
+        {connecting ? (
           <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-5 py-3">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
@@ -129,20 +140,29 @@ function AwsConnectionFlow({
               ) : (
                 <ShieldCheck />
               )}
-              Continue to AWS
+              Create connection
+            </Button>
+          </DialogFooter>
+        ) : null}
+
+        {leftInAws !== null ? (
+          <DialogFooter className="shrink-0 border-t border-border bg-muted/20 px-5 py-3">
+            <Button type="button" onClick={onClose}>
+              Done
             </Button>
           </DialogFooter>
         ) : null}
       </DialogContent>
 
       {connection ? (
-        <RemoveConnectionDialog
+        <ConfirmConnectionDialog
           connection={connection}
-          open={controller.removeOpen}
-          pending={controller.activeAction === "remove"}
-          error={controller.removalError}
-          onOpenChange={controller.setRemoveOpen}
-          onConfirm={controller.remove}
+          action={controller.confirming}
+          pending={controller.activeAction === "remove" || controller.activeAction === "forget"}
+          error={controller.confirmError}
+          onCancel={() => controller.setConfirming(null)}
+          onRemove={controller.remove}
+          onForget={controller.forget}
         />
       ) : null}
     </>
@@ -192,7 +212,8 @@ function ConnectForm({
       </div>
 
       <p className="text-xs leading-5 text-muted-foreground">
-        You review the requested access in AWS once. LazyCloud never asks for access or secret keys.
+        Next, you review the requested access once in the AWS Console. LazyCloud never asks for
+        access or secret keys.
       </p>
 
       {error ? <ErrorNotice error={error} /> : null}
@@ -204,32 +225,29 @@ function ConnectionActions({
   connection,
   pendingAction,
   error,
-  onClose,
   onValidate,
   onReconnect,
   onCancelReconnect,
   onRetry,
-  onRemove,
+  onConfirm,
 }: {
   connection: AwsConnection;
   pendingAction: AwsConnectionDialogRecoveryAction | null;
   error: Error | null;
-  onClose: () => void;
   onValidate: () => void;
   onReconnect: () => void;
   onCancelReconnect: () => void;
   onRetry: () => void;
-  onRemove: () => void;
+  onConfirm: (action: AwsConnectionConfirmedAction) => void;
 }) {
   const presentation = awsConnectionPresentation(connection);
   const actionPlan = awsConnectionDialogActionPlan(connection);
   const lastValidatedAt = connection.active_authorization?.last_validated_at;
   const customerAction = connection.customer_action;
-  const customerActionAvailable = Boolean(customerAction?.url || customerAction?.stack);
+  const authorizing = connection.available_actions.includes("authorize");
   const pending = pendingAction !== null;
   const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
-  const showActionBar =
-    actionPlan.primary !== null || actionPlan.secondary !== null || actionPlan.destructive !== null;
+  const showActionBar = actionPlan.recovery.length > 0 || actionPlan.remove || actionPlan.forget;
 
   return (
     <div className="space-y-5">
@@ -258,60 +276,58 @@ function ConnectionActions({
         </dl>
       ) : null}
 
-      {customerAction?.stack ? (
+      {customerAction ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
-          <p>Use an AWS CLI profile for account {customerAction.stack.account_id}.</p>
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">
-            lazycloud cloud authorize --profile YOUR_AWS_PROFILE
-          </pre>
-          <p>After CloudFormation finishes, select Check authorization.</p>
+          <p className="leading-5">
+            {authorizing
+              ? "In the AWS Console, review the stack, tick the IAM acknowledgement and choose Create stack. This dialog updates by itself once the stack is ready."
+              : customerAction.label}
+          </p>
+          <Button asChild className="w-full">
+            <a href={customerAction.url} target="_blank" rel="noopener">
+              Open AWS Console
+              <ExternalLink />
+            </a>
+          </Button>
         </div>
-      ) : null}
-
-      {customerAction?.url ? (
-        <Button asChild className="w-full">
-          <a href={customerAction.url} target="_blank" rel="noreferrer" onClick={onClose}>
-            {customerAction.label}
-            <ExternalLink />
-          </a>
-        </Button>
       ) : null}
 
       {error ? <ErrorNotice error={error} /> : null}
 
       {showActionBar ? (
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          {actionPlan.primary ? (
+          {actionPlan.recovery.map((action, index) => (
             <ConnectionRecoveryButton
-              action={actionPlan.primary}
+              key={action}
+              action={action}
               pendingAction={pendingAction}
               disabled={pending}
-              variant={customerActionAvailable ? "outline" : "default"}
+              variant={index === 0 && !customerAction ? "default" : "outline"}
               onValidate={onValidate}
               onReconnect={onReconnect}
               onCancelReconnect={onCancelReconnect}
               onRetry={onRetry}
             />
-          ) : null}
-          {actionPlan.secondary ? (
-            <ConnectionRecoveryButton
-              action={actionPlan.secondary}
-              pendingAction={pendingAction}
-              disabled={pending}
-              variant="outline"
-              onValidate={onValidate}
-              onReconnect={onReconnect}
-              onCancelReconnect={onCancelReconnect}
-              onRetry={onRetry}
-            />
-          ) : null}
-          {actionPlan.destructive ? (
+          ))}
+          {actionPlan.forget ? (
             <Button
               type="button"
               variant="ghost"
               className="ml-auto text-destructive"
               disabled={pending}
-              onClick={onRemove}
+              onClick={() => onConfirm("forget")}
+            >
+              <CloudOff />
+              Forget connection
+            </Button>
+          ) : null}
+          {actionPlan.remove ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className={actionPlan.forget ? "text-destructive" : "ml-auto text-destructive"}
+              disabled={pending}
+              onClick={() => onConfirm("remove")}
             >
               <Trash2 />
               {connection.active_authorization ? "Remove connection" : "Cancel setup"}
@@ -371,24 +387,38 @@ function ConnectionRecoveryButton({
   );
 }
 
-function RemoveConnectionDialog({
+function ConfirmConnectionDialog({
   connection,
-  open,
+  action,
   pending,
   error,
-  onOpenChange,
-  onConfirm,
+  onCancel,
+  onRemove,
+  onForget,
 }: {
   connection: AwsConnection;
-  open: boolean;
+  action: AwsConnectionConfirmedAction | null;
   pending: boolean;
   error: Error | null;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
+  onCancel: () => void;
+  onRemove: () => void;
+  onForget: () => void;
 }) {
-  const confirmation = awsRemovalConfirmation(connection);
+  // The closing animation keeps showing the action that was being confirmed.
+  const [shown, setShown] = useState(action);
+  if (action !== null && action !== shown) setShown(action);
+  const forgetting = (action ?? shown) === "forget";
+  const confirmation = forgetting
+    ? awsForgetConfirmation(connection)
+    : awsRemovalConfirmation(connection);
+  const Icon = forgetting ? CloudOff : Trash2;
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
+    <AlertDialog
+      open={action !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{confirmation.title}</AlertDialogTitle>
@@ -397,13 +427,54 @@ function RemoveConnectionDialog({
         {error ? <ErrorNotice error={error} /> : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>{confirmation.cancelLabel}</AlertDialogCancel>
-          <Button variant="destructive" disabled={pending} onClick={onConfirm}>
-            {pending ? <Loader2 className="animate-spin" /> : <Trash2 />}
+          <Button
+            variant="destructive"
+            disabled={pending}
+            onClick={forgetting ? onForget : onRemove}
+          >
+            {pending ? <Loader2 className="animate-spin" /> : <Icon />}
             {confirmation.confirmLabel}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function LeftInAws({ leftovers }: { leftovers: Schemas["AwsLeftover"][] }) {
+  if (leftovers.length === 0) {
+    return <p className="text-sm">Nothing was left in AWS.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-5 text-muted-foreground">
+        These stay in your AWS account. Delete each one in the AWS Console.
+      </p>
+      <ul className="border border-border bg-card text-xs">
+        {leftovers.map((leftover) => (
+          <li
+            key={`${leftover.kind}:${leftover.region}:${leftover.id}`}
+            className="flex items-center gap-3 border-b border-border px-3 py-2.5 last:border-b-0"
+          >
+            <span className="w-16 shrink-0 text-muted-foreground">
+              {leftover.kind === "stack" ? "Stack" : "Instance"}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="mono block truncate text-foreground">{leftover.id}</span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                {leftover.region}
+              </span>
+            </span>
+            <Button asChild variant="outline" size="sm">
+              <a href={leftover.console_url} target="_blank" rel="noopener">
+                Open
+                <ExternalLink />
+              </a>
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

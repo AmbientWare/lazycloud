@@ -60,7 +60,7 @@ describe("AWS connection controller", () => {
     await runAndSettle(result, () => result.current.validate());
     expect(result.current.recoveryError?.message).toBe("AWS is unavailable");
     expect(result.current.createError).toBeNull();
-    expect(result.current.removalError).toBeNull();
+    expect(result.current.confirmError).toBeNull();
 
     act(() => {
       result.current.validate();
@@ -96,10 +96,10 @@ describe("AWS connection controller", () => {
     });
     const { result } = renderController(queryClient, onClose);
 
-    act(() => result.current.setRemoveOpen(true));
+    act(() => result.current.setConfirming("remove"));
     await runAndSettle(result, () => result.current.remove());
 
-    expect(result.current.removeOpen).toBe(false);
+    expect(result.current.confirming).toBeNull();
     expect(onClose).toHaveBeenCalledOnce();
     expect(
       projections.map((queryKey) => queryClient.getQueryState(queryKey)?.isInvalidated),
