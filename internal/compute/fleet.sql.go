@@ -458,7 +458,9 @@ const managedConnectionNetworks = `-- name: ManagedConnectionNetworks :many
 select cc.id, a.networks
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('awaiting_authorization', 'validating')
+where cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
+   or (cc.phase = 'action_required'
+       and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring'))
 `
 
 type ManagedConnectionNetworksRow struct {
@@ -466,8 +468,9 @@ type ManagedConnectionNetworksRow struct {
 	Networks []byte
 }
 
-// Connections whose account may still hold fleet instances, with the
-// networks of their active authorization.
+// Connections whose capacity the platform still manages, with the
+// networks of their active authorization; Connection.ManagesCapacity
+// applies the same rule. A removal sweeps its own instances.
 func (q *Queries) ManagedConnectionNetworks(ctx context.Context) ([]ManagedConnectionNetworksRow, error) {
 	rows, err := q.db.Query(ctx, managedConnectionNetworks)
 	if err != nil {

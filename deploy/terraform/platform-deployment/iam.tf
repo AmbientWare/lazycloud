@@ -194,7 +194,7 @@ data "aws_iam_policy_document" "control_plane" {
     sid = "DescribeFleet"
     actions = [
       "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSpotInstanceRequests", "ec2:DescribeSpotPriceHistory",
-      "ec2:DescribeInstanceTypeOfferings", "ec2:GetSpotPlacementScores",
+      "ec2:DescribeInstanceTypeOfferings", "ec2:GetSpotPlacementScores", "ec2:DescribeImages",
     ]
     resources = ["*"]
   }
@@ -222,7 +222,8 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   # Connected accounts launch the baked node images: before each launch the
-  # launcher grants the account launch permission on the image it uses.
+  # launcher grants the account launch permission on the image it uses,
+  # and a removed connection's account loses it on every image it was granted.
   # Image ARNs carry no account, so the node-image tag the bake sets
   # scopes this to the platform's own images.
   statement {
