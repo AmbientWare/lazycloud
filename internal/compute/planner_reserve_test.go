@@ -14,6 +14,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -554,15 +555,53 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 	}
 }
 
-// A connected account keeps no reserves and no headroom: an idle host of
-// its leaves at once, and one whose work just ended leaves once the keep
-// window has passed, held by its market's running target carried from the
-// pass that saw the work.
+// A connected account keeps the platform's CPU reserves while warm CPU is
+// on and its GPU reserves while warm GPU is on, each only once a workspace
+// uses the connection.
+func TestAConnectedAccountKeepsEachReserveOnlyWhileItIsWarmAndAWorkspaceUsesIt(t *testing.T) {
+	t.Parallel()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	spotPrices(t, o)
+	bought := func(where string) int {
+		plan(t, o)
+		return scan[int](t, o.pool, "select count(*) from hosts where connection_id = $1 and phase = 'requested' and "+where, conn.ID)
+	}
+	if n := bought("true"); n != 0 {
+		t.Fatalf("bought %d hosts with no workspace, want none", n)
+	}
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
+	warm(t, o, alice, compute.ConnectionSettings{WarmGPU: new(false)})
+	cpuWarm, cpuReserves := bought("gpu_count = 0 and reserve_mode is null"), bought("gpu_count = 0 and reserve_mode is not null")
+	if gpus := bought("gpu_count > 0"); cpuWarm == 0 || cpuReserves == 0 || gpus != 0 {
+		t.Fatalf("bought %d warm CPU hosts, %d CPU reserves and %d GPU hosts with warm GPU off, want CPU ones only", cpuWarm, cpuReserves, gpus)
+	}
+	warm(t, o, alice, compute.ConnectionSettings{WarmGPU: new(true)})
+	if n := bought("gpu_count > 0 and reserve_mode is not null"); n == 0 {
+		t.Fatal("bought no GPU reserves with warm GPU on")
+	}
+}
+
+func warm(t *testing.T, o owners, account identity.UserID, set compute.ConnectionSettings) {
+	t.Helper()
+	conn, err := o.compute.UpdateConnection(t.Context(), account, set)
+	if err != nil || set.WarmCPU != nil && conn.WarmCPU != *set.WarmCPU || set.WarmGPU != nil && conn.WarmGPU != *set.WarmGPU {
+		t.Fatalf("update connection %+v: %+v, %v", set, conn, err)
+	}
+}
+
+// A connected account without warm CPU or GPU keeps no reserves and no
+// headroom: an idle host of its leaves at once, and one whose work just
+// ended leaves once the keep window has passed, held by its market's
+// running target carried from the pass that saw the work.
 func TestAConnectedAccountsIdleHostLeavesAfterTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
+	warm(t, o, alice, compute.ConnectionSettings{WarmCPU: new(false), WarmGPU: new(false)})
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
 	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")

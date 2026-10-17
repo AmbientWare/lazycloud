@@ -4,6 +4,7 @@ import {
   Cloud,
   CloudOff,
   ExternalLink,
+  Info,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -32,6 +33,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +42,7 @@ import { type AwsConnectionConfirmedAction, useAwsConnectionController } from ".
 import {
   type AwsConnectionDialogRecoveryAction,
   awsConnectionDialogActionPlan,
+  awsConnectionIsUsable,
   awsConnectionPresentation,
   awsForgetConfirmation,
   awsRemovalConfirmation,
@@ -117,6 +121,9 @@ function AwsConnectionFlow({
               onCancelReconnect={controller.cancelReconnect}
               onRetry={controller.retry}
               onConfirm={controller.setConfirming}
+              settingsPending={controller.settingsPending}
+              settingsError={controller.settingsError}
+              onUpdateSettings={controller.updateSettings}
             />
           ) : (
             <ConnectForm
@@ -233,6 +240,9 @@ function ConnectionActions({
   onCancelReconnect,
   onRetry,
   onConfirm,
+  settingsPending,
+  settingsError,
+  onUpdateSettings,
 }: {
   connection: AwsConnection;
   pendingAction: AwsConnectionDialogRecoveryAction | null;
@@ -242,6 +252,9 @@ function ConnectionActions({
   onCancelReconnect: () => void;
   onRetry: () => void;
   onConfirm: (action: AwsConnectionConfirmedAction) => void;
+  settingsPending: boolean;
+  settingsError: Error | null;
+  onUpdateSettings: (update: Schemas["AwsConnectionUpdate"]) => void;
 }) {
   const presentation = awsConnectionPresentation(connection);
   const actionPlan = awsConnectionDialogActionPlan(connection);
@@ -249,7 +262,8 @@ function ConnectionActions({
   const customerAction = connection.customer_action;
   const authorizing = connection.available_actions.includes("authorize");
   const pending = pendingAction !== null;
-  const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
+  const showCapacity = awsConnectionIsUsable(connection);
+  const showWarmHosts = showCapacity || connection.phase === "ready";
   const showActionBar = actionPlan.recovery.length > 0 || actionPlan.remove || actionPlan.forget;
   const setupStep = awsSetupStep(connection);
 
@@ -345,6 +359,38 @@ function ConnectionActions({
         </dl>
       ) : null}
 
+      {showWarmHosts ? (
+        <div className="divide-y divide-border border border-border bg-card text-xs">
+          <WarmSetting
+            id="aws-warm-cpu"
+            label="Warm CPU"
+            enabled={connection.warm_cpu}
+            pending={settingsPending}
+            onChange={(on) => onUpdateSettings({ warm_cpu: on })}
+          >
+            Keeps CPU hosts running in your AWS account, and stopped ones ready to resume, once a
+            workspace uses this connection. CPU work starts in seconds instead of waiting for a new
+            instance. You pay AWS for the running hosts and the stopped hosts' disks. Turn it off to
+            launch instances only when work arrives; they end 2 minutes after it finishes.
+          </WarmSetting>
+          <WarmSetting
+            id="aws-warm-gpu"
+            label="Warm GPU"
+            enabled={connection.warm_gpu}
+            pending={settingsPending}
+            onChange={(on) => onUpdateSettings({ warm_gpu: on })}
+          >
+            Keeps a stopped Spot GPU host with each T4, A10G and L4 card ready to resume once a
+            workspace uses this connection, and more as GPU work grows. GPU work starts in about a
+            minute instead of the 2 to 3 minutes a new instance takes. You pay AWS for the stopped
+            hosts&apos; disks, the minutes each runs while it is prepared, and the hosts kept
+            running beside busy GPU work. Turn it off to launch GPU instances only when work
+            arrives.
+          </WarmSetting>
+        </div>
+      ) : null}
+      {settingsError ? <ErrorNotice error={settingsError} /> : null}
+
       {customerAction ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
           <p className="leading-5">
@@ -404,6 +450,49 @@ function ConnectionActions({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function WarmSetting({
+  id,
+  label,
+  enabled,
+  pending,
+  onChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  enabled: boolean;
+  pending: boolean;
+  onChange: (on: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-1 px-3 py-1.5">
+      <label htmlFor={id}>{label}</label>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 border-transparent text-muted-foreground"
+            aria-label={`About ${label.charAt(0).toLowerCase()}${label.slice(1)}`}
+          >
+            <Info className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start">{children}</PopoverContent>
+      </Popover>
+      <Switch
+        id={id}
+        className="ml-auto"
+        checked={enabled}
+        disabled={pending}
+        onCheckedChange={onChange}
+      />
     </div>
   );
 }

@@ -2678,7 +2678,8 @@ export interface paths {
         delete: operations["disconnectAws"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Change the connection's settings */
+        patch: operations["updateAwsConnection"];
         trace?: never;
     };
     "/v1/aws-connection/validate": {
@@ -5451,6 +5452,10 @@ export interface components {
             /** @description New workloads can be placed in the account. */
             hosts_workloads: boolean;
             can_manage_existing_capacity: boolean;
+            /** @description Keeps CPU hosts ready while a workspace uses the connection. */
+            warm_cpu: boolean;
+            /** @description Keeps GPU hosts ready while a workspace uses the connection. */
+            warm_gpu: boolean;
             available_actions: components["schemas"]["AwsConnectionAction"][];
             detail: string;
             customer_action?: components["schemas"]["AwsCustomerAction"];
@@ -5468,6 +5473,11 @@ export interface components {
         };
         AwsConnectionEnvelope: {
             connection?: components["schemas"]["AwsConnection"];
+        };
+        /** @description The settings to change; an omitted one keeps its value. */
+        AwsConnectionUpdate: {
+            warm_cpu?: boolean;
+            warm_gpu?: boolean;
         };
         AwsNetwork: {
             vpc_id: string;
@@ -10501,6 +10511,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AwsConnectionEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateAwsConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwsConnectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnection"];
                 };
             };
             default: components["responses"]["Error"];

@@ -52,4 +52,6 @@ type CloudConnection struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	RemovalRequestedAt *time.Time
+	WarmCpu            bool
+	WarmGpu            bool
 }

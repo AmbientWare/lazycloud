@@ -189,8 +189,9 @@ func (c *Compute) policy() Policy {
 	return DefaultPolicy()
 }
 
-// connectionPolicy is a connected account's: no headroom and no reserves,
-// so an idle host leaves after the keep window.
+// connectionPolicy is a connected account's whose reserves do not apply:
+// no headroom and no reserves, so an idle host leaves after the keep
+// window.
 func connectionPolicy(p Policy) Policy {
 	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
 	return p
@@ -352,21 +353,11 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	}
 	in.Cooldowns = append(in.Cooldowns, unproven...)
 	ps.cool(ownerPlatform, unproven, "its host could not prove a stop into the reserve")
-	// A reserve being prepared or stopping runs, so it holds host room as
-	// well as reserve room.
-	held, reserves := 0, 0
-	for _, h := range hosts {
-		if h.reserve() {
-			reserves++
-		}
-		if !h.reserve() || h.State == FleetPreparing || h.State == FleetStopping {
-			held++
-		}
-	}
+	hostRoom, reserveRoom := ps.rooms(hosts)
 	recent, started, burst, arrived, disks := shapesByMarket(ps.r.recent)
 	s := FleetSnapshot{
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
-		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWait,
+		HostRoom: hostRoom, ReserveRoom: reserveRoom, BatchWait: ps.r.batchWait,
 	}
 	s.Holds = ps.holds(nil)
 	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
@@ -380,13 +371,37 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	return ps.publish(plan, nil)
 }
 
+// rooms is how many more hosts may run or start and how many more may be
+// held stopped beside hosts. A reserve being prepared or stopping runs, so
+// it holds host room as well as reserve room.
+func (ps *fleetPass) rooms(hosts []FleetHost) (hostRoom, reserveRoom int) {
+	held, reserves := 0, 0
+	for _, h := range hosts {
+		if h.reserve() {
+			reserves++
+		}
+		if !h.reserve() || h.State == FleetPreparing || h.State == FleetStopping {
+			held++
+		}
+	}
+	return max(0, ps.c.fleet.MaxHosts-held), max(0, ps.c.fleet.MaxHosts-reserves)
+}
+
 // connections plans each connected account that takes workloads: its
 // pending containers on its hosts or new ones within its own networks, and
 // its idle hosts' departure. Its accounts pay for their hosts, so no margin
-// applies, and they keep no reserves.
+// applies. A connection keeps the platform's CPU reserves while its CPU
+// reserves apply and its GPU reserves while its GPU reserves apply; in a
+// market without reserves its idle hosts leave after the keep window.
 func (ps *fleetPass) connections(groups []pendingGroup) error {
-	p := connectionPolicy(ps.p)
 	for _, conn := range ps.r.connections {
+		p := connectionPolicy(ps.p)
+		if conn.CpuReserves {
+			p.Spot, p.OnDemand = ps.p.Spot, ps.p.OnDemand
+		}
+		if conn.GpuReserves {
+			p.GPU = ps.p.GPU
+		}
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
 			if ownedBy(row, &conn.ID) {
@@ -399,7 +414,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 				pending = append(pending, g.group)
 			}
 		}
-		if len(hosts) == 0 && len(pending) == 0 {
+		if len(hosts) == 0 && len(pending) == 0 && !conn.CpuReserves && !conn.GpuReserves {
 			continue
 		}
 		var networks map[string]Network
@@ -407,14 +422,9 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 			return fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
 		}
 		in := ps.r.inputs(ps.c.fleet.StorageRegion, networks, &conn.ID, hosts)
-		held := 0
-		for _, h := range hosts {
-			if !h.reserve() {
-				held++
-			}
-		}
+		hostRoom, reserveRoom := ps.rooms(hosts)
 		s := FleetSnapshot{
-			Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: max(0, ps.c.fleet.MaxHosts-held),
+			Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: hostRoom, ReserveRoom: reserveRoom,
 			BatchWait: ps.r.connectionWaits[conn.ID], Holds: ps.holds(&conn.ID),
 		}
 		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
