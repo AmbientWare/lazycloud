@@ -99,6 +99,16 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 		}
 		return describeStacksReply(*s)
 	})
+	e.on("DescribeStackEvents", func(call awsCall) awsReply {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, s := range c.stacks {
+			if s.ID == call.Form.Get("StackName") {
+				return describeStackEventsReply(*s)
+			}
+		}
+		return queryError(http.StatusBadRequest, "ValidationError", "Stack ["+call.Form.Get("StackName")+"] does not exist")
+	})
 	e.on("DeleteStack", func(call awsCall) awsReply {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -506,6 +516,54 @@ func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
 	customer.setStatus(pending.Pending.StackName, "CREATE_IN_PROGRESS")
 	if conn := validate(t, o, drifted); conn.Phase != compute.ConnAwaiting {
 		t.Fatalf("stack still creating: %s %v, want awaiting_authorization", conn.Phase, code(conn.Pending))
+	}
+}
+
+// A setup says where the customer's stack stands, checks again within
+// seconds while the customer sets it up, and keeps waiting through a failed
+// stack until the customer creates it again.
+func TestASetupFollowsTheCustomersStack(t *testing.T) {
+	t.Parallel()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connect(t, o, alice, "111111111111")
+	check := func(want compute.SetupStep) compute.Connection {
+		t.Helper()
+		conn := validate(t, o, alice)
+		if conn.Phase != compute.ConnAwaiting || conn.Pending == nil || conn.Pending.SetupStep == nil || *conn.Pending.SetupStep != want {
+			t.Fatalf("connection %s with pending %+v, want awaiting_authorization at %s", conn.Phase, conn.Pending, want)
+		}
+		if conn.NextRetryAt == nil || time.Until(*conn.NextRetryAt) > 15*time.Second {
+			t.Fatalf("next check at %v, want within 15 seconds", conn.NextRetryAt)
+		}
+		return conn
+	}
+	check(compute.SetupWaitingForStack)
+
+	customer.authorize(t, o, conn, role{})
+	customer.setStatus(conn.Pending.StackName, "CREATE_IN_PROGRESS")
+	check(compute.SetupStackCreating)
+
+	customer.setStatus(conn.Pending.StackName, "ROLLBACK_IN_PROGRESS")
+	failed := check(compute.SetupStackFailed)
+	if !strings.Contains(failed.Pending.ErrorMessage, "Validation failed with 1 error(s)") {
+		t.Fatalf("failed stack reported %q, want CloudFormation's reason", failed.Pending.ErrorMessage)
+	}
+	if view := o.compute.View(failed); view.Customer == nil || view.ConsoleURL == nil {
+		t.Fatalf("failed stack offers %+v and console %v, want the stack to delete and the link to create it again", view.Customer, view.ConsoleURL)
+	}
+	// The rollback deletes the role; the failure stays until the customer
+	// creates the stack again.
+	customer.mu.Lock()
+	delete(customer.roles, conn.Pending.RoleARN)
+	customer.mu.Unlock()
+	if again := check(compute.SetupStackFailed); again.Pending.ErrorMessage != failed.Pending.ErrorMessage {
+		t.Fatalf("after the role went the failure reads %q, want %q", again.Pending.ErrorMessage, failed.Pending.ErrorMessage)
+	}
+
+	customer.authorize(t, o, failed, role{})
+	if ready := validate(t, o, alice); ready.Phase != compute.ConnReady || ready.Active == nil || ready.Active.SetupStep != nil {
+		t.Fatalf("after the stack was created again: %s %+v, want ready", ready.Phase, ready.Active)
 	}
 }
 

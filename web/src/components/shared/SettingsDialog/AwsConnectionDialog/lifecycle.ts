@@ -2,9 +2,13 @@ import type { Schemas } from "@/lib/api/client";
 
 type AwsConnection = Schemas["AwsConnection"];
 type AwsConnectionAction = Schemas["AwsConnectionAction"];
+type AwsSetupStep = Schemas["AwsSetupStep"];
 
 export type AwsConnectionPresentation = {
   label:
+    | "Waiting for stack"
+    | "Creating"
+    | "Stack failed"
     | "Authorization required"
     | "Checking"
     | "Connected"
@@ -27,7 +31,32 @@ export type AwsConnectionDialogActionPlan = {
   forget: boolean;
 };
 
+/** Where the customer's stack stands while the pending authorization has never validated. */
+export function awsSetupStep(connection: AwsConnection): AwsSetupStep | null {
+  const step = connection.pending_authorization?.setup_step;
+  if (!step) return null;
+  switch (connection.phase) {
+    case "awaiting_authorization":
+    case "validating":
+    case "reconnect_pending":
+      return step;
+    default:
+      return null;
+  }
+}
+
 export function awsConnectionPresentation(connection: AwsConnection): AwsConnectionPresentation {
+  // A reconnect keeps serving, so its row shows the working connection.
+  const step = connection.active_authorization ? null : awsSetupStep(connection);
+  switch (step) {
+    case "waiting_for_stack":
+      return { label: "Waiting for stack", live: false };
+    case "stack_creating":
+      return { label: "Creating", live: false };
+    case "stack_failed":
+      return { label: "Stack failed", live: false };
+    case null:
+  }
   switch (connection.phase) {
     case "awaiting_authorization":
       return { label: "Authorization required", live: false };

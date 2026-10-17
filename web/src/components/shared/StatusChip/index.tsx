@@ -34,6 +34,10 @@ const TONES: Record<string, Tone> = {
   expired: "danger",
   unhealthy: "danger",
   "not ok": "danger",
+  // AWS connection setup.
+  "waiting for stack": "warning",
+  creating: "warning",
+  "stack failed": "danger",
 };
 
 /** The only filled chip in the app; strictly for status values, shown as the API words them. */

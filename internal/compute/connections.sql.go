@@ -47,18 +47,26 @@ func (q *Queries) AccountConnectedElsewhere(ctx context.Context, arg AccountConn
 
 const authorizationFailed = `-- name: AuthorizationFailed :exec
 update cloud_authorizations
-set phase = 'degraded', error_code = $1, error_message = $2, updated_at = now()
-where id = $3
+set phase = 'degraded', error_code = $1, error_message = $2,
+    setup_step = coalesce($3, setup_step), updated_at = now()
+where id = $4
 `
 
 type AuthorizationFailedParams struct {
 	ErrorCode    *string
 	ErrorMessage *string
+	SetupStep    *string
 	ID           uuid.UUID
 }
 
+// A failure that says nothing of the setup's stack keeps its step.
 func (q *Queries) AuthorizationFailed(ctx context.Context, arg AuthorizationFailedParams) error {
-	_, err := q.db.Exec(ctx, authorizationFailed, arg.ErrorCode, arg.ErrorMessage, arg.ID)
+	_, err := q.db.Exec(ctx, authorizationFailed,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.SetupStep,
+		arg.ID,
+	)
 	return err
 }
 
@@ -76,7 +84,7 @@ func (q *Queries) AuthorizationLiveHosts(ctx context.Context, authorizationID *u
 
 const authorizationValidated = `-- name: AuthorizationValidated :exec
 update cloud_authorizations
-set phase = 'ready', error_code = null, error_message = null, last_validated_at = now(),
+set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
     stack_id = coalesce($1, stack_id), networks = $2,
     node_role_arn = coalesce($3, node_role_arn),
     node_instance_profile = coalesce($4, node_instance_profile),
@@ -158,7 +166,7 @@ func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (Connectio
 }
 
 const connectionAuthorizations = `-- name: ConnectionAuthorizations :many
-select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at from cloud_authorizations where connection_id = $1 and slot is not null order by generation
+select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step from cloud_authorizations where connection_id = $1 and slot is not null order by generation
 `
 
 // The connection's authorizations that hold a slot.
@@ -197,6 +205,7 @@ func (q *Queries) ConnectionAuthorizations(ctx context.Context, connectionID uui
 			&i.UpdatedAt,
 			&i.StackDeleteRequestedAt,
 			&i.StackDeletedAt,
+			&i.SetupStep,
 		); err != nil {
 			return nil, err
 		}
@@ -376,11 +385,12 @@ func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *
 const insertAuthorization = `-- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at)
+                                  node_instance_profile, networks, expires_at, setup_step)
 values ($1, $2, $3, 'pending', 'awaiting_authorization', $4, $5, $6,
         $7, $8, $9, $10,
-        $11, $12, now() + interval '1 day')
-returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at
+        $11, $12, now() + interval '1 day',
+        case when $3::text = 'managed_stack' then 'waiting_for_stack' end)
+returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step
 `
 
 type InsertAuthorizationParams struct {
@@ -440,6 +450,7 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		&i.UpdatedAt,
 		&i.StackDeleteRequestedAt,
 		&i.StackDeletedAt,
+		&i.SetupStep,
 	)
 	return i, err
 }

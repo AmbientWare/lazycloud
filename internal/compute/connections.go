@@ -143,20 +143,32 @@ const (
 	slotRetiring authorizationSlot = "retiring"
 )
 
+// SetupStep is where the customer's creation of a managed authorization's
+// stack stands while the authorization has never validated.
+type SetupStep string
+
+const (
+	SetupWaitingForStack SetupStep = "waiting_for_stack"
+	SetupStackCreating   SetupStep = "stack_creating"
+	SetupStackFailed     SetupStep = "stack_failed"
+)
+
 // Authorization is one role generation of a connection.
 type Authorization struct {
-	ID                 uuid.UUID
-	Generation         int
-	Mode               AuthorizationMode
-	Phase              AuthorizationPhase
-	RoleARN            string
-	Region             string
-	StackName          string
-	StackID            string
-	TemplateVersion    string
-	TemplateSHA256     string
-	ErrorCode          *AuthorizationError
-	ErrorMessage       string
+	ID              uuid.UUID
+	Generation      int
+	Mode            AuthorizationMode
+	Phase           AuthorizationPhase
+	RoleARN         string
+	Region          string
+	StackName       string
+	StackID         string
+	TemplateVersion string
+	TemplateSHA256  string
+	ErrorCode       *AuthorizationError
+	ErrorMessage    string
+	// SetupStep is set while a managed authorization has never validated.
+	SetupStep          *SetupStep
 	ValidationStarted  *time.Time
 	LastValidated      *time.Time
 	CreatedAt          time.Time
@@ -227,8 +239,33 @@ func acceptsWork(phase ConnectionPhase, active AuthorizationPhase) bool {
 // awaitsStack reports whether the pending authorization waits for the
 // customer to create its stack.
 func (c Connection) awaitsStack() bool {
-	waiting := c.Phase == ConnAwaiting || c.Phase == ConnReconnecting || c.Phase == ConnDegraded
+	waiting := c.Phase == ConnAwaiting || c.Phase == ConnReconnecting || c.Phase == ConnDegraded ||
+		c.Phase == ConnValidating && c.settingUp()
 	return waiting && c.Pending != nil && c.Pending.Mode == ModeManagedStack
+}
+
+// settingUp reports whether the pending authorization's stack has not
+// validated yet.
+func (c Connection) settingUp() bool {
+	return c.Pending != nil && c.Pending.SetupStep != nil
+}
+
+// Detail is the sentence users see for the connection: the setup step
+// while the customer creates the stack, else the phase.
+func (c Connection) Detail() string {
+	if c.Phase == ConnAwaiting || c.Phase == ConnValidating || c.Phase == ConnReconnecting {
+		if c.settingUp() {
+			switch *c.Pending.SetupStep {
+			case SetupWaitingForStack:
+				return "Create the connection stack in the AWS Console."
+			case SetupStackCreating:
+				return "AWS is creating the connection stack."
+			case SetupStackFailed:
+				return "The connection stack failed in AWS. Delete it, then create it again."
+			}
+		}
+	}
+	return c.Phase.Detail()
 }
 
 // ManagesCapacity reports whether the platform still runs the account's
@@ -243,7 +280,12 @@ func (c Connection) Actions() []ConnectionAction {
 	switch c.Phase {
 	case ConnAwaiting:
 		return []ConnectionAction{ActionAuthorize, ActionValidate, ActionRemove}
-	case ConnValidating, ConnRetiring:
+	case ConnValidating:
+		if c.settingUp() {
+			return []ConnectionAction{ActionAuthorize, ActionRemove}
+		}
+		return []ConnectionAction{ActionRemove}
+	case ConnRetiring:
 		return []ConnectionAction{ActionRemove}
 	case ConnReady:
 		return []ConnectionAction{ActionReconnect, ActionRemove}
@@ -499,6 +541,10 @@ func authorizationOf(a CloudAuthorization) Authorization {
 		externalID: a.ExternalID, nodeRoleARN: deref(a.NodeRoleArn), nodeInstanceProfle: deref(a.NodeInstanceProfile),
 		expiresAt: a.ExpiresAt, deleteRequested: a.StackDeleteRequestedAt,
 	}
+	if a.SetupStep != nil {
+		step := SetupStep(*a.SetupStep)
+		auth.SetupStep = &step
+	}
 	if a.ErrorCode != nil {
 		code := AuthorizationError(*a.ErrorCode)
 		auth.ErrorCode = &code
@@ -515,6 +561,9 @@ func (a Authorization) ExternalID() string { return a.externalID }
 func (c *Compute) View(conn Connection) Connection {
 	if conn.awaitsStack() {
 		conn.ConsoleURL = ptr(c.quickCreateURL(conn.AWSAccountID, *conn.Pending))
+		if p := conn.Pending; p.SetupStep != nil && *p.SetupStep == SetupStackFailed {
+			conn.Customer = &CustomerStep{URL: stackURL(p.Region, "", p.StackName), Label: "Delete the failed stack in AWS"}
+		}
 	}
 	return conn
 }

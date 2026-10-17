@@ -362,6 +362,29 @@ func describeStacksReply(s cfnStack) awsReply {
 	return ok(b.String())
 }
 
+// describeStackEventsReply is CloudFormation's DescribeStackEvents answer for
+// a stack whose create failed and rolled back, newest first, as recorded on
+// 2026-10-17 in default-test for stack lazycloud-connection-rbcheck61609-g1:
+// the create failed pre-deployment validation and rolled back within six
+// seconds.
+func describeStackEventsReply(s cfnStack) awsReply {
+	events := [][3]string{
+		{"ROLLBACK_COMPLETE", "", "2026-10-17T18:27:04.621Z"},
+		{"ROLLBACK_IN_PROGRESS", "Validation failure detected. See the operation's FAILED event for details.", "2026-10-17T18:27:03.160Z"},
+		{"CREATE_FAILED", "Validation failed with 1 error(s). Call DescribeEvents to retrieve the full list of issues with resource and property details, resolve each error, then retry the operation.", "2026-10-17T18:27:02.907Z"},
+		{"CREATE_IN_PROGRESS", "User Initiated", "2026-10-17T18:26:58.796Z"},
+	}
+	var b strings.Builder
+	b.WriteString(`<DescribeStackEventsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"><DescribeStackEventsResult><StackEvents>`)
+	for i, e := range events {
+		fmt.Fprintf(&b, `<member><EventId>event-%d</EventId><StackName>%s</StackName><StackId>%s</StackId><LogicalResourceId>%s</LogicalResourceId>`+
+			`<ResourceType>AWS::CloudFormation::Stack</ResourceType><ResourceStatus>%s</ResourceStatus><ResourceStatusReason>%s</ResourceStatusReason><Timestamp>%s</Timestamp></member>`,
+			i, esc(s.Name), esc(s.ID), esc(s.Name), e[0], esc(e[1]), e[2])
+	}
+	b.WriteString(`</StackEvents></DescribeStackEventsResult><ResponseMetadata><RequestId>req-0000</RequestId></ResponseMetadata></DescribeStackEventsResponse>`)
+	return ok(b.String())
+}
+
 func deleteStackReply() awsReply {
 	return ok(`<DeleteStackResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"><ResponseMetadata><RequestId>req-0000</RequestId></ResponseMetadata></DeleteStackResponse>`)
 }

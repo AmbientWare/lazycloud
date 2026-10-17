@@ -19,10 +19,11 @@ returning *;
 -- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at)
+                                  node_instance_profile, networks, expires_at, setup_step)
 values (@connection_id, @generation, @mode, 'pending', 'awaiting_authorization', @role_arn, @external_id, @region,
         sqlc.narg(stack_name), sqlc.narg(template_version), sqlc.narg(template_sha256), sqlc.narg(node_role_arn),
-        sqlc.narg(node_instance_profile), @networks, now() + interval '1 day')
+        sqlc.narg(node_instance_profile), @networks, now() + interval '1 day',
+        case when @mode::text = 'managed_stack' then 'waiting_for_stack' end)
 returning *;
 
 -- name: NextGeneration :one
@@ -52,7 +53,7 @@ where id = @id;
 
 -- name: AuthorizationValidated :exec
 update cloud_authorizations
-set phase = 'ready', error_code = null, error_message = null, last_validated_at = now(),
+set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
     stack_id = coalesce(sqlc.narg(stack_id), stack_id), networks = @networks,
     node_role_arn = coalesce(sqlc.narg(node_role_arn), node_role_arn),
     node_instance_profile = coalesce(sqlc.narg(node_instance_profile), node_instance_profile),
@@ -60,8 +61,10 @@ set phase = 'ready', error_code = null, error_message = null, last_validated_at 
 where id = @id;
 
 -- name: AuthorizationFailed :exec
+-- A failure that says nothing of the setup's stack keeps its step.
 update cloud_authorizations
-set phase = 'degraded', error_code = @error_code, error_message = @error_message, updated_at = now()
+set phase = 'degraded', error_code = @error_code, error_message = @error_message,
+    setup_step = coalesce(sqlc.narg(setup_step), setup_step), updated_at = now()
 where id = @id;
 
 -- name: DeleteConnection :exec

@@ -1,11 +1,13 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,9 +26,18 @@ import (
 type validationFailure struct {
 	code    AuthorizationError
 	message string
-	// setup reports that the customer's authorization is still being set
-	// up, so a connection without a working one keeps waiting.
-	setup bool
+	// step is where the setup's stack stands when the failure is the
+	// customer still setting it up, so a connection without a working
+	// authorization keeps waiting.
+	step *SetupStep
+}
+
+// setupFailure is a failure of an authorization that has never validated,
+// at step.
+func setupFailure(step SetupStep, code AuthorizationError, format string, args ...any) *validationFailure {
+	f := fail(code, format, args...)
+	f.step = &step
+	return f
 }
 
 func (f *validationFailure) Error() string { return f.message }
@@ -150,7 +161,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		attempts := int(row.StepAttempts) + 1
 		if failure != nil {
 			if err := q.AuthorizationFailed(ctx, AuthorizationFailedParams{
-				ID: target.ID, ErrorCode: ptr(string(failure.code)), ErrorMessage: &failure.message,
+				ID: target.ID, ErrorCode: ptr(string(failure.code)), ErrorMessage: &failure.message, SetupStep: (*string)(failure.step),
 			}); err != nil {
 				return fmt.Errorf("record failure: %w", err)
 			}
@@ -158,11 +169,10 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			switch {
 			case conn.Pending != nil && target.ID == conn.Pending.ID && conn.Active != nil:
 				phase = ConnReconnecting
-			case conn.Active == nil && (failure.setup || failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
+			case conn.Active == nil && (failure.step != nil || failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
 				phase = ConnAwaiting
 			}
-			backoff := time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
-			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(backoff)), attempts, nil)
+			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
 		}
 		networks, err := json.Marshal(result.networks)
 		if err != nil {
@@ -216,11 +226,21 @@ func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Aut
 	assumed := clients.assume(a.RoleARN, a.externalID, session, conn.ID.String())
 	identity, err := clients.sts(assumed, a.Region).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		if (accessDenied(err) || awsCode(err) == "") && a.Mode == ModeManagedStack {
-			// A stack that failed and rolled back keeps its name, so the
-			// console link cannot create it again until it is deleted.
-			return validated{}, fail(ErrAssumeRoleDenied, "AWS refused AssumeRole on %s: stack %s is not created yet, or it failed; "+
-				"delete a failed stack in CloudFormation, then create it from the link again: %s", a.RoleARN, a.StackName, describeAWSError(err))
+		if (accessDenied(err) || awsCode(err) == "") && a.SetupStep != nil {
+			// The stack makes the role early and a rollback deletes it, so
+			// a role refused after the stack was seen means the stack failed.
+			// A failed stack keeps its name, so the console link cannot
+			// create it again until it is deleted.
+			if *a.SetupStep == SetupWaitingForStack {
+				return validated{}, setupFailure(SetupWaitingForStack, ErrAssumeRoleDenied,
+					"AWS refused AssumeRole on %s: stack %s is not created yet: %s", a.RoleARN, a.StackName, describeAWSError(err))
+			}
+			if *a.SetupStep == SetupStackFailed && a.ErrorCode != nil {
+				// The reason recorded when the stack was seen failing stays.
+				return validated{}, setupFailure(SetupStackFailed, *a.ErrorCode, "%s", a.ErrorMessage)
+			}
+			return validated{}, setupFailure(SetupStackFailed, ErrAssumeRoleDenied,
+				"stack %s failed and AWS deleted its role; delete the stack in CloudFormation, then create it again", a.StackName)
 		}
 		if accessDenied(err) || awsCode(err) == "" {
 			return validated{}, fail(ErrAssumeRoleDenied, "AWS refused AssumeRole on %s with its external ID: %s", a.RoleARN, describeAWSError(err))
@@ -283,10 +303,12 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 		return validated{}, fail(ErrStackDrift, "authorization stack %s was not found", a.StackName)
 	}
 	stack := out.Stacks[0]
-	if stack.StackStatus == cftypes.StackStatusCreateInProgress {
-		creating := fail(ErrStackDrift, "authorization stack %s is still being created", a.StackName)
-		creating.setup = true
-		return validated{}, creating
+	if a.SetupStep != nil && stack.StackStatus == cftypes.StackStatusCreateInProgress {
+		return validated{}, setupFailure(SetupStackCreating, ErrStackDrift, "authorization stack %s is still being created", a.StackName)
+	}
+	if a.SetupStep != nil && stack.StackStatus != cftypes.StackStatusCreateComplete {
+		return validated{}, setupFailure(SetupStackFailed, ErrStackDrift, "stack %s failed (%s): %s", a.StackName, stack.StackStatus,
+			stackFailure(ctx, clients.cloudFormation(scope, a.Region), stack))
 	}
 	if stack.StackStatus != cftypes.StackStatusCreateComplete && stack.StackStatus != cftypes.StackStatusUpdateComplete {
 		return validated{}, fail(ErrStackDrift, "authorization stack is not ready (%s)", stack.StackStatus)
@@ -399,4 +421,43 @@ func accountOfRole(arn string) string {
 		return m[2]
 	}
 	return ""
+}
+
+// setupChecks is how long after it starts a setup is checked every few
+// seconds; later checks back off. CloudFormation creates the stack in about
+// three minutes once the customer starts it.
+const setupChecks = 30 * time.Minute
+
+// nextCheck is when a failed validation runs again: soon while the
+// customer sets up the stack, so the connection turns ready within seconds
+// of the stack, and otherwise backing off up to five minutes apart.
+func nextCheck(a Authorization, failure *validationFailure, attempts int) time.Duration {
+	if failure.step != nil && time.Since(a.CreatedAt) < setupChecks {
+		if *failure.step == SetupStackCreating {
+			return 10 * time.Second
+		}
+		return 15 * time.Second
+	}
+	return time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
+}
+
+// stackFailure is why CloudFormation failed to create stack: its earliest
+// failed event, or the stack's own reason when its events cannot be read.
+func stackFailure(ctx context.Context, cf *cloudformation.Client, stack cftypes.Stack) string {
+	reason := cmp.Or(aws.ToString(stack.StackStatusReason), string(stack.StackStatus))
+	out, err := cf.DescribeStackEvents(ctx, &cloudformation.DescribeStackEventsInput{StackName: stack.StackId})
+	if err != nil {
+		return reason
+	}
+	// Events are newest first; the earliest failure caused the rollback.
+	for _, e := range slices.Backward(out.StackEvents) {
+		if e.ResourceStatus != cftypes.ResourceStatusCreateFailed {
+			continue
+		}
+		if resource := aws.ToString(e.LogicalResourceId); resource != aws.ToString(stack.StackName) {
+			return resource + ": " + aws.ToString(e.ResourceStatusReason)
+		}
+		return aws.ToString(e.ResourceStatusReason)
+	}
+	return reason
 }
