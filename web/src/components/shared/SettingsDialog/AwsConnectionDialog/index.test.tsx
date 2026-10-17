@@ -76,7 +76,7 @@ describe("AWS connection dialog", () => {
     ]);
   });
 
-  it("turns warm capacity off and explains it", async () => {
+  it("turns warm GPU off and explains it", async () => {
     const sent: string[] = [];
     const ready = connection("ready", {
       hosts_workloads: true,
@@ -85,20 +85,21 @@ describe("AWS connection dialog", () => {
     });
     vi.stubGlobal("fetch", async (request: Request) => {
       sent.push(`${request.method} ${new URL(request.url).pathname} ${await request.text()}`);
-      return Response.json({ ...ready, warm_capacity: false });
+      return Response.json({ ...ready, warm_gpu: false });
     });
     const { queryClient } = renderDialog(ready);
 
-    fireEvent.click(screen.getByRole("button", { name: "About warm capacity" }));
-    expect(await screen.findByText(/Keeps a host running in your AWS account/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "About warm GPU" }));
+    expect(await screen.findByText(/Keeps a stopped Spot GPU host/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Warm capacity" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Warm GPU" }));
     await vi.waitFor(() =>
       expect(queryClient.getQueryData(accountQueryKeys.compute.awsConnection())).toMatchObject({
-        warm_capacity: false,
+        warm_cpu: true,
+        warm_gpu: false,
       }),
     );
-    expect(sent).toEqual(['PATCH /v1/aws-connection {"warm_capacity":false}']);
+    expect(sent).toEqual(['PATCH /v1/aws-connection {"warm_gpu":false}']);
   });
 
   it("forgets after confirmation and links what stays in AWS", async () => {
@@ -180,7 +181,8 @@ function connection(
     revision: 1,
     hosts_workloads: false,
     can_manage_existing_capacity: false,
-    warm_capacity: true,
+    warm_cpu: true,
+    warm_gpu: true,
     available_actions: [],
     detail: "AWS connection state",
     created_at: "2026-07-20T00:00:00Z",

@@ -365,7 +365,7 @@ func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	out := apitypes.AwsConnection{
 		Id: conn.ID, AccountId: conn.AWSAccountID, Phase: apitypes.AwsConnectionPhase(conn.Phase), Revision: conn.Revision,
-		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(), WarmCapacity: conn.WarmCapacity,
+		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(), WarmCpu: conn.WarmCPU, WarmGpu: conn.WarmGPU,
 		AvailableActions: []apitypes.AwsConnectionAction{}, Detail: conn.Detail(), NextRetryAt: conn.NextRetryAt,
 		ActiveAuthorization: authorizationOut(conn.Active), PendingAuthorization: authorizationOut(conn.Pending),
 		RetiringAuthorization: authorizationOut(conn.Retiring), CreatedAt: conn.CreatedAt, UpdatedAt: conn.UpdatedAt,
@@ -469,7 +469,7 @@ func (s *Server) UpdateAwsConnection(ctx context.Context, req UpdateAwsConnectio
 	if err != nil {
 		return nil, err
 	}
-	conn, err := s.owners.Compute.SetWarmCapacity(ctx, p.User, req.Body.WarmCapacity)
+	conn, err := s.owners.Compute.UpdateConnection(ctx, p.User, compute.ConnectionSettings{WarmCPU: req.Body.WarmCpu, WarmGPU: req.Body.WarmGpu})
 	if err != nil {
 		return nil, err
 	}

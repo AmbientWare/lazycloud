@@ -24,7 +24,8 @@ def short_id(value: object, length: int = 8) -> str:
 
 
 def label(value: str) -> str:
-    return value.replace("_", " ").strip().capitalize()
+    words = value.replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
 
 
 def text(item: object, *, style: Style | None = None) -> Text:

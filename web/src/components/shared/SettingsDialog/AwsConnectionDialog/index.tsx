@@ -121,9 +121,9 @@ function AwsConnectionFlow({
               onCancelReconnect={controller.cancelReconnect}
               onRetry={controller.retry}
               onConfirm={controller.setConfirming}
-              warmCapacityPending={controller.warmCapacityPending}
-              warmCapacityError={controller.warmCapacityError}
-              onWarmCapacity={controller.setWarmCapacity}
+              settingsPending={controller.settingsPending}
+              settingsError={controller.settingsError}
+              onUpdateSettings={controller.updateSettings}
             />
           ) : (
             <ConnectForm
@@ -240,9 +240,9 @@ function ConnectionActions({
   onCancelReconnect,
   onRetry,
   onConfirm,
-  warmCapacityPending,
-  warmCapacityError,
-  onWarmCapacity,
+  settingsPending,
+  settingsError,
+  onUpdateSettings,
 }: {
   connection: AwsConnection;
   pendingAction: AwsConnectionDialogRecoveryAction | null;
@@ -252,9 +252,9 @@ function ConnectionActions({
   onCancelReconnect: () => void;
   onRetry: () => void;
   onConfirm: (action: AwsConnectionConfirmedAction) => void;
-  warmCapacityPending: boolean;
-  warmCapacityError: Error | null;
-  onWarmCapacity: (on: boolean) => void;
+  settingsPending: boolean;
+  settingsError: Error | null;
+  onUpdateSettings: (update: Schemas["AwsConnectionUpdate"]) => void;
 }) {
   const presentation = awsConnectionPresentation(connection);
   const actionPlan = awsConnectionDialogActionPlan(connection);
@@ -263,7 +263,7 @@ function ConnectionActions({
   const authorizing = connection.available_actions.includes("authorize");
   const pending = pendingAction !== null;
   const showCapacity = awsConnectionIsUsable(connection);
-  const showWarmCapacity = showCapacity || connection.phase === "ready";
+  const showWarmHosts = showCapacity || connection.phase === "ready";
   const showActionBar = actionPlan.recovery.length > 0 || actionPlan.remove || actionPlan.forget;
   const setupStep = awsSetupStep(connection);
 
@@ -359,14 +359,37 @@ function ConnectionActions({
         </dl>
       ) : null}
 
-      {showWarmCapacity ? (
-        <WarmCapacity
-          enabled={connection.warm_capacity}
-          pending={warmCapacityPending}
-          onChange={onWarmCapacity}
-        />
+      {showWarmHosts ? (
+        <div className="divide-y divide-border border border-border bg-card text-xs">
+          <WarmSetting
+            id="aws-warm-cpu"
+            label="Warm CPU"
+            enabled={connection.warm_cpu}
+            pending={settingsPending}
+            onChange={(on) => onUpdateSettings({ warm_cpu: on })}
+          >
+            Keeps CPU hosts running in your AWS account, and stopped ones ready to resume, once a
+            workspace uses this connection. CPU work starts in seconds instead of waiting for a new
+            instance. You pay AWS for the running hosts and the stopped hosts' disks. Turn it off to
+            launch instances only when work arrives; they end 2 minutes after it finishes.
+          </WarmSetting>
+          <WarmSetting
+            id="aws-warm-gpu"
+            label="Warm GPU"
+            enabled={connection.warm_gpu}
+            pending={settingsPending}
+            onChange={(on) => onUpdateSettings({ warm_gpu: on })}
+          >
+            Keeps a stopped Spot GPU host with each T4, A10G and L4 card ready to resume once a
+            workspace uses this connection, and more as GPU work grows. GPU work starts in about a
+            minute instead of the 2 to 3 minutes a new instance takes. You pay AWS for the stopped
+            hosts&apos; disks, the minutes each runs while it is prepared, and the hosts kept
+            running beside busy GPU work. Turn it off to launch GPU instances only when work
+            arrives.
+          </WarmSetting>
+        </div>
       ) : null}
-      {warmCapacityError ? <ErrorNotice error={warmCapacityError} /> : null}
+      {settingsError ? <ErrorNotice error={settingsError} /> : null}
 
       {customerAction ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
@@ -431,18 +454,24 @@ function ConnectionActions({
   );
 }
 
-function WarmCapacity({
+function WarmSetting({
+  id,
+  label,
   enabled,
   pending,
   onChange,
+  children,
 }: {
+  id: string;
+  label: string;
   enabled: boolean;
   pending: boolean;
   onChange: (on: boolean) => void;
+  children: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-1 border border-border bg-card px-3 py-1.5 text-xs">
-      <label htmlFor="aws-warm-capacity">Warm capacity</label>
+    <div className="flex items-center gap-1 px-3 py-1.5">
+      <label htmlFor={id}>{label}</label>
       <Popover>
         <PopoverTrigger asChild>
           <Button
@@ -450,20 +479,15 @@ function WarmCapacity({
             variant="ghost"
             size="icon"
             className="size-7 border-transparent text-muted-foreground"
-            aria-label="About warm capacity"
+            aria-label={`About ${label.charAt(0).toLowerCase()}${label.slice(1)}`}
           >
             <Info className="size-3.5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start">
-          Keeps a host running in your AWS account, and a stopped one ready to resume, once a
-          workspace uses this connection. Work starts in seconds instead of waiting for a new
-          instance. You pay AWS for the idle hosts. Turn it off to launch instances only when work
-          arrives; they end 2 minutes after it finishes.
-        </PopoverContent>
+        <PopoverContent align="start">{children}</PopoverContent>
       </Popover>
       <Switch
-        id="aws-warm-capacity"
+        id={id}
         className="ml-auto"
         checked={enabled}
         disabled={pending}

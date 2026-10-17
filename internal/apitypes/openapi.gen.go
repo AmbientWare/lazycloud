@@ -2566,8 +2566,11 @@ type AwsConnection struct {
 	Revision              int                         `json:"revision"`
 	UpdatedAt             time.Time                   `json:"updated_at"`
 
-	// WarmCapacity Keeps hosts ready while a workspace uses the connection.
-	WarmCapacity bool `json:"warm_capacity"`
+	// WarmCpu Keeps CPU hosts ready while a workspace uses the connection.
+	WarmCpu bool `json:"warm_cpu"`
+
+	// WarmGpu Keeps GPU hosts ready while a workspace uses the connection.
+	WarmGpu bool `json:"warm_gpu"`
 }
 
 // AwsConnectionAction defines model for AwsConnectionAction.
@@ -2607,9 +2610,10 @@ type AwsConnectionRequest struct {
 	RoleArn *string `json:"role_arn,omitempty"`
 }
 
-// AwsConnectionUpdate defines model for AwsConnectionUpdate.
+// AwsConnectionUpdate The settings to change; an omitted one keeps its value.
 type AwsConnectionUpdate struct {
-	WarmCapacity bool `json:"warm_capacity"`
+	WarmCpu *bool `json:"warm_cpu,omitempty"`
+	WarmGpu *bool `json:"warm_gpu,omitempty"`
 }
 
 // AwsCustomerAction A step the customer takes in the AWS Console.

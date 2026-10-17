@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from enum import Enum
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -437,19 +438,30 @@ def cloud_retry(
     )
 
 
+class WarmHosts(str, Enum):
+    cpu = "cpu"
+    gpu = "gpu"
+
+
 @cloud_app.command("warm-capacity")
 def cloud_warm_capacity(
     ctx: typer.Context,
+    hosts: Annotated[WarmHosts, typer.Argument(metavar="cpu|gpu")],
     enabled: Annotated[bool, typer.Argument(metavar="on|off")],
 ) -> None:
-    """Turn warm capacity on or off: hosts kept ready in the connected AWS account."""
-    response = _compute().update_aws(AwsConnectionUpdate(warm_capacity=enabled))
+    """Turn warm CPU or GPU hosts on or off in the connected AWS account."""
+    update = (
+        AwsConnectionUpdate(warm_cpu=enabled)
+        if hosts is WarmHosts.cpu
+        else AwsConnectionUpdate(warm_gpu=enabled)
+    )
+    response = _compute().update_aws(update)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
             json_default(_connection_summary(response)),
-            title="Warm capacity " + ("enabled" if enabled else "disabled"),
+            title=f"Warm {hosts.value.upper()} " + ("enabled" if enabled else "disabled"),
             tone="success",
         ),
     )
@@ -505,7 +517,8 @@ def _connection_summary(response: AwsConnection) -> dict[str, object]:
     summary: dict[str, object] = {
         "account_id": response.account_id,
         "phase": response.phase.value,
-        "warm_capacity": "enabled" if response.warm_capacity else "disabled",
+        "warm CPU": "enabled" if response.warm_cpu else "disabled",
+        "warm GPU": "enabled" if response.warm_gpu else "disabled",
     }
     if response.detail:
         summary["detail"] = response.detail

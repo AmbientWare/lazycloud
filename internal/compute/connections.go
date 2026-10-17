@@ -189,13 +189,14 @@ type Connection struct {
 	AWSAccountID string
 	Phase        ConnectionPhase
 	Revision     int
-	// WarmCapacity keeps the platform's reserves in the account's markets
-	// while a workspace uses the connection.
-	WarmCapacity bool
-	Active       *Authorization
-	Pending      *Authorization
-	Retiring     *Authorization
-	NextRetryAt  *time.Time
+	// WarmCPU and WarmGPU keep the platform's CPU and GPU reserves in the
+	// account's markets while a workspace uses the connection.
+	WarmCPU     bool
+	WarmGPU     bool
+	Active      *Authorization
+	Pending     *Authorization
+	Retiring    *Authorization
+	NextRetryAt *time.Time
 	// Customer is what the customer must do in AWS while the connection
 	// waits on them.
 	Customer  *CustomerStep
@@ -508,7 +509,7 @@ func (c *Compute) connectionByID(ctx context.Context, id uuid.UUID) (Connection,
 func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	conn := Connection{
 		ID: row.ID, AWSAccountID: row.AwsAccountID, Phase: ConnectionPhase(row.Phase), Revision: int(row.Revision),
-		WarmCapacity: row.WarmCapacity, NextRetryAt: row.NextStepAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
+		WarmCPU: row.WarmCpu, WarmGPU: row.WarmGpu, NextRetryAt: row.NextStepAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
 	}
 	if row.ActionUrl != nil && row.ActionLabel != nil {
 		conn.Customer = &CustomerStep{URL: *row.ActionUrl, Label: *row.ActionLabel}
@@ -740,9 +741,20 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 	return c.connectionByID(ctx, id)
 }
 
-// SetWarmCapacity turns the account's warm capacity on or off and wakes the
-// fleet pass, which plans the account's markets with or without reserves.
-func (c *Compute) SetWarmCapacity(ctx context.Context, account identity.UserID, on bool) (Connection, error) {
+// ConnectionSettings changes a connection's settings; a nil field keeps its
+// current value.
+type ConnectionSettings struct {
+	WarmCPU *bool
+	WarmGPU *bool
+}
+
+// UpdateConnection changes the account's connection settings and wakes the
+// fleet pass, which plans the account's markets with or without each
+// reserve.
+func (c *Compute) UpdateConnection(ctx context.Context, account identity.UserID, set ConnectionSettings) (Connection, error) {
+	if set.WarmCPU == nil && set.WarmGPU == nil {
+		return Connection{}, &InvalidError{Message: "connection update must set warm_cpu or warm_gpu"}
+	}
 	var id uuid.UUID
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -754,16 +766,16 @@ func (c *Compute) SetWarmCapacity(ctx context.Context, account identity.UserID, 
 		if connectionOf(row, auths).removing() {
 			return &ConflictError{Message: "AWS account connection is being removed"}
 		}
-		if row.WarmCapacity == on {
+		if (set.WarmCPU == nil || *set.WarmCPU == row.WarmCpu) && (set.WarmGPU == nil || *set.WarmGPU == row.WarmGpu) {
 			return nil
 		}
-		if err := q.SetWarmCapacity(ctx, SetWarmCapacityParams{ID: row.ID, WarmCapacity: on}); err != nil {
-			return fmt.Errorf("set warm capacity: %w", err)
+		if err := q.UpdateConnectionSettings(ctx, UpdateConnectionSettingsParams{ID: row.ID, WarmCpu: set.WarmCPU, WarmGpu: set.WarmGPU}); err != nil {
+			return fmt.Errorf("update connection settings: %w", err)
 		}
 		return notifyChannel(ctx, tx, row.ID)
 	})
 	if err != nil {
-		return Connection{}, fmt.Errorf("set warm capacity: %w", err)
+		return Connection{}, fmt.Errorf("update connection: %w", err)
 	}
 	return c.connectionByID(ctx, id)
 }

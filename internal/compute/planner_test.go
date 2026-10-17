@@ -401,7 +401,7 @@ values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1
 }
 
 // A connected account's estimated cost is what its hosts' compute, root
-// disks and public addresses cost; without warm capacity it runs only the
+// disks and public addresses cost; without warm CPU or GPU it runs only the
 // host its work bought. Expected transfer is an estimate, so it
 // ranks the regions but stays out of the price a host records.
 func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.T) {
@@ -412,7 +412,7 @@ func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.
 	networks := `{"us-east-2": {"subnets": [{"id": "subnet-c-east", "zone": "us-east-2a", "zone_id": "use2-az1"}]},
 	              "us-west-1": {"subnets": [{"id": "subnet-c-west", "zone": "us-west-1b", "zone_id": "usw1-az3"}]}}`
 	run(t, o.pool, `
-with conn as (insert into cloud_connections (account_id, aws_account_id, phase, warm_capacity) values ($1, '123456789012', 'ready', false) returning id),
+with conn as (insert into cloud_connections (account_id, aws_account_id, phase, warm_cpu, warm_gpu) values ($1, '123456789012', 'ready', false, false) returning id),
 auth as (
     insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region, networks)
     select id, 1, 'existing_role', 'active', 'ready', 'arn:aws:iam::123456789012:role/lazycloud', 'external', 'us-east-2', $3::jsonb

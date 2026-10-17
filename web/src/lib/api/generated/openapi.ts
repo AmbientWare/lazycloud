@@ -5452,8 +5452,10 @@ export interface components {
             /** @description New workloads can be placed in the account. */
             hosts_workloads: boolean;
             can_manage_existing_capacity: boolean;
-            /** @description Keeps hosts ready while a workspace uses the connection. */
-            warm_capacity: boolean;
+            /** @description Keeps CPU hosts ready while a workspace uses the connection. */
+            warm_cpu: boolean;
+            /** @description Keeps GPU hosts ready while a workspace uses the connection. */
+            warm_gpu: boolean;
             available_actions: components["schemas"]["AwsConnectionAction"][];
             detail: string;
             customer_action?: components["schemas"]["AwsCustomerAction"];
@@ -5472,8 +5474,10 @@ export interface components {
         AwsConnectionEnvelope: {
             connection?: components["schemas"]["AwsConnection"];
         };
+        /** @description The settings to change; an omitted one keeps its value. */
         AwsConnectionUpdate: {
-            warm_capacity: boolean;
+            warm_cpu?: boolean;
+            warm_gpu?: boolean;
         };
         AwsNetwork: {
             vpc_id: string;

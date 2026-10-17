@@ -7141,7 +7141,7 @@ components:
     AwsConnection:
       type: object
       required: [id, account_id, phase, revision, hosts_workloads, can_manage_existing_capacity,
-                 warm_capacity, available_actions, detail, created_at, updated_at]
+                 warm_cpu, warm_gpu, available_actions, detail, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         account_id:
@@ -7153,8 +7153,11 @@ components:
           description: New workloads can be placed in the account.
           type: boolean
         can_manage_existing_capacity: { type: boolean }
-        warm_capacity:
-          description: Keeps hosts ready while a workspace uses the connection.
+        warm_cpu:
+          description: Keeps CPU hosts ready while a workspace uses the connection.
+          type: boolean
+        warm_gpu:
+          description: Keeps GPU hosts ready while a workspace uses the connection.
           type: boolean
         available_actions:
           type: array
@@ -7177,11 +7180,13 @@ components:
         connection: { $ref: "#/components/schemas/AwsConnection" }
 
     AwsConnectionUpdate:
+      description: The settings to change; an omitted one keeps its value.
       type: object
-      required: [warm_capacity]
+      minProperties: 1
       additionalProperties: false
       properties:
-        warm_capacity: { type: boolean }
+        warm_cpu: { type: boolean }
+        warm_gpu: { type: boolean }
 
     AwsNetwork:
       type: object

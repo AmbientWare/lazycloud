@@ -390,17 +390,17 @@ func (ps *fleetPass) rooms(hosts []FleetHost) (hostRoom, reserveRoom int) {
 // connections plans each connected account that takes workloads: its
 // pending containers on its hosts or new ones within its own networks, and
 // its idle hosts' departure. Its accounts pay for their hosts, so no margin
-// applies. A connection whose reserves apply keeps the platform's CPU
-// reserves; any other keeps none, so its idle hosts leave after the keep
-// window.
+// applies. A connection keeps the platform's CPU reserves while its CPU
+// reserves apply and its GPU reserves while its GPU reserves apply; in a
+// market without reserves its idle hosts leave after the keep window.
 func (ps *fleetPass) connections(groups []pendingGroup) error {
 	for _, conn := range ps.r.connections {
 		p := connectionPolicy(ps.p)
-		if conn.Reserves {
-			// Warm capacity keeps the platform's CPU reserves. GPU reserves
-			// would buy a host of each card for an account that may never
-			// run one, so its GPU work waits for a launch.
+		if conn.CpuReserves {
 			p.Spot, p.OnDemand = ps.p.Spot, ps.p.OnDemand
+		}
+		if conn.GpuReserves {
+			p.GPU = ps.p.GPU
 		}
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
@@ -414,7 +414,7 @@ func (ps *fleetPass) connections(groups []pendingGroup) error {
 				pending = append(pending, g.group)
 			}
 		}
-		if len(hosts) == 0 && len(pending) == 0 && !conn.Reserves {
+		if len(hosts) == 0 && len(pending) == 0 && !conn.CpuReserves && !conn.GpuReserves {
 			continue
 		}
 		var networks map[string]Network
