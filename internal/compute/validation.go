@@ -24,6 +24,9 @@ import (
 type validationFailure struct {
 	code    AuthorizationError
 	message string
+	// setup reports that the customer's authorization is still being set
+	// up, so a connection without a working one keeps waiting.
+	setup bool
 }
 
 func (f *validationFailure) Error() string { return f.message }
@@ -155,7 +158,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			switch {
 			case conn.Pending != nil && target.ID == conn.Pending.ID && conn.Active != nil:
 				phase = ConnReconnecting
-			case conn.Active == nil && (failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
+			case conn.Active == nil && (failure.setup || failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
 				phase = ConnAwaiting
 			}
 			backoff := time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
@@ -213,6 +216,12 @@ func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Aut
 	assumed := clients.assume(a.RoleARN, a.externalID, session, conn.ID.String())
 	identity, err := clients.sts(assumed, a.Region).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
+		if (accessDenied(err) || awsCode(err) == "") && a.Mode == ModeManagedStack {
+			// A stack that failed and rolled back keeps its name, so the
+			// console link cannot create it again until it is deleted.
+			return validated{}, fail(ErrAssumeRoleDenied, "AWS refused AssumeRole on %s: stack %s is not created yet, or it failed; "+
+				"delete a failed stack in CloudFormation, then create it from the link again: %s", a.RoleARN, a.StackName, describeAWSError(err))
+		}
 		if accessDenied(err) || awsCode(err) == "" {
 			return validated{}, fail(ErrAssumeRoleDenied, "AWS refused AssumeRole on %s with its external ID: %s", a.RoleARN, describeAWSError(err))
 		}
@@ -274,6 +283,11 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 		return validated{}, fail(ErrStackDrift, "authorization stack %s was not found", a.StackName)
 	}
 	stack := out.Stacks[0]
+	if stack.StackStatus == cftypes.StackStatusCreateInProgress {
+		creating := fail(ErrStackDrift, "authorization stack %s is still being created", a.StackName)
+		creating.setup = true
+		return validated{}, creating
+	}
 	if stack.StackStatus != cftypes.StackStatusCreateComplete && stack.StackStatus != cftypes.StackStatusUpdateComplete {
 		return validated{}, fail(ErrStackDrift, "authorization stack is not ready (%s)", stack.StackStatus)
 	}

@@ -126,12 +126,15 @@ where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase =
   and (h.launch_lease_until is null or h.launch_lease_until < now());
 
 -- name: ManagedConnectionNetworks :many
--- Connections whose account may still hold fleet instances, with the
--- networks of their active authorization.
+-- Connections whose capacity the platform still manages, with the
+-- networks of their active authorization; Connection.ManagesCapacity
+-- applies the same rule. A removal sweeps its own instances.
 select cc.id, a.networks
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('awaiting_authorization', 'validating');
+where cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
+   or (cc.phase = 'action_required'
+       and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring'));
 
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.

@@ -504,8 +504,8 @@ func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
 	pending := connect(t, o, drifted, "444444444444")
 	customer.authorize(t, o, pending, role{})
 	customer.setStatus(pending.Pending.StackName, "CREATE_IN_PROGRESS")
-	if conn := validate(t, o, drifted); conn.Phase == compute.ConnReady || code(conn.Pending) != compute.ErrStackDrift {
-		t.Fatalf("stack still creating: %s %v, want stack_drift", conn.Phase, code(conn.Pending))
+	if conn := validate(t, o, drifted); conn.Phase != compute.ConnAwaiting {
+		t.Fatalf("stack still creating: %s %v, want awaiting_authorization", conn.Phase, code(conn.Pending))
 	}
 }
 
@@ -681,6 +681,15 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	}
 	if deletes := deletedStacks(emulator); len(deletes) != 1 || deletes[0] != conn.Active.StackName {
 		t.Fatalf("DeleteStack calls %v, want the active stack", deletes)
+	}
+	assumed := len(emulator.calls("AssumeRole"))
+	if err := o.compute.Reconcile(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range emulator.calls("AssumeRole")[assumed:] {
+		if c.Form.Get("RoleArn") == conn.Active.RoleARN {
+			t.Fatal("reconcile assumed the role the removal is deleting")
+		}
 	}
 	due(t, o, conn)
 	advance(t, o)
