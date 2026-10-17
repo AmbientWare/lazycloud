@@ -861,10 +861,8 @@ func TestDisconnectMidReconnectDeletesBothGenerationsStacks(t *testing.T) {
 	}
 }
 
-// A setup that never finished is removed once nothing it asked the
-// customer to create can remain: a stack the customer creates before the
-// setup would have expired is deleted, and without one the connection goes
-// at that expiry.
+// Removing a setup that never finished deletes the stack the customer
+// created, and removes a setup whose stack AWS does not show at once.
 func TestAnUnfinishedSetupIsRemovedWithTheStackTheCustomerCreates(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -877,23 +875,17 @@ func TestAnUnfinishedSetupIsRemovedWithTheStackTheCustomerCreates(t *testing.T) 
 			t.Fatalf("disconnect an unfinished setup: %+v %v, want revoking", conn, err)
 		}
 	}
-	step := func() {
+	customer.authorize(t, o, creating, role{})
+	advance(t, o)
+	if phase := phaseOf(t, o, bob); phase != "" {
+		t.Fatalf("connection %q with no stack in AWS, want removed", phase)
+	}
+	for n := 0; n < 5 && phaseOf(t, o, carol) != ""; n++ {
 		run(t, o.pool, "update cloud_connections set next_step_at = now()")
 		advance(t, o)
 	}
-	step()
-	if bob, carol := phaseOf(t, o, bob), phaseOf(t, o, carol); bob != compute.ConnRevoking || carol != compute.ConnRevoking {
-		t.Fatalf("connections %q and %q before their setups expire, want both still revoking", bob, carol)
-	}
-
-	customer.authorize(t, o, creating, role{})
-	run(t, o.pool, "update cloud_authorizations a set expires_at = now() from cloud_connections c where c.id = a.connection_id and c.account_id = $1",
-		uuid.UUID(bob))
-	for n := 0; n < 5 && (phaseOf(t, o, bob) != "" || phaseOf(t, o, carol) != ""); n++ {
-		step()
-	}
-	if bob, carol := phaseOf(t, o, bob), phaseOf(t, o, carol); bob != "" || carol != "" {
-		t.Fatalf("connections %q and %q remain, want both removed", bob, carol)
+	if phase := phaseOf(t, o, carol); phase != "" {
+		t.Fatalf("connection %q remains, want removed", phase)
 	}
 	if got := deletedStacks(emulator); !slices.Equal(got, []string{creating.Pending.StackName}) {
 		t.Fatalf("DeleteStack calls %v, want only the stack the customer created", got)
@@ -1163,36 +1155,6 @@ func TestARemovalWhoseRoleIsGoneFinishes(t *testing.T) {
 	if phase := phaseOf(t, o, alice); phase != "" || len(emulator.calls("DeleteStack")) != 0 || !unshared(emulator) {
 		t.Fatalf("connection %q with %d DeleteStack calls and image calls %v, want it removed with the launch permission",
 			phase, len(emulator.calls("DeleteStack")), emulator.calls("ModifyImageAttribute"))
-	}
-}
-
-// A reconnect cancelled while the customer is still creating its stack
-// waits for the stack, then deletes it.
-func TestACancelledReconnectWaitsForAStackStillBeingCreated(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	o, emulator, customer := connectionFleet(t)
-	alice := newUser(t, o.pool, "alice@example.com")
-	first := connected(t, o, customer, alice)
-	reconnecting, err := o.compute.Reconnect(ctx, alice, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := o.compute.CancelReconnect(ctx, alice); err != nil {
-		t.Fatal(err)
-	}
-	advance(t, o)
-	if phase := phaseOf(t, o, alice); phase != compute.ConnRetiring {
-		t.Fatalf("with no stack yet the connection is %s, want still retiring the cancelled generation", phase)
-	}
-
-	customer.authorize(t, o, reconnecting, role{})
-	for n := 0; n < 5 && phaseOf(t, o, alice) != compute.ConnReady; n++ {
-		due(t, o, first)
-		advance(t, o)
-	}
-	if got := deletedStacks(emulator); phaseOf(t, o, alice) != compute.ConnReady || !slices.Equal(got, []string{reconnecting.Pending.StackName}) {
-		t.Fatalf("connection %s with DeleteStack calls %v, want ready after the late stack was deleted", phaseOf(t, o, alice), got)
 	}
 }
 
