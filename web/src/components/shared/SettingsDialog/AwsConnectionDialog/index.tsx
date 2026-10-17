@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  Check,
   Cloud,
   CloudOff,
   ExternalLink,
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { Schemas } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
 
 import { type AwsConnectionConfirmedAction, useAwsConnectionController } from "./controller";
 import {
@@ -40,6 +42,7 @@ import {
   awsConnectionPresentation,
   awsForgetConfirmation,
   awsRemovalConfirmation,
+  awsSetupStep,
 } from "./lifecycle";
 
 type AwsConnection = Schemas["AwsConnection"];
@@ -248,6 +251,72 @@ function ConnectionActions({
   const pending = pendingAction !== null;
   const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
   const showActionBar = actionPlan.recovery.length > 0 || actionPlan.remove || actionPlan.forget;
+  const setupStep = awsSetupStep(connection);
+
+  if (setupStep) {
+    const checking = connection.phase === "validating" || pendingAction === "validate";
+    const checkedAt = connection.pending_authorization?.last_validation_started_at;
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center justify-between gap-4">
+          <h3 className="text-sm font-medium">
+            Account <span className="mono">{connection.account_id}</span>
+          </h3>
+          <StatusChip status={presentation.label} live={presentation.live} />
+        </div>
+        <SetupTrack connection={connection} step={setupStep} />
+        {error ? <ErrorNotice error={error} /> : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-4">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending || checking}
+            onClick={onValidate}
+          >
+            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            Check now
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {checking ? (
+              "Checking"
+            ) : checkedAt ? (
+              <>
+                Checked <LiveRelativeTime value={checkedAt} />
+              </>
+            ) : (
+              "Not checked yet"
+            )}
+          </span>
+          {actionPlan.recovery.includes("cancel_reconnect") ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              disabled={pending}
+              onClick={onCancelReconnect}
+            >
+              {pendingAction === "cancel_reconnect" ? <Loader2 className="animate-spin" /> : <X />}
+              Cancel reconnect
+            </Button>
+          ) : actionPlan.remove ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ml-auto text-destructive"
+              disabled={pending}
+              onClick={() => onConfirm("remove")}
+            >
+              <Trash2 />
+              Cancel setup
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -336,6 +405,150 @@ function ConnectionActions({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The setup's steps in order; the customer's stack decides which one is current. */
+function SetupTrack({
+  connection,
+  step,
+}: {
+  connection: AwsConnection;
+  step: Schemas["AwsSetupStep"];
+}) {
+  const consoleUrl = connection.console_url;
+  const failedStackUrl = step === "stack_failed" ? connection.customer_action?.url : undefined;
+  return (
+    <ol className="space-y-4">
+      <SetupStepRow
+        state={step === "waiting_for_stack" ? "current" : "done"}
+        marker="1"
+        title="Create the stack in AWS"
+      >
+        {step === "waiting_for_stack" ? (
+          <>
+            <p>Tick the IAM acknowledgement and choose Create stack.</p>
+            {consoleUrl ? (
+              <Button asChild size="sm" className="mt-2.5">
+                <a href={consoleUrl} target="_blank" rel="noopener">
+                  Open AWS Console
+                  <ExternalLink />
+                </a>
+              </Button>
+            ) : null}
+          </>
+        ) : null}
+      </SetupStepRow>
+      {step === "stack_failed" ? (
+        <SetupStepRow state="failed" marker="2" title="The stack failed in AWS">
+          {connection.pending_authorization?.error_message ? (
+            <p className="mono border border-destructive/40 bg-destructive/5 p-2.5 text-[11px] text-foreground">
+              {connection.pending_authorization.error_message}
+            </p>
+          ) : null}
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            {failedStackUrl ? (
+              <Button asChild variant="outline" size="sm">
+                <a href={failedStackUrl} target="_blank" rel="noopener">
+                  Delete the stack
+                  <ExternalLink />
+                </a>
+              </Button>
+            ) : null}
+            {consoleUrl ? (
+              <Button asChild size="sm">
+                <a href={consoleUrl} target="_blank" rel="noopener">
+                  Create again
+                  <ExternalLink />
+                </a>
+              </Button>
+            ) : null}
+          </div>
+        </SetupStepRow>
+      ) : (
+        <SetupStepRow
+          state={step === "stack_creating" ? "working" : "upcoming"}
+          marker="2"
+          title={step === "stack_creating" ? "AWS is creating the stack" : "AWS creates the stack"}
+        >
+          {step === "stack_creating" ? (
+            <p>Usually about 3 minutes. This updates by itself.</p>
+          ) : null}
+        </SetupStepRow>
+      )}
+      <SetupStepRow state="upcoming" marker="3" title="LazyCloud checks access" last />
+    </ol>
+  );
+}
+
+type SetupStepState = "done" | "current" | "working" | "failed" | "upcoming";
+
+function SetupStepRow({
+  state,
+  marker,
+  title,
+  last = false,
+  children,
+}: {
+  state: SetupStepState;
+  marker: string;
+  title: string;
+  last?: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <li
+      className="relative grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3.5"
+      aria-current={
+        state === "current" || state === "working" || state === "failed" ? "step" : undefined
+      }
+    >
+      {last ? null : (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "absolute top-7 -bottom-3 left-3 w-px",
+            state === "done" ? "bg-brand" : "bg-border",
+          )}
+        />
+      )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mono flex size-6 items-center justify-center border text-[11px]",
+          state === "done" && "border-brand bg-brand text-brand-foreground",
+          (state === "current" || state === "working") && "border-brand text-brand",
+          state === "failed" && "border-destructive text-destructive",
+          state === "upcoming" && "border-border text-muted-foreground/70",
+        )}
+      >
+        {state === "done" ? (
+          <Check className="size-3.5" strokeWidth={3} />
+        ) : state === "working" ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : state === "failed" ? (
+          <X className="size-3.5" strokeWidth={3} />
+        ) : (
+          marker
+        )}
+      </span>
+      <div className="min-w-0">
+        <p
+          className={cn(
+            "text-sm leading-6",
+            state === "done" && "text-muted-foreground",
+            (state === "current" || state === "working") && "font-medium text-foreground",
+            state === "failed" && "font-medium text-destructive",
+            state === "upcoming" && "text-muted-foreground/70",
+          )}
+        >
+          {title}
+        </p>
+        {children ? (
+          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{children}</div>
+        ) : null}
+      </div>
+    </li>
   );
 }
 

@@ -6,6 +6,7 @@ import {
   awsConnectionIsRemoving,
   awsConnectionIsUsable,
   awsConnectionPresentation,
+  awsSetupStep,
 } from "./AwsConnectionDialog/lifecycle";
 import { CapacityBadge, LifecycleChip } from "@/components/shared/LifecycleChip";
 import { Panel } from "@/components/shared/Panel";
@@ -229,6 +230,8 @@ function CloudProviderRow({
   const usable = awsConnectionIsUsable(connection);
   const removing = awsConnectionIsRemoving(connection);
   const actionLabel = connectionActionLabel(connection);
+  // The chip says where the setup stands.
+  const settingUp = !connection.active_authorization && awsSetupStep(connection) !== null;
 
   return (
     <div className="interactive-row group grid min-w-0 gap-3 px-4 py-3 sm:grid-cols-[minmax(15rem,1fr)_auto_minmax(9rem,auto)_auto] sm:items-center">
@@ -274,6 +277,8 @@ function CloudProviderRow({
             {ready} ready{pending > 0 ? ` · ${pending} pending` : ""}
           </span>
         </span>
+      ) : settingUp ? (
+        <span />
       ) : (
         <span className="max-w-72 text-xs leading-5 text-muted-foreground sm:text-right">
           {connection.detail}
@@ -454,6 +459,15 @@ function SettingsSkeleton() {
 
 function connectionActionLabel(connection: AwsConnection): string | null {
   if (connection.available_actions.length === 0) return null;
+  switch (connection.active_authorization ? null : awsSetupStep(connection)) {
+    case "waiting_for_stack":
+      return "Resume setup";
+    case "stack_creating":
+      return "View";
+    case "stack_failed":
+      return "Resolve";
+    case null:
+  }
   if (connection.available_actions.includes("authorize")) return "Resume setup";
   if (
     connection.available_actions.includes("retry") ||

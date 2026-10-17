@@ -337,6 +337,10 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 		code := apitypes.AwsAuthorizationError(*a.ErrorCode)
 		out.ErrorCode, out.ErrorMessage = &code, &a.ErrorMessage
 	}
+	if a.SetupStep != nil {
+		step := apitypes.AwsSetupStep(*a.SetupStep)
+		out.SetupStep = &step
+	}
 	if a.Mode == compute.ModeManagedStack {
 		out.ManagedAuthorization = &struct {
 			Generation      int     `json:"generation"`
@@ -362,18 +366,19 @@ func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	out := apitypes.AwsConnection{
 		Id: conn.ID, AccountId: conn.AWSAccountID, Phase: apitypes.AwsConnectionPhase(conn.Phase), Revision: conn.Revision,
 		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(),
-		AvailableActions: []apitypes.AwsConnectionAction{}, Detail: conn.Phase.Detail(), NextRetryAt: conn.NextRetryAt,
+		AvailableActions: []apitypes.AwsConnectionAction{}, Detail: conn.Detail(), NextRetryAt: conn.NextRetryAt,
 		ActiveAuthorization: authorizationOut(conn.Active), PendingAuthorization: authorizationOut(conn.Pending),
 		RetiringAuthorization: authorizationOut(conn.Retiring), CreatedAt: conn.CreatedAt, UpdatedAt: conn.UpdatedAt,
 	}
 	for _, a := range conn.Actions() {
 		out.AvailableActions = append(out.AvailableActions, apitypes.AwsConnectionAction(a))
 	}
+	out.ConsoleUrl = conn.ConsoleURL
 	switch {
-	case conn.ConsoleURL != nil:
-		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: *conn.ConsoleURL}
 	case conn.Customer != nil:
 		out.CustomerAction = &apitypes.AwsCustomerAction{Label: conn.Customer.Label, Url: conn.Customer.URL}
+	case conn.ConsoleURL != nil:
+		out.CustomerAction = &apitypes.AwsCustomerAction{Label: "Create the connection stack in the AWS Console", Url: *conn.ConsoleURL}
 	}
 	return out
 }

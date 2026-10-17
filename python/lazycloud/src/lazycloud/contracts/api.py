@@ -1738,46 +1738,15 @@ class ManagedAuthorization(APIModel):
     template_sha256: str
 
 
-class AwsAuthorizationGeneration(APIModel):
-    generation: int
-    authorization_mode: AuthorizationMode
-    managed_authorization: ManagedAuthorization | None = None
-    phase: AwsAuthorizationPhase
-    last_validation_started_at: AwareDatetime | None = None
-    last_validated_at: AwareDatetime | None = None
-    error_code: AwsAuthorizationError | None = None
-    error_message: Annotated[str | None, Field(max_length=512)] = None
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
+class AwsSetupStep(str, Enum):
+    waiting_for_stack = "waiting_for_stack"
+    stack_creating = "stack_creating"
+    stack_failed = "stack_failed"
 
 
 class AwsCustomerAction(APIModel):
     label: str
     url: str
-
-
-class AwsConnection(APIModel):
-    id: UUID
-    account_id: Annotated[str, Field(description="The 12-digit AWS account id.")]
-    phase: AwsConnectionPhase
-    revision: int
-    hosts_workloads: Annotated[
-        bool, Field(description="New workloads can be placed in the account.")
-    ]
-    can_manage_existing_capacity: bool
-    available_actions: list[AwsConnectionAction]
-    detail: str
-    customer_action: AwsCustomerAction | None = None
-    next_retry_at: AwareDatetime | None = None
-    active_authorization: AwsAuthorizationGeneration | None = None
-    pending_authorization: AwsAuthorizationGeneration | None = None
-    retiring_authorization: AwsAuthorizationGeneration | None = None
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
-class AwsConnectionEnvelope(APIModel):
-    connection: AwsConnection | None = None
 
 
 class SubnetId(RootModel[str]):
@@ -1839,11 +1808,6 @@ class Authorization(APIModel):
     external_id: Annotated[
         str | None, Field(description="The external ID an existing role must require.")
     ] = None
-
-
-class AwsConnectionAuthorization(APIModel):
-    connection: AwsConnection
-    authorization: Authorization
 
 
 class Kind1(str, Enum):
@@ -3083,6 +3047,52 @@ class ComputeSummary(APIModel):
     instances: Instances
     cost: Cost
     workload_count: int
+
+
+class AwsAuthorizationGeneration(APIModel):
+    generation: int
+    authorization_mode: AuthorizationMode
+    managed_authorization: ManagedAuthorization | None = None
+    phase: AwsAuthorizationPhase
+    last_validation_started_at: AwareDatetime | None = None
+    last_validated_at: AwareDatetime | None = None
+    error_code: AwsAuthorizationError | None = None
+    error_message: Annotated[str | None, Field(max_length=512)] = None
+    setup_step: AwsSetupStep | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class AwsConnection(APIModel):
+    id: UUID
+    account_id: Annotated[str, Field(description="The 12-digit AWS account id.")]
+    phase: AwsConnectionPhase
+    revision: int
+    hosts_workloads: Annotated[
+        bool, Field(description="New workloads can be placed in the account.")
+    ]
+    can_manage_existing_capacity: bool
+    available_actions: list[AwsConnectionAction]
+    detail: str
+    customer_action: AwsCustomerAction | None = None
+    console_url: Annotated[
+        str | None, Field(description="The AWS Console link that creates the pending stack.")
+    ] = None
+    next_retry_at: AwareDatetime | None = None
+    active_authorization: AwsAuthorizationGeneration | None = None
+    pending_authorization: AwsAuthorizationGeneration | None = None
+    retiring_authorization: AwsAuthorizationGeneration | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class AwsConnectionEnvelope(APIModel):
+    connection: AwsConnection | None = None
+
+
+class AwsConnectionAuthorization(APIModel):
+    connection: AwsConnection
+    authorization: Authorization
 
 
 class GpuRate(APIModel):

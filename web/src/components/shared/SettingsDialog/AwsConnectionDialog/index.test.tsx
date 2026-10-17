@@ -30,6 +30,52 @@ describe("AWS connection dialog", () => {
     expect(buttonNames()).toEqual(["Retry", "Forget connection"]);
   });
 
+  it("shows where the customer's stack stands during setup", () => {
+    const failedStack = "https://us-east-2.console.aws.amazon.com/cloudformation/home#/stacks";
+    const setup = (
+      setup_step: Schemas["AwsSetupStep"],
+      fields: Partial<Schemas["AwsConnection"]> = {},
+    ) =>
+      connection("awaiting_authorization", {
+        active_authorization: undefined,
+        pending_authorization: {
+          generation: 1,
+          authorization_mode: "managed_stack",
+          phase: "degraded",
+          setup_step,
+          error_message: "Validation failed with 1 error(s).",
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:01Z",
+        },
+        available_actions: ["authorize", "validate", "remove"],
+        console_url: STACK_URL,
+        ...fields,
+      });
+    const links = () =>
+      screen.queryAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")]);
+
+    const { rerender } = renderDialog(setup("waiting_for_stack"));
+    expect(links()).toEqual([["Open AWS Console", STACK_URL]]);
+    expect(buttonNames()).toEqual(["Check now", "Cancel setup"]);
+
+    rerender(dialog(setup("stack_creating")));
+    expect(screen.getByText("AWS is creating the stack")).toBeInTheDocument();
+    expect(links()).toEqual([]);
+
+    rerender(
+      dialog(
+        setup("stack_failed", {
+          customer_action: { label: "Delete the failed stack in AWS", url: failedStack },
+        }),
+      ),
+    );
+    expect(screen.getByText("Validation failed with 1 error(s).")).toBeInTheDocument();
+    expect(links()).toEqual([
+      ["Delete the stack", failedStack],
+      ["Create again", STACK_URL],
+    ]);
+  });
+
   it("forgets after confirmation and links what stays in AWS", async () => {
     const leftovers: Schemas["AwsLeftover"][] = [
       {

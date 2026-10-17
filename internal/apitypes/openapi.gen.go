@@ -292,6 +292,27 @@ func (e AwsLeftoverKind) Valid() bool {
 	}
 }
 
+// Defines values for AwsSetupStep.
+const (
+	StackCreating   AwsSetupStep = "stack_creating"
+	StackFailed     AwsSetupStep = "stack_failed"
+	WaitingForStack AwsSetupStep = "waiting_for_stack"
+)
+
+// Valid indicates whether the value is a known member of the AwsSetupStep enum.
+func (e AwsSetupStep) Valid() bool {
+	switch e {
+	case StackCreating:
+		return true
+	case StackFailed:
+		return true
+	case WaitingForStack:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BilledDimension.
 const (
 	BilledDimensionComputeRuntime BilledDimension = "compute_runtime"
@@ -2506,8 +2527,11 @@ type AwsAuthorizationGeneration struct {
 		TemplateSha256  string  `json:"template_sha256"`
 		TemplateVersion string  `json:"template_version"`
 	} `json:"managed_authorization,omitempty"`
-	Phase     AwsAuthorizationPhase `json:"phase"`
-	UpdatedAt time.Time             `json:"updated_at"`
+	Phase AwsAuthorizationPhase `json:"phase"`
+
+	// SetupStep Where the customer's creation of a managed authorization's stack stands while the authorization has never validated.
+	SetupStep *AwsSetupStep `json:"setup_step,omitempty"`
+	UpdatedAt time.Time     `json:"updated_at"`
 }
 
 // AwsAuthorizationGenerationAuthorizationMode defines model for AwsAuthorizationGeneration.AuthorizationMode.
@@ -2523,7 +2547,10 @@ type AwsConnection struct {
 	ActiveAuthorization       *AwsAuthorizationGeneration `json:"active_authorization,omitempty"`
 	AvailableActions          []AwsConnectionAction       `json:"available_actions"`
 	CanManageExistingCapacity bool                        `json:"can_manage_existing_capacity"`
-	CreatedAt                 time.Time                   `json:"created_at"`
+
+	// ConsoleUrl The AWS Console link that creates the pending stack.
+	ConsoleUrl *string   `json:"console_url,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	// CustomerAction A step the customer takes in the AWS Console.
 	CustomerAction *AwsCustomerAction `json:"customer_action,omitempty"`
@@ -2610,6 +2637,9 @@ type AwsNetwork struct {
 type AwsReconnectRequest struct {
 	RoleArn *string `json:"role_arn,omitempty"`
 }
+
+// AwsSetupStep Where the customer's creation of a managed authorization's stack stands while the authorization has never validated.
+type AwsSetupStep string
 
 // BilledDimension The invoice line a component rolls up into.
 type BilledDimension string

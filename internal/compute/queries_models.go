@@ -36,6 +36,7 @@ type CloudAuthorization struct {
 	UpdatedAt               time.Time
 	StackDeleteRequestedAt  *time.Time
 	StackDeletedAt          *time.Time
+	SetupStep               *string
 }
 
 type CloudConnection struct {

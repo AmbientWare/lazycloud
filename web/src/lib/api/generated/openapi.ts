@@ -5425,11 +5425,17 @@ export interface components {
             last_validated_at?: string;
             error_code?: components["schemas"]["AwsAuthorizationError"];
             error_message?: string;
+            setup_step?: components["schemas"]["AwsSetupStep"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description Where the customer's creation of a managed authorization's stack stands while the authorization has never validated.
+         * @enum {string}
+         */
+        AwsSetupStep: "waiting_for_stack" | "stack_creating" | "stack_failed";
         /** @description A step the customer takes in the AWS Console. */
         AwsCustomerAction: {
             label: string;
@@ -5448,6 +5454,8 @@ export interface components {
             available_actions: components["schemas"]["AwsConnectionAction"][];
             detail: string;
             customer_action?: components["schemas"]["AwsCustomerAction"];
+            /** @description The AWS Console link that creates the pending stack. */
+            console_url?: string;
             /** Format: date-time */
             next_retry_at?: string;
             active_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
@@ -11687,6 +11695,7 @@ export const awsConnectionActionValues: ReadonlyArray<FlattenedDeepRequired<comp
 export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationPhase"]> = ["awaiting_authorization", "validating", "ready", "degraded", "retiring", "retired"];
 export const awsAuthorizationErrorValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationError"]> = ["assume_role_denied", "external_id_not_enforced", "account_mismatch", "permission_drift", "stack_drift", "upstream_unavailable"];
 export const awsAuthorizationGenerationAuthorization_modeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationGeneration"]["authorization_mode"]> = ["managed_stack", "existing_role"];
+export const awsSetupStepValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsSetupStep"]> = ["waiting_for_stack", "stack_creating", "stack_failed"];
 export const awsLeftoverKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsLeftover"]["kind"]> = ["stack", "instance"];
 export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "terminating", "stopped", "hibernate_unverified", "image_saved"];
 export const fleetNodeProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetNode"]["provider"]> = ["agent", "aws"];

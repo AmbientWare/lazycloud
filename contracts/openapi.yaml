@@ -7103,8 +7103,16 @@ components:
         last_validated_at: { type: string, format: date-time }
         error_code: { $ref: "#/components/schemas/AwsAuthorizationError" }
         error_message: { type: string, maxLength: 512 }
+        setup_step: { $ref: "#/components/schemas/AwsSetupStep" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    AwsSetupStep:
+      description: >-
+        Where the customer's creation of a managed authorization's stack
+        stands while the authorization has never validated.
+      type: string
+      enum: [waiting_for_stack, stack_creating, stack_failed]
 
     AwsCustomerAction:
       description: A step the customer takes in the AWS Console.
@@ -7134,6 +7142,9 @@ components:
           items: { $ref: "#/components/schemas/AwsConnectionAction" }
         detail: { type: string }
         customer_action: { $ref: "#/components/schemas/AwsCustomerAction" }
+        console_url:
+          description: The AWS Console link that creates the pending stack.
+          type: string
         next_retry_at: { type: string, format: date-time }
         active_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
         pending_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
