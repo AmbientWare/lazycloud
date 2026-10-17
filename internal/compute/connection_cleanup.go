@@ -204,21 +204,16 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	if ok, err := assumable(ctx, scope); err != nil {
 		return outcome{err: err}
 	} else if !ok {
-		switch {
-		case access.deleteRequested != nil:
+		if access.deleteRequested != nil {
 			// The stack removes its role last: once the platform asked to
 			// delete it, the role going is the stack going.
 			if err := c.queries.StackDeleted(ctx, access.ID); err != nil {
 				return outcome{err: fmt.Errorf("record stack deleted: %w", err)}
 			}
-			return c.finishRevoke(ctx, conn)
-		case conn.Active == nil && setupWait(conn, access) != nil:
-			// The customer may still be creating the setup's stack, which
-			// makes the role.
-			return outcome{until: setupWait(conn, access)}
 		}
-		// Without the role the platform reaches nothing in the account, and
-		// nothing there trusts it any more.
+		// Without the role the platform reaches nothing in the account. A
+		// stack created after removal trusts only an external ID removal
+		// discards.
 		return c.finishRevoke(ctx, conn)
 	}
 	if conn.Active != nil && conn.Phase == ConnRevoking {
@@ -329,9 +324,6 @@ type connectionStack struct {
 	authorization uuid.UUID
 	region, name  string
 	id            string
-	// creatingUntil is when a name with no stack counts as gone, while the
-	// customer may still be creating it.
-	creatingUntil *time.Time
 }
 
 // action shows the customer the stack in the CloudFormation console.
@@ -351,8 +343,6 @@ func (c *Compute) deleteStack(ctx context.Context, scope awsScope, s *connection
 	out, err := cf.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: aws.String(cmp.Or(s.id, s.name))})
 	gone := s.id == "" && awsCode(err) == "ValidationError"
 	switch {
-	case gone && s.creatingUntil != nil && time.Now().Before(*s.creatingUntil):
-		return false, nil
 	case gone:
 	case err != nil:
 		return false, refusedOr(err, "describe stack %s", s.name)
@@ -493,11 +483,6 @@ func (c *Compute) retire(ctx context.Context, conn Connection) outcome {
 		}
 		if a.Mode == ModeManagedStack {
 			s := connectionStack{authorization: a.ID, region: a.Region, name: a.StackName, id: a.StackID}
-			if a.StackID == "" {
-				// A generation never validated retired when its reconnect was
-				// cancelled or lapsed, and its stack may still be being created.
-				s.creatingUntil = ptr(a.UpdatedAt.Add(setupStackWait))
-			}
 			scope := c.roleScope(conn, conn.Active)
 			if ok, err := assumable(ctx, scope); !ok {
 				return roleRefused(err, s.action())
@@ -570,25 +555,4 @@ func stackURL(region, id, name string) string {
 		return stacksURL(region) + "/stackinfo?stackId=" + url.QueryEscape(id)
 	}
 	return stacksURL(region) + "?filteringText=" + url.QueryEscape(name)
-}
-
-// setupStackWait bounds how long removing an unfinished setup waits for a
-// stack the customer may still be creating; CloudFormation makes the role
-// within minutes of the create.
-const setupStackWait = 5 * time.Minute
-
-// setupWait is when removing an unfinished setup stops waiting for its
-// role, or nil once that time has passed.
-func setupWait(conn Connection, pending *Authorization) *time.Time {
-	if conn.removalRequested == nil {
-		return nil
-	}
-	until := conn.removalRequested.Add(setupStackWait)
-	if pending.expiresAt != nil && pending.expiresAt.Before(until) {
-		until = *pending.expiresAt
-	}
-	if !time.Now().Before(until) {
-		return nil
-	}
-	return &until
 }

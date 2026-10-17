@@ -104,7 +104,8 @@ export function awsRemovalConfirmation(connection: AwsConnection): AwsConnection
   if (!connection.active_authorization) {
     return {
       title: "Cancel AWS setup?",
-      description: "This unfinished connection will be removed. No AWS compute has been activated.",
+      description:
+        "This unfinished connection will be removed, along with its stack if LazyCloud finds one. If you are still creating the stack in CloudFormation, delete it there.",
       cancelLabel: "Keep setup",
       confirmLabel: "Cancel setup",
     };
