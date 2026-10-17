@@ -231,7 +231,10 @@ func (q *Queries) HostWaitTrace(ctx context.Context, hostID *uuid.UUID) (string,
 }
 
 const hostingConnections = `-- name: HostingConnections :many
-select cc.id, a.networks
+select cc.id, a.networks,
+       (cc.warm_capacity and exists (
+           select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active'
+       ))::boolean as reserves
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
 where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
@@ -242,11 +245,14 @@ for share of cc
 type HostingConnectionsRow struct {
 	ID       uuid.UUID
 	Networks []byte
+	Reserves bool
 }
 
 // Connections that take new workloads, with the networks of their active
-// authorization. Each row is share-locked so no connection leaves hosting
-// while the pass that read it writes hosts into it.
+// authorization and whether their markets keep reserves: warm capacity is
+// on and an active workspace uses the connection. Each row is share-locked
+// so no connection leaves hosting while the pass that read it writes hosts
+// into it.
 func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsRow, error) {
 	rows, err := q.db.Query(ctx, hostingConnections)
 	if err != nil {
@@ -256,7 +262,7 @@ func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsR
 	var items []HostingConnectionsRow
 	for rows.Next() {
 		var i HostingConnectionsRow
-		if err := rows.Scan(&i.ID, &i.Networks); err != nil {
+		if err := rows.Scan(&i.ID, &i.Networks, &i.Reserves); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

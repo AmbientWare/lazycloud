@@ -252,9 +252,14 @@ order by market;
 
 -- name: HostingConnections :many
 -- Connections that take new workloads, with the networks of their active
--- authorization. Each row is share-locked so no connection leaves hosting
--- while the pass that read it writes hosts into it.
-select cc.id, a.networks
+-- authorization and whether their markets keep reserves: warm capacity is
+-- on and an active workspace uses the connection. Each row is share-locked
+-- so no connection leaves hosting while the pass that read it writes hosts
+-- into it.
+select cc.id, a.networks,
+       (cc.warm_capacity and exists (
+           select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active'
+       ))::boolean as reserves
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
 where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')

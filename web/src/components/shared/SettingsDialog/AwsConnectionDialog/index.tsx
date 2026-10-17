@@ -4,6 +4,7 @@ import {
   Cloud,
   CloudOff,
   ExternalLink,
+  Info,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -32,6 +33,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +42,7 @@ import { type AwsConnectionConfirmedAction, useAwsConnectionController } from ".
 import {
   type AwsConnectionDialogRecoveryAction,
   awsConnectionDialogActionPlan,
+  awsConnectionIsUsable,
   awsConnectionPresentation,
   awsForgetConfirmation,
   awsRemovalConfirmation,
@@ -117,6 +121,9 @@ function AwsConnectionFlow({
               onCancelReconnect={controller.cancelReconnect}
               onRetry={controller.retry}
               onConfirm={controller.setConfirming}
+              warmCapacityPending={controller.warmCapacityPending}
+              warmCapacityError={controller.warmCapacityError}
+              onWarmCapacity={controller.setWarmCapacity}
             />
           ) : (
             <ConnectForm
@@ -233,6 +240,9 @@ function ConnectionActions({
   onCancelReconnect,
   onRetry,
   onConfirm,
+  warmCapacityPending,
+  warmCapacityError,
+  onWarmCapacity,
 }: {
   connection: AwsConnection;
   pendingAction: AwsConnectionDialogRecoveryAction | null;
@@ -242,6 +252,9 @@ function ConnectionActions({
   onCancelReconnect: () => void;
   onRetry: () => void;
   onConfirm: (action: AwsConnectionConfirmedAction) => void;
+  warmCapacityPending: boolean;
+  warmCapacityError: Error | null;
+  onWarmCapacity: (on: boolean) => void;
 }) {
   const presentation = awsConnectionPresentation(connection);
   const actionPlan = awsConnectionDialogActionPlan(connection);
@@ -249,7 +262,8 @@ function ConnectionActions({
   const customerAction = connection.customer_action;
   const authorizing = connection.available_actions.includes("authorize");
   const pending = pendingAction !== null;
-  const showCapacity = connection.hosts_workloads || connection.can_manage_existing_capacity;
+  const showCapacity = awsConnectionIsUsable(connection);
+  const showWarmCapacity = showCapacity || connection.phase === "ready";
   const showActionBar = actionPlan.recovery.length > 0 || actionPlan.remove || actionPlan.forget;
   const setupStep = awsSetupStep(connection);
 
@@ -345,6 +359,15 @@ function ConnectionActions({
         </dl>
       ) : null}
 
+      {showWarmCapacity ? (
+        <WarmCapacity
+          enabled={connection.warm_capacity}
+          pending={warmCapacityPending}
+          onChange={onWarmCapacity}
+        />
+      ) : null}
+      {warmCapacityError ? <ErrorNotice error={warmCapacityError} /> : null}
+
       {customerAction ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
           <p className="leading-5">
@@ -404,6 +427,48 @@ function ConnectionActions({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function WarmCapacity({
+  enabled,
+  pending,
+  onChange,
+}: {
+  enabled: boolean;
+  pending: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 border border-border bg-card px-3 py-1.5 text-xs">
+      <label htmlFor="aws-warm-capacity">Warm capacity</label>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 border-transparent text-muted-foreground"
+            aria-label="About warm capacity"
+          >
+            <Info className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start">
+          Keeps a host running in your AWS account, and a stopped one ready to resume, once a
+          workspace uses this connection. Work starts in seconds instead of waiting for a new
+          instance. You pay AWS for the idle hosts. Turn it off to launch instances only when work
+          arrives; they end 2 minutes after it finishes.
+        </PopoverContent>
+      </Popover>
+      <Switch
+        id="aws-warm-capacity"
+        className="ml-auto"
+        checked={enabled}
+        disabled={pending}
+        onCheckedChange={onChange}
+      />
     </div>
   );
 }

@@ -177,3 +177,6 @@ where id = @id;
 
 -- name: RequestRemoval :exec
 update cloud_connections set removal_requested_at = now() where id = @id;
+
+-- name: SetWarmCapacity :exec
+update cloud_connections set warm_capacity = @warm_capacity, updated_at = now() where id = @id;

@@ -113,6 +113,10 @@ export async function removeAwsConnection(): Promise<Schemas["AwsConnection"] | 
   return (await ok(api.DELETE("/v1/aws-connection"))).connection ?? null;
 }
 
+export function setAwsConnectionWarmCapacity(warmCapacity: boolean) {
+  return ok(api.PATCH("/v1/aws-connection", { body: { warm_capacity: warmCapacity } }));
+}
+
 export function cancelAwsConnectionReconnect() {
   return ok(api.DELETE("/v1/aws-connection/reconnect"));
 }

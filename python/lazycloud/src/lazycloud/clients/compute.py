@@ -12,6 +12,7 @@ from lazycloud.contracts.api import (
     AwsConnectionAuthorization,
     AwsConnectionEnvelope,
     AwsConnectionRequest,
+    AwsConnectionUpdate,
     AwsForgetResult,
     AwsReconnectRequest,
     ComputeInstance,
@@ -82,6 +83,9 @@ class ComputeApi:
     def disconnect_aws(self) -> AwsConnection | None:
         """The connection while removal runs, or None once it is gone."""
         return self.api._send(AwsConnectionEnvelope, "DELETE", "/v1/aws-connection").connection
+
+    def update_aws(self, update: AwsConnectionUpdate) -> AwsConnection:
+        return self.api._send(AwsConnection, "PATCH", "/v1/aws-connection", body=update)
 
     def validate_aws(self) -> AwsConnection:
         return self.api._send(AwsConnection, "POST", "/v1/aws-connection/validate")

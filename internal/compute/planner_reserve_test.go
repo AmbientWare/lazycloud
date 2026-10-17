@@ -14,6 +14,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
 
@@ -554,15 +555,50 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 	}
 }
 
-// A connected account keeps no reserves and no headroom: an idle host of
-// its leaves at once, and one whose work just ended leaves once the keep
-// window has passed, held by its market's running target carried from the
-// pass that saw the work.
+// A connected account keeps the platform's reserves while warm capacity is
+// on and a workspace uses the connection, and none otherwise.
+func TestAConnectedAccountKeepsReservesOnlyWithWarmCapacityAndAWorkspace(t *testing.T) {
+	t.Parallel()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	spotPrices(t, o)
+	bought := func(where string) int {
+		plan(t, o)
+		return scan[int](t, o.pool, "select count(*) from hosts where connection_id = $1 and phase = 'requested' and "+where, conn.ID)
+	}
+	if n := bought("true"); n != 0 {
+		t.Fatalf("bought %d hosts with no workspace, want none", n)
+	}
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
+	warmCapacity(t, o, alice, false)
+	if n := bought("true"); n != 0 {
+		t.Fatalf("bought %d hosts with warm capacity off, want none", n)
+	}
+	warmCapacity(t, o, alice, true)
+	if warm, reserves := bought("reserve_mode is null"), bought("reserve_mode is not null"); warm == 0 || reserves == 0 {
+		t.Fatalf("bought %d warm hosts and %d reserves with warm capacity on, want both", warm, reserves)
+	}
+}
+
+func warmCapacity(t *testing.T, o owners, account identity.UserID, on bool) {
+	t.Helper()
+	if conn, err := o.compute.SetWarmCapacity(t.Context(), account, on); err != nil || conn.WarmCapacity != on {
+		t.Fatalf("set warm capacity %t: %+v, %v", on, conn, err)
+	}
+}
+
+// A connected account without warm capacity keeps no reserves and no
+// headroom: an idle host of its leaves at once, and one whose work just
+// ended leaves once the keep window has passed, held by its market's
+// running target carried from the pass that saw the work.
 func TestAConnectedAccountsIdleHostLeavesAfterTheKeepWindow(t *testing.T) {
 	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
+	warmCapacity(t, o, alice, false)
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
 	idle := idleHost(t, o, "m7i.large", "i-0000000000000f901")

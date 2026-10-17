@@ -260,7 +260,7 @@ func (q *Queries) ConnectionLiveHosts(ctx context.Context, connectionID *uuid.UU
 }
 
 const connectionOfAccount = `-- name: ConnectionOfAccount :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity from cloud_connections where account_id = $1
 `
 
 func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) (CloudConnection, error) {
@@ -279,6 +279,7 @@ func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
 }
@@ -458,7 +459,7 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 const insertConnection = `-- name: InsertConnection :one
 insert into cloud_connections (account_id, aws_account_id, phase, next_step_at)
 values ($1, $2, 'awaiting_authorization', now())
-returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at
+returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity
 `
 
 type InsertConnectionParams struct {
@@ -482,6 +483,7 @@ func (q *Queries) InsertConnection(ctx context.Context, arg InsertConnectionPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
 }
@@ -519,7 +521,7 @@ func (q *Queries) LiveConnectionInstances(ctx context.Context, connectionID *uui
 }
 
 const lockConnection = `-- name: LockConnection :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where id = $1 for update
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity from cloud_connections where id = $1 for update
 `
 
 func (q *Queries) LockConnection(ctx context.Context, id uuid.UUID) (CloudConnection, error) {
@@ -538,12 +540,13 @@ func (q *Queries) LockConnection(ctx context.Context, id uuid.UUID) (CloudConnec
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
 }
 
 const lockConnectionOfAccount = `-- name: LockConnectionOfAccount :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1 for update
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity from cloud_connections where account_id = $1 for update
 `
 
 func (q *Queries) LockConnectionOfAccount(ctx context.Context, accountID uuid.UUID) (CloudConnection, error) {
@@ -562,12 +565,13 @@ func (q *Queries) LockConnectionOfAccount(ctx context.Context, accountID uuid.UU
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
 }
 
 const lockWorkspaceConnection = `-- name: LockWorkspaceConnection :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1 for share
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity from cloud_connections where account_id = $1 for share
 `
 
 // The account's connection, share-locked so its phase holds until the
@@ -588,6 +592,7 @@ func (q *Queries) LockWorkspaceConnection(ctx context.Context, accountID uuid.UU
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
 }
@@ -694,7 +699,7 @@ set phase = $1, revision = revision + 1, next_step_at = $2,
     step_attempts = $3, action_url = $4, action_label = $5,
     updated_at = now()
 where id = $6
-returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at
+returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_capacity
 `
 
 type SetConnectionPhaseParams struct {
@@ -731,8 +736,23 @@ func (q *Queries) SetConnectionPhase(ctx context.Context, arg SetConnectionPhase
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
+		&i.WarmCapacity,
 	)
 	return i, err
+}
+
+const setWarmCapacity = `-- name: SetWarmCapacity :exec
+update cloud_connections set warm_capacity = $1, updated_at = now() where id = $2
+`
+
+type SetWarmCapacityParams struct {
+	WarmCapacity bool
+	ID           uuid.UUID
+}
+
+func (q *Queries) SetWarmCapacity(ctx context.Context, arg SetWarmCapacityParams) error {
+	_, err := q.db.Exec(ctx, setWarmCapacity, arg.WarmCapacity, arg.ID)
+	return err
 }
 
 const stackDeleteRequested = `-- name: StackDeleteRequested :exec

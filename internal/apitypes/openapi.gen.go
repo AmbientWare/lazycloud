@@ -2565,6 +2565,9 @@ type AwsConnection struct {
 	RetiringAuthorization *AwsAuthorizationGeneration `json:"retiring_authorization,omitempty"`
 	Revision              int                         `json:"revision"`
 	UpdatedAt             time.Time                   `json:"updated_at"`
+
+	// WarmCapacity Keeps hosts ready while a workspace uses the connection.
+	WarmCapacity bool `json:"warm_capacity"`
 }
 
 // AwsConnectionAction defines model for AwsConnectionAction.
@@ -2602,6 +2605,11 @@ type AwsConnectionRequest struct {
 
 	// RoleArn An existing role to assume; it must require the external ID.
 	RoleArn *string `json:"role_arn,omitempty"`
+}
+
+// AwsConnectionUpdate defines model for AwsConnectionUpdate.
+type AwsConnectionUpdate struct {
+	WarmCapacity bool `json:"warm_capacity"`
 }
 
 // AwsCustomerAction A step the customer takes in the AWS Console.
@@ -6300,6 +6308,9 @@ type ListWorkloadsParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
+
+// UpdateAwsConnectionJSONRequestBody defines body for UpdateAwsConnection for application/json ContentType.
+type UpdateAwsConnectionJSONRequestBody = AwsConnectionUpdate
 
 // ConnectAwsJSONRequestBody defines body for ConnectAws for application/json ContentType.
 type ConnectAwsJSONRequestBody = AwsConnectionRequest
