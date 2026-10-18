@@ -3,6 +3,7 @@ package compute
 import (
 	"cmp"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -255,11 +256,11 @@ func freeRange(block netip.Prefix, used []netip.Prefix) (netip.Prefix, error) {
 	if !block.Addr().Is4() || bits > 32 {
 		return netip.Prefix{}, fmt.Errorf("%w: %s", errNoSubnetRange, block)
 	}
-	base := block.Masked().Addr().As4()
-	start := uint32(base[0])<<24 | uint32(base[1])<<16 | uint32(base[2])<<8 | uint32(base[3])
+	addr := block.Masked().Addr().As4()
+	start := binary.BigEndian.Uint32(addr[:])
 	for n := uint32(1); n < 256; n++ {
-		v := start + n<<(32-bits)
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}), bits)
+		binary.BigEndian.PutUint32(addr[:], start+n<<(32-bits))
+		p := netip.PrefixFrom(netip.AddrFrom4(addr), bits)
 		if !slices.ContainsFunc(used, p.Overlaps) {
 			return p, nil
 		}
