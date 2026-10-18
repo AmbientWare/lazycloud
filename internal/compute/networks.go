@@ -268,13 +268,12 @@ func freeRange(block netip.Prefix, used []netip.Prefix) (netip.Prefix, error) {
 	return netip.Prefix{}, fmt.Errorf("%w: %s", errNoSubnetRange, block)
 }
 
-// ensureSecurityGroup returns the node security group of vpc, admitting
-// the volume peer port from itself.
+// ensureSecurityGroup returns the node security group of vpc, the one it
+// tags for the fleet, admitting the volume peer port from itself.
 func (c *Compute) ensureSecurityGroup(ctx context.Context, client *ec2.Client, vpc string) (string, error) {
 	name := c.fleet.Name + "-node"
 	out, err := client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{Filters: []ec2types.Filter{
-		{Name: aws.String("vpc-id"), Values: []string{vpc}},
-		{Name: aws.String("group-name"), Values: []string{name}},
+		{Name: aws.String("vpc-id"), Values: []string{vpc}}, c.fleetFilter(),
 	}})
 	if err != nil {
 		return "", refusedOr(err, "describe the node security group of %s", vpc)

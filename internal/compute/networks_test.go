@@ -65,7 +65,7 @@ func checkNetwork(t *testing.T, f *fakeVPCs, n compute.Network) {
 				groups = append(groups, g)
 			}
 		}
-		if len(groups) != 1 || groups[0].ID != n.SecurityGroupID || groups[0].Name != networkFleet+"-node" ||
+		if len(groups) != 1 || groups[0].ID != n.SecurityGroupID ||
 			!reflect.DeepEqual(groups[0].Peers, []string{n.SecurityGroupID}) {
 			t.Errorf("node groups %+v", groups)
 		}
@@ -165,7 +165,7 @@ func TestNetworkAdoptsATerraformNetwork(t *testing.T) {
 		}
 		f.subnets["subnet-a"] = &fakeSubnet{ID: "subnet-a", VPC: "vpc-tf", Zone: "us-east-2a", ZoneID: "use2-az1", CIDR: "10.50.1.0/24", Public: true, Tags: fleetTags("lazycloud-us-east-2a")}
 		f.subnets["subnet-b"] = &fakeSubnet{ID: "subnet-b", VPC: "vpc-tf", Zone: "us-east-2b", ZoneID: "use2-az2", CIDR: "10.50.3.0/24", Public: true, Tags: fleetTags("lazycloud-us-east-2b")}
-		f.groups["sg-tf"] = &fakeGroup{ID: "sg-tf", VPC: "vpc-tf", Name: networkFleet + "-node", Tags: fleetTags(networkFleet + "-node")}
+		f.groups["sg-tf"] = &fakeGroup{ID: "sg-tf", VPC: "vpc-tf", Name: networkFleet + "-fleet-node", Tags: fleetTags(networkFleet + "-fleet-node")}
 		f.endpoints["vpce-tf"] = &fakeEndpoint{ID: "vpce-tf", VPC: "vpc-tf", Service: "com.amazonaws.us-east-2.s3", Tables: []string{"rtb-tf"}, Tags: map[string]string{"Name": "lazycloud-s3"}}
 	})
 

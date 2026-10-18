@@ -47,6 +47,8 @@ type customerAWS struct {
 	stacks map[string]*cfnStack
 	// failDelete makes deleting the named stack end in DELETE_FAILED.
 	failDelete map[string]bool
+	// vpcs are the account's networks.
+	vpcs *fakeVPCs
 }
 
 type role struct {
@@ -123,8 +125,10 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 		}
 		return deleteStackReply()
 	})
-	// The account runs no fleet instances unless a test says so.
+	// The account runs no fleet instances unless a test says so, and its
+	// networks are what the fleet makes there.
 	e.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
+	c.vpcs = newFakeVPCs(e)
 	return c
 }
 
@@ -664,6 +668,13 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	o, emulator, customer := imagedConnectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
+	run(t, o.pool, "delete from fleet_networks where owner = $1", conn.ID.String())
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if creates := emulator.calls("CreateVpc"); len(creates) != 1 || creates[0].AccessKey != assumedKey(conn.Active.RoleARN) {
+		t.Fatalf("CreateVpc calls %v, want the account's network made through its role", creates)
+	}
 	ws := newWorkspace(t, o.pool, "prod", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
 	var conflict *compute.ConflictError
@@ -741,9 +752,15 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 			emulator.calls("ModifyImageAttribute"))
 	}
 	if n := scan[int](t, o.pool, `select (select count(*) from capacity_cooldowns where connection_key = $1::text) +
-(select count(*) from fleet_markets where starts_with(market, $1::text))`, conn.ID); n != 0 {
-		t.Fatalf("%d cooldown and market rows of the removed connection remain", n)
+(select count(*) from fleet_markets where starts_with(market, $1::text)) +
+(select count(*) from fleet_networks where owner = $1::text)`, conn.ID); n != 0 {
+		t.Fatalf("%d cooldown, market and network rows of the removed connection remain", n)
 	}
+	customer.vpcs.with(func() {
+		if len(customer.vpcs.vpcs) != 0 {
+			t.Fatalf("VPCs %v remain in the removed account", customer.vpcs.vpcs)
+		}
+	})
 }
 
 // A network failure while reading a stack proves nothing about it: the
