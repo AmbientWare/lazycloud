@@ -114,7 +114,7 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 		}
 	}
 	in.OwnerPays = true
-	if offers := RankOffers(connectionPolicy(DefaultPolicy(), HostingConnectionsRow{}), need, false, in); len(offers) == 0 || offers[0].Type.GPU != "H100" {
+	if offers := RankOffers(connectionPolicy(DefaultPolicy()), need, false, in); len(offers) == 0 || offers[0].Type.GPU != "H100" {
 		t.Fatalf("connected account offers %v", offerKeys(offers))
 	}
 }
