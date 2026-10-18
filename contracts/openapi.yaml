@@ -7157,19 +7157,6 @@ components:
       properties:
         connection: { $ref: "#/components/schemas/AwsConnection" }
 
-    AwsNetwork:
-      type: object
-      required: [vpc_id, subnet_ids, security_group_id]
-      additionalProperties: false
-      properties:
-        vpc_id: { type: string, minLength: 1, maxLength: 128 }
-        subnet_ids:
-          type: array
-          minItems: 2
-          uniqueItems: true
-          items: { type: string, minLength: 1, maxLength: 128 }
-        security_group_id: { type: string, minLength: 1, maxLength: 128 }
-
     AwsConnectionRequest:
       type: object
       required: [account_id]
@@ -7182,10 +7169,6 @@ components:
           description: An existing role to assume; it must require the external ID.
           type: string
           pattern: "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
-        networks:
-          description: Per-region VPC, subnets and security group for an existing role.
-          type: object
-          additionalProperties: { $ref: "#/components/schemas/AwsNetwork" }
         external_id:
           description: The external ID an existing role already requires.
           type: string

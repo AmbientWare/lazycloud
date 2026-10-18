@@ -5469,19 +5469,10 @@ export interface components {
         AwsConnectionEnvelope: {
             connection?: components["schemas"]["AwsConnection"];
         };
-        AwsNetwork: {
-            vpc_id: string;
-            subnet_ids: string[];
-            security_group_id: string;
-        };
         AwsConnectionRequest: {
             account_id: string;
             /** @description An existing role to assume; it must require the external ID. */
             role_arn?: string;
-            /** @description Per-region VPC, subnets and security group for an existing role. */
-            networks?: {
-                [key: string]: components["schemas"]["AwsNetwork"];
-            };
             /** @description The external ID an existing role already requires. */
             external_id?: string;
         };

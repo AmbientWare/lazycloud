@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import typer
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 from rich.text import Text
 
 from lazycloud._terminal.cards import notice_card, result_card
@@ -34,7 +34,6 @@ from lazycloud.contracts.api import (
     AwsConnectionAuthorization,
     AwsConnectionPhase,
     AwsConnectionRequest,
-    AwsNetwork,
     AwsReconnectRequest,
     ComputeInstancePage,
     ComputeWorkloadPage,
@@ -145,21 +144,11 @@ def cloud_connect_aws(
         str | None,
         typer.Option("--role-arn", help="Existing cross-account management role."),
     ] = None,
-    networks_json: Annotated[
-        str,
-        typer.Option(
-            "--networks-json",
-            help="Regional VPC, subnet and security group IDs as JSON; requires an existing role.",
-        ),
-    ] = "{}",
 ) -> None:
     """Connect an AWS account, which backs every workspace you own."""
-    networks = TypeAdapter(dict[str, AwsNetwork]).validate_json(networks_json)
     fields: dict[str, object] = {"account_id": account_id}
     if role_arn is not None:
         fields["role_arn"] = role_arn
-    if networks:
-        fields["networks"] = networks
     response = _compute().connect_aws(AwsConnectionRequest.model_validate(fields))
     _emit_authorization(ctx, response, title="AWS authorization required")
 

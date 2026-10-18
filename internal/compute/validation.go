@@ -3,18 +3,15 @@ package compute
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -59,7 +56,6 @@ func truncate(s string) string {
 // validated is what a passing check learned.
 type validated struct {
 	stackID         string
-	networks        map[string]Network
 	nodeRoleARN     string
 	instanceProfile string
 }
@@ -174,12 +170,8 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			}
 			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
 		}
-		networks, err := json.Marshal(result.networks)
-		if err != nil {
-			return fmt.Errorf("encode networks: %w", err)
-		}
 		if err := q.AuthorizationValidated(ctx, AuthorizationValidatedParams{
-			ID: target.ID, StackID: nilIfEmpty(result.stackID), Networks: networks,
+			ID: target.ID, StackID: nilIfEmpty(result.stackID),
 			NodeRoleArn: nilIfEmpty(result.nodeRoleARN), NodeInstanceProfile: nilIfEmpty(result.instanceProfile),
 		}); err != nil {
 			return fmt.Errorf("record validation: %w", err)
@@ -218,8 +210,8 @@ func nilIfEmpty(s string) *string {
 
 // checkAuthorization proves the platform can act through the role: it
 // assumes the role with the external ID, confirms the role refuses
-// AssumeRole without it, and reads the stack's outputs or the given
-// networks.
+// AssumeRole without it, and reads the stack's outputs. The fleet makes
+// the account's networks itself (EnsureNetworks).
 func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Authorization) (validated, error) {
 	clients := c.aws()
 	session := "lazycloud-validate-" + conn.ID.String()[:8]
@@ -262,7 +254,10 @@ func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Aut
 	if a.Mode == ModeManagedStack {
 		return c.checkStack(ctx, clients, assumed, a)
 	}
-	return c.checkNetworks(ctx, clients, assumed, a)
+	return validated{
+		instanceProfile: existingRoleNodeProfile,
+		nodeRoleARN:     fmt.Sprintf("arn:aws:iam::%s:role/%s", accountOfRole(a.RoleARN), existingRoleNodeProfile),
+	}, nil
 }
 
 func (c *Compute) assumeWithoutExternalID(role, session string) awsScope {
@@ -320,67 +315,9 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 	if outputs["ConnectionRoleArn"] != a.RoleARN {
 		return validated{}, fail(ErrStackDrift, "authorization stack outputs another role")
 	}
-	subnets := strings.Split(outputs["SubnetIds"], ",")
-	if outputs["VpcId"] == "" || outputs["SecurityGroupId"] == "" || len(subnets) < 2 {
-		return validated{}, fail(ErrStackDrift, "authorization stack outputs no network")
-	}
-	network, err := c.describeNetwork(ctx, clients, scope, a.Region, outputs["VpcId"], outputs["SecurityGroupId"], subnets)
-	if err != nil {
-		return validated{}, err
-	}
 	return validated{
-		stackID: aws.ToString(stack.StackId), networks: map[string]Network{a.Region: network},
-		nodeRoleARN: outputs["NodeRoleArn"], instanceProfile: outputs["NodeInstanceProfileName"],
+		stackID: aws.ToString(stack.StackId), nodeRoleARN: outputs["NodeRoleArn"], instanceProfile: outputs["NodeInstanceProfileName"],
 	}, nil
-}
-
-func (c *Compute) checkNetworks(ctx context.Context, clients awsClients, scope awsScope, a Authorization) (validated, error) {
-	if len(a.networks) == 0 {
-		return validated{}, fail(ErrPermissionDrift, "AWS connection has no regional networks")
-	}
-	out := validated{
-		networks: map[string]Network{}, instanceProfile: existingRoleNodeProfile,
-		nodeRoleARN: fmt.Sprintf("arn:aws:iam::%s:role/%s", accountOfRole(a.RoleARN), existingRoleNodeProfile),
-	}
-	for region, n := range a.networks {
-		ids := make([]string, 0, len(n.Subnets))
-		for _, s := range n.Subnets {
-			ids = append(ids, s.ID)
-		}
-		network, err := c.describeNetwork(ctx, clients, scope, region, n.VPCID, n.SecurityGroupID, ids)
-		if err != nil {
-			return validated{}, err
-		}
-		out.networks[region] = network
-	}
-	return out, nil
-}
-
-// describeNetwork confirms the subnets sit in the VPC across two zones and
-// records each subnet's zone.
-func (c *Compute) describeNetwork(ctx context.Context, clients awsClients, scope awsScope, region, vpc, group string, subnets []string) (Network, error) {
-	out, err := clients.ec2(scope, region).DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{SubnetIds: subnets})
-	if err != nil {
-		if accessDenied(err) {
-			return Network{}, fail(ErrPermissionDrift, "AWS refused DescribeSubnets: %s", describeAWSError(err))
-		}
-		return Network{}, fail(ErrPermissionDrift, "AWS subnets in %s could not be read: %s", region, describeAWSError(err))
-	}
-	network := Network{VPCID: vpc, SecurityGroupID: group}
-	zones := map[string]bool{}
-	for _, s := range out.Subnets {
-		if aws.ToString(s.VpcId) != vpc {
-			return Network{}, fail(ErrPermissionDrift, "subnet %s is outside VPC %s", aws.ToString(s.SubnetId), vpc)
-		}
-		zones[aws.ToString(s.AvailabilityZone)] = true
-		network.Subnets = append(network.Subnets, Subnet{
-			ID: aws.ToString(s.SubnetId), Zone: aws.ToString(s.AvailabilityZone), ZoneID: aws.ToString(s.AvailabilityZoneId),
-		})
-	}
-	if len(zones) < 2 {
-		return Network{}, fail(ErrPermissionDrift, "the subnets in %s must span two availability zones", region)
-	}
-	return network, nil
 }
 
 // advanceConnection runs a connection's due background step.

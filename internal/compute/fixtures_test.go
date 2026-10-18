@@ -1,6 +1,7 @@
 package compute_test
 
 import (
+	"encoding/json"
 	"log/slog"
 	"regexp"
 	"testing"
@@ -32,9 +33,30 @@ func newOwners(t *testing.T, config compute.Config) owners {
 	t.Helper()
 	pool := dbtest.New(t)
 	e := execution.NewExecution(pool)
-	return owners{
+	o := owners{
 		pool: pool, compute: compute.NewCompute(pool, e, config), execution: e,
 		scheduling: scheduling.NewScheduling(pool, e, discard()),
+	}
+	platform := map[string]compute.Network{}
+	for _, region := range config.Fleet.Regions {
+		if n, ok := fleetNetworks()[region]; ok {
+			platform[region] = n
+		}
+	}
+	setNetworks(t, o, "platform", platform)
+	return o
+}
+
+// setNetworks records owner's networks as the network owner would.
+func setNetworks(t *testing.T, o owners, owner string, networks map[string]compute.Network) {
+	t.Helper()
+	run(t, o.pool, "delete from fleet_networks where owner = $1", owner)
+	for region, n := range networks {
+		raw, err := json.Marshal(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run(t, o.pool, "insert into fleet_networks (owner, region, network, ensured_at) values ($1, $2, $3, now())", owner, region, raw)
 	}
 }
 

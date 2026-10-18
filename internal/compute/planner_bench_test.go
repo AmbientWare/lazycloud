@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"slices"
@@ -22,8 +23,10 @@ func BenchmarkPlan(b *testing.B) {
 		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
 	networks := map[string]Network{"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1a", "usw1-az1")}
-	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, Networks: networks, StorageRegion: "us-east-1"}})
+	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, StorageRegion: "us-east-1"}})
 	for region, n := range networks {
+		raw, _ := json.Marshal(n) //nolint:errcheck // A Network always encodes.
+		exec(b, pool, "insert into fleet_networks (owner, region, network, ensured_at) values ('platform', $1, $2, now())", region, raw)
 		for _, typ := range FleetCatalog() {
 			if price, sold := typ.OnDemandMicros(region); sold {
 				exec(b, pool, `insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)

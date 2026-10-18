@@ -8,7 +8,6 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -176,7 +175,6 @@ type Authorization struct {
 	externalID         string
 	nodeRoleARN        string
 	nodeInstanceProfle string
-	networks           map[string]Network
 	expiresAt          *time.Time
 	// deleteRequested is when the platform last asked CloudFormation to
 	// delete the stack.
@@ -315,7 +313,6 @@ type ConnectRequest struct {
 	// RoleARN names an existing role; without it the customer creates the
 	// managed stack.
 	RoleARN    string
-	Networks   map[string]Network
 	ExternalID string
 }
 
@@ -336,13 +333,6 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 		m := roleARNPattern.FindStringSubmatch(req.RoleARN)
 		if m == nil || m[2] != req.AWSAccountID {
 			return Connection{}, &InvalidError{Message: "AWS role ARN must belong to account_id"}
-		}
-	} else if len(req.Networks) > 0 {
-		return Connection{}, &InvalidError{Message: "AWS network may only be supplied with an existing role"}
-	}
-	for region := range req.Networks {
-		if !awsRegionPattern.MatchString(region) {
-			return Connection{}, &InvalidError{Message: fmt.Sprintf("AWS network key %q is not an AWS region such as us-east-2", region)}
 		}
 	}
 	if c.fleet.PrincipalARN == "" {
@@ -402,13 +392,8 @@ func (c *Compute) insertAuthorization(ctx context.Context, q *Queries, conn Clou
 		}
 		externalID = base64.RawURLEncoding.EncodeToString(raw)
 	}
-	networks, err := json.Marshal(nonNilMap(req.Networks))
-	if err != nil {
-		return fmt.Errorf("encode networks: %w", err)
-	}
 	params := InsertAuthorizationParams{
 		ConnectionID: conn.ID, Generation: int32(gen), ExternalID: externalID, Region: connectionRegion, //nolint:gosec // Generations are small.
-		Networks: networks,
 	}
 	if req.RoleARN != "" {
 		params.Mode, params.RoleArn = string(ModeExistingRole), req.RoleARN
@@ -454,13 +439,6 @@ func connectionSuffix(conn CloudConnection) string {
 }
 
 func stackPrefix(suffix string) string { return "lazycloud-connection-" + suffix }
-
-func nonNilMap(m map[string]Network) map[string]Network {
-	if m == nil {
-		return map[string]Network{}
-	}
-	return m
-}
 
 // AccountConnection returns the account's connection, or nil without one.
 func (c *Compute) AccountConnection(ctx context.Context, account identity.UserID) (*Connection, error) {
@@ -549,8 +527,6 @@ func authorizationOf(a CloudAuthorization) Authorization {
 		code := AuthorizationError(*a.ErrorCode)
 		auth.ErrorCode = &code
 	}
-	// The column holds what validation or Connect wrote.
-	_ = json.Unmarshal(a.Networks, &auth.networks)
 	return auth
 }
 
@@ -695,7 +671,7 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 		}
 		req := ConnectRequest{AWSAccountID: row.AwsAccountID, RoleARN: roleARN}
 		if roleARN != "" {
-			req.ExternalID, req.Networks = conn.Active.externalID, conn.Active.networks
+			req.ExternalID = conn.Active.externalID
 		}
 		if err := c.insertAuthorization(ctx, q, row, int(gen), req); err != nil {
 			return err

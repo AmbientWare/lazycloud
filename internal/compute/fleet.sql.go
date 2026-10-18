@@ -13,6 +13,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const accountNetworkRegions = `-- name: AccountNetworkRegions :many
+select region from fleet_networks where owner = $1 order by region
+`
+
+// The regions an account holds a network in.
+func (q *Queries) AccountNetworkRegions(ctx context.Context, owner string) ([]string, error) {
+	rows, err := q.db.Query(ctx, accountNetworkRegions, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var region string
+		if err := rows.Scan(&region); err != nil {
+			return nil, err
+		}
+		items = append(items, region)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const alignWalk = `-- name: AlignWalk :exec
 with walked as (
     select connection_key, region, availability_zone_id, instance_type, market, until
@@ -77,7 +102,7 @@ func (q *Queries) ClearCooldown(ctx context.Context, arg ClearCooldownParams) er
 }
 
 const connectionAccounts = `-- name: ConnectionAccounts :many
-select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile, a.node_role_arn,
+select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.node_instance_profile, a.node_role_arn,
        (a.phase = 'ready'
         and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
        (a.phase = 'ready'
@@ -98,7 +123,6 @@ type ConnectionAccountsRow struct {
 	AuthorizationID     uuid.UUID
 	RoleArn             string
 	ExternalID          string
-	Networks            []byte
 	NodeInstanceProfile *string
 	NodeRoleArn         *string
 	Hosting             bool
@@ -107,7 +131,7 @@ type ConnectionAccountsRow struct {
 }
 
 // The connected accounts with an active authorization, or only the one of
-// @connection_id: the role and networks the fleet's calls there use;
+// @connection_id: the role the fleet's calls there use;
 // whether it takes new hosts (acceptsWork), whether the platform still
 // manages its instances (Connection.ManagesCapacity), and whether an
 // active workspace uses it. Each row is share-locked so no connection
@@ -126,7 +150,6 @@ func (q *Queries) ConnectionAccounts(ctx context.Context, connectionID *uuid.UUI
 			&i.AuthorizationID,
 			&i.RoleArn,
 			&i.ExternalID,
-			&i.Networks,
 			&i.NodeInstanceProfile,
 			&i.NodeRoleArn,
 			&i.Hosting,
@@ -141,6 +164,20 @@ func (q *Queries) ConnectionAccounts(ctx context.Context, connectionID *uuid.UUI
 		return nil, err
 	}
 	return items, nil
+}
+
+const deleteFleetNetwork = `-- name: DeleteFleetNetwork :exec
+delete from fleet_networks where owner = $1 and region = $2
+`
+
+type DeleteFleetNetworkParams struct {
+	Owner  string
+	Region string
+}
+
+func (q *Queries) DeleteFleetNetwork(ctx context.Context, arg DeleteFleetNetworkParams) error {
+	_, err := q.db.Exec(ctx, deleteFleetNetwork, arg.Owner, arg.Region)
+	return err
 }
 
 const drainConnectionHosts = `-- name: DrainConnectionHosts :many
@@ -313,6 +350,37 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.InterruptionAt,
 			&i.Failure,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const fleetNetworks = `-- name: FleetNetworks :many
+select owner, region, network from fleet_networks order by owner, region
+`
+
+type FleetNetworksRow struct {
+	Owner   string
+	Region  string
+	Network []byte
+}
+
+// Every account's networks, by owner key and region.
+func (q *Queries) FleetNetworks(ctx context.Context) ([]FleetNetworksRow, error) {
+	rows, err := q.db.Query(ctx, fleetNetworks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FleetNetworksRow
+	for rows.Next() {
+		var i FleetNetworksRow
+		if err := rows.Scan(&i.Owner, &i.Region, &i.Network); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -643,4 +711,58 @@ func (q *Queries) SetHostPhase(ctx context.Context, arg SetHostPhaseParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const staleNetworks = `-- name: StaleNetworks :many
+select r.region::text
+from unnest($1::text[]) as r(region)
+where not exists (
+    select 1 from fleet_networks n where n.owner = $2 and n.region = r.region and n.ensured_at >= $3
+)
+order by 1
+`
+
+type StaleNetworksParams struct {
+	Regions []string
+	Owner   string
+	Since   time.Time
+}
+
+// Which of an account's fleet regions hold no network ensured since
+// @since.
+func (q *Queries) StaleNetworks(ctx context.Context, arg StaleNetworksParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, staleNetworks, arg.Regions, arg.Owner, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var r_region string
+		if err := rows.Scan(&r_region); err != nil {
+			return nil, err
+		}
+		items = append(items, r_region)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertFleetNetwork = `-- name: UpsertFleetNetwork :exec
+insert into fleet_networks (owner, region, network, ensured_at)
+values ($1, $2, $3, now())
+on conflict (owner, region) do update set network = excluded.network, ensured_at = excluded.ensured_at
+`
+
+type UpsertFleetNetworkParams struct {
+	Owner   string
+	Region  string
+	Network []byte
+}
+
+func (q *Queries) UpsertFleetNetwork(ctx context.Context, arg UpsertFleetNetworkParams) error {
+	_, err := q.db.Exec(ctx, upsertFleetNetwork, arg.Owner, arg.Region, arg.Network)
+	return err
 }

@@ -71,7 +71,8 @@ func TestRealEC2Fleet(t *testing.T) {
 		}
 	})
 	t.Run("prices_and_quotas", func(t *testing.T) {
-		o := newOwners(t, compute.Config{Fleet: compute.Fleet{Name: acceptanceFleet, AWS: cfg, Networks: networks}})
+		o := newOwners(t, compute.Config{Fleet: compute.Fleet{Name: acceptanceFleet, AWS: cfg, Regions: slices.Sorted(maps.Keys(networks))}})
+		setNetworks(t, o, "platform", networks)
 		checkSpotPrices(t, o, networks)
 		checkQuotas(t, o, cfg, networks)
 	})
@@ -90,10 +91,10 @@ func TestRealEC2Fleet(t *testing.T) {
 		o := newOwners(t, compute.Config{
 			InstallURL: "https://lazycloud.invalid", ServerAddress: "lazycloud.invalid:443",
 			Fleet: compute.Fleet{
-				Name: acceptanceFleet, AWS: cfg, MaxHosts: 4, Images: images,
-				Networks: map[string]compute.Network{acceptanceRegion(): networks[acceptanceRegion()]},
+				Name: acceptanceFleet, AWS: cfg, MaxHosts: 4, Images: images, Regions: []string{acceptanceRegion()},
 			},
 		})
+		setNetworks(t, o, "platform", map[string]compute.Network{acceptanceRegion(): networks[acceptanceRegion()]})
 		publish(t, o.compute)
 		for _, c := range []reserveCase{
 			{instanceType: "m7i.large", market: compute.MarketOnDemand, mode: compute.ReserveHibernate},

@@ -68,7 +68,7 @@ func idleHost(t *testing.T, o owners, typ, instance string) compute.HostID {
 // market's, and never holds the GPU host.
 func TestAPassCountsLoadWhereItRuns(t *testing.T) {
 	t.Parallel()
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	o := newOwners(t, fleetConfig(compute.Fleet{Regions: []string{}}))
 	host := fleetHost(t, o, compute.PhaseReady, "c6a.4xlarge", "i-0000000000000a001")
 	alice := newUser(t, o.pool, "alice@example.com")
 	ws := newWorkspace(t, o.pool, "dev", alice)
@@ -130,7 +130,7 @@ func TestSpotHeadroomFollowsASteadyArrivalRateAndTheLargestBurst(t *testing.T) {
 		{"steady", "now() - make_interval(secs => 20 * (n / 4))", 13_000},
 		{"burst", "to_timestamp(floor(extract(epoch from now()) / 5) * 5 - 0.8 + n * 0.1)", 16_000},
 	} {
-		o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+		o := newOwners(t, fleetConfig(compute.Fleet{Regions: []string{}}))
 		host := fleetHost(t, o, compute.PhaseReady, "c6a.8xlarge", "i-0000000000000b001")
 		run(t, o.pool, "update hosts set market = 'spot' where id = $1", uuid.UUID(host))
 		alice := newUser(t, o.pool, "alice@example.com")
@@ -440,7 +440,7 @@ func TestQuotaRoomsAndSpotPricesSteerPurchases(t *testing.T) {
 // it changed.
 func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 	t.Parallel()
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	o := newOwners(t, fleetConfig(compute.Fleet{Regions: []string{}}))
 	used(t, o)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
@@ -494,7 +494,7 @@ func TestThePassPublishesEachMarketAndLogsOnlyChangedDecisions(t *testing.T) {
 // on-demand. The market's load peak carries to the passes after.
 func TestTargetsFollowRunningAndPendingLoad(t *testing.T) {
 	t.Parallel()
-	o := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{}}))
+	o := newOwners(t, fleetConfig(compute.Fleet{Regions: []string{}}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Market: compute.MarketSpot, Region: "us-east-2", CPU: 16_000, Memory: 64 * gib})
@@ -1106,13 +1106,8 @@ select coalesce(array_agg(instance_type || ' ' || market || ' ' || coalesce(rese
                           order by 1), '{}')
 from hosts where phase = 'requested'`)
 	}
-	platform := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{
-		"us-east-2": {VPCID: "vpc-customer", SecurityGroupID: "sg-customer", Subnets: []compute.Subnet{
-			{ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
-			{ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
-			{ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
-		}},
-	}}))
+	platform := newOwners(t, fleetConfig(compute.Fleet{}))
+	setNetworks(t, platform, "platform", customerNetworks())
 	spotPrices(t, platform)
 	used(t, platform)
 	o, _, customer := connectionFleet(t)

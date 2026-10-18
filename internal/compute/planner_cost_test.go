@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -165,9 +166,11 @@ func TestPlanningPassCostStaysFlatAsBacklogAndHistoryGrow(t *testing.T) {
 	network := func(zone, id string) Network {
 		return Network{VPCID: "vpc-1", SecurityGroupID: "sg-1", Subnets: []Subnet{{ID: "subnet-" + zone, Zone: zone, ZoneID: id}}}
 	}
-	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, StorageRegion: "us-east-1", Networks: map[string]Network{
-		"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3"),
-	}}})
+	c := NewCompute(traced, nil, Config{Fleet: Fleet{MaxHosts: 1000, StorageRegion: "us-east-1"}})
+	for region, n := range map[string]Network{"us-east-2": network("us-east-2a", "use2-az1"), "us-west-1": network("us-west-1b", "usw1-az3")} {
+		raw, _ := json.Marshal(n) //nolint:errcheck // A Network always encodes.
+		costExec(t, pool, "insert into fleet_networks (owner, region, network, ensured_at) values ('platform', $1, $2, now())", region, raw)
+	}
 	costExec(t, pool, `insert into images (digest, id, dockerfile, python_version, architecture)
 values (sha256('cost'), 'img_' || left(encode(sha256('cost'), 'hex'), 24), 'FROM x', '3.12', 'amd64')`)
 	// Twenty functions, and serving hosts with four live containers each.

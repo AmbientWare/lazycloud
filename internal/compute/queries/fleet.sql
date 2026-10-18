@@ -158,12 +158,12 @@ where id = @id and phase = @from_phase;
 
 -- name: ConnectionAccounts :many
 -- The connected accounts with an active authorization, or only the one of
--- @connection_id: the role and networks the fleet's calls there use;
+-- @connection_id: the role the fleet's calls there use;
 -- whether it takes new hosts (acceptsWork), whether the platform still
 -- manages its instances (Connection.ManagesCapacity), and whether an
 -- active workspace uses it. Each row is share-locked so no connection
 -- leaves hosting while a planning pass that read it writes hosts into it.
-select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile, a.node_role_arn,
+select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.node_instance_profile, a.node_role_arn,
        (a.phase = 'ready'
         and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
        (a.phase = 'ready'
@@ -182,3 +182,29 @@ for share of cc;
 -- Whether an active workspace runs on the platform's own account.
 select exists (select 1 from workspaces where connection_id is null and state = 'active')::boolean;
 
+
+-- name: FleetNetworks :many
+-- Every account's networks, by owner key and region.
+select owner, region, network from fleet_networks order by owner, region;
+
+-- name: StaleNetworks :many
+-- Which of an account's fleet regions hold no network ensured since
+-- @since.
+select r.region::text
+from unnest(@regions::text[]) as r(region)
+where not exists (
+    select 1 from fleet_networks n where n.owner = @owner and n.region = r.region and n.ensured_at >= @since
+)
+order by 1;
+
+-- name: UpsertFleetNetwork :exec
+insert into fleet_networks (owner, region, network, ensured_at)
+values (@owner, @region, @network, now())
+on conflict (owner, region) do update set network = excluded.network, ensured_at = excluded.ensured_at;
+
+-- name: DeleteFleetNetwork :exec
+delete from fleet_networks where owner = @owner and region = @region;
+
+-- name: AccountNetworkRegions :many
+-- The regions an account holds a network in.
+select region from fleet_networks where owner = @owner order by region;

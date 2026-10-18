@@ -19,10 +19,10 @@ returning *;
 -- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at, setup_step)
+                                  node_instance_profile, expires_at, setup_step)
 values (@connection_id, @generation, @mode, 'pending', 'awaiting_authorization', @role_arn, @external_id, @region,
         sqlc.narg(stack_name), sqlc.narg(template_version), sqlc.narg(template_sha256), sqlc.narg(node_role_arn),
-        sqlc.narg(node_instance_profile), @networks, now() + interval '1 day',
+        sqlc.narg(node_instance_profile), now() + interval '1 day',
         case when @mode::text = 'managed_stack' then 'waiting_for_stack' end)
 returning *;
 
@@ -54,7 +54,7 @@ where id = @id;
 -- name: AuthorizationValidated :exec
 update cloud_authorizations
 set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
-    stack_id = coalesce(sqlc.narg(stack_id), stack_id), networks = @networks,
+    stack_id = coalesce(sqlc.narg(stack_id), stack_id),
     node_role_arn = coalesce(sqlc.narg(node_role_arn), node_role_arn),
     node_instance_profile = coalesce(sqlc.narg(node_instance_profile), node_instance_profile),
     expires_at = null, updated_at = now()
@@ -138,7 +138,7 @@ update cloud_authorizations set stack_deleted_at = now(), updated_at = now() whe
 -- any its hosts record.
 select h.region::text from hosts h where h.connection_id = sqlc.arg(connection)::uuid and h.region <> ''
 union
-select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = sqlc.arg(connection)::uuid
+select n.region from fleet_networks n where n.owner = sqlc.arg(connection)::uuid::text
 order by 1;
 
 -- name: ConnectionHostsAmong :many

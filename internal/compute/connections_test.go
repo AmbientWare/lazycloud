@@ -125,18 +125,6 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 	})
 	// The account runs no fleet instances unless a test says so.
 	e.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
-	e.on("DescribeSubnets", func(call awsCall) awsReply {
-		zones := map[string]compute.Subnet{
-			"subnet-a": {ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
-			"subnet-b": {ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
-			"subnet-c": {ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
-		}
-		var subnets []compute.Subnet
-		for _, id := range list(call.Form, "SubnetId") {
-			subnets = append(subnets, zones[id])
-		}
-		return describeSubnetsReply("vpc-customer", subnets...)
-	})
 	return c
 }
 
@@ -187,8 +175,7 @@ func (c *customerAWS) authorize(t *testing.T, o owners, conn compute.Connection,
 		Name: stack.stackName, Status: "CREATE_COMPLETE",
 		ID: "arn:aws:cloudformation:us-east-2:" + account + ":stack/" + stack.stackName + "/" + uuid.NewString(),
 		Outputs: map[string]string{
-			"ConnectionRoleArn": "arn:aws:iam::" + account + ":role/" + stack.params["ConnectionRoleName"],
-			"VpcId":             "vpc-customer", "SecurityGroupId": "sg-customer", "SubnetIds": "subnet-a,subnet-b,subnet-c",
+			"ConnectionRoleArn":       "arn:aws:iam::" + account + ":role/" + stack.params["ConnectionRoleName"],
 			"NodeInstanceProfileName": stack.params["NodeInstanceProfileName"],
 			"NodeRoleArn":             "arn:aws:iam::" + account + ":role/" + stack.params["NodeRoleName"],
 		},
@@ -257,7 +244,20 @@ func connected(t *testing.T, o owners, customer *customerAWS, account identity.U
 	if conn.Phase != compute.ConnReady {
 		t.Fatalf("connection %s (%+v), want ready", conn.Phase, conn.Pending)
 	}
+	setNetworks(t, o, conn.ID.String(), customerNetworks())
 	return conn
+}
+
+// customerNetworks are a connected account's networks as the network
+// owner records them.
+func customerNetworks() map[string]compute.Network {
+	return map[string]compute.Network{
+		"us-east-2": {VPCID: "vpc-customer", SecurityGroupID: "sg-customer", Subnets: []compute.Subnet{
+			{ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
+			{ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
+			{ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
+		}},
+	}
 }
 
 func advance(t *testing.T, o owners) {
@@ -428,12 +428,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	var invalid *compute.InvalidError
 	for name, req := range map[string]compute.ConnectRequest{
 		"a role in another account":     {AWSAccountID: "111111111111", RoleARN: "arn:aws:iam::222222222222:role/lazycloud"},
-		"networks without a role":       {AWSAccountID: "111111111111", Networks: fleetNetworks()},
 		"an external ID without a role": {AWSAccountID: "111111111111", ExternalID: strings.Repeat("x", 40)},
-		"a network keyed by a region alias": {
-			AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud",
-			Networks: map[string]compute.Network{"us-east": fleetNetworks()["us-east-2"]},
-		},
 	} {
 		if _, err := o.compute.Connect(ctx, alice, req); !errors.As(err, &invalid) {
 			t.Errorf("%s: %v, want InvalidError", name, err)
@@ -459,7 +454,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	}
 
 	existing, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{
-		AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud", Networks: fleetNetworks(),
+		AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +464,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	}
 }
 
-func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
+func TestValidationProvesTheRole(t *testing.T) {
 	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	ready, denied, open, drifted := newUser(t, o.pool, "ready@example.com"), newUser(t, o.pool, "denied@example.com"),
@@ -478,19 +473,6 @@ func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
 	conn := connected(t, o, customer, ready)
 	if conn.Active == nil || conn.Active.Phase != compute.AuthReady || conn.Pending != nil || !conn.HostsWorkloads() {
 		t.Fatalf("validated connection %+v", conn)
-	}
-	var raw []byte
-	if err := o.pool.QueryRow(t.Context(), "select networks from cloud_authorizations where id = $1", conn.Active.ID).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var networks map[string]compute.Network
-	if err := json.Unmarshal(raw, &networks); err != nil {
-		t.Fatal(err)
-	}
-	east := networks["us-east-2"]
-	if east.VPCID != "vpc-customer" || east.SecurityGroupID != "sg-customer" || len(east.Subnets) != 3 ||
-		east.Subnets[0].Zone != "us-east-2a" || east.Subnets[1].ZoneID != "use2-az2" {
-		t.Fatalf("recorded networks %+v, want the stack's VPC and subnets with their zones", networks)
 	}
 	// The role was proven to refuse AssumeRole without the exact external ID.
 	var probes int

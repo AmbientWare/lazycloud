@@ -26,7 +26,6 @@ type CloudAuthorization struct {
 	TemplateSha256          *string
 	NodeRoleArn             *string
 	NodeInstanceProfile     *string
-	Networks                []byte
 	ErrorCode               *string
 	ErrorMessage            *string
 	LastValidationStartedAt *time.Time

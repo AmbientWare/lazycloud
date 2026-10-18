@@ -30,8 +30,9 @@ type Fleet struct {
 	// NodeRoleARN and InstanceProfile are what platform instances run as.
 	NodeRoleARN     string
 	InstanceProfile string
-	// Networks are the platform's launchable regions.
-	Networks map[string]Network
+	// Regions are where the fleet runs, in every account: each account
+	// gets a network in each, and adding one here is all expanding takes.
+	Regions []string
 	// StorageRegion holds the platform's registry and object store; hosts in
 	// another region pay transfer on what they move to and from them.
 	StorageRegion string

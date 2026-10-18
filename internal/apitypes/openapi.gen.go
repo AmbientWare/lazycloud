@@ -2597,9 +2597,6 @@ type AwsConnectionRequest struct {
 	// ExternalId The external ID an existing role already requires.
 	ExternalId *string `json:"external_id,omitempty"`
 
-	// Networks Per-region VPC, subnets and security group for an existing role.
-	Networks *map[string]AwsNetwork `json:"networks,omitempty"`
-
 	// RoleArn An existing role to assume; it must require the external ID.
 	RoleArn *string `json:"role_arn,omitempty"`
 }
@@ -2625,13 +2622,6 @@ type AwsLeftover struct {
 
 // AwsLeftoverKind defines model for AwsLeftover.Kind.
 type AwsLeftoverKind string
-
-// AwsNetwork defines model for AwsNetwork.
-type AwsNetwork struct {
-	SecurityGroupId string   `json:"security_group_id"`
-	SubnetIds       []string `json:"subnet_ids"`
-	VpcId           string   `json:"vpc_id"`
-}
 
 // AwsReconnectRequest defines model for AwsReconnectRequest.
 type AwsReconnectRequest struct {

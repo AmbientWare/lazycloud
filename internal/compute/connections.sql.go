@@ -85,16 +85,15 @@ func (q *Queries) AuthorizationLiveHosts(ctx context.Context, authorizationID *u
 const authorizationValidated = `-- name: AuthorizationValidated :exec
 update cloud_authorizations
 set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
-    stack_id = coalesce($1, stack_id), networks = $2,
-    node_role_arn = coalesce($3, node_role_arn),
-    node_instance_profile = coalesce($4, node_instance_profile),
+    stack_id = coalesce($1, stack_id),
+    node_role_arn = coalesce($2, node_role_arn),
+    node_instance_profile = coalesce($3, node_instance_profile),
     expires_at = null, updated_at = now()
-where id = $5
+where id = $4
 `
 
 type AuthorizationValidatedParams struct {
 	StackID             *string
-	Networks            []byte
 	NodeRoleArn         *string
 	NodeInstanceProfile *string
 	ID                  uuid.UUID
@@ -103,7 +102,6 @@ type AuthorizationValidatedParams struct {
 func (q *Queries) AuthorizationValidated(ctx context.Context, arg AuthorizationValidatedParams) error {
 	_, err := q.db.Exec(ctx, authorizationValidated,
 		arg.StackID,
-		arg.Networks,
 		arg.NodeRoleArn,
 		arg.NodeInstanceProfile,
 		arg.ID,
@@ -166,7 +164,7 @@ func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (Connectio
 }
 
 const connectionAuthorizations = `-- name: ConnectionAuthorizations :many
-select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step from cloud_authorizations where connection_id = $1 and slot is not null order by generation
+select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step from cloud_authorizations where connection_id = $1 and slot is not null order by generation
 `
 
 // The connection's authorizations that hold a slot.
@@ -195,7 +193,6 @@ func (q *Queries) ConnectionAuthorizations(ctx context.Context, connectionID uui
 			&i.TemplateSha256,
 			&i.NodeRoleArn,
 			&i.NodeInstanceProfile,
-			&i.Networks,
 			&i.ErrorCode,
 			&i.ErrorMessage,
 			&i.LastValidationStartedAt,
@@ -286,7 +283,7 @@ func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) 
 const connectionRegions = `-- name: ConnectionRegions :many
 select h.region::text from hosts h where h.connection_id = $1::uuid and h.region <> ''
 union
-select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = $1::uuid
+select n.region from fleet_networks n where n.owner = $1::uuid::text
 order by 1
 `
 
@@ -385,12 +382,12 @@ func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *
 const insertAuthorization = `-- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at, setup_step)
+                                  node_instance_profile, expires_at, setup_step)
 values ($1, $2, $3, 'pending', 'awaiting_authorization', $4, $5, $6,
         $7, $8, $9, $10,
-        $11, $12, now() + interval '1 day',
+        $11, now() + interval '1 day',
         case when $3::text = 'managed_stack' then 'waiting_for_stack' end)
-returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step
+returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step
 `
 
 type InsertAuthorizationParams struct {
@@ -405,7 +402,6 @@ type InsertAuthorizationParams struct {
 	TemplateSha256      *string
 	NodeRoleArn         *string
 	NodeInstanceProfile *string
-	Networks            []byte
 }
 
 func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizationParams) (CloudAuthorization, error) {
@@ -421,7 +417,6 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		arg.TemplateSha256,
 		arg.NodeRoleArn,
 		arg.NodeInstanceProfile,
-		arg.Networks,
 	)
 	var i CloudAuthorization
 	err := row.Scan(
@@ -440,7 +435,6 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		&i.TemplateSha256,
 		&i.NodeRoleArn,
 		&i.NodeInstanceProfile,
-		&i.Networks,
 		&i.ErrorCode,
 		&i.ErrorMessage,
 		&i.LastValidationStartedAt,

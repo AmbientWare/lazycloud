@@ -1,6 +1,8 @@
 package compute_test
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -14,8 +16,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// fleetNetworks are two launchable regions in the shape
-// LAZYCLOUD_FLEET_NETWORKS configures.
+// fleetNetworks are the platform's networks in two regions, as the network
+// owner records them.
 func fleetNetworks() map[string]compute.Network {
 	return map[string]compute.Network{
 		"us-east-2": {VPCID: "vpc-east", SecurityGroupID: "sg-east", Subnets: []compute.Subnet{
@@ -29,8 +31,8 @@ func fleetNetworks() map[string]compute.Network {
 }
 
 func fleetConfig(f compute.Fleet) compute.Config {
-	if f.Networks == nil {
-		f.Networks = fleetNetworks()
+	if f.Regions == nil {
+		f.Regions = slices.Sorted(maps.Keys(fleetNetworks()))
 	}
 	if f.Name == "" {
 		f.Name = "lazycloud-test"
@@ -408,16 +410,19 @@ func TestAConnectedHostRecordsItsPriceWithoutTheTransferThatRankedIt(t *testing.
 	o := newOwners(t, fleetConfig(compute.Fleet{}))
 	alice := newUser(t, o.pool, "alice@example.com")
 	ws := newWorkspace(t, o.pool, "connected", alice)
-	networks := `{"us-east-2": {"subnets": [{"id": "subnet-c-east", "zone": "us-east-2a", "zone_id": "use2-az1"}]},
-	              "us-west-1": {"subnets": [{"id": "subnet-c-west", "zone": "us-west-1b", "zone_id": "usw1-az3"}]}}`
-	run(t, o.pool, `
+	conn := scan[uuid.UUID](t, o.pool, `
 with conn as (insert into cloud_connections (account_id, aws_account_id, phase) values ($1, '123456789012', 'ready') returning id),
 auth as (
-    insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region, networks)
-    select id, 1, 'existing_role', 'active', 'ready', 'arn:aws:iam::123456789012:role/lazycloud', 'external', 'us-east-2', $3::jsonb
+    insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region)
+    select id, 1, 'existing_role', 'active', 'ready', 'arn:aws:iam::123456789012:role/lazycloud', 'external', 'us-east-2'
     from conn
-)
-update workspaces set connection_id = (select id from conn) where id = $2`, uuid.UUID(alice), ws, networks)
+),
+ws as (update workspaces set connection_id = (select id from conn) where id = $2)
+select id from conn`, uuid.UUID(alice), ws)
+	setNetworks(t, o, conn.String(), map[string]compute.Network{
+		"us-east-2": {Subnets: []compute.Subnet{{ID: "subnet-c-east", Zone: "us-east-2a", ZoneID: "use2-az1"}}},
+		"us-west-1": {Subnets: []compute.Subnet{{ID: "subnet-c-west", Zone: "us-west-1b", ZoneID: "usw1-az3"}}},
+	})
 	// m7i.large computes 4,000 µ$ an hour cheaper in us-west-1, but its
 	// volumes cost 3,111 more there and its expected transfer 5,000 more.
 	run(t, o.pool, `

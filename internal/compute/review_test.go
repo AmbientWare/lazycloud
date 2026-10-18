@@ -25,15 +25,15 @@ func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
 	role := "arn:aws:iam::222222222222:role/shared"
 	var invalid *compute.InvalidError
 	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{
-		AWSAccountID: "222222222222", RoleARN: role, Networks: fleetNetworks(), ExternalID: strings.Repeat("x", 40),
+		AWSAccountID: "222222222222", RoleARN: role, ExternalID: strings.Repeat("x", 40),
 	}); !errors.As(err, &invalid) {
 		t.Fatalf("connect with a chosen external ID: %v, want InvalidError", err)
 	}
-	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role, Networks: fleetNetworks()}); err != nil {
+	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role}); err != nil {
 		t.Fatal(err)
 	}
 	var conflict *compute.ConflictError
-	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role, Networks: fleetNetworks()}); !errors.As(err, &conflict) {
+	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role}); !errors.As(err, &conflict) {
 		t.Fatalf("connect another account to the same role: %v, want ConflictError", err)
 	}
 }
@@ -238,9 +238,9 @@ func openAgent(t *testing.T, o owners, host compute.HostID, version, rejected st
 // transfer from.
 func TestFleetConfigurationNeedsReachableEndpoints(t *testing.T) {
 	t.Parallel()
-	fleet := compute.Fleet{Networks: fleetNetworks(), StorageRegion: "us-east-1"}
+	fleet := compute.Fleet{Regions: []string{"us-east-2"}, StorageRegion: "us-east-1"}
 	for name, c := range map[string]compute.Config{
-		"no storage region":    {InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: compute.Fleet{Networks: fleetNetworks()}},
+		"no storage region":    {InstallURL: "https://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: compute.Fleet{Regions: []string{"us-east-2"}}},
 		"no install URL":       {ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"plain HTTP install":   {InstallURL: "http://lazycloud.test", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},
 		"loopback install":     {InstallURL: "https://127.0.0.1", ServerAddress: "hosts.lazycloud.test:443", Fleet: fleet},

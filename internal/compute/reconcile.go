@@ -288,28 +288,16 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 // host is gone, with every instance they launched. A request whose launch
 // answer was lost still has a live host and is spared.
 func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Logger, client *ec2.Client) error {
-	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
-		Filters: []ec2types.Filter{
-			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
-			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
-		},
-	})
-	var requests []ec2types.SpotInstanceRequest
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("describe spot requests: %w", err)
-		}
-		requests = append(requests, page.SpotInstanceRequests...)
+	requests, err := c.liveSpotRequests(ctx, client)
+	if err != nil {
+		return err
 	}
 	hosts := map[string]uuid.UUID{}
 	var tagged []uuid.UUID
 	for _, r := range requests {
-		for _, t := range r.Tags {
-			if id, err := uuid.Parse(aws.ToString(t.Value)); err == nil && aws.ToString(t.Key) == tagHost {
-				hosts[aws.ToString(r.SpotInstanceRequestId)] = id
-				tagged = append(tagged, id)
-			}
+		if id, ok := hostTag(r.Tags); ok {
+			hosts[aws.ToString(r.SpotInstanceRequestId)] = id
+			tagged = append(tagged, id)
 		}
 	}
 	if len(requests) == 0 {
@@ -339,4 +327,24 @@ func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Log
 		logger.WarnContext(ctx, "orphan spot request cancelled", "spot_request_id", request)
 	}
 	return nil
+}
+
+// liveSpotRequests are the fleet's tagged Spot requests that can still
+// launch an instance.
+func (c *Compute) liveSpotRequests(ctx context.Context, client *ec2.Client) ([]ec2types.SpotInstanceRequest, error) {
+	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
+			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
+		},
+	})
+	var requests []ec2types.SpotInstanceRequest
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe spot requests: %w", err)
+		}
+		requests = append(requests, page.SpotInstanceRequests...)
+	}
+	return requests, nil
 }

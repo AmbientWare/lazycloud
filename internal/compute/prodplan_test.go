@@ -39,10 +39,14 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 	now := time.Now()
 	cooldown := 10 * time.Minute
 	r, err := readMarkets(ctx, New(pool), p, now, cooldown)
-	platform := account{scope: awsScope{key: ownerPlatform}, networks: fleet.Networks, awsAccount: fleet.AccountID}
 	if err != nil {
 		t.Fatal(err)
 	}
+	withNet, err := withNetworks(ctx, New(pool), []account{{scope: awsScope{key: ownerPlatform}, awsAccount: fleet.AccountID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := withNet[0]
 	groups, err := pendingGroups(r.pending)
 	if err != nil {
 		t.Fatal(err)

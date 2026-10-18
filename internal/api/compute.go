@@ -428,16 +428,6 @@ func (s *Server) ConnectAws(ctx context.Context, req ConnectAwsRequestObject) (C
 	if req.Body.ExternalId != nil {
 		r.ExternalID = *req.Body.ExternalId
 	}
-	if req.Body.Networks != nil {
-		r.Networks = map[string]compute.Network{}
-		for region, n := range *req.Body.Networks {
-			network := compute.Network{VPCID: n.VpcId, SecurityGroupID: n.SecurityGroupId}
-			for _, id := range n.SubnetIds {
-				network.Subnets = append(network.Subnets, compute.Subnet{ID: id})
-			}
-			r.Networks[region] = network
-		}
-	}
 	conn, err := s.owners.Compute.Connect(ctx, p.User, r)
 	if err != nil {
 		return nil, err
