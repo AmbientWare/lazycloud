@@ -137,12 +137,9 @@ func (q *Queries) OverdueAttempts(ctx context.Context, arg OverdueAttemptsParams
 const stalePendingContainers = `-- name: StalePendingContainers :many
 select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
 from containers c
-join workspaces ws on ws.id = c.workspace_id
-left join image_builds ib on ib.id = c.image_build_id
 left join releases r on r.id = c.release_id
 left join hosts h on h.id = c.capacity_host_id
 where c.state = 'pending'
-  and (ws.connection_id is null or ib.mirror is true)
   and c.created_at < now() - make_interval(secs => $1::float8)
   and coalesce(r.spec -> 'placement' ->> 'machine', '') = ''
   and (c.capacity_wait in ('cooldown', 'quota', 'margin', 'no_offer') or c.capacity_wait = 'provisioning' and h.phase = 'requested')
@@ -164,14 +161,12 @@ type StalePendingContainersRow struct {
 	Wait      string
 }
 
-// Platform fleet containers pending longer than the queue timeout that the
-// fleet cannot get a host for: no offer can host them, the offers that
-// could cool or lack quota or margin, or the host bought for them has not
-// launched. In (created_at, id) order after the cursor, with why the
+// Fleet containers, in any account, pending longer than the queue timeout
+// that the fleet cannot get a host for: no offer can host them, the offers
+// that could cool or lack quota or margin, or the host bought for them has
+// not launched. In (created_at, id) order after the cursor, with why the
 // planner says they wait. Work waiting on the host limit or arrivals waits
-// on; work pinned to a joined machine waits for it, and a connected
-// account's work for its own hosts; a mirror build runs on the platform
-// whatever its workspace.
+// on; work pinned to a joined machine waits for it.
 func (q *Queries) StalePendingContainers(ctx context.Context, arg StalePendingContainersParams) ([]StalePendingContainersRow, error) {
 	rows, err := q.db.Query(ctx, stalePendingContainers,
 		arg.TimeoutSeconds,

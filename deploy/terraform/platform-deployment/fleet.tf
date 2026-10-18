@@ -1,19 +1,17 @@
 # The US regions the fleet buys in, the deployment's own first. Each gets a
-# fleet network and a copy of the layer bucket (storage.tf); both reach the
-# server's settings from here. The node images LAZYCLOUD_FLEET_IMAGES names
-# per region come from the Node images workflow.
+# copy of the layer bucket (storage.tf), and the scheduler makes or adopts
+# the fleet network there in every account (compute.EnsureNetworks). The
+# node images LAZYCLOUD_FLEET_IMAGES names per region come from the Node
+# images workflow.
 locals {
-  fleet_regions  = toset([var.region, "us-east-2", "us-west-1", "us-west-2"])
-  fleet_tags     = { "lazycloud:fleet" = local.fleet_name }
-  fleet_networks = { for region, network in module.fleet : region => network.network }
+  fleet_regions = toset([var.region, "us-east-2", "us-west-1", "us-west-2"])
 }
 
-module "fleet" {
-  for_each = local.fleet_regions
-  source   = "./fleet-network"
-  region   = each.key
-  name     = "${var.deployment}-fleet"
-  cidr     = var.fleet_cidr
-  tags     = local.fleet_tags
+# The scheduler owns the fleet networks this deployment once made and
+# adopts them by their lazycloud:fleet tag; Terraform keeps none of them.
+removed {
+  from = module.fleet
+  lifecycle {
+    destroy = false
+  }
 }
-

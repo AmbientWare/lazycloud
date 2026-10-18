@@ -63,6 +63,10 @@ locals {
   workload_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/*"
   platform_arn = "${local.arn_prefix}:ecr:${var.region}:${local.account_id}:repository/${local.core.workload_image_repository}/platform/*"
   ec2_arn      = "${local.arn_prefix}:ec2:*:${local.account_id}"
+  fleet_network_creates = [
+    "ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateInternetGateway", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup",
+    "ec2:CreateVpcEndpoint",
+  ]
 }
 
 data "aws_iam_policy_document" "control_plane" {
@@ -194,7 +198,9 @@ data "aws_iam_policy_document" "control_plane" {
     sid = "DescribeFleet"
     actions = [
       "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSpotInstanceRequests", "ec2:DescribeSpotPriceHistory",
-      "ec2:DescribeInstanceTypeOfferings", "ec2:GetSpotPlacementScores", "ec2:DescribeImages",
+      "ec2:DescribeInstanceTypeOfferings", "ec2:GetSpotPlacementScores", "ec2:DescribeImages", "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeVpcs", "ec2:DescribeInternetGateways", "ec2:DescribeRouteTables", "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVpcEndpoints",
     ]
     resources = ["*"]
   }
@@ -211,13 +217,44 @@ data "aws_iam_policy_document" "control_plane" {
   }
 
   statement {
-    sid       = "TagAtLaunch"
+    sid       = "TagAtCreation"
     actions   = ["ec2:CreateTags"]
-    resources = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*", "${local.ec2_arn}:spot-instances-request/*"]
+    resources = ["${local.ec2_arn}:*"]
     condition {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
-      values   = ["RunInstances"]
+      values   = concat(["RunInstances", "AuthorizeSecurityGroupIngress"], local.fleet_network_creates)
+    }
+  }
+
+  # The scheduler makes each region's fleet network (compute.EnsureNetworks),
+  # in any region the fleet may run in, as it does in a connected account.
+  # It creates only resources tagged for the fleet and changes only those.
+  statement {
+    sid       = "CreateFleetNetworks"
+    actions   = local.fleet_network_creates
+    resources = ["${local.ec2_arn}:*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/lazycloud:fleet"
+      values   = [local.fleet_name]
+    }
+  }
+
+  statement {
+    sid = "ManageFleetNetworks"
+    actions = [
+      "ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup", "ec2:CreateVpcEndpoint",
+      "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway",
+      "ec2:CreateRoute", "ec2:AssociateRouteTable", "ec2:AuthorizeSecurityGroupIngress", "ec2:ModifyVpcEndpoint",
+      "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteInternetGateway", "ec2:DeleteRouteTable", "ec2:DeleteSecurityGroup",
+      "ec2:DeleteVpcEndpoints",
+    ]
+    resources = ["${local.ec2_arn}:*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/lazycloud:fleet"
+      values   = [local.fleet_name]
     }
   }
 

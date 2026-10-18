@@ -31,7 +31,7 @@ resource "aws_s3_object" "values" {
       LAZYCLOUD_FLEET_ACCOUNT_ID          = local.account_id
       LAZYCLOUD_FLEET_NODE_ROLE_ARN       = aws_iam_role.fleet_node.arn
       LAZYCLOUD_FLEET_INSTANCE_PROFILE    = aws_iam_instance_profile.fleet_node.name
-      LAZYCLOUD_FLEET_NETWORKS            = jsonencode(local.fleet_networks)
+      LAZYCLOUD_FLEET_REGIONS             = join(",", sort(local.fleet_regions))
       LAZYCLOUD_AWS_PRINCIPAL_ARN         = aws_iam_role.control_plane.arn
     }
     server = {

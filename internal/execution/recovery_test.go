@@ -177,11 +177,11 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	}
 }
 
-// A platform fleet container the fleet could not get a host for within the
-// queue timeout stops as a start failure naming why it waited, and its
-// queued work fails at once; one younger, one a launched host will take,
-// one waiting on the fleet's host limit, one pinned to a joined machine and
-// a connected account's keep waiting. A release with a container on a host
+// A fleet container the fleet could not get a host for within the queue
+// timeout, in the platform's account or a connected one, stops as a start
+// failure naming why it waited, and its queued work fails at once; one
+// younger, one a launched host will take, one waiting on the fleet's host
+// limit and one pinned to a joined machine keep waiting. A release with a container on a host
 // keeps its queued work when a stale pending one stops.
 func TestPendingWorkFailsAfterTheQueueTimeout(t *testing.T) {
 	pool := dbtest.New(t)
@@ -227,8 +227,8 @@ update workspaces set connection_id = conn.id from conn where workspaces.id = $1
 	}
 	var theirs uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
-insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at)
-values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at, capacity_wait)
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour', 'cooldown') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
 		t.Fatal(err)
 	}
 	machine := newRelease(t, pool, `{"placement": {"machine": "studio"}}`)
@@ -248,8 +248,11 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 		Scan(&reason, &message); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 || reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
-		t.Fatalf("stopped %d, reason %q message %q; want the two stale containers stopped as start_failed naming their wait", n, reason, message)
+	if n != 3 || reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
+		t.Fatalf("stopped %d, reason %q message %q; want the three stale containers stopped as start_failed naming their wait", n, reason, message)
+	}
+	if state := containerState(t, pool, theirs); state != ContainerStopped {
+		t.Errorf("the connected account's stale container is %s, want stopped", state)
 	}
 	if state := containerState(t, pool, spare); state != ContainerStopped {
 		t.Errorf("the served release's stale container is %s, want stopped", state)
@@ -269,7 +272,7 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 	if status != string(TaskFailed) || kind != string(FailureStartFailed) {
 		t.Fatalf("queued task %s (%s), want failed as start_failed", status, kind)
 	}
-	for _, c := range []uuid.UUID{young, coming, limited, pinned, theirs} {
+	for _, c := range []uuid.UUID{young, coming, limited, pinned} {
 		if state := containerState(t, pool, c); state != ContainerPending {
 			t.Errorf("container %s is %s, want pending", c, state)
 		}

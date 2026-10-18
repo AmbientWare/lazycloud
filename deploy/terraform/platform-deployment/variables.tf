@@ -61,12 +61,6 @@ variable "region" {
   default     = "us-east-1"
 }
 
-variable "fleet_cidr" {
-  description = "CIDR of each regional fleet VPC. It must overlap neither the cluster's nor another deployment's, nor the 10.86.0.0/16 a customer connection stack creates."
-  type        = string
-  default     = "10.84.0.0/16"
-}
-
 variable "database_pool_max_connections" {
   description = "pool_max_conns of each of a process's two pools, one per database URL; the session pool holds the listener and the locks."
   type        = number
