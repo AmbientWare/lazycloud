@@ -17,7 +17,7 @@ import (
 // statements, each bounded by live rows or a sample. A reserve whose start
 // EC2 refused within cooldown reads as refused.
 type offerRead struct {
-	now       time.Time
+	now   time.Time
 	hosts []PlannerHostsRow
 	// recent and quotas are by account key.
 	recent    map[string][]RecentShapesRow
