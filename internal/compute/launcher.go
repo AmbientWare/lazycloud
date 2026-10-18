@@ -191,7 +191,7 @@ func (r *poolRefusal) cooldown() poolCooldown {
 
 // poolCooldown is how far a refusal cools a host's type and market: in the
 // zone zoneID, or in its whole region when zoneID is empty, and on a quota
-// refusal the platform's quota class in the region.
+// refusal the account's quota class in the region.
 type poolCooldown struct {
 	zoneID string
 	quota  bool

@@ -8,8 +8,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Fleet configures the platform's AWS capacity. Without networks the
-// platform launches nothing, which is how a local stack runs.
+// Fleet configures the AWS capacity of the platform and connected
+// accounts. Without regions it launches nothing, which is how a local stack
+// runs.
 type Fleet struct {
 	// Name tags every instance the fleet launches, in every account, so
 	// reconciliation finds them.
@@ -39,9 +40,8 @@ type Fleet struct {
 	// Images are the node images platform hosts launch from. Nil launches
 	// the stock Amazon Linux images, which carry no gVisor.
 	Images *NodeImages
-	// MaxHosts bounds the running and starting cloud hosts of the platform
-	// and of each connected account; the platform may hold as many
-	// stopped reserves besides.
+	// MaxHosts bounds the running and starting cloud hosts of each
+	// account, which may hold as many stopped reserves besides.
 	MaxHosts int
 	// BootTimeout is how long a launched instance may take to enroll.
 	BootTimeout time.Duration

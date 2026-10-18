@@ -64,8 +64,8 @@ func (c *Compute) claimHosts(ctx context.Context, phases []string, batch int) ([
 	return claimed, nil
 }
 
-// Actuate makes the EC2 calls cloud hosts wait on: StopInstances for a
-// platform host the agent proved ready to stop, StartInstances for a
+// Actuate makes the EC2 calls cloud hosts wait on, in each host's account:
+// StopInstances for a host the agent proved ready to stop, StartInstances for a
 // reserve asked to resume, and TerminateInstances for a terminating host
 // or a drained one that runs nothing, cancelling a persistent Spot request
 // first. The calls run outside any transaction against what EC2 reports
