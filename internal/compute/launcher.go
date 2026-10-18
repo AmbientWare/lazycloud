@@ -240,9 +240,11 @@ func (c *Compute) poolInputs(ctx context.Context, h ClaimHostActionsRow) (*Offer
 		if err != nil {
 			return nil, fmt.Errorf("read connection scope: %w", err)
 		}
-		if err := json.Unmarshal(row.Networks, &networks); err != nil {
+		var own map[string]Network
+		if err := json.Unmarshal(row.Networks, &own); err != nil {
 			return nil, fmt.Errorf("decode networks: %w", err)
 		}
+		networks = own
 	}
 	in := r.inputs(c.fleet.StorageRegion, networks, h.ConnectionID, hosts)
 	in.QuotaUsed = QuotaUse(hosts, in.Catalog)

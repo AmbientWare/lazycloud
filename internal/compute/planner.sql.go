@@ -231,7 +231,7 @@ func (q *Queries) HostWaitTrace(ctx context.Context, hostID *uuid.UUID) (string,
 }
 
 const hostingConnections = `-- name: HostingConnections :many
-select cc.id, a.networks,
+select cc.id, a.networks, used.active as in_use,
        (cc.warm_cpu and used.active)::boolean as cpu_reserves,
        (cc.warm_gpu and used.active)::boolean as gpu_reserves
 from cloud_connections cc
@@ -247,15 +247,17 @@ for share of cc
 type HostingConnectionsRow struct {
 	ID          uuid.UUID
 	Networks    []byte
+	InUse       bool
 	CpuReserves bool
 	GpuReserves bool
 }
 
 // Connections that take new workloads, with the networks of their active
-// authorization and whether their markets keep CPU and GPU reserves: the
-// connection's warm CPU or warm GPU is on and an active workspace uses the
-// connection. Each row is share-locked so no connection leaves hosting
-// while the pass that read it writes hosts into it.
+// authorization, whether an active workspace uses the connection, and
+// whether their markets keep CPU and GPU reserves: the connection's warm
+// CPU or warm GPU is on and an active workspace uses it. Each row is
+// share-locked so no connection leaves hosting while the pass that read it
+// writes hosts into it.
 func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsRow, error) {
 	rows, err := q.db.Query(ctx, hostingConnections)
 	if err != nil {
@@ -268,6 +270,7 @@ func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsR
 		if err := rows.Scan(
 			&i.ID,
 			&i.Networks,
+			&i.InUse,
 			&i.CpuReserves,
 			&i.GpuReserves,
 		); err != nil {
