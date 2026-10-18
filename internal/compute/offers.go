@@ -37,7 +37,7 @@ type Fleet struct {
 	// StorageRegion holds the platform's registry and object store; hosts in
 	// another region pay transfer on what they move to and from them.
 	StorageRegion string
-	// Images are the node images platform hosts launch from. Nil launches
+	// Images are the node images fleet hosts launch from. Nil launches
 	// the stock Amazon Linux images, which carry no gVisor.
 	Images *NodeImages
 	// MaxHosts bounds the running and starting cloud hosts of each

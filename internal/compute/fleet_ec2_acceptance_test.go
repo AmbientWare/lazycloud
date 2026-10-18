@@ -45,7 +45,9 @@ func acceptanceRegion() string {
 // LAZYCLOUD_EC2_ACCEPTANCE_GPU_RUNS, one instance per kind at a time; every
 // instance and Spot request tagged for the acceptance fleet is ended when
 // it finishes. LAZYCLOUD_FLEET_IMAGES launches the lifecycle from baked
-// node images, as the server reads it. With
+// node images, and LAZYCLOUD_FLEET_NODE_ROLE_ARN and
+// LAZYCLOUD_FLEET_INSTANCE_PROFILE name the node role it runs as, as the
+// server reads them. With
 // LAZYCLOUD_FLEET_SPOT_SNAPSHOT naming a file it writes the Spot prices it
 // read there.
 func TestRealEC2Fleet(t *testing.T) {
@@ -92,6 +94,7 @@ func TestRealEC2Fleet(t *testing.T) {
 			InstallURL: "https://lazycloud.invalid", ServerAddress: "lazycloud.invalid:443",
 			Fleet: compute.Fleet{
 				Name: acceptanceFleet, AWS: cfg, MaxHosts: 4, Images: images, Regions: []string{acceptanceRegion()},
+				NodeRoleARN: os.Getenv("LAZYCLOUD_FLEET_NODE_ROLE_ARN"), InstanceProfile: os.Getenv("LAZYCLOUD_FLEET_INSTANCE_PROFILE"),
 			},
 		})
 		setNetworks(t, o, "platform", map[string]compute.Network{acceptanceRegion(): networks[acceptanceRegion()]})

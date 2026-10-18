@@ -34,8 +34,8 @@ var connectionTemplate string
 // made from another one.
 const TemplateVersion = "2026-10-17.v1"
 
-// connectionRegion is where connection stacks are created. The template's
-// subnets name this region's zone IDs, which are the same in every account.
+// connectionRegion is where connection stacks are created; the stack holds
+// only IAM, which is global.
 const connectionRegion = "us-east-2"
 
 // TemplateSHA256 is the hex digest of the connection template.
@@ -223,7 +223,7 @@ func (c Connection) removing() bool {
 // acceptsWork decides whether a connection in phase, whose active
 // authorization is in active, takes new workspaces and hosts: the active
 // authorization works and the connection is neither being removed nor
-// waiting on the customer. HostingConnections applies the same rule in
+// waiting on the customer. ConnectionAccounts applies the same rule in
 // SQL.
 func acceptsWork(phase ConnectionPhase, active AuthorizationPhase) bool {
 	switch phase {

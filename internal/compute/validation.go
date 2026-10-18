@@ -210,8 +210,7 @@ func nilIfEmpty(s string) *string {
 
 // checkAuthorization proves the platform can act through the role: it
 // assumes the role with the external ID, confirms the role refuses
-// AssumeRole without it, and reads the stack's outputs. The fleet makes
-// the account's networks itself (EnsureNetworks).
+// AssumeRole without it, and reads the stack's outputs.
 func (c *Compute) checkAuthorization(ctx context.Context, conn Connection, a Authorization) (validated, error) {
 	clients := c.aws()
 	session := "lazycloud-validate-" + conn.ID.String()[:8]

@@ -20,7 +20,7 @@ import (
 //	LAZYCLOUD_FLEET_REGIONS           comma-separated regions every account runs hosts in
 //	LAZYCLOUD_OBJECT_STORE_REGION     region of the registry and object store hosts read
 //	LAZYCLOUD_FLEET_IMAGES            {"cpu": {"us-east-2": "ami-..."}, "gpu": {...}}; unset uses stock Amazon Linux
-//	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per owner, and platform reserves (20)
+//	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per account, and its reserves (20)
 //	LAZYCLOUD_AWS_PRINCIPAL_ARN       principal connection roles trust
 //	LAZYCLOUD_WORKSPACE_BUCKET_PREFIX workspace bucket names' prefix (lazycloud-ws)
 //	LAZYCLOUD_AWS_TEMPLATE_BUCKET     public-read bucket the server publishes the connection template to

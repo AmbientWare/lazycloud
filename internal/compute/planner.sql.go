@@ -608,8 +608,8 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 
 const recentShapes = `-- name: RecentShapes :many
 with recent as (
-    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
-           case when c.billing_owner = 'connected_cloud' then ws.connection_id end as connection_id,
+    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class,
+           coalesce(case when c.billing_owner = 'connected_cloud' then ws.connection_id::text end, 'platform') as owner,
            coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
            coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
     from (
@@ -622,70 +622,68 @@ with recent as (
     ) c
     left join releases r on r.id = c.release_id
     left join workspaces ws on ws.id = c.workspace_id
+    where c.billing_owner <> 'self_hosted' and c.assigned_at is not null
 )
-select coalesce(connection_id::text, 'platform')::text as owner, 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select owner::text as owner, 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
        max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
-where billing_owner <> 'self_hosted' and assigned_at is not null
 group by 1, 3, 4
 union all
-select coalesce(connection_id::text, 'platform'), 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+select owner, 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
        max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, count(*)::int
 from recent
-where billing_owner <> 'self_hosted' and assigned_at is not null
-  and id > (select uuidv7(- make_interval(secs => $3::float8)))
+where id > (select uuidv7(- make_interval(secs => $3::float8)))
 group by 1, 3, 4
 union all
-select coalesce(connection_id::text, 'platform'), 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
+select owner, 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
 from (
-    select connection_id, preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
+    select owner, preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
     from (
-        select connection_id, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by connection_id, preemptible, gpu_type, run))
+        select owner, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by owner, preemptible, gpu_type, run))
                      / $4::float8) as part
         from (
-            select connection_id, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
-                   count(*) filter (where opens) over (partition by connection_id, preemptible, gpu_type order by created_at, id) as run
+            select owner, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
+                   count(*) filter (where opens) over (partition by owner, preemptible, gpu_type order by created_at, id) as run
             from (
-                select id, connection_id, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count,
+                select id, owner, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count,
                        created_at,
                        coalesce(created_at - lag(created_at)
-                                over (partition by connection_id, (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
+                                over (partition by owner, (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
                                 interval '1 day') >= make_interval(secs => $5::float8) as opens
                 from recent
-                where billing_owner <> 'self_hosted' and assigned_at is not null
-                  and id > (select uuidv7(- make_interval(secs => $3::float8)))
+                where id > (select uuidv7(- make_interval(secs => $3::float8)))
             ) gaps
         ) runs
     ) parts
-    group by connection_id, preemptible, gpu_type, run, part
+    group by owner, preemptible, gpu_type, run, part
 ) batches
-group by connection_id, preemptible, gpu_type
+group by owner, preemptible, gpu_type
 union all
-select coalesce(connection_id::text, 'platform'), 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
+select owner, 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
-    select connection_id, sum(cpu_millis) as cpu, sum(memory_bytes) as memory
+    select owner, sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
-        select connection_id, cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by connection_id, run)) / $4::float8) as part
+        select owner, cpu_millis, memory_bytes, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by owner, run)) / $4::float8) as part
         from (
-            select connection_id, cpu_millis, memory_bytes, created_at,
-                   count(*) filter (where opens) over (partition by connection_id order by created_at, id) as run
+            select owner, cpu_millis, memory_bytes, created_at,
+                   count(*) filter (where opens) over (partition by owner order by created_at, id) as run
             from (
-                select id, connection_id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (partition by connection_id order by created_at, id), interval '1 day')
+                select id, owner, cpu_millis, memory_bytes, created_at,
+                       coalesce(created_at - lag(created_at) over (partition by owner order by created_at, id), interval '1 day')
                            >= make_interval(secs => $5::float8) as opens
                 from recent
-                where billing_owner <> 'self_hosted' and assigned_at is not null and gpu_count = 0
+                where gpu_count = 0
                   and rate_class in ('auto', 'pinned')
                   and id > (select uuidv7(- make_interval(secs => $6::float8)))
             ) gaps
         ) runs
     ) parts
-    group by connection_id, run, part
+    group by owner, run, part
 ) batches
-group by connection_id
+group by owner
 order by 1, 2, 3, 4
 `
 

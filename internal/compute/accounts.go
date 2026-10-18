@@ -39,13 +39,9 @@ type account struct {
 	hosting, managed, inUse bool
 }
 
-// key names the account in cooldowns, quotas, published plans and logs.
-func (a account) key() string {
-	if a.connection == nil {
-		return ownerPlatform
-	}
-	return a.connection.String()
-}
+// key names the account in cooldowns, quotas, networks, published plans
+// and logs.
+func (a account) key() string { return hostOwner(a.connection) }
 
 // kind is what the account's hosts bill as.
 func (a account) kind() HostKind {
@@ -97,16 +93,11 @@ func (c *Compute) accounts(ctx context.Context, q *Queries) ([]account, error) {
 	return c.withNetworks(ctx, q, out)
 }
 
-// accountOf is the account of a host that records connection.
+// accountOf is the account of a host that records connection, for its
+// calls; inUse is read only by accounts.
 func (c *Compute) accountOf(ctx context.Context, q *Queries, connection *uuid.UUID) (account, error) {
-	var a account
-	if connection == nil {
-		inUse, err := q.PlatformInUse(ctx)
-		if err != nil {
-			return account{}, fmt.Errorf("read platform use: %w", err)
-		}
-		a = c.platformAccount(inUse)
-	} else {
+	a := c.platformAccount(false)
+	if connection != nil {
 		rows, err := q.ConnectionAccounts(ctx, connection)
 		if err != nil {
 			return account{}, fmt.Errorf("read connected account: %w", err)
@@ -213,7 +204,10 @@ func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int,
 
 // hostOwner is the key of the account of a host that records connection.
 func hostOwner(connection *uuid.UUID) string {
-	return account{connection: connection}.key()
+	if connection == nil {
+		return ownerPlatform
+	}
+	return connection.String()
 }
 
 // fleetZones are, by region, the zone ids of every managed account's

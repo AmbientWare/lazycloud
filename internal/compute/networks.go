@@ -13,14 +13,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 )
 
 // The fleet network of one account in one region: a VPC with a public
 // subnet per availability zone routed to an internet gateway, a node
 // security group that admits the volume peer port from itself, and an S3
 // gateway endpoint. Every account gets the same shape; a VPC that already
-// carries the fleet tag, such as one Terraform made, is adopted with its
-// own CIDR block.
+// carries the fleet tag is adopted with its own CIDR block.
 const (
 	// networkCIDR is the block of a VPC the fleet creates.
 	networkCIDR = "10.86.0.0/16"
@@ -397,7 +397,8 @@ func (c *Compute) deleteVPC(ctx context.Context, client *ec2.Client, vpc string)
 		}
 		for _, u := range out.Unsuccessful {
 			if u.Error != nil && !alreadyGone(aws.ToString(u.Error.Code)) {
-				return fmt.Errorf("delete endpoint %s: %s: %s", aws.ToString(u.ResourceId), aws.ToString(u.Error.Code), aws.ToString(u.Error.Message))
+				return fmt.Errorf("delete endpoint %s: %w", aws.ToString(u.ResourceId),
+					&smithy.GenericAPIError{Code: aws.ToString(u.Error.Code), Message: aws.ToString(u.Error.Message)})
 			}
 		}
 	}

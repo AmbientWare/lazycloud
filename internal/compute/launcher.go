@@ -704,6 +704,11 @@ func (c *Compute) launchTarget(ctx context.Context, h ClaimHostActionsRow) (laun
 	if !ok {
 		return launchTarget{}, fmt.Errorf("the account has no network in %s", h.Region)
 	}
+	// A host proves its identity as the node role, so one without it
+	// never enrolls.
+	if acct.nodeRole == "" || acct.instanceProfile == "" {
+		return launchTarget{}, errors.New("the account names no node role")
+	}
 	return launchTarget{account: acct, network: network}, nil
 }
 

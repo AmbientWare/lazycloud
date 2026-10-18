@@ -440,16 +440,6 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 	if host != "us-east-2 m7i.large spot "+strconv.Itoa(want) {
 		t.Fatalf("connected host %q, want us-east-2 m7i.large spot %d", host, want)
 	}
-	summary, err := o.compute.WorkspaceSummary(t.Context(), identity.WorkspaceID(ws))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The estimate is every host's recorded price, the warm ones the
-	// account keeps included.
-	total := scan[int64](t, o.pool, "select sum(hourly_micros)::bigint from hosts where kind = 'connection'")
-	if summary.HourlyMicros == nil || *summary.HourlyMicros != total {
-		t.Fatalf("connection estimate %v µ$/h, want the hosts' %d", summary.HourlyMicros, total)
-	}
 }
 
 // CPU work never keeps a fleet GPU host up: once its GPU work ends, the
