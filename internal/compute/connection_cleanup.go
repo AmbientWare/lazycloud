@@ -270,9 +270,9 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 
 // deleteNetworks deletes the connection's network in every region it may
 // have one, once its instances are gone, and reports whether one still
-// waits on AWS to release what the instances held. Another connection to
-// the same AWS account runs in the same networks, so they stay while one
-// does.
+// waits: on AWS to release what the instances held, or on a network pass
+// holding the networks lock. Another live connection to the same AWS
+// account runs in the same networks, so they stay while one does.
 func (c *Compute) deleteNetworks(ctx context.Context, scope awsScope, conn Connection) (bool, error) {
 	shared, err := c.queries.AccountConnectedElsewhere(ctx, AccountConnectedElsewhereParams{AwsAccountID: conn.AWSAccountID, ID: conn.ID})
 	if err != nil {
@@ -281,12 +281,17 @@ func (c *Compute) deleteNetworks(ctx context.Context, scope awsScope, conn Conne
 	if shared {
 		return false, nil
 	}
-	recorded, err := c.queries.AccountNetworkRegions(ctx, conn.ID.String())
+	release, locked, err := c.networksLock(ctx)
+	if err != nil || !locked {
+		return !locked, err
+	}
+	defer release()
+	regions, err := c.queries.ConnectionRegions(ctx, conn.ID)
 	if err != nil {
-		return false, fmt.Errorf("read connection networks: %w", err)
+		return false, fmt.Errorf("read connection regions: %w", err)
 	}
 	waiting := false
-	for _, region := range slices.Compact(slices.Sorted(slices.Values(append(recorded, c.fleet.Regions...)))) {
+	for _, region := range slices.Compact(slices.Sorted(slices.Values(append(regions, c.fleet.Regions...)))) {
 		gone, err := c.deleteNetwork(ctx, scope, region)
 		if err != nil {
 			return false, err

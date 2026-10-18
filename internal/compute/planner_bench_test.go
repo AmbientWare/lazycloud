@@ -26,7 +26,7 @@ func BenchmarkPlan(b *testing.B) {
 	c := NewCompute(pool, nil, Config{Fleet: Fleet{MaxHosts: 1000, StorageRegion: "us-east-1"}})
 	for region, n := range networks {
 		raw, _ := json.Marshal(n) //nolint:errcheck // A Network always encodes.
-		exec(b, pool, "insert into fleet_networks (owner, region, network, ensured_at) values ('platform', $1, $2, now())", region, raw)
+		exec(b, pool, "insert into fleet_networks (owner, region, network, checked_at) values ('platform', $1, $2, now())", region, raw)
 		for _, typ := range FleetCatalog() {
 			if price, sold := typ.OnDemandMicros(region); sold {
 				exec(b, pool, `insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)

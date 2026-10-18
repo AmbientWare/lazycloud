@@ -462,8 +462,8 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 		}))
 	})
 	// Each account's networks, made once it takes hosts and found again
-	// every half hour. Only the leader's timer runs it, so no two replicas
-	// make one account's network at once.
+	// every half hour, on the leader's timer; the networks lock keeps a
+	// replica's start-up pass apart from it.
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: t.networks}, nil, nil, timed("fleet_networks", func(ctx context.Context) bool {
 			if _, err := comp.EnsureNetworks(ctx, logger); err != nil && ctx.Err() == nil {

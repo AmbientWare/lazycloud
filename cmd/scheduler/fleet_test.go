@@ -58,7 +58,7 @@ func TestALaunchHoldsUpNoPreemption(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	exec(`insert into fleet_networks (owner, region, network, ensured_at) values ('platform', 'us-east-2',
+	exec(`insert into fleet_networks (owner, region, network, checked_at) values ('platform', 'us-east-2',
 '{"vpc_id": "vpc-1", "security_group_id": "sg-1", "subnets": [{"id": "subnet-1", "zone": "us-east-2a", "zone_id": "use2-az1"}]}', now())`)
 	exec(`insert into agent_releases (version, sha256_amd64, target) values ('1.0.0', repeat('a', 64), true)`)
 	exec(`insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)

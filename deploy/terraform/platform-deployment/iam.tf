@@ -246,7 +246,7 @@ data "aws_iam_policy_document" "control_plane" {
     actions = [
       "ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup", "ec2:CreateVpcEndpoint",
       "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway",
-      "ec2:CreateRoute", "ec2:AssociateRouteTable", "ec2:AuthorizeSecurityGroupIngress", "ec2:ModifyVpcEndpoint",
+      "ec2:CreateRoute", "ec2:AssociateRouteTable", "ec2:AuthorizeSecurityGroupIngress",
       "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteInternetGateway", "ec2:DeleteRouteTable", "ec2:DeleteSecurityGroup",
       "ec2:DeleteVpcEndpoints",
     ]
@@ -278,9 +278,20 @@ data "aws_iam_policy_document" "control_plane" {
     sid     = "LaunchInFleetNetworks"
     actions = ["ec2:RunInstances"]
     resources = [
-      "${local.ec2_arn}:subnet/*", "${local.ec2_arn}:security-group/*", "${local.ec2_arn}:network-interface/*",
-      "${local.ec2_arn}:spot-instances-request/*", "${local.arn_prefix}:ec2:*::image/*",
+      "${local.ec2_arn}:network-interface/*", "${local.ec2_arn}:spot-instances-request/*", "${local.arn_prefix}:ec2:*::image/*",
     ]
+  }
+
+  # Hosts launch only into the fleet's own subnets and security groups.
+  statement {
+    sid       = "LaunchInFleetSubnets"
+    actions   = ["ec2:RunInstances"]
+    resources = ["${local.ec2_arn}:subnet/*", "${local.ec2_arn}:security-group/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/lazycloud:fleet"
+      values   = [local.fleet_name]
+    }
   }
 
   # Reserves stop, hibernate and start in place.

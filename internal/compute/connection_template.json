@@ -74,10 +74,18 @@
                   "Resource": [
                     {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:network-interface/*"},
                     {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"},
-                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"},
-                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"},
                     {"Fn::Sub": "arn:${AWS::Partition}:ec2:*::image/*"}
                   ]
+                },
+                {
+                  "Sid": "LaunchInFleetSubnets",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"}
+                  ],
+                  "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
                 },
                 {
                   "Sid": "TagAtCreation",
@@ -124,8 +132,8 @@
                     "ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup", "ec2:CreateVpcEndpoint",
                     "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute", "ec2:AttachInternetGateway",
                     "ec2:DetachInternetGateway", "ec2:CreateRoute", "ec2:AssociateRouteTable", "ec2:AuthorizeSecurityGroupIngress",
-                    "ec2:ModifyVpcEndpoint", "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteInternetGateway",
-                    "ec2:DeleteRouteTable", "ec2:DeleteSecurityGroup", "ec2:DeleteVpcEndpoints"
+                    "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteInternetGateway", "ec2:DeleteRouteTable",
+                    "ec2:DeleteSecurityGroup", "ec2:DeleteVpcEndpoints"
                   ],
                   "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:*"},
                   "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}

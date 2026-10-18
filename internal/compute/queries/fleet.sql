@@ -172,8 +172,7 @@ where id = @id and phase = @from_phase;
 -- @connection_id: the role the fleet's calls there use;
 -- whether it takes new hosts (acceptsWork), whether the platform still
 -- manages its instances (Connection.ManagesCapacity), and whether an
--- active workspace uses it. Each row is share-locked so no connection
--- leaves hosting while a planning pass that read it writes hosts into it.
+-- active workspace uses it.
 select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.node_instance_profile, a.node_role_arn,
        (a.phase = 'ready'
         and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
@@ -186,8 +185,12 @@ select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.node_instan
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where sqlc.narg(connection_id)::uuid is null or cc.id = sqlc.narg(connection_id)::uuid
-order by cc.id
-for share of cc;
+order by cc.id;
+
+-- name: ShareConnections :exec
+-- A planning pass share-locks every connection, so none leaves hosting
+-- while the pass that read it writes hosts into it.
+select id from cloud_connections for share;
 
 -- name: PlatformInUse :one
 -- Whether an active workspace runs on the platform's own account.
@@ -195,19 +198,34 @@ select exists (select 1 from workspaces where connection_id is null and state = 
 
 
 -- name: FleetNetworks :many
--- Every account's networks, by owner key and region, and when each was
--- last found or made.
-select owner, region, network, ensured_at from fleet_networks order by owner, region;
+-- The networks of every account, or only of @owner, by owner key and
+-- region.
+select owner, region, network from fleet_networks
+where network is not null and (sqlc.narg(owner)::text is null or owner = sqlc.narg(owner)::text)
+order by owner, region;
 
--- name: LockNetworks :one
--- One pass makes networks at a time, so no two make one account's.
-select pg_try_advisory_xact_lock(hashtextextended('fleet-networks', 0))::bool;
+-- name: CheckedNetworks :many
+-- The account regions whose network was found or made within
+-- @ensured_seconds, or failed within @failed_seconds, so the pass leaves
+-- them be.
+select owner, region from fleet_networks
+where checked_at > now() - make_interval(secs => case when error is null then @ensured_seconds::float8 else @failed_seconds::float8 end);
+
+-- name: TryNetworksLock :one
+-- One session makes or deletes fleet networks at a time, so no two touch
+-- one account's.
+select pg_try_advisory_lock(hashtextextended('fleet-networks', 0))::bool;
+
+-- name: ReleaseNetworksLock :exec
+select pg_advisory_unlock(hashtextextended('fleet-networks', 0));
 
 -- name: UpsertFleetNetwork :exec
-insert into fleet_networks (owner, region, network, ensured_at)
+insert into fleet_networks (owner, region, network, checked_at)
 values (@owner, @region, @network, now())
-on conflict (owner, region) do update set network = excluded.network, ensured_at = excluded.ensured_at;
+on conflict (owner, region) do update set network = excluded.network, checked_at = excluded.checked_at, error = null;
 
--- name: AccountNetworkRegions :many
--- The regions an account holds a network in.
-select region from fleet_networks where owner = @owner order by region;
+-- name: FailFleetNetwork :exec
+insert into fleet_networks (owner, region, checked_at, error)
+values (@owner, @region, now(), @error)
+on conflict (owner, region) do update set checked_at = excluded.checked_at, error = excluded.error;
+

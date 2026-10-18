@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 // account is an AWS account the fleet runs hosts in: the platform's own,
@@ -90,7 +89,7 @@ func (c *Compute) accounts(ctx context.Context, q *Queries) ([]account, error) {
 	for _, row := range rows {
 		out = append(out, c.connectionAccount(row))
 	}
-	return c.withNetworks(ctx, q, out)
+	return c.withNetworks(ctx, q, out, nil)
 }
 
 // accountOf is the account of a host that records connection, for its
@@ -107,16 +106,17 @@ func (c *Compute) accountOf(ctx context.Context, q *Queries, connection *uuid.UU
 		}
 		a = c.connectionAccount(rows[0])
 	}
-	accounts, err := c.withNetworks(ctx, q, []account{a})
+	accounts, err := c.withNetworks(ctx, q, []account{a}, ptr(a.key()))
 	if err != nil {
 		return account{}, err
 	}
 	return accounts[0], nil
 }
 
-// withNetworks fills in each account's networks in the fleet's regions.
-func (c *Compute) withNetworks(ctx context.Context, q *Queries, accounts []account) ([]account, error) {
-	rows, err := q.FleetNetworks(ctx)
+// withNetworks fills in each account's networks in the fleet's regions,
+// reading only owner's when one is given.
+func (c *Compute) withNetworks(ctx context.Context, q *Queries, accounts []account, owner *string) ([]account, error) {
+	rows, err := q.FleetNetworks(ctx, owner)
 	if err != nil {
 		return nil, fmt.Errorf("read fleet networks: %w", err)
 	}
@@ -140,66 +140,116 @@ func (c *Compute) withNetworks(ctx context.Context, q *Queries, accounts []accou
 	return accounts, nil
 }
 
-// networkRecheck is how often an account's networks are found or made
-// again, which adds a subnet in a zone AWS opened since.
-const networkRecheck = 30 * time.Minute
+const (
+	// networkRecheck is how often an account's networks are found or made
+	// again, which adds a subnet in a zone AWS opened since.
+	networkRecheck = 30 * time.Minute
+	// networkRetry is how long a region whose network failed waits before
+	// the next try.
+	networkRetry = 5 * time.Minute
+	// networkDeadline bounds one account's network in one region, so a
+	// slow account holds up no other.
+	networkDeadline = 2 * time.Minute
+)
 
 // EnsureNetworks finds or makes a network in every fleet region of each
-// account that takes new hosts, whose network is missing or last ensured
-// networkRecheck ago, and records it. A region that fails is tried again
-// next pass. It reports how many networks it ensured.
+// account that takes new hosts, unless it was found within networkRecheck
+// or failed within networkRetry, and records the network or why it failed.
+// It holds the networks lock, so no removal deletes an account's network
+// while it runs, and rereads each account under it. It reports how many
+// networks it ensured.
 func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int, error) {
-	ensured := 0
-	var failed error
-	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		if locked, err := q.LockNetworks(ctx); err != nil || !locked {
-			return err
-		}
-		// Read outside the transaction, which holds no connection's row
-		// while AWS answers.
-		accounts, err := c.accounts(ctx, c.queries)
-		if err != nil {
-			return err
-		}
-		rows, err := q.FleetNetworks(ctx)
-		if err != nil {
-			return fmt.Errorf("read fleet networks: %w", err)
-		}
-		fresh := map[[2]string]bool{}
-		for _, row := range rows {
-			fresh[[2]string{row.Owner, row.Region}] = time.Since(row.EnsuredAt) < networkRecheck
-		}
-		for _, a := range accounts {
-			for _, region := range c.fleet.Regions {
-				if !a.hosting || fresh[[2]string{a.key(), region}] {
-					continue
-				}
-				network, err := c.ensureNetwork(ctx, a.scope, region)
-				if err != nil {
-					if ctx.Err() != nil {
-						return err
-					}
-					logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
-					failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
-					continue
-				}
-				raw, err := json.Marshal(network)
-				if err != nil {
-					return fmt.Errorf("encode network: %w", err)
-				}
-				if err := q.UpsertFleetNetwork(ctx, UpsertFleetNetworkParams{Owner: a.key(), Region: region, Network: raw}); err != nil {
-					return fmt.Errorf("record network: %w", err)
-				}
-				ensured++
-			}
-		}
-		return nil
+	release, locked, err := c.networksLock(ctx)
+	if err != nil || !locked {
+		return 0, err
+	}
+	defer release()
+	accounts, err := c.accounts(ctx, c.queries)
+	if err != nil {
+		return 0, err
+	}
+	checked, err := c.queries.CheckedNetworks(ctx, CheckedNetworksParams{
+		EnsuredSeconds: networkRecheck.Seconds(), FailedSeconds: networkRetry.Seconds(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("ensure networks: %w", err)
+		return 0, fmt.Errorf("read checked networks: %w", err)
+	}
+	done := map[CheckedNetworksRow]bool{}
+	for _, row := range checked {
+		done[row] = true
+	}
+	ensured := 0
+	var failed error
+	for _, a := range accounts {
+		for _, region := range c.fleet.Regions {
+			if !a.hosting || done[CheckedNetworksRow{Owner: a.key(), Region: region}] {
+				continue
+			}
+			if err := c.ensureAccountNetwork(ctx, a, region); err != nil {
+				if ctx.Err() != nil {
+					return ensured, err
+				}
+				logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
+				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
+				continue
+			}
+			ensured++
+		}
 	}
 	return ensured, failed
+}
+
+// ensureAccountNetwork finds or makes a's network in region, if a still
+// takes hosts, and records it or the failure.
+func (c *Compute) ensureAccountNetwork(ctx context.Context, a account, region string) error {
+	now, err := c.accountOf(ctx, c.queries, a.connection)
+	if err != nil || !now.hosting {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, networkDeadline)
+	defer cancel()
+	network, err := c.ensureNetwork(ctx, now.scope, region)
+	if err != nil {
+		if rerr := c.queries.FailFleetNetwork(context.WithoutCancel(ctx), FailFleetNetworkParams{
+			Owner: a.key(), Region: region, Error: ptr(truncate(err.Error())),
+		}); rerr != nil {
+			return errors.Join(err, fmt.Errorf("record the failure: %w", rerr))
+		}
+		return err
+	}
+	raw, err := json.Marshal(network)
+	if err != nil {
+		return fmt.Errorf("encode network: %w", err)
+	}
+	if err := c.queries.UpsertFleetNetwork(ctx, UpsertFleetNetworkParams{Owner: a.key(), Region: region, Network: raw}); err != nil {
+		return fmt.Errorf("record network: %w", err)
+	}
+	return nil
+}
+
+// networksLock takes the networks lock on a connection of its own, if no
+// other session holds it; release gives it back.
+func (c *Compute) networksLock(ctx context.Context) (release func(), locked bool, err error) {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire a connection: %w", err)
+	}
+	q := New(conn)
+	if locked, err = q.TryNetworksLock(ctx); err != nil || !locked {
+		conn.Release()
+		if err != nil {
+			err = fmt.Errorf("take the networks lock: %w", err)
+		}
+		return nil, false, err
+	}
+	return func() {
+		// A failed unlock leaves the lock to the session's end, which
+		// destroying the connection brings.
+		if err := q.ReleaseNetworksLock(context.WithoutCancel(ctx)); err != nil {
+			_ = conn.Conn().Close(context.WithoutCancel(ctx)) //nolint:errcheck // The connection is discarded either way.
+		}
+		conn.Release()
+	}, true, nil
 }
 
 // hostOwner is the key of the account of a host that records connection.

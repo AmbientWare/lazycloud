@@ -808,6 +808,32 @@ func TestRemovingOneOfTwoConnectionsToAnAccountKeepsItsNetworks(t *testing.T) {
 	})
 }
 
+// A region whose network AWS refuses records why and waits before the
+// next try, instead of asking again every pass.
+func TestARefusedNetworkWaitsBeforeTheNextTry(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	conn := connected(t, o, customer, newUser(t, o.pool, "alice@example.com"))
+	run(t, o.pool, "delete from fleet_networks where owner = $1", conn.ID.String())
+	emulator.on("CreateVpc", func(awsCall) awsReply {
+		return ec2Error(http.StatusBadRequest, "VpcLimitExceeded", "The maximum number of VPCs has been reached.")
+	})
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err == nil {
+		t.Fatal("ensure with VPCs refused succeeded")
+	}
+	tries := len(emulator.calls("CreateVpc"))
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatalf("second pass: %v, want the refused regions left to wait", err)
+	}
+	if n := len(emulator.calls("CreateVpc")); n != tries {
+		t.Fatalf("%d CreateVpc calls after the second pass, want still %d", n, tries)
+	}
+	if reason := scan[string](t, o.pool, "select error from fleet_networks where owner = $1 limit 1", conn.ID.String()); !strings.Contains(reason, "VpcLimitExceeded") {
+		t.Fatalf("recorded failure %q, want AWS's reason", reason)
+	}
+}
+
 // A network failure while reading a stack proves nothing about it: the
 // connection keeps the stack to delete and tries again.
 func TestAStackReadWithoutAnAnswerIsRetried(t *testing.T) {

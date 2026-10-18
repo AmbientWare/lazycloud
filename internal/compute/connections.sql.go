@@ -28,7 +28,10 @@ func (q *Queries) AbandonConnectionHosts(ctx context.Context, connectionID *uuid
 
 const accountConnectedElsewhere = `-- name: AccountConnectedElsewhere :one
 select exists (
-    select 1 from cloud_connections where aws_account_id = $1 and id <> $2
+    select 1 from cloud_connections cc
+    join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
+    where cc.aws_account_id = $1 and cc.id <> $2
+      and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 )::bool
 `
 
@@ -37,7 +40,9 @@ type AccountConnectedElsewhereParams struct {
 	ID           uuid.UUID
 }
 
-// Whether another connection reaches the same AWS account.
+// Whether another live connection reaches the same AWS account: one with a
+// ready active authorization that is not being removed, which runs in the
+// account's networks and may launch its images.
 func (q *Queries) AccountConnectedElsewhere(ctx context.Context, arg AccountConnectedElsewhereParams) (bool, error) {
 	row := q.db.QueryRow(ctx, accountConnectedElsewhere, arg.AwsAccountID, arg.ID)
 	var column_1 bool

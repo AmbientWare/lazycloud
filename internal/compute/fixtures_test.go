@@ -56,7 +56,7 @@ func setNetworks(t *testing.T, o owners, owner string, networks map[string]compu
 		if err != nil {
 			t.Fatal(err)
 		}
-		run(t, o.pool, "insert into fleet_networks (owner, region, network, ensured_at) values ($1, $2, $3, now())", owner, region, raw)
+		run(t, o.pool, "insert into fleet_networks (owner, region, network, checked_at) values ($1, $2, $3, now())", owner, region, raw)
 	}
 }
 

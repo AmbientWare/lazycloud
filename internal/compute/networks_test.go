@@ -144,11 +144,12 @@ func TestNetworkMadeInAFreshAccountAndDeleted(t *testing.T) {
 	})
 }
 
-// TestNetworkAdoptsATerraformNetwork completes a network Terraform made,
-// whose gateway and route table carry only a Name tag, without replacing
-// any of it: the missing zone gets the first free range of the VPC's own
-// block, and the unassociated subnet and the missing peer rule are added.
-func TestNetworkAdoptsATerraformNetwork(t *testing.T) {
+// TestNetworkFillsInWhatAnExistingNetworkLacks completes an existing fleet
+// network, whose gateway and route table carry only a Name tag, without
+// replacing any of it: a zone AWS opened since gets the first free range of
+// the VPC's own block, and an unassociated subnet and a missing peer rule
+// are added.
+func TestNetworkFillsInWhatAnExistingNetworkLacks(t *testing.T) {
 	t.Parallel()
 	c, f := newNetworkOwner(t)
 	fleetTags := func(name string) map[string]string {

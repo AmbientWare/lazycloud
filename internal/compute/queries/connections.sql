@@ -174,9 +174,14 @@ set phase = 'failed', state = 'retired', failure = 'unknown', launch_lease_until
 where connection_id = @connection_id and phase not in ('deleted', 'failed');
 
 -- name: AccountConnectedElsewhere :one
--- Whether another connection reaches the same AWS account.
+-- Whether another live connection reaches the same AWS account: one with a
+-- ready active authorization that is not being removed, which runs in the
+-- account's networks and may launch its images.
 select exists (
-    select 1 from cloud_connections where aws_account_id = @aws_account_id and id <> @id
+    select 1 from cloud_connections cc
+    join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
+    where cc.aws_account_id = @aws_account_id and cc.id <> @id
+      and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 )::bool;
 
 -- name: LockWorkspaceConnection :one

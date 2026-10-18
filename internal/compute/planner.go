@@ -150,6 +150,9 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 		if !lock.Locked {
 			return nil
 		}
+		if err := q.ShareConnections(ctx); err != nil {
+			return fmt.Errorf("lock connections: %w", err)
+		}
 		p := c.policy()
 		read, err := c.readFleet(ctx, q, p, lock.Now)
 		if err != nil {

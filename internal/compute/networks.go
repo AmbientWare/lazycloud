@@ -319,15 +319,6 @@ func (c *Compute) ensureEndpoint(ctx context.Context, client *ec2.Client, region
 		return err
 	}
 	if len(endpoints) > 0 {
-		e := endpoints[0]
-		if slices.Contains(e.RouteTableIds, table) {
-			return nil
-		}
-		if _, err := client.ModifyVpcEndpoint(ctx, &ec2.ModifyVpcEndpointInput{
-			VpcEndpointId: e.VpcEndpointId, AddRouteTableIds: []string{table},
-		}); err != nil {
-			return refusedOr(err, "route %s through %s", table, aws.ToString(e.VpcEndpointId))
-		}
 		return nil
 	}
 	if _, err := client.CreateVpcEndpoint(ctx, &ec2.CreateVpcEndpointInput{
