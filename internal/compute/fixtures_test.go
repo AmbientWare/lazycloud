@@ -70,6 +70,13 @@ func newWorkspace(t *testing.T, pool *pgxpool.Pool, name string, owner identity.
 	return id
 }
 
+// used puts an active workspace on the platform's account, which keeps
+// reserves only while one runs there.
+func used(t *testing.T, o owners) {
+	t.Helper()
+	newWorkspace(t, o.pool, "used", newUser(t, o.pool, "used@example.com"))
+}
+
 // newRelease inserts an active function in workspace whose active release
 // has spec, and returns the release.
 func newRelease(t *testing.T, pool *pgxpool.Pool, workspace uuid.UUID, spec string) uuid.UUID {

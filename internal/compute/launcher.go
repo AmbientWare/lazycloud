@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,20 +49,6 @@ const (
 	tagFleet = "lazycloud:fleet"
 	tagHost  = "lazycloud:host-id"
 )
-
-// launchTarget is where and as whom one host launches.
-type launchTarget struct {
-	scope           awsScope
-	network         Network
-	instanceProfile string
-	// authorization and nodeRole are what a connection host launches
-	// under; its identity proof must name nodeRole.
-	authorization *uuid.UUID
-	nodeRole      string
-	// account is a connection host's AWS account, which the node image
-	// is shared with; empty for platform hosts.
-	account string
-}
 
 // Launch starts instances for requested hosts. Each launch is claimed as
 // every host action is and runs outside any transaction; RunInstances takes the host id,
@@ -212,15 +197,7 @@ type poolCooldown struct {
 	quota  bool
 }
 
-// ownerKey names the owner of h's cooldowns: the platform or a connection.
-func ownerKey(h ClaimHostActionsRow) string {
-	if h.ConnectionID != nil {
-		return h.ConnectionID.String()
-	}
-	return ownerPlatform
-}
-
-// poolInputs reads the offer inputs of h's owner, as the planner reads
+// poolInputs reads the offer inputs of h's account, as the planner reads
 // them: cooldowns, quotas and the vCPUs live hosts count against them, and
 // the memory each type reported.
 func (c *Compute) poolInputs(ctx context.Context, h ClaimHostActionsRow) (*OfferInputs, error) {
@@ -228,25 +205,17 @@ func (c *Compute) poolInputs(ctx context.Context, h ClaimHostActionsRow) (*Offer
 	if err != nil {
 		return nil, err
 	}
+	acct, err := c.accountOf(ctx, c.queries, h.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
 	var hosts []FleetHost
 	for _, row := range r.hosts {
-		if ownedBy(row, h.ConnectionID) {
+		if acct.owns(row.ConnectionID) {
 			hosts = append(hosts, fleetHostOf(row, r.now))
 		}
 	}
-	networks := c.fleet.Networks
-	if h.ConnectionID != nil {
-		row, err := c.queries.ConnectionScope(ctx, *h.ConnectionID)
-		if err != nil {
-			return nil, fmt.Errorf("read connection scope: %w", err)
-		}
-		var own map[string]Network
-		if err := json.Unmarshal(row.Networks, &own); err != nil {
-			return nil, fmt.Errorf("decode networks: %w", err)
-		}
-		networks = own
-	}
-	in := r.inputs(c.fleet.StorageRegion, networks, h.ConnectionID, hosts)
+	in := r.inputs(c.fleet.StorageRegion, acct, hosts)
 	in.QuotaUsed = QuotaUse(hosts, in.Catalog)
 	return &in, nil
 }
@@ -268,11 +237,11 @@ func (c *Compute) nextPool(ctx context.Context, h ClaimHostActionsRow, in *Offer
 		return FleetOffer{}, false, fmt.Errorf("read cooldowns: %w", err)
 	}
 	market := Market(*h.Market)
-	in.Cooldowns = offerCooldowns(cooldowns, ownerKey(h))
+	in.Cooldowns = offerCooldowns(cooldowns, hostOwner(h.ConnectionID))
 	if cool != nil {
 		in.Cooldowns = append(in.Cooldowns, OfferCooldown{
 			Region: h.Region, ZoneID: cool.zoneID, InstanceType: h.InstanceType, Market: market,
-			Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota && h.ConnectionID == nil,
+			Until: in.Now.Add(c.fleet.CapacityCooldown), Quota: cool.quota,
 		})
 	}
 	if t, known := CatalogTypeNamed(h.InstanceType); known && in.QuotaUsed != nil {
@@ -396,7 +365,7 @@ func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, att
 // quota or price is returned for the caller to move on; every other
 // outcome is settled here.
 func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHostActionsRow) (bool, *poolRefusal, error) {
-	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
+	target, err := c.launchTarget(ctx, h)
 	if err != nil {
 		return false, nil, c.failLaunch(ctx, h, err.Error(), nil)
 	}
@@ -516,7 +485,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 	}
 	if h.Market != nil {
 		if err := c.queries.ClearCooldown(ctx, ClearCooldownParams{
-			ConnectionKey: ownerKey(h), Region: h.Region, AvailabilityZoneID: subnet.ZoneID, InstanceType: h.InstanceType, Market: *h.Market,
+			ConnectionKey: hostOwner(h.ConnectionID), Region: h.Region, AvailabilityZoneID: subnet.ZoneID, InstanceType: h.InstanceType, Market: *h.Market,
 		}); err != nil {
 			return true, nil, fmt.Errorf("clear the pool's cooldown: %w", err)
 		}
@@ -563,20 +532,16 @@ type launchOptions struct {
 }
 
 // launchOptionsFor sizes a launch. Its root has the throughput its type is
-// priced with. A platform host bought for the reserve hibernates when it
-// asks to and its catalog type can, with its root grown for the image. A
-// platform Spot reserve keeps its request across stops, and so does a
-// platform Spot GPU host, which returns to the reserve when its market's
-// reserves fall short as it leaves. Serving and connection hosts launch
-// with the plain root.
+// priced with. A host bought for the reserve hibernates when it asks to and
+// its catalog type can, with its root grown for the image. A Spot reserve
+// keeps its request across stops, and so does a Spot GPU host, which
+// returns to the reserve when its market's reserves fall short as it
+// leaves. Serving hosts launch with the plain root.
 func launchOptionsFor(h ClaimHostActionsRow) launchOptions {
 	t, _ := CatalogTypeNamed(h.InstanceType)
 	opts := launchOptions{
 		rootGiB: rootVolumeGiB, rootMiBps: int32(t.RootMiBps()), //nolint:gosec // At most buildMiBps.
 		dataGiB: int32(t.DataVolumeGiB()), //nolint:gosec // At most a few TiB.
-	}
-	if HostKind(h.Kind) != KindPlatform {
-		return opts
 	}
 	opts.persistent = h.Market != nil && Market(*h.Market) == MarketSpot && (h.ReserveMode != nil || h.GpuCount > 0)
 	if h.ReserveMode == nil {
@@ -644,19 +609,20 @@ func (c *Compute) nodeImage(region string, gpu bool) (string, bool) {
 	return image, ok && image != ""
 }
 
-// shareImage grants a connection's account launch permission on a baked
-// image, with the platform's credentials, before the account launches it.
+// shareImage grants an account launch permission on a baked image, with
+// the platform's credentials, before the account launches it; the images
+// live in the platform's account.
 // Adding a permission the account holds already changes nothing, so every
 // launch shares again and no record is kept. The images hold public
 // software only; the agent and its credentials arrive at boot.
 func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, image string) error {
-	if target.account == "" || strings.HasPrefix(image, "resolve:ssm:") {
+	if target.awsAccount == c.fleet.AccountID || strings.HasPrefix(image, "resolve:ssm:") {
 		return nil
 	}
-	_, err := c.aws().ec2(awsScope{key: string(KindPlatform)}, region).ModifyImageAttribute(ctx, &ec2.ModifyImageAttributeInput{
+	_, err := c.aws().ec2(c.platformAccount(false).scope, region).ModifyImageAttribute(ctx, &ec2.ModifyImageAttributeInput{
 		ImageId: aws.String(image),
 		LaunchPermission: &ec2types.LaunchPermissionModifications{
-			Add: []ec2types.LaunchPermission{{UserId: aws.String(target.account)}},
+			Add: []ec2types.LaunchPermission{{UserId: aws.String(target.awsAccount)}},
 		},
 	})
 	if err != nil {
@@ -690,8 +656,8 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, message
 }
 
 // coolPool skips h's type and market in the zone or region cool names
-// until the cooldown ends, and on a quota refusal its class in the region
-// for the platform. Every pool h's launch walk refused cools until their
+// until the cooldown ends, and on a quota refusal its class in the
+// account's region. Every pool h's launch walk refused cools until their
 // latest end, in the same transaction, so no pass plans from cooldowns
 // that end apart.
 func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimHostActionsRow, message string, cool poolCooldown) error {
@@ -699,7 +665,7 @@ func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimHostActionsRo
 		return nil
 	}
 	params := InsertCooldownParams{
-		ConnectionKey: ownerKey(h), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
+		ConnectionKey: hostOwner(h.ConnectionID), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
 		Reason: truncate(message), Walk: &h.ID,
 	}
@@ -709,54 +675,39 @@ func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimHostActionsRo
 	if err := q.AlignWalk(ctx, h.ID); err != nil {
 		return fmt.Errorf("align the walk's cooldowns: %w", err)
 	}
-	if cool.quota && h.ConnectionID == nil {
-		return c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market))
+	if cool.quota {
+		return c.refuseQuota(ctx, q, hostOwner(h.ConnectionID), h.Region, h.InstanceType, Market(*h.Market))
 	}
 	return nil
 }
 
-// launchTarget resolves the credentials, network and instance profile for
-// the platform or a connection in region.
-func (c *Compute) launchTarget(ctx context.Context, connection *uuid.UUID, region string) (launchTarget, error) {
-	if connection == nil {
-		network, ok := c.fleet.Networks[region]
-		if !ok {
-			return launchTarget{}, fmt.Errorf("the platform has no network in %s", region)
-		}
-		return launchTarget{
-			scope: awsScope{key: string(KindPlatform)}, network: network, instanceProfile: c.fleet.InstanceProfile,
-			nodeRole: c.fleet.NodeRoleARN,
-		}, nil
-	}
-	row, err := c.queries.ConnectionScope(ctx, *connection)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return launchTarget{}, errors.New("the connection has no active authorization")
-	}
+// launchTarget is where and as whom one host launches: its account and
+// that account's network in the host's region.
+type launchTarget struct {
+	account
+	network Network
+}
+
+// launchTarget resolves h's account and network. A disconnect waits on
+// every host the connection requested, so a launch that read its account
+// hosting ends under the drain; none starts once the account reads
+// otherwise.
+func (c *Compute) launchTarget(ctx context.Context, h ClaimHostActionsRow) (launchTarget, error) {
+	acct, err := c.accountOf(ctx, c.queries, h.ConnectionID)
 	if err != nil {
-		return launchTarget{}, fmt.Errorf("read connection scope: %w", err)
+		return launchTarget{}, err
 	}
-	// A disconnect waits on every host the connection requested, so a
-	// launch that read the connection hosting ends under its drain; none
-	// starts once the connection reads otherwise.
-	if !acceptsWork(ConnectionPhase(row.Phase), AuthorizationPhase(row.AuthorizationPhase)) {
-		return launchTarget{}, fmt.Errorf("the connection is %s and takes no new hosts", row.Phase)
+	if !acct.hosting {
+		return launchTarget{}, errors.New("the account takes no new hosts")
 	}
-	var networks map[string]Network
-	if err := json.Unmarshal(row.Networks, &networks); err != nil {
-		return launchTarget{}, fmt.Errorf("decode networks: %w", err)
-	}
-	network, ok := networks[region]
+	network, ok := acct.networks[h.Region]
 	if !ok {
-		return launchTarget{}, fmt.Errorf("the connection has no network in %s", region)
+		return launchTarget{}, fmt.Errorf("the account has no network in %s", h.Region)
 	}
-	scope := c.aws().assume(row.RoleArn, row.ExternalID, "lazycloud-fleet-"+connection.String()[:8], connection.String())
-	if deref(row.NodeRoleArn) == "" || deref(row.NodeInstanceProfile) == "" {
-		return launchTarget{}, errors.New("the connection's authorization names no node role")
+	if acct.nodeRole == "" || acct.instanceProfile == "" {
+		return launchTarget{}, errors.New("the account names no node role")
 	}
-	return launchTarget{
-		scope: scope, network: network, instanceProfile: deref(row.NodeInstanceProfile),
-		authorization: &row.AuthorizationID, nodeRole: deref(row.NodeRoleArn), account: accountOfRole(row.RoleArn),
-	}, nil
+	return launchTarget{account: acct, network: network}, nil
 }
 
 // bootstrap is the instance's user data: install Docker if the image lacks

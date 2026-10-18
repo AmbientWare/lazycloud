@@ -93,20 +93,19 @@ type priceRegion struct {
 // transaction. It returns the regions it read and the reads that failed
 // apart from err, which stopped it.
 func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, []priceRegion, error, error) {
+	zones, err := c.fleetZones(ctx)
+	if err != nil {
+		return 0, nil, nil, err
+	}
 	var regions []priceRegion
 	var updates []UpsertSpotPricesParams
 	var failed error
-	for _, region := range slices.Sorted(maps.Keys(c.fleet.Networks)) {
-		r := priceRegion{name: region, types: spotTypes(region), zones: map[string]bool{}}
-		for _, s := range c.fleet.Networks[region].Subnets {
-			if s.ZoneID != "" {
-				r.zones[s.ZoneID] = true
-			}
-		}
-		if len(r.types) == 0 || len(r.zones) == 0 {
+	for _, region := range slices.Sorted(maps.Keys(zones)) {
+		r := priceRegion{name: region, types: spotTypes(region), zones: zones[region]}
+		if len(r.types) == 0 {
 			continue
 		}
-		r.client = c.aws().ec2(awsScope{key: string(KindPlatform)}, region)
+		r.client = c.aws().ec2(c.platformAccount(false).scope, region)
 		prices, err := spotQuotes(ctx, r.client, slices.Sorted(maps.Keys(r.zones)), r.types, time.Now())
 		if err != nil {
 			if ctx.Err() != nil {
@@ -126,7 +125,7 @@ func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, 
 		regions, updates = append(regions, r), append(updates, params)
 	}
 	stored := 0
-	err := inTx(ctx, c, func(tx pgx.Tx) error {
+	err = inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		for _, params := range updates {
 			if err := q.UpsertSpotPrices(ctx, params); err != nil {

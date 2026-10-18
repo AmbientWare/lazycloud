@@ -125,17 +125,6 @@ from cloud_connections cc
 where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase = 'requested'
   and (h.launch_lease_until is null or h.launch_lease_until < now());
 
--- name: ManagedConnectionNetworks :many
--- Connections whose capacity the platform still manages, with the
--- networks of their active authorization; Connection.ManagesCapacity
--- applies the same rule. A removal sweeps its own instances.
-select cc.id, a.networks
-from cloud_connections cc
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
-   or (cc.phase = 'action_required'
-       and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring'));
-
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
 select id, phase, phase_message, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
@@ -167,9 +156,29 @@ update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
 where id = @id and phase = @from_phase;
 
--- name: ConnectionScope :one
-select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
-       a.node_role_arn, cc.phase, a.phase as authorization_phase
+-- name: ConnectionAccounts :many
+-- The connected accounts with an active authorization, or only the one of
+-- @connection_id: the role and networks the fleet's calls there use;
+-- whether it takes new hosts (acceptsWork), whether the platform still
+-- manages its instances (Connection.ManagesCapacity), and whether an
+-- active workspace uses it. Each row is share-locked so no connection
+-- leaves hosting while a planning pass that read it writes hosts into it.
+select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile, a.node_role_arn,
+       (a.phase = 'ready'
+        and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
+       (a.phase = 'ready'
+        and (cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
+             or cc.phase = 'action_required'
+                and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring')))::boolean
+           as managed,
+       exists (select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active')::boolean as in_use
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
-where cc.id = @id;
+where sqlc.narg(connection_id)::uuid is null or cc.id = sqlc.narg(connection_id)::uuid
+order by cc.id
+for share of cc;
+
+-- name: PlatformInUse :one
+-- Whether an active workspace runs on the platform's own account.
+select exists (select 1 from workspaces where connection_id is null and state = 'active')::boolean;
+

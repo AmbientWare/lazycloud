@@ -76,39 +76,71 @@ func (q *Queries) ClearCooldown(ctx context.Context, arg ClearCooldownParams) er
 	return err
 }
 
-const connectionScope = `-- name: ConnectionScope :one
-select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
-       a.node_role_arn, cc.phase, a.phase as authorization_phase
+const connectionAccounts = `-- name: ConnectionAccounts :many
+select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile, a.node_role_arn,
+       (a.phase = 'ready'
+        and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
+       (a.phase = 'ready'
+        and (cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
+             or cc.phase = 'action_required'
+                and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring')))::boolean
+           as managed,
+       exists (select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active')::boolean as in_use
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
-where cc.id = $1
+where $1::uuid is null or cc.id = $1::uuid
+order by cc.id
+for share of cc
 `
 
-type ConnectionScopeRow struct {
+type ConnectionAccountsRow struct {
+	ID                  uuid.UUID
 	AuthorizationID     uuid.UUID
 	RoleArn             string
 	ExternalID          string
 	Networks            []byte
 	NodeInstanceProfile *string
 	NodeRoleArn         *string
-	Phase               string
-	AuthorizationPhase  string
+	Hosting             bool
+	Managed             bool
+	InUse               bool
 }
 
-func (q *Queries) ConnectionScope(ctx context.Context, id uuid.UUID) (ConnectionScopeRow, error) {
-	row := q.db.QueryRow(ctx, connectionScope, id)
-	var i ConnectionScopeRow
-	err := row.Scan(
-		&i.AuthorizationID,
-		&i.RoleArn,
-		&i.ExternalID,
-		&i.Networks,
-		&i.NodeInstanceProfile,
-		&i.NodeRoleArn,
-		&i.Phase,
-		&i.AuthorizationPhase,
-	)
-	return i, err
+// The connected accounts with an active authorization, or only the one of
+// @connection_id: the role and networks the fleet's calls there use;
+// whether it takes new hosts (acceptsWork), whether the platform still
+// manages its instances (Connection.ManagesCapacity), and whether an
+// active workspace uses it. Each row is share-locked so no connection
+// leaves hosting while a planning pass that read it writes hosts into it.
+func (q *Queries) ConnectionAccounts(ctx context.Context, connectionID *uuid.UUID) ([]ConnectionAccountsRow, error) {
+	rows, err := q.db.Query(ctx, connectionAccounts, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConnectionAccountsRow
+	for rows.Next() {
+		var i ConnectionAccountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AuthorizationID,
+			&i.RoleArn,
+			&i.ExternalID,
+			&i.Networks,
+			&i.NodeInstanceProfile,
+			&i.NodeRoleArn,
+			&i.Hosting,
+			&i.Managed,
+			&i.InUse,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const drainConnectionHosts = `-- name: DrainConnectionHosts :many
@@ -454,43 +486,6 @@ func (q *Queries) LiveHosts(ctx context.Context, ids []uuid.UUID) ([]LiveHostsRo
 	return items, nil
 }
 
-const managedConnectionNetworks = `-- name: ManagedConnectionNetworks :many
-select cc.id, a.networks
-from cloud_connections cc
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
-   or (cc.phase = 'action_required'
-       and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring'))
-`
-
-type ManagedConnectionNetworksRow struct {
-	ID       uuid.UUID
-	Networks []byte
-}
-
-// Connections whose capacity the platform still manages, with the
-// networks of their active authorization; Connection.ManagesCapacity
-// applies the same rule. A removal sweeps its own instances.
-func (q *Queries) ManagedConnectionNetworks(ctx context.Context) ([]ManagedConnectionNetworksRow, error) {
-	rows, err := q.db.Query(ctx, managedConnectionNetworks)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ManagedConnectionNetworksRow
-	for rows.Next() {
-		var i ManagedConnectionNetworksRow
-		if err := rows.Scan(&i.ID, &i.Networks); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const markHostDeleted = `-- name: MarkHostDeleted :execrows
 update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
@@ -555,6 +550,18 @@ func (q *Queries) MoveLaunchPool(ctx context.Context, arg MoveLaunchPoolParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const platformInUse = `-- name: PlatformInUse :one
+select exists (select 1 from workspaces where connection_id is null and state = 'active')::boolean
+`
+
+// Whether an active workspace runs on the platform's own account.
+func (q *Queries) PlatformInUse(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, platformInUse)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const recordLaunch = `-- name: RecordLaunch :execrows

@@ -15,11 +15,16 @@ import (
 
 const cloudHostIdentity = `-- name: CloudHostIdentity :one
 select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region, h.node_role_arn,
-       cc.aws_account_id
+       coalesce(cc.aws_account_id, $1::text)::text as aws_account_id
 from hosts h
 left join cloud_connections cc on cc.id = h.connection_id
-where h.id = $1
+where h.id = $2
 `
+
+type CloudHostIdentityParams struct {
+	PlatformAccount string
+	ID              uuid.UUID
+}
 
 type CloudHostIdentityRow struct {
 	ID           uuid.UUID
@@ -29,13 +34,14 @@ type CloudHostIdentityRow struct {
 	ConnectionID *uuid.UUID
 	Region       string
 	NodeRoleArn  *string
-	AwsAccountID *string
+	AwsAccountID string
 }
 
-// What an instance's identity proof must match: its account, through the
-// connection's active authorization when it runs in a customer account.
-func (q *Queries) CloudHostIdentity(ctx context.Context, id uuid.UUID) (CloudHostIdentityRow, error) {
-	row := q.db.QueryRow(ctx, cloudHostIdentity, id)
+// What an instance's identity proof must match: the account it runs in,
+// the connection's or @platform_account, and the node role it launched
+// with.
+func (q *Queries) CloudHostIdentity(ctx context.Context, arg CloudHostIdentityParams) (CloudHostIdentityRow, error) {
+	row := q.db.QueryRow(ctx, cloudHostIdentity, arg.PlatformAccount, arg.ID)
 	var i CloudHostIdentityRow
 	err := row.Scan(
 		&i.ID,

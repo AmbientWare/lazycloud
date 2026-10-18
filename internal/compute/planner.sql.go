@@ -230,43 +230,6 @@ func (q *Queries) HostWaitTrace(ctx context.Context, hostID *uuid.UUID) (string,
 	return traceparent, err
 }
 
-const hostingConnections = `-- name: HostingConnections :many
-select cc.id, a.networks
-from cloud_connections cc
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
-order by cc.id
-for share of cc
-`
-
-type HostingConnectionsRow struct {
-	ID       uuid.UUID
-	Networks []byte
-}
-
-// Connections that take new workloads, with the networks of their active
-// authorization. Each row is share-locked so no connection leaves hosting
-// while the pass that read it writes hosts into it.
-func (q *Queries) HostingConnections(ctx context.Context) ([]HostingConnectionsRow, error) {
-	rows, err := q.db.Query(ctx, hostingConnections)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []HostingConnectionsRow
-	for rows.Next() {
-		var i HostingConnectionsRow
-		if err := rows.Scan(&i.ID, &i.Networks); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const insertRequestedHosts = `-- name: InsertRequestedHosts :exec
 insert into hosts (id, name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
                    gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
@@ -646,6 +609,7 @@ func (q *Queries) PlannerHosts(ctx context.Context, cooldownSeconds float64) ([]
 const recentShapes = `-- name: RecentShapes :many
 with recent as (
     select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+           case when c.billing_owner = 'connected_cloud' then ws.connection_id end as connection_id,
            coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
            coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
     from (
@@ -657,67 +621,72 @@ with recent as (
         limit $2
     ) c
     left join releases r on r.id = c.release_id
+    left join workspaces ws on ws.id = c.workspace_id
 )
-select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select coalesce(connection_id::text, 'platform')::text as owner, 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
        max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
-where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 2, 3
+where billing_owner <> 'self_hosted' and assigned_at is not null
+group by 1, 3, 4
 union all
-select 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+select coalesce(connection_id::text, 'platform'), 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
        max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, count(*)::int
 from recent
-where billing_owner = 'platform_fleet' and assigned_at is not null
+where billing_owner <> 'self_hosted' and assigned_at is not null
   and id > (select uuidv7(- make_interval(secs => $3::float8)))
-group by 2, 3
+group by 1, 3, 4
 union all
-select 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
+select coalesce(connection_id::text, 'platform'), 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
 from (
-    select preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
+    select connection_id, preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
     from (
-        select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by preemptible, gpu_type, run)) / $4::float8) as part
+        select connection_id, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by connection_id, preemptible, gpu_type, run))
+                     / $4::float8) as part
         from (
-            select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
-                   count(*) filter (where opens) over (partition by preemptible, gpu_type order by created_at, id) as run
+            select connection_id, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
+                   count(*) filter (where opens) over (partition by connection_id, preemptible, gpu_type order by created_at, id) as run
             from (
-                select id, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
-                       coalesce(created_at - lag(created_at) over (partition by (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
+                select id, connection_id, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count,
+                       created_at,
+                       coalesce(created_at - lag(created_at)
+                                over (partition by connection_id, (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
                                 interval '1 day') >= make_interval(secs => $5::float8) as opens
                 from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null
+                where billing_owner <> 'self_hosted' and assigned_at is not null
                   and id > (select uuidv7(- make_interval(secs => $3::float8)))
             ) gaps
         ) runs
     ) parts
-    group by preemptible, gpu_type, run, part
+    group by connection_id, preemptible, gpu_type, run, part
 ) batches
-group by preemptible, gpu_type
+group by connection_id, preemptible, gpu_type
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
+select coalesce(connection_id::text, 'platform'), 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
-    select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
+    select connection_id, sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
-        select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / $4::float8) as part
+        select connection_id, cpu_millis, memory_bytes, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by connection_id, run)) / $4::float8) as part
         from (
-            select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
+            select connection_id, cpu_millis, memory_bytes, created_at,
+                   count(*) filter (where opens) over (partition by connection_id order by created_at, id) as run
             from (
-                select id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
+                select id, connection_id, cpu_millis, memory_bytes, created_at,
+                       coalesce(created_at - lag(created_at) over (partition by connection_id order by created_at, id), interval '1 day')
                            >= make_interval(secs => $5::float8) as opens
                 from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
+                where billing_owner <> 'self_hosted' and assigned_at is not null and gpu_count = 0
                   and rate_class in ('auto', 'pinned')
                   and id > (select uuidv7(- make_interval(secs => $6::float8)))
             ) gaps
         ) runs
     ) parts
-    group by run, part
+    group by connection_id, run, part
 ) batches
-having count(*) > 0
-order by 1, 2, 3
+group by connection_id
+order by 1, 2, 3, 4
 `
 
 type RecentShapesParams struct {
@@ -730,6 +699,7 @@ type RecentShapesParams struct {
 }
 
 type RecentShapesRow struct {
+	Owner       string
 	Kind        string
 	Preemptible bool
 	GpuType     string
@@ -741,14 +711,15 @@ type RecentShapesRow struct {
 	Starts      int32
 }
 
-// By purchase market and GPU model: the largest CPU, memory and GPUs placed
-// platform containers reserved, the most disks one attached, and the bytes
-// of platform volumes they read with how many started, among the newest
+// By account (its owner key: platform or the connection id), purchase market and
+// GPU model: the largest CPU, memory and GPUs placed fleet containers
+// reserved, the most disks one attached, and the bytes of volumes they
+// read with how many started, among the newest
 // containers created within the window, up to the sample (recent); the
 // largest shape among those created within the warm window (started),
 // which sizes the warm floor; the largest batch of them within the warm
 // window (burst), which the market keeps room for; and what the placed
-// Spot-tolerant platform CPU containers of the sample created within the
+// Spot-tolerant CPU containers of the sample created within the
 // arrival window reserve, less their largest batch (arrived): a steady rate
 // of work, which a single burst is not. A batch is
 // arrivals less than batch_quiet apart, at most batch_max long, as
@@ -772,6 +743,7 @@ func (q *Queries) RecentShapes(ctx context.Context, arg RecentShapesParams) ([]R
 	for rows.Next() {
 		var i RecentShapesRow
 		if err := rows.Scan(
+			&i.Owner,
 			&i.Kind,
 			&i.Preemptible,
 			&i.GpuType,

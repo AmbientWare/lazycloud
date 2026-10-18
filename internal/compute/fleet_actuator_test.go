@@ -615,6 +615,7 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 func TestARefusedStopCoolsItsOfferSoTheNextPassBuysElsewhere(t *testing.T) {
 	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
+	used(t, o)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c021")
 	run(t, o.pool, "update hosts set instance_type = 'c6a.2xlarge' where id = $1", uuid.UUID(host))
 	ec2.add(fakeInstance{ID: "i-0000000000000c021", State: "running", Type: "c6a.2xlarge"}, host.String())

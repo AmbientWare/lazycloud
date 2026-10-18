@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -84,16 +83,10 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 	if err != nil {
 		return result, err
 	}
-	type owner struct {
-		connection uuid.UUID
-		region     string
-	}
+	type owner struct{ account, region string }
 	groups := map[owner][]ClaimHostActionsRow{}
 	for _, h := range claimed {
-		key := owner{region: h.Region}
-		if h.ConnectionID != nil {
-			key.connection = *h.ConnectionID
-		}
+		key := owner{account: hostOwner(h.ConnectionID), region: h.Region}
 		groups[key] = append(groups[key], h)
 	}
 	for key, hosts := range groups {
@@ -118,13 +111,13 @@ func (c *Compute) Actuate(ctx context.Context, logger *slog.Logger) (ActuateResu
 	return result, nil
 }
 
-// actuateRegion makes the calls of one owner's claimed hosts in region.
+// actuateRegion makes the calls of one account's claimed hosts in region.
 func (c *Compute) actuateRegion(ctx context.Context, logger *slog.Logger, region string, hosts []ClaimHostActionsRow, result *ActuateResult) error {
-	scope, err := c.scopeOf(ctx, hosts[0].ConnectionID)
+	acct, err := c.accountOf(ctx, c.queries, hosts[0].ConnectionID)
 	if err != nil {
 		return err
 	}
-	client := c.aws().ec2(scope, region)
+	client := c.aws().ec2(acct.scope, region)
 	ids := make([]string, len(hosts))
 	for n, h := range hosts {
 		ids[n] = deref(h.InstanceID)
@@ -150,7 +143,7 @@ func (c *Compute) actuateRegion(ctx context.Context, logger *slog.Logger, region
 				err = c.startReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], result)
 			}
 		case PhaseTerminating:
-			err = c.terminateHost(ctx, logger, scope, h, instance, seen, result)
+			err = c.terminateHost(ctx, logger, acct.scope, h, instance, seen, result)
 		case PhaseRequested, PhaseProvisioning, PhaseBooting, PhaseJoining, PhaseReady, PhaseDraining,
 			PhasePreparing, PhaseStopped, PhaseDeleted, PhaseFailed:
 			// The claim moves a draining host to terminating and selects none
@@ -344,14 +337,14 @@ func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimHostAction
 		zone = h.AvailabilityZoneID
 	}
 	if err := q.InsertCooldown(ctx, InsertCooldownParams{
-		ConnectionKey: string(KindPlatform), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
+		ConnectionKey: hostOwner(h.ConnectionID), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
 		Reason: truncate(describeAWSError(refusal)),
 	}); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)
 	}
 	if quotaRefusal(code) {
-		return c.refuseQuota(ctx, q, h.Region, h.InstanceType, Market(*h.Market))
+		return c.refuseQuota(ctx, q, hostOwner(h.ConnectionID), h.Region, h.InstanceType, Market(*h.Market))
 	}
 	return nil
 }
@@ -593,19 +586,4 @@ func (c *Compute) terminate(ctx context.Context, scope awsScope, region, instanc
 		return fmt.Errorf("terminate %s: %w", instance, err)
 	}
 	return nil
-}
-
-// scopeOf is the credentials scope of the platform or a connection.
-func (c *Compute) scopeOf(ctx context.Context, connection *uuid.UUID) (awsScope, error) {
-	if connection == nil {
-		return awsScope{key: string(KindPlatform)}, nil
-	}
-	row, err := c.queries.ConnectionScope(ctx, *connection)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return awsScope{}, errors.New("the connection has no active authorization")
-	}
-	if err != nil {
-		return awsScope{}, fmt.Errorf("read connection scope: %w", err)
-	}
-	return c.aws().assume(row.RoleArn, row.ExternalID, "lazycloud-fleet-"+connection.String()[:8], connection.String()), nil
 }

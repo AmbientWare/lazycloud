@@ -439,8 +439,11 @@ from hosts h join containers c on c.capacity_host_id = h.id where c.id = $1 and 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.HourlyMicros == nil || *summary.HourlyMicros != int64(want) {
-		t.Fatalf("connection estimate %v µ$/h, want %d", summary.HourlyMicros, want)
+	// The estimate is every host's recorded price, the warm ones the
+	// account keeps included.
+	total := scan[int64](t, o.pool, "select sum(hourly_micros)::bigint from hosts where kind = 'connection'")
+	if summary.HourlyMicros == nil || *summary.HourlyMicros != total {
+		t.Fatalf("connection estimate %v µ$/h, want the hosts' %d", summary.HourlyMicros, total)
 	}
 }
 

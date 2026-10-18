@@ -11,12 +11,13 @@ import (
 )
 
 const quotas = `-- name: Quotas :many
-select region, quota_class, market, vcpus, observed_at, coalesce(refused_until > now(), false)::bool as refused
+select owner, region, quota_class, market, vcpus, observed_at, coalesce(refused_until > now(), false)::bool as refused
 from fleet_quotas
-order by region, quota_class, market
+order by owner, region, quota_class, market
 `
 
 type QuotasRow struct {
+	Owner      string
 	Region     string
 	QuotaClass string
 	Market     string
@@ -35,6 +36,7 @@ func (q *Queries) Quotas(ctx context.Context) ([]QuotasRow, error) {
 	for rows.Next() {
 		var i QuotasRow
 		if err := rows.Scan(
+			&i.Owner,
 			&i.Region,
 			&i.QuotaClass,
 			&i.Market,
@@ -53,22 +55,24 @@ func (q *Queries) Quotas(ctx context.Context) ([]QuotasRow, error) {
 }
 
 const refuseQuota = `-- name: RefuseQuota :exec
-insert into fleet_quotas (region, quota_class, market, refused_until)
-values ($1, $2, $3, now() + make_interval(secs => $4::float8))
-on conflict (region, quota_class, market) do update set refused_until = excluded.refused_until
+insert into fleet_quotas (owner, region, quota_class, market, refused_until)
+values ($1, $2, $3, $4, now() + make_interval(secs => $5::float8))
+on conflict (owner, region, quota_class, market) do update set refused_until = excluded.refused_until
 `
 
 type RefuseQuotaParams struct {
+	Owner      string
 	Region     string
 	QuotaClass string
 	Market     string
 	Seconds    float64
 }
 
-// EC2 refused a launch or start for quota: the class has no room in the
-// region until the cooldown ends, whatever the quota read said.
+// EC2 refused one account a launch or start for quota: the class has no
+// room in the region until the cooldown ends, whatever the quota read said.
 func (q *Queries) RefuseQuota(ctx context.Context, arg RefuseQuotaParams) error {
 	_, err := q.db.Exec(ctx, refuseQuota,
+		arg.Owner,
 		arg.Region,
 		arg.QuotaClass,
 		arg.Market,
@@ -78,23 +82,25 @@ func (q *Queries) RefuseQuota(ctx context.Context, arg RefuseQuotaParams) error 
 }
 
 const upsertQuotas = `-- name: UpsertQuotas :exec
-insert into fleet_quotas (region, quota_class, market, vcpus, observed_at)
-select $1::text, unnest($2::text[]), unnest($3::text[]), unnest($4::integer[]), now()
-on conflict (region, quota_class, market) do update
+insert into fleet_quotas (owner, region, quota_class, market, vcpus, observed_at)
+select $1::text, $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::integer[]), now()
+on conflict (owner, region, quota_class, market) do update
 set vcpus = excluded.vcpus, observed_at = excluded.observed_at
 `
 
 type UpsertQuotasParams struct {
+	Owner   string
 	Region  string
 	Classes []string
 	Markets []string
 	Vcpus   []int32
 }
 
-// One region's EC2 vCPU quotas, in one statement. The arrays have one
-// element per quota.
+// One account's EC2 vCPU quotas in one region, in one statement. The
+// arrays have one element per quota.
 func (q *Queries) UpsertQuotas(ctx context.Context, arg UpsertQuotasParams) error {
 	_, err := q.db.Exec(ctx, upsertQuotas,
+		arg.Owner,
 		arg.Region,
 		arg.Classes,
 		arg.Markets,
