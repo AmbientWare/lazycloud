@@ -109,6 +109,7 @@
                     "ec2:DescribeRouteTables",
                     "ec2:DescribeSecurityGroups",
                     "ec2:DescribeVpcEndpoints",
+                    "ec2:DescribeSecurityGroupRules",
                     "servicequotas:GetServiceQuota",
                     "sts:GetCallerIdentity",
                     "ssm:GetParameters"
@@ -169,12 +170,12 @@
                       "ec2:CreateAction": [
                         "RunInstances",
                         "AuthorizeSecurityGroupIngress",
-                        "ec2:CreateVpc",
-                        "ec2:CreateSubnet",
-                        "ec2:CreateInternetGateway",
-                        "ec2:CreateRouteTable",
-                        "ec2:CreateSecurityGroup",
-                        "ec2:CreateVpcEndpoint"
+                        "CreateVpc",
+                        "CreateSubnet",
+                        "CreateInternetGateway",
+                        "CreateRouteTable",
+                        "CreateSecurityGroup",
+                        "CreateVpcEndpoint"
                       ]
                     }
                   }
@@ -222,7 +223,8 @@
                     "ec2:CreateInternetGateway",
                     "ec2:CreateRouteTable",
                     "ec2:CreateSecurityGroup",
-                    "ec2:CreateVpcEndpoint"
+                    "ec2:CreateVpcEndpoint",
+                    "ec2:AuthorizeSecurityGroupIngress"
                   ],
                   "Resource": {
                     "Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:*"

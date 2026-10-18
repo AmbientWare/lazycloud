@@ -1,6 +1,7 @@
 package compute_test
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"reflect"
@@ -20,8 +21,9 @@ import (
 // TestRealEC2Network makes a fleet network in a real account, checks its
 // shape, makes it again without creating anything new, and deletes it. It
 // runs only with LAZYCLOUD_EC2_ACCEPTANCE_PROFILE naming an AWS profile, in
-// acceptanceRegion(), under a fleet name of its own; cleanup deletes
-// whatever of the network is left.
+// acceptanceRegion(), under a fleet name of its own or
+// LAZYCLOUD_EC2_ACCEPTANCE_FLEET, the one a connection role's tag conditions
+// name; cleanup deletes whatever of the network is left.
 func TestRealEC2Network(t *testing.T) {
 	t.Parallel()
 	profile := os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_PROFILE")
@@ -33,7 +35,7 @@ func TestRealEC2Network(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fleet := "acceptance-net-" + uuid.NewString()[:8]
+	fleet := cmp.Or(os.Getenv("LAZYCLOUD_EC2_ACCEPTANCE_FLEET"), "acceptance-net-"+uuid.NewString()[:8])
 	c := compute.NewCompute(nil, nil, compute.Config{Fleet: compute.Fleet{Name: fleet, AWS: cfg}})
 	client := ec2.NewFromConfig(cfg)
 	t.Cleanup(func() {

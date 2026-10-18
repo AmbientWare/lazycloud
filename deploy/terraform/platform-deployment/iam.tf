@@ -65,7 +65,7 @@ locals {
   ec2_arn      = "${local.arn_prefix}:ec2:*:${local.account_id}"
   fleet_network_creates = [
     "ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateInternetGateway", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup",
-    "ec2:CreateVpcEndpoint",
+    "ec2:CreateVpcEndpoint", "ec2:AuthorizeSecurityGroupIngress",
   ]
 }
 
@@ -223,7 +223,7 @@ data "aws_iam_policy_document" "control_plane" {
     condition {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
-      values   = concat(["RunInstances", "AuthorizeSecurityGroupIngress"], local.fleet_network_creates)
+      values   = concat(["RunInstances"], [for a in local.fleet_network_creates : trimprefix(a, "ec2:")])
     }
   }
 
