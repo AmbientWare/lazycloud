@@ -159,8 +159,6 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): Schema
     revision: 1,
     hosts_workloads: phase === "ready",
     can_manage_existing_capacity: phase === "ready",
-    warm_cpu: true,
-    warm_gpu: true,
     available_actions: phase === "ready" ? ["validate", "reconnect", "remove"] : [],
     detail: "AWS connection state",
     created_at: "2026-07-20T00:00:00Z",

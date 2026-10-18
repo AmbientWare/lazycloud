@@ -252,18 +252,10 @@ order by market;
 
 -- name: HostingConnections :many
 -- Connections that take new workloads, with the networks of their active
--- authorization, whether an active workspace uses the connection, and
--- whether their markets keep CPU and GPU reserves: the connection's warm
--- CPU or warm GPU is on and an active workspace uses it. Each row is
--- share-locked so no connection leaves hosting while the pass that read it
--- writes hosts into it.
-select cc.id, a.networks, used.active as in_use,
-       (cc.warm_cpu and used.active)::boolean as cpu_reserves,
-       (cc.warm_gpu and used.active)::boolean as gpu_reserves
+-- authorization. Each row is share-locked so no connection leaves hosting
+-- while the pass that read it writes hosts into it.
+select cc.id, a.networks
 from cloud_connections cc
-cross join lateral (
-    select exists (select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active') as active
-) used
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
 where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 order by cc.id

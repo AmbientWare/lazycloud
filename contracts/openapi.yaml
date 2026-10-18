@@ -3004,22 +3004,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AwsConnectionEnvelope" }
         default: { $ref: "#/components/responses/Error" }
-    patch:
-      operationId: updateAwsConnection
-      tags: [compute]
-      summary: Change the connection's settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AwsConnectionUpdate" }
-      responses:
-        "200":
-          description: The connection
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AwsConnection" }
-        default: { $ref: "#/components/responses/Error" }
 
   /v1/aws-connection/validate:
     post:
@@ -7141,7 +7125,7 @@ components:
     AwsConnection:
       type: object
       required: [id, account_id, phase, revision, hosts_workloads, can_manage_existing_capacity,
-                 warm_cpu, warm_gpu, available_actions, detail, created_at, updated_at]
+                 available_actions, detail, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         account_id:
@@ -7153,12 +7137,6 @@ components:
           description: New workloads can be placed in the account.
           type: boolean
         can_manage_existing_capacity: { type: boolean }
-        warm_cpu:
-          description: Keeps CPU hosts ready while a workspace uses the connection.
-          type: boolean
-        warm_gpu:
-          description: Keeps GPU hosts ready while a workspace uses the connection.
-          type: boolean
         available_actions:
           type: array
           items: { $ref: "#/components/schemas/AwsConnectionAction" }
@@ -7178,15 +7156,6 @@ components:
       type: object
       properties:
         connection: { $ref: "#/components/schemas/AwsConnection" }
-
-    AwsConnectionUpdate:
-      description: The settings to change; an omitted one keeps its value.
-      type: object
-      minProperties: 1
-      additionalProperties: false
-      properties:
-        warm_cpu: { type: boolean }
-        warm_gpu: { type: boolean }
 
     AwsNetwork:
       type: object

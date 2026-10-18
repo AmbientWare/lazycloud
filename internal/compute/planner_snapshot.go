@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -135,8 +136,11 @@ func readFleet(ctx context.Context, q *Queries, p Policy, now time.Time, cooldow
 	for _, m := range markets {
 		r.markets[m.Market] = m
 	}
-	if r.connections, err = q.HostingConnections(ctx); err != nil {
-		return r, fmt.Errorf("read connections: %w", err)
+	if slices.ContainsFunc(r.pending, func(g PendingDemandRow) bool { return g.ConnectionID != nil }) ||
+		slices.ContainsFunc(r.hosts, func(h PlannerHostsRow) bool { return h.ConnectionID != nil }) {
+		if r.connections, err = q.HostingConnections(ctx); err != nil {
+			return r, fmt.Errorf("read connections: %w", err)
+		}
 	}
 	return r, nil
 }

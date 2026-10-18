@@ -64,8 +64,6 @@ def _connection(phase: str, **extra: object) -> dict[str, object]:
         "revision": 2,
         "hosts_workloads": phase == "ready",
         "can_manage_existing_capacity": phase == "ready",
-        "warm_cpu": True,
-        "warm_gpu": True,
         "available_actions": [],
         "detail": "",
         "created_at": NOW,

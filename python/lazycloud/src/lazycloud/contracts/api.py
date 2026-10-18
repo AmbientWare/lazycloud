@@ -1749,14 +1749,6 @@ class AwsCustomerAction(APIModel):
     url: str
 
 
-class AwsConnectionUpdate(APIModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    warm_cpu: bool | None = None
-    warm_gpu: bool | None = None
-
-
 class SubnetId(RootModel[str]):
     root: Annotated[str, Field(max_length=128, min_length=1)]
 
@@ -3080,12 +3072,6 @@ class AwsConnection(APIModel):
         bool, Field(description="New workloads can be placed in the account.")
     ]
     can_manage_existing_capacity: bool
-    warm_cpu: Annotated[
-        bool, Field(description="Keeps CPU hosts ready while a workspace uses the connection.")
-    ]
-    warm_gpu: Annotated[
-        bool, Field(description="Keeps GPU hosts ready while a workspace uses the connection.")
-    ]
     available_actions: list[AwsConnectionAction]
     detail: str
     customer_action: AwsCustomerAction | None = None

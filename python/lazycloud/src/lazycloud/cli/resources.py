@@ -4,7 +4,6 @@ import subprocess
 import sys
 import time
 import webbrowser
-from enum import Enum
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -35,7 +34,6 @@ from lazycloud.contracts.api import (
     AwsConnectionAuthorization,
     AwsConnectionPhase,
     AwsConnectionRequest,
-    AwsConnectionUpdate,
     AwsNetwork,
     AwsReconnectRequest,
     ComputeInstancePage,
@@ -438,35 +436,6 @@ def cloud_retry(
     )
 
 
-class WarmHosts(str, Enum):
-    cpu = "cpu"
-    gpu = "gpu"
-
-
-@cloud_app.command("warm-capacity")
-def cloud_warm_capacity(
-    ctx: typer.Context,
-    hosts: Annotated[WarmHosts, typer.Argument(metavar="cpu|gpu")],
-    enabled: Annotated[bool, typer.Argument(metavar="on|off")],
-) -> None:
-    """Turn warm CPU or GPU hosts on or off in the connected AWS account."""
-    update = (
-        AwsConnectionUpdate(warm_cpu=enabled)
-        if hosts is WarmHosts.cpu
-        else AwsConnectionUpdate(warm_gpu=enabled)
-    )
-    response = _compute().update_aws(update)
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=result_card(
-            json_default(_connection_summary(response)),
-            title=f"Warm {hosts.value.upper()} " + ("enabled" if enabled else "disabled"),
-            tone="success",
-        ),
-    )
-
-
 _CREATE_STACK = (
     "The link below opens the stack in the AWS Console. Review it, tick the IAM "
     "acknowledgement and choose Create stack. LazyCloud checks the connection once the "
@@ -517,8 +486,6 @@ def _connection_summary(response: AwsConnection) -> dict[str, object]:
     summary: dict[str, object] = {
         "account_id": response.account_id,
         "phase": response.phase.value,
-        "warm CPU": "enabled" if response.warm_cpu else "disabled",
-        "warm GPU": "enabled" if response.warm_gpu else "disabled",
     }
     if response.detail:
         summary["detail"] = response.detail

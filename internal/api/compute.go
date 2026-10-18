@@ -365,7 +365,7 @@ func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	out := apitypes.AwsConnection{
 		Id: conn.ID, AccountId: conn.AWSAccountID, Phase: apitypes.AwsConnectionPhase(conn.Phase), Revision: conn.Revision,
-		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(), WarmCpu: conn.WarmCPU, WarmGpu: conn.WarmGPU,
+		HostsWorkloads: conn.HostsWorkloads(), CanManageExistingCapacity: conn.ManagesCapacity(),
 		AvailableActions: []apitypes.AwsConnectionAction{}, Detail: conn.Detail(), NextRetryAt: conn.NextRetryAt,
 		ActiveAuthorization: authorizationOut(conn.Active), PendingAuthorization: authorizationOut(conn.Pending),
 		RetiringAuthorization: authorizationOut(conn.Retiring), CreatedAt: conn.CreatedAt, UpdatedAt: conn.UpdatedAt,
@@ -461,19 +461,6 @@ func (s *Server) DisconnectAws(ctx context.Context, _ DisconnectAwsRequestObject
 		out.Connection = &c
 	}
 	return out, nil
-}
-
-// UpdateAwsConnection changes the connection's settings.
-func (s *Server) UpdateAwsConnection(ctx context.Context, req UpdateAwsConnectionRequestObject) (UpdateAwsConnectionResponseObject, error) {
-	p, err := s.account(ctx, "change the AWS connection")
-	if err != nil {
-		return nil, err
-	}
-	conn, err := s.owners.Compute.UpdateConnection(ctx, p.User, compute.ConnectionSettings{WarmCPU: req.Body.WarmCpu, WarmGPU: req.Body.WarmGpu})
-	if err != nil {
-		return nil, err
-	}
-	return UpdateAwsConnection200JSONResponse(s.connectionOut(conn)), nil
 }
 
 // ValidateAwsConnection checks the connection's authorization now.

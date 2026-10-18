@@ -177,10 +177,3 @@ where id = @id;
 
 -- name: RequestRemoval :exec
 update cloud_connections set removal_requested_at = now() where id = @id;
-
--- name: UpdateConnectionSettings :exec
-update cloud_connections
-set warm_cpu = coalesce(sqlc.narg(warm_cpu)::boolean, warm_cpu),
-    warm_gpu = coalesce(sqlc.narg(warm_gpu)::boolean, warm_gpu),
-    updated_at = now()
-where id = @id;
