@@ -1093,3 +1093,36 @@ func TestABuildAfterIdleResumesAReserveAndLaunchesNothing(t *testing.T) {
 		t.Fatalf("plan once arrivals settled %+v, want nothing bought", r)
 	}
 }
+
+// A connected account an active workspace uses keeps what the platform
+// keeps in the same networks: the same hosts and reserves, of the same
+// types, markets and sleep modes, in the same zones.
+func TestAConnectedAccountKeepsThePlatformsReserves(t *testing.T) {
+	t.Parallel()
+	bought := func(o owners) []string {
+		plan(t, o)
+		return scan[[]string](t, o.pool, `
+select coalesce(array_agg(instance_type || ' ' || market || ' ' || coalesce(reserve_mode, 'serving') || ' ' || availability_zone_id
+                          order by 1), '{}')
+from hosts where phase = 'requested'`)
+	}
+	platform := newOwners(t, fleetConfig(compute.Fleet{Networks: map[string]compute.Network{
+		"us-east-2": {VPCID: "vpc-customer", SecurityGroupID: "sg-customer", Subnets: []compute.Subnet{
+			{ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
+			{ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
+			{ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
+		}},
+	}}))
+	spotPrices(t, platform)
+	used(t, platform)
+	o, _, customer := connectionFleet(t)
+	spotPrices(t, o)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
+	want, got := bought(platform), bought(o)
+	if len(want) == 0 || !slices.Equal(got, want) {
+		t.Fatalf("connected account bought %v, want the platform's %v", got, want)
+	}
+}
