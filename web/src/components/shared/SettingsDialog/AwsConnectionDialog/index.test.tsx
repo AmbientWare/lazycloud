@@ -90,7 +90,7 @@ describe("AWS connection dialog", () => {
     const { queryClient } = renderDialog(ready);
 
     fireEvent.click(screen.getByRole("button", { name: "About warm GPU" }));
-    expect(await screen.findByText(/Keeps a stopped Spot GPU host/)).toBeInTheDocument();
+    expect(await screen.findByText(/Keeps one more GPU host running/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Warm GPU" }));
     await vi.waitFor(() =>

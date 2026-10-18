@@ -776,6 +776,41 @@ func TestConnectionHostsLaunchTheBakedImageSharedWithTheirAccount(t *testing.T) 
 	}
 }
 
+// A refused connection launch walks the connection's own networks, and the
+// walk leaves the platform's networks as they were: the platform's next
+// launch in the region still goes to the platform's subnets.
+func TestARefusedConnectionLaunchWalksOnlyItsOwnNetworks(t *testing.T) {
+	t.Parallel()
+	emulator := newAWS(t)
+	o := newOwners(t, fleetConfig(emulator.fleet(compute.Fleet{
+		PrincipalARN: platformPrincipal, Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}},
+	})))
+	publish(t, o.compute)
+	customer := newCustomerAWS(emulator)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	ws := newWorkspace(t, o.pool, "prod", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
+	emulator.on("ModifyImageAttribute", func(awsCall) awsReply { return modifyImageAttributeReply() })
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	requestedHost(t, o, ws, `{"placement": {"preemptible": false}}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the connection host in its next pool", n)
+	}
+	requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{"placement": {"preemptible": false}}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the platform host", n)
+	}
+	for _, c := range emulator.calls("RunInstances") {
+		subnet := c.Form.Get("SubnetId")
+		own := c.AccessKey == assumedKey(conn.Active.RoleARN)
+		platformSubnet := strings.HasPrefix(subnet, "subnet-east-") || strings.HasPrefix(subnet, "subnet-west-")
+		if own == platformSubnet {
+			t.Fatalf("launch into %s through the connection role %t, want each owner only in its own subnets", subnet, own)
+		}
+	}
+}
+
 func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})

@@ -189,12 +189,28 @@ func (c *Compute) policy() Policy {
 	return DefaultPolicy()
 }
 
-// connectionPolicy is a connected account's whose reserves do not apply:
-// no headroom and no reserves, so an idle host leaves after the keep
-// window.
-func connectionPolicy(p Policy) Policy {
-	p.Spot, p.OnDemand, p.GPU = MarketReserve{}, MarketReserve{}, nil
-	return p
+// connectionPolicy is the policy a connected account plans under. Its
+// hosts are never stopped, so it keeps no stopped reserves: warm CPU keeps
+// the CPU markets' running headroom and warm GPU the GPU markets'. In a
+// market without either an idle host leaves after the keep window, and at
+// once while no active workspace uses the connection.
+func connectionPolicy(p Policy, conn HostingConnectionsRow) Policy {
+	running := func(r MarketReserve) MarketReserve { return MarketReserve{Warm: r.Warm} }
+	c := p
+	c.Spot, c.OnDemand, c.GPU = MarketReserve{}, MarketReserve{}, nil
+	if conn.CpuReserves {
+		c.Spot, c.OnDemand = running(p.Spot), running(p.OnDemand)
+	}
+	if conn.GpuReserves {
+		c.GPU = make(map[string]GPUReserve, len(p.GPU))
+		for model, r := range p.GPU {
+			c.GPU[model] = GPUReserve{Spot: running(r.Spot), OnDemand: running(r.OnDemand)}
+		}
+	}
+	if !conn.InUse {
+		c.Keep = 0
+	}
+	return c
 }
 
 // fleetPass is one planning pass: its snapshot, its decisions and the
@@ -389,19 +405,11 @@ func (ps *fleetPass) rooms(hosts []FleetHost) (hostRoom, reserveRoom int) {
 
 // connections plans each connected account that takes workloads: its
 // pending containers on its hosts or new ones within its own networks, and
-// its idle hosts' departure. Its accounts pay for their hosts, so no margin
-// applies. A connection keeps the platform's CPU reserves while its CPU
-// reserves apply and its GPU reserves while its GPU reserves apply; in a
-// market without reserves its idle hosts leave after the keep window.
+// its idle hosts' departure under connectionPolicy. Its accounts pay for
+// their hosts, so no margin applies.
 func (ps *fleetPass) connections(groups []pendingGroup) error {
 	for _, conn := range ps.r.connections {
-		p := connectionPolicy(ps.p)
-		if conn.CpuReserves {
-			p.Spot, p.OnDemand = ps.p.Spot, ps.p.OnDemand
-		}
-		if conn.GpuReserves {
-			p.GPU = ps.p.GPU
-		}
+		p := connectionPolicy(ps.p, conn)
 		var hosts []FleetHost
 		for _, row := range ps.r.hosts {
 			if ownedBy(row, &conn.ID) {

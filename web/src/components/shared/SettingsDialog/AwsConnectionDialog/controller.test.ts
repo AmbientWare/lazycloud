@@ -50,12 +50,13 @@ describe("AWS connection controller", () => {
     ]);
   });
 
-  it("runs one recovery action at a time and keeps a failed one retryable under its own error", async () => {
+  it("runs one recovery action at a time, keeps a failed one retryable under its own error and stays open", async () => {
     const validation = deferred<Response>();
     const sent = serve({
       "POST /v1/aws-connection/validate": [unavailable, () => validation.promise],
     });
-    const { result } = renderController(testQueryClient(), vi.fn());
+    const onClose = vi.fn();
+    const { result } = renderController(testQueryClient(), onClose);
 
     await runAndSettle(result, () => result.current.validate());
     expect(result.current.recoveryError?.message).toBe("AWS is unavailable");
@@ -72,6 +73,8 @@ describe("AWS connection controller", () => {
     await waitFor(() => expect(result.current.activeAction).toBeNull());
 
     expect(result.current.recoveryError).toBeNull();
+    // A check leaves the dialog open on the connection's new state.
+    expect(onClose).not.toHaveBeenCalled();
     expect(sent.map((call) => `${call.method} ${call.path}`)).toEqual([
       "POST /v1/aws-connection/validate",
       "POST /v1/aws-connection/validate",

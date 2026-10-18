@@ -555,10 +555,10 @@ func TestAPendingContainerResumesAReserveThatJoinsAndTakesIt(t *testing.T) {
 	}
 }
 
-// A connected account keeps the platform's CPU reserves while warm CPU is
-// on and its GPU reserves while warm GPU is on, each only once a workspace
-// uses the connection.
-func TestAConnectedAccountKeepsEachReserveOnlyWhileItIsWarmAndAWorkspaceUsesIt(t *testing.T) {
+// A connected account keeps the platform's running headroom while warm CPU
+// is on and a workspace uses the connection, and buys no stopped reserves:
+// its hosts are never stopped.
+func TestAConnectedAccountKeepsWarmHostsOnlyWhileAWorkspaceUsesIt(t *testing.T) {
 	t.Parallel()
 	o, _, customer := connectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
@@ -573,14 +573,8 @@ func TestAConnectedAccountKeepsEachReserveOnlyWhileItIsWarmAndAWorkspaceUsesIt(t
 	}
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
-	warm(t, o, alice, compute.ConnectionSettings{WarmGPU: new(false)})
-	cpuWarm, cpuReserves := bought("gpu_count = 0 and reserve_mode is null"), bought("gpu_count = 0 and reserve_mode is not null")
-	if gpus := bought("gpu_count > 0"); cpuWarm == 0 || cpuReserves == 0 || gpus != 0 {
-		t.Fatalf("bought %d warm CPU hosts, %d CPU reserves and %d GPU hosts with warm GPU off, want CPU ones only", cpuWarm, cpuReserves, gpus)
-	}
-	warm(t, o, alice, compute.ConnectionSettings{WarmGPU: new(true)})
-	if n := bought("gpu_count > 0 and reserve_mode is not null"); n == 0 {
-		t.Fatal("bought no GPU reserves with warm GPU on")
+	if warmHosts, reserves := bought("reserve_mode is null"), bought("reserve_mode is not null"); warmHosts == 0 || reserves != 0 {
+		t.Fatalf("bought %d warm hosts and %d reserves, want warm hosts only", warmHosts, reserves)
 	}
 }
 
@@ -626,6 +620,29 @@ func TestAConnectedAccountsIdleHostLeavesAfterTheKeepWindow(t *testing.T) {
 	}
 	if phase, _ := hostPhase(t, o.pool, recent); phase != string(compute.PhaseDraining) {
 		t.Fatalf("connection host whose work ended is %s, want draining", phase)
+	}
+}
+
+// Once no active workspace uses a connected account, its idle hosts leave
+// at once, warm ones and those whose work just ended alike.
+func TestAConnectedAccountNoWorkspaceUsesKeepsNoHosts(t *testing.T) {
+	t.Parallel()
+	o, _, customer := connectionFleet(t)
+	alice := newUser(t, o.pool, "alice@example.com")
+	conn := connected(t, o, customer, alice)
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, dev)
+	recent := idleHost(t, o, "m7i.large", "i-0000000000000f903")
+	run(t, o.pool, "update hosts set kind = 'connection', connection_id = $1 where id = $2", conn.ID, uuid.UUID(recent))
+	work := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"preemptible": false}}`), 1000, gib)
+	placeOn(t, o, work, recent)
+	planCapacity(t, o)
+
+	run(t, o.pool, "update containers set state = 'stopped', stop_reason = 'stopped', stopped_at = now() where id = $1", work)
+	run(t, o.pool, "update workspaces set state = 'deleting', deletion_requested_at = now() where id = $1", dev)
+	planCapacity(t, o)
+	if phase, _ := hostPhase(t, o.pool, recent); phase != string(compute.PhaseDraining) {
+		t.Fatalf("connection host after its workspace was deleted is %s, want draining", phase)
 	}
 }
 

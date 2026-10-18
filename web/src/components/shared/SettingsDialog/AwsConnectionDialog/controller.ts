@@ -102,8 +102,9 @@ export function useAwsConnectionController({
         setLeftInAws(outcome.leftInAws);
         return;
       }
-      // Creating and reconnecting leave the dialog open on the AWS Console link.
-      if (outcome.action !== "create" && outcome.action !== "reconnect") onClose();
+      // Removing closes the dialog; every other action leaves it open on the
+      // connection's new state.
+      if (outcome.action === "remove") onClose();
     },
     onSettled: () => {
       activeActionRef.current = null;

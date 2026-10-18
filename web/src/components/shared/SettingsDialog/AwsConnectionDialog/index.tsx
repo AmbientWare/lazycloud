@@ -368,10 +368,10 @@ function ConnectionActions({
             pending={settingsPending}
             onChange={(on) => onUpdateSettings({ warm_cpu: on })}
           >
-            Keeps CPU hosts running in your AWS account, and stopped ones ready to resume, once a
-            workspace uses this connection. CPU work starts in seconds instead of waiting for a new
-            instance. You pay AWS for the running hosts and the stopped hosts' disks. Turn it off to
-            launch instances only when work arrives; they end 2 minutes after it finishes.
+            Keeps CPU hosts running in your AWS account once a workspace uses this connection, so
+            CPU work starts in seconds instead of waiting for a new instance. You pay AWS for the
+            running hosts. Turn it off to launch instances only when work arrives; they end 2
+            minutes after it finishes.
           </WarmSetting>
           <WarmSetting
             id="aws-warm-gpu"
@@ -380,12 +380,10 @@ function ConnectionActions({
             pending={settingsPending}
             onChange={(on) => onUpdateSettings({ warm_gpu: on })}
           >
-            Keeps a stopped Spot GPU host with each T4, A10G and L4 card ready to resume once a
-            workspace uses this connection, and more as GPU work grows. GPU work starts in about a
-            minute instead of the 2 to 3 minutes a new instance takes. You pay AWS for the stopped
-            hosts&apos; disks, the minutes each runs while it is prepared, and the hosts kept
-            running beside busy GPU work. Turn it off to launch GPU instances only when work
-            arrives.
+            Keeps one more GPU host running for every four GPU jobs once a workspace uses this
+            connection, so the next GPU job starts at once instead of waiting 2 to 3 minutes for a
+            new instance. You pay AWS for the hosts kept running. Turn it off to launch GPU
+            instances only when work arrives.
           </WarmSetting>
         </div>
       ) : null}
