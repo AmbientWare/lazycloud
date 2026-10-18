@@ -194,7 +194,8 @@ var errDrainTimeout = errors.New("the instances did not end within the drain's b
 // revoke removes a disconnected account from AWS through its access
 // authorization: the active one, or the pending one for a setup that never
 // finished. It terminates every instance tagged as one of the connection's
-// hosts, then deletes every generation's stack not yet confirmed deleted.
+// hosts, deletes its networks, then deletes every generation's stack not
+// yet confirmed deleted.
 // The access stack goes last because it holds the role. The connection is
 // deleted once every stack is gone.
 func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
@@ -221,6 +222,9 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	if conn.Active != nil && conn.Phase == ConnRevoking {
 		left, err := c.sweepInstances(ctx, scope, conn)
 		if err != nil || left > 0 {
+			return outcome{err: err, action: c.instancesAction(conn)}
+		}
+		if waiting, err := c.deleteNetworks(ctx, scope, conn); err != nil || waiting {
 			return outcome{err: err, action: c.instancesAction(conn)}
 		}
 	}
@@ -262,6 +266,31 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 		return moveTo(conn, ConnVerifying, ptr(time.Now().Add(10*time.Second)))
 	}
 	return c.finishRevoke(ctx, conn)
+}
+
+// deleteNetworks deletes the connection's network in each region it holds
+// one, once its instances are gone, and reports whether one still waits on
+// AWS to release what the instances held.
+func (c *Compute) deleteNetworks(ctx context.Context, scope awsScope, conn Connection) (bool, error) {
+	regions, err := c.queries.AccountNetworkRegions(ctx, conn.ID.String())
+	if err != nil {
+		return false, fmt.Errorf("read connection networks: %w", err)
+	}
+	waiting := false
+	for _, region := range regions {
+		gone, err := c.deleteNetwork(ctx, scope, region)
+		if err != nil {
+			return false, refusedOr(err, "delete the network in %s", region)
+		}
+		if !gone {
+			waiting = true
+			continue
+		}
+		if err := c.queries.DeleteFleetNetwork(ctx, DeleteFleetNetworkParams{Owner: conn.ID.String(), Region: region}); err != nil {
+			return false, fmt.Errorf("forget network: %w", err)
+		}
+	}
+	return waiting, nil
 }
 
 // sweepInstances cancels the Spot requests and terminates the running

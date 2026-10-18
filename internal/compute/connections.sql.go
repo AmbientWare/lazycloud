@@ -338,12 +338,16 @@ with markets as (
     delete from fleet_markets where starts_with(market, $1::uuid::text || '/')
 ), cooldowns as (
     delete from capacity_cooldowns where connection_key = $1::uuid::text
+), quotas as (
+    delete from fleet_quotas where owner = $1::uuid::text
+), networks as (
+    delete from fleet_networks where owner = $1::uuid::text
 )
 delete from cloud_connections where id = $1::uuid
 `
 
 // The connection goes with the fleet state keyed by it: its published
-// markets and its pools' cooldowns.
+// markets, its pools' cooldowns, its quotas and its networks.
 func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConnection, id)
 	return err

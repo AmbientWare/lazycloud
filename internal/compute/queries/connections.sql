@@ -69,11 +69,15 @@ where id = @id;
 
 -- name: DeleteConnection :exec
 -- The connection goes with the fleet state keyed by it: its published
--- markets and its pools' cooldowns.
+-- markets, its pools' cooldowns, its quotas and its networks.
 with markets as (
     delete from fleet_markets where starts_with(market, sqlc.arg(id)::uuid::text || '/')
 ), cooldowns as (
     delete from capacity_cooldowns where connection_key = sqlc.arg(id)::uuid::text
+), quotas as (
+    delete from fleet_quotas where owner = sqlc.arg(id)::uuid::text
+), networks as (
+    delete from fleet_networks where owner = sqlc.arg(id)::uuid::text
 )
 delete from cloud_connections where id = sqlc.arg(id)::uuid;
 

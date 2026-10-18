@@ -37,7 +37,7 @@ func TestALaunchHoldsUpNoPreemption(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	for name, value := range map[string]string{
-		"LAZYCLOUD_FLEET_NETWORKS":         `{"us-east-2": {"vpc_id": "vpc-1", "security_group_id": "sg-1", "subnets": [{"id": "subnet-1", "zone": "us-east-2a", "zone_id": "use2-az1"}]}}`,
+		"LAZYCLOUD_FLEET_REGIONS":          "us-east-2",
 		"LAZYCLOUD_FLEET_IMAGES":           `{"cpu": {"us-east-2": "ami-1"}, "gpu": {"us-east-2": "ami-2"}}`,
 		"LAZYCLOUD_FLEET_NODE_ROLE_ARN":    "arn:aws:iam::111122223333:role/node",
 		"LAZYCLOUD_FLEET_INSTANCE_PROFILE": "node",
@@ -58,6 +58,8 @@ func TestALaunchHoldsUpNoPreemption(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
+	exec(`insert into fleet_networks (owner, region, network, ensured_at) values ('platform', 'us-east-2',
+'{"vpc_id": "vpc-1", "security_group_id": "sg-1", "subnets": [{"id": "subnet-1", "zone": "us-east-2a", "zone_id": "use2-az1"}]}', now())`)
 	exec(`insert into agent_releases (version, sha256_amd64, target) values ('1.0.0', repeat('a', 64), true)`)
 	exec(`insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, instance_type, market)
 values ('launching', 'offline', 'platform', 'aws', 'requested', 2000, 6442450944, 'us-east-2', 'us-east-2a', 'm7i.large', 'on_demand')`)

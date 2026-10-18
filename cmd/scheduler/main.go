@@ -79,6 +79,8 @@ type ticks struct {
 	// fleet paces capacity planning, launches, retirement, preemption
 	// and connection steps; compute wakes cut it short.
 	fleet time.Duration
+	// networks paces the fleet network check.
+	networks time.Duration
 	// reconcile paces comparing cloud hosts with the provider.
 	reconcile time.Duration
 	// rollup paces folding container metric samples into minute
@@ -104,7 +106,7 @@ func productionTicks() ticks {
 	return ticks{
 		tick: time.Second, safety: 30 * time.Second, leaderCheck: 10 * time.Second, contendedRetry: 100 * time.Millisecond,
 		hostLoss: 5 * time.Second, buildRecovery: 10 * time.Second, sweep: 30 * time.Second, layerSweep: 10 * time.Minute,
-		purge: time.Minute, fleet: 5 * time.Second, reconcile: time.Minute, rollup: 30 * time.Second,
+		purge: time.Minute, fleet: 5 * time.Second, networks: 15 * time.Second, reconcile: time.Minute, rollup: 30 * time.Second,
 		email: 5 * time.Second, housekeeping: time.Minute, deletion: 2 * time.Second,
 		metering: 15 * time.Second, payments: 5 * time.Second, retention: time.Minute,
 	}
@@ -117,7 +119,7 @@ func (t ticks) validate() error {
 	}{
 		{"tick", t.tick}, {"safety", t.safety}, {"leader check", t.leaderCheck}, {"contended retry", t.contendedRetry},
 		{"host loss", t.hostLoss}, {"build recovery", t.buildRecovery}, {"sweep", t.sweep}, {"layer sweep", t.layerSweep},
-		{"purge", t.purge}, {"fleet", t.fleet}, {"reconcile", t.reconcile}, {"rollup", t.rollup},
+		{"purge", t.purge}, {"fleet", t.fleet}, {"networks", t.networks}, {"reconcile", t.reconcile}, {"rollup", t.rollup},
 		{"email", t.email}, {"housekeeping", t.housekeeping}, {"deletion", t.deletion},
 		{"metering", t.metering}, {"payments", t.payments}, {"retention", t.retention},
 	} {
@@ -455,6 +457,16 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 		return p.loop(ctx, cadence{every: t.fleet}, connectionWake, nil, timed("connections", func(ctx context.Context) bool {
 			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "connection pass", "error", err)
+			}
+			return false
+		}))
+	})
+	// Each account's networks, made once it takes hosts and found again
+	// every half hour; a connection that turns ready wakes it.
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: t.networks}, connectionWake, nil, timed("fleet_networks", func(ctx context.Context) bool {
+			if _, err := comp.EnsureNetworks(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "fleet networks incomplete", "error", err)
 			}
 			return false
 		}))
