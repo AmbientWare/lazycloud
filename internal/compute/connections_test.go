@@ -432,6 +432,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	var invalid *compute.InvalidError
 	for name, req := range map[string]compute.ConnectRequest{
 		"a role in another account":     {AWSAccountID: "111111111111", RoleARN: "arn:aws:iam::222222222222:role/lazycloud"},
+		"the platform's own account":    {AWSAccountID: "111122223333"},
 		"an external ID without a role": {AWSAccountID: "111111111111", ExternalID: strings.Repeat("x", 40)},
 	} {
 		if _, err := o.compute.Connect(ctx, alice, req); !errors.As(err, &invalid) {
@@ -581,13 +582,20 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 	}
 	// A host launched under the first generation runs as its role, so the
 	// stack stays until the host drained and is gone.
+	// A stopped reserve runs nothing, so it ends at once.
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Region: "us-east-2", InstanceID: "i-0000000000000f001"})
-	run(t, o.pool, "update hosts set connection_id = $1, authorization_id = $2 where id = $3", conn.ID, first.Active.ID, uuid.UUID(host))
+	reserve := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseStopped,
+		Region: "us-east-2", InstanceID: "i-0000000000000f002"})
+	run(t, o.pool, "update hosts set connection_id = $1, authorization_id = $2 where id = any($3)", conn.ID, first.Active.ID,
+		[]uuid.UUID{uuid.UUID(host), uuid.UUID(reserve)})
 	advance(t, o)
 	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseDraining) || len(emulator.calls("DeleteStack")) != 0 {
 		t.Fatalf("with a host on the old role: host %s, %d DeleteStack calls; want it draining and the stack kept", phase, len(emulator.calls("DeleteStack")))
 	}
-	run(t, o.pool, "update hosts set phase = 'deleted' where id = $1", uuid.UUID(host))
+	if phase, _ := hostPhase(t, o.pool, reserve); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("stopped reserve on the old role is %s, want terminating", phase)
+	}
+	run(t, o.pool, "update hosts set phase = 'deleted' where id = any($1)", []uuid.UUID{uuid.UUID(host), uuid.UUID(reserve)})
 	due(t, o, conn)
 	advance(t, o)
 	deletes := emulator.calls("DeleteStack")
@@ -703,6 +711,9 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 			Tags: map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": uuid.UUID(host).String()}})
 	})
 
+	stopped := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseStopped,
+		Region: "us-east-2", InstanceID: "i-0000000000000c002"})
+	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(stopped))
 	draining, err := o.compute.Disconnect(ctx, alice)
 	if err != nil || draining == nil || draining.Phase != compute.ConnDraining {
 		t.Fatalf("disconnect: %+v %v, want disconnect_draining", draining, err)
@@ -714,6 +725,10 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	if _, err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
+	if phase, _ := hostPhase(t, o.pool, stopped); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("the account's stopped reserve is %s, want terminating", phase)
+	}
+	run(t, o.pool, "update hosts set phase = 'deleted' where id = $1", uuid.UUID(stopped))
 	actuate(t, o)
 	terms := emulator.calls("TerminateInstances")
 	if len(terms) != 1 || terms[0].AccessKey != assumedKey(conn.Active.RoleARN) {
@@ -759,6 +774,36 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	customer.vpcs.with(func() {
 		if len(customer.vpcs.vpcs) != 0 {
 			t.Fatalf("VPCs %v remain in the removed account", customer.vpcs.vpcs)
+		}
+	})
+}
+
+// Two connections reaching one AWS account run in the same networks, so
+// removing one leaves them to the other.
+func TestRemovingOneOfTwoConnectionsToAnAccountKeepsItsNetworks(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, customer := connectionFleet(t)
+	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
+	gone := connected(t, o, customer, alice)
+	connected(t, o, customer, bob)
+	run(t, o.pool, "delete from fleet_networks where owner <> 'platform'")
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		due(t, o, gone)
+		advance(t, o)
+	}
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("alice's connection is %s, want removed", phase)
+	}
+	customer.vpcs.with(func() {
+		if len(customer.vpcs.vpcs) != 1 {
+			t.Fatalf("VPCs %v, want the account's network kept for bob's connection", customer.vpcs.vpcs)
 		}
 	})
 }

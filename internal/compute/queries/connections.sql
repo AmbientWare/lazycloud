@@ -112,13 +112,23 @@ select count(*)::int from hosts
 where authorization_id = @authorization_id and phase not in ('deleted', 'failed');
 
 -- name: DrainAuthorizationHosts :many
--- Hosts launched under a replaced authorization stop taking work; retirement
--- terminates each once it is empty.
-update hosts
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-where authorization_id = @authorization_id and phase in ('ready', 'joining')
-returning id;
+-- Hosts launched under a replaced authorization stop taking work, and
+-- retirement terminates each once it is empty; a reserve, which runs no
+-- work, terminates at once.
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    where h.authorization_id = sqlc.narg(authorization_id)::uuid and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    where h.authorization_id = sqlc.narg(authorization_id)::uuid and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained;
 
 -- name: ConnectionAccess :one
 -- The connected account, the role its active authorization grants and how

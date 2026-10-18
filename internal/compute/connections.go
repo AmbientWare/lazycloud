@@ -329,6 +329,10 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 		// at a role another account set up.
 		return Connection{}, &InvalidError{Message: "LazyCloud generates the external ID; make the role require the one it returns"}
 	}
+	if req.AWSAccountID == c.fleet.AccountID {
+		// The platform's own fleet and its networks run there.
+		return Connection{}, &InvalidError{Message: "LazyCloud's own AWS account cannot be connected"}
+	}
 	if req.RoleARN != "" {
 		m := roleARNPattern.FindStringSubmatch(req.RoleARN)
 		if m == nil || m[2] != req.AWSAccountID {

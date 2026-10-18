@@ -268,27 +268,30 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	return c.finishRevoke(ctx, conn)
 }
 
-// deleteNetworks deletes the connection's network in each region it holds
-// one, once its instances are gone, and reports whether one still waits on
-// AWS to release what the instances held.
+// deleteNetworks deletes the connection's network in every region it may
+// have one, once its instances are gone, and reports whether one still
+// waits on AWS to release what the instances held. Another connection to
+// the same AWS account runs in the same networks, so they stay while one
+// does.
 func (c *Compute) deleteNetworks(ctx context.Context, scope awsScope, conn Connection) (bool, error) {
-	regions, err := c.queries.AccountNetworkRegions(ctx, conn.ID.String())
+	shared, err := c.queries.AccountConnectedElsewhere(ctx, AccountConnectedElsewhereParams{AwsAccountID: conn.AWSAccountID, ID: conn.ID})
+	if err != nil {
+		return false, fmt.Errorf("read connections of the account: %w", err)
+	}
+	if shared {
+		return false, nil
+	}
+	recorded, err := c.queries.AccountNetworkRegions(ctx, conn.ID.String())
 	if err != nil {
 		return false, fmt.Errorf("read connection networks: %w", err)
 	}
 	waiting := false
-	for _, region := range regions {
+	for _, region := range slices.Compact(slices.Sorted(slices.Values(append(recorded, c.fleet.Regions...)))) {
 		gone, err := c.deleteNetwork(ctx, scope, region)
 		if err != nil {
-			return false, refusedOr(err, "delete the network in %s", region)
+			return false, err
 		}
-		if !gone {
-			waiting = true
-			continue
-		}
-		if err := c.queries.DeleteFleetNetwork(ctx, DeleteFleetNetworkParams{Owner: conn.ID.String(), Region: region}); err != nil {
-			return false, fmt.Errorf("forget network: %w", err)
-		}
+		waiting = waiting || !gone
 	}
 	return waiting, nil
 }

@@ -166,30 +166,27 @@ func (q *Queries) ConnectionAccounts(ctx context.Context, connectionID *uuid.UUI
 	return items, nil
 }
 
-const deleteFleetNetwork = `-- name: DeleteFleetNetwork :exec
-delete from fleet_networks where owner = $1 and region = $2
-`
-
-type DeleteFleetNetworkParams struct {
-	Owner  string
-	Region string
-}
-
-func (q *Queries) DeleteFleetNetwork(ctx context.Context, arg DeleteFleetNetworkParams) error {
-	_, err := q.db.Exec(ctx, deleteFleetNetwork, arg.Owner, arg.Region)
-	return err
-}
-
 const drainConnectionHosts = `-- name: DrainConnectionHosts :many
-update hosts h
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-from cloud_connections cc
-where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
-returning h.id
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained
 `
 
-// A disconnecting account's hosts stop taking work.
+// A disconnecting account's hosts stop taking work; its reserves, which
+// run no work, terminate at once.
 func (q *Queries) DrainConnectionHosts(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, drainConnectionHosts)
 	if err != nil {

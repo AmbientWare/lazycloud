@@ -109,13 +109,24 @@ where connection_key = @connection_key and region = @region and availability_zon
   and instance_type = @instance_type and market = @market;
 
 -- name: DrainConnectionHosts :many
--- A disconnecting account's hosts stop taking work.
-update hosts h
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-from cloud_connections cc
-where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
-returning h.id;
+-- A disconnecting account's hosts stop taking work; its reserves, which
+-- run no work, terminate at once.
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained;
 
 -- name: CancelConnectionLaunches :exec
 -- A disconnecting account buys nothing more.
@@ -201,9 +212,6 @@ order by 1;
 insert into fleet_networks (owner, region, network, ensured_at)
 values (@owner, @region, @network, now())
 on conflict (owner, region) do update set network = excluded.network, ensured_at = excluded.ensured_at;
-
--- name: DeleteFleetNetwork :exec
-delete from fleet_networks where owner = @owner and region = @region;
 
 -- name: AccountNetworkRegions :many
 -- The regions an account holds a network in.

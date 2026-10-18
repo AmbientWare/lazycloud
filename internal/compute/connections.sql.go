@@ -354,15 +354,25 @@ func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 }
 
 const drainAuthorizationHosts = `-- name: DrainAuthorizationHosts :many
-update hosts
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-where authorization_id = $1 and phase in ('ready', 'joining')
-returning id
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    where h.authorization_id = $1::uuid and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    where h.authorization_id = $1::uuid and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained
 `
 
-// Hosts launched under a replaced authorization stop taking work; retirement
-// terminates each once it is empty.
+// Hosts launched under a replaced authorization stop taking work, and
+// retirement terminates each once it is empty; a reserve, which runs no
+// work, terminates at once.
 func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, drainAuthorizationHosts, authorizationID)
 	if err != nil {
