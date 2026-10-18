@@ -42,7 +42,7 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withNet, err := withNetworks(ctx, New(pool), []account{{scope: awsScope{key: ownerPlatform}, awsAccount: fleet.AccountID}})
+	withNet, err := (&Compute{fleet: fleet}).withNetworks(ctx, New(pool), []account{{scope: awsScope{key: ownerPlatform}, awsAccount: fleet.AccountID}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // account is an AWS account the fleet runs hosts in: the platform's own,
@@ -92,7 +94,7 @@ func (c *Compute) accounts(ctx context.Context, q *Queries) ([]account, error) {
 	for _, row := range rows {
 		out = append(out, c.connectionAccount(row))
 	}
-	return withNetworks(ctx, q, out)
+	return c.withNetworks(ctx, q, out)
 }
 
 // accountOf is the account of a host that records connection.
@@ -114,21 +116,24 @@ func (c *Compute) accountOf(ctx context.Context, q *Queries, connection *uuid.UU
 		}
 		a = c.connectionAccount(rows[0])
 	}
-	accounts, err := withNetworks(ctx, q, []account{a})
+	accounts, err := c.withNetworks(ctx, q, []account{a})
 	if err != nil {
 		return account{}, err
 	}
 	return accounts[0], nil
 }
 
-// withNetworks fills in each account's networks.
-func withNetworks(ctx context.Context, q *Queries, accounts []account) ([]account, error) {
+// withNetworks fills in each account's networks in the fleet's regions.
+func (c *Compute) withNetworks(ctx context.Context, q *Queries, accounts []account) ([]account, error) {
 	rows, err := q.FleetNetworks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read fleet networks: %w", err)
 	}
 	byOwner := map[string]map[string]Network{}
 	for _, row := range rows {
+		if !slices.Contains(c.fleet.Regions, row.Region) {
+			continue
+		}
 		var n Network
 		if err := json.Unmarshal(row.Network, &n); err != nil {
 			return nil, fmt.Errorf("decode the network of %s in %s: %w", row.Owner, row.Region, err)
@@ -153,41 +158,55 @@ const networkRecheck = 30 * time.Minute
 // networkRecheck ago, and records it. A region that fails is tried again
 // next pass. It reports how many networks it ensured.
 func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int, error) {
-	accounts, err := c.accounts(ctx, c.queries)
-	if err != nil {
-		return 0, err
-	}
 	ensured := 0
 	var failed error
-	for _, a := range accounts {
-		if !a.hosting {
-			continue
+	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		if locked, err := q.LockNetworks(ctx); err != nil || !locked {
+			return err
 		}
-		stale, err := c.queries.StaleNetworks(ctx, StaleNetworksParams{
-			Regions: c.fleet.Regions, Owner: a.key(), Since: time.Now().Add(-networkRecheck),
-		})
+		// Read outside the transaction, which holds no connection's row
+		// while AWS answers.
+		accounts, err := c.accounts(ctx, c.queries)
 		if err != nil {
-			return ensured, fmt.Errorf("read stale networks: %w", err)
+			return err
 		}
-		for _, region := range stale {
-			network, err := c.ensureNetwork(ctx, a.scope, region)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ensured, err
+		rows, err := q.FleetNetworks(ctx)
+		if err != nil {
+			return fmt.Errorf("read fleet networks: %w", err)
+		}
+		fresh := map[[2]string]bool{}
+		for _, row := range rows {
+			fresh[[2]string{row.Owner, row.Region}] = time.Since(row.EnsuredAt) < networkRecheck
+		}
+		for _, a := range accounts {
+			for _, region := range c.fleet.Regions {
+				if !a.hosting || fresh[[2]string{a.key(), region}] {
+					continue
 				}
-				logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
-				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
-				continue
+				network, err := c.ensureNetwork(ctx, a.scope, region)
+				if err != nil {
+					if ctx.Err() != nil {
+						return err
+					}
+					logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
+					failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
+					continue
+				}
+				raw, err := json.Marshal(network)
+				if err != nil {
+					return fmt.Errorf("encode network: %w", err)
+				}
+				if err := q.UpsertFleetNetwork(ctx, UpsertFleetNetworkParams{Owner: a.key(), Region: region, Network: raw}); err != nil {
+					return fmt.Errorf("record network: %w", err)
+				}
+				ensured++
 			}
-			raw, err := json.Marshal(network)
-			if err != nil {
-				return ensured, fmt.Errorf("encode network: %w", err)
-			}
-			if err := c.queries.UpsertFleetNetwork(ctx, UpsertFleetNetworkParams{Owner: a.key(), Region: region, Network: raw}); err != nil {
-				return ensured, fmt.Errorf("record network: %w", err)
-			}
-			ensured++
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("ensure networks: %w", err)
 	}
 	return ensured, failed
 }

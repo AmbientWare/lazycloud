@@ -186,13 +186,13 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // fractions of its size sum lowest after placement, which keeps large
 // holes for large containers.
 // Spot-tolerant work borrows an on-demand fleet CPU host only while one
-// of them still keeps floor free afterwards, so work that cannot run on
-// Spot starts at once.
+// of its account's still keeps floor free afterwards, so work that cannot
+// run on Spot starts at once.
 func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 	holders := 0
 	if r.Preemptible && !floor.Empty() {
 		for _, h := range hosts {
-			if h.keepsFloor(floor) {
+			if h.keepsFloor(floor) && sameOwner(h.Connection, r.Connection) {
 				holders++
 			}
 		}

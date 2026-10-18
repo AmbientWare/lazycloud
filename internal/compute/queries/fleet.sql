@@ -195,18 +195,13 @@ select exists (select 1 from workspaces where connection_id is null and state = 
 
 
 -- name: FleetNetworks :many
--- Every account's networks, by owner key and region.
-select owner, region, network from fleet_networks order by owner, region;
+-- Every account's networks, by owner key and region, and when each was
+-- last found or made.
+select owner, region, network, ensured_at from fleet_networks order by owner, region;
 
--- name: StaleNetworks :many
--- Which of an account's fleet regions hold no network ensured since
--- @since.
-select r.region::text
-from unnest(@regions::text[]) as r(region)
-where not exists (
-    select 1 from fleet_networks n where n.owner = @owner and n.region = r.region and n.ensured_at >= @since
-)
-order by 1;
+-- name: LockNetworks :one
+-- One pass makes networks at a time, so no two make one account's.
+select pg_try_advisory_xact_lock(hashtextextended('fleet-networks', 0))::bool;
 
 -- name: UpsertFleetNetwork :exec
 insert into fleet_networks (owner, region, network, ensured_at)

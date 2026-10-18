@@ -358,26 +358,26 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 }
 
 const fleetNetworks = `-- name: FleetNetworks :many
-select owner, region, network from fleet_networks order by owner, region
+select owner, region, network, ensured_at from fleet_networks order by owner, region
 `
 
-type FleetNetworksRow struct {
-	Owner   string
-	Region  string
-	Network []byte
-}
-
-// Every account's networks, by owner key and region.
-func (q *Queries) FleetNetworks(ctx context.Context) ([]FleetNetworksRow, error) {
+// Every account's networks, by owner key and region, and when each was
+// last found or made.
+func (q *Queries) FleetNetworks(ctx context.Context) ([]FleetNetwork, error) {
 	rows, err := q.db.Query(ctx, fleetNetworks)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []FleetNetworksRow
+	var items []FleetNetwork
 	for rows.Next() {
-		var i FleetNetworksRow
-		if err := rows.Scan(&i.Owner, &i.Region, &i.Network); err != nil {
+		var i FleetNetwork
+		if err := rows.Scan(
+			&i.Owner,
+			&i.Region,
+			&i.Network,
+			&i.EnsuredAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -551,6 +551,18 @@ func (q *Queries) LiveHosts(ctx context.Context, ids []uuid.UUID) ([]LiveHostsRo
 	return items, nil
 }
 
+const lockNetworks = `-- name: LockNetworks :one
+select pg_try_advisory_xact_lock(hashtextextended('fleet-networks', 0))::bool
+`
+
+// One pass makes networks at a time, so no two make one account's.
+func (q *Queries) LockNetworks(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, lockNetworks)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const markHostDeleted = `-- name: MarkHostDeleted :execrows
 update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
@@ -708,43 +720,6 @@ func (q *Queries) SetHostPhase(ctx context.Context, arg SetHostPhaseParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const staleNetworks = `-- name: StaleNetworks :many
-select r.region::text
-from unnest($1::text[]) as r(region)
-where not exists (
-    select 1 from fleet_networks n where n.owner = $2 and n.region = r.region and n.ensured_at >= $3
-)
-order by 1
-`
-
-type StaleNetworksParams struct {
-	Regions []string
-	Owner   string
-	Since   time.Time
-}
-
-// Which of an account's fleet regions hold no network ensured since
-// @since.
-func (q *Queries) StaleNetworks(ctx context.Context, arg StaleNetworksParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, staleNetworks, arg.Regions, arg.Owner, arg.Since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var r_region string
-		if err := rows.Scan(&r_region); err != nil {
-			return nil, err
-		}
-		items = append(items, r_region)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const upsertFleetNetwork = `-- name: UpsertFleetNetwork :exec

@@ -52,3 +52,10 @@ type CloudConnection struct {
 	UpdatedAt          time.Time
 	RemovalRequestedAt *time.Time
 }
+
+type FleetNetwork struct {
+	Owner     string
+	Region    string
+	Network   []byte
+	EnsuredAt time.Time
+}
