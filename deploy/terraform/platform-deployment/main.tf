@@ -1,5 +1,5 @@
 # One deployment on platform-core's cluster: its database, buckets, secret
-# documents, fleet networks, workload identities, public ingress and Stripe
+# documents, workload identities, public ingress and Stripe
 # webhook, and the chart values the Deploy workflow records.
 
 data "terraform_remote_state" "core" {

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,8 +34,8 @@ const (
 	// answers. The session asks again every ReserveAttemptTimeout, and an
 	// agent update in flight is waited out.
 	preparingLimit = 15 * time.Minute
-	// ownerPlatform keys the platform's cooldowns; a connection's are keyed
-	// by its id.
+	// ownerPlatform keys the platform account; a connected account is keyed
+	// by its connection id.
 	ownerPlatform = string(KindPlatform)
 )
 
@@ -123,8 +122,8 @@ type PlanResult struct {
 
 // Plan is the fleet planning pass. Under the capacity lock and in one
 // transaction it reads one snapshot of hosts, pending demand, cooldowns,
-// prices, quotas and the published markets; decides with PlanFleet for the
-// platform and for each connected account; and writes the intents the
+// prices, quotas, accounts and the published markets; decides with
+// PlanFleet for each account the fleet runs in; and writes the intents the
 // launcher, the reserve actuator and host sessions carry out, the container
 // waits and the published plan. EC2 calls run outside it.
 func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
@@ -151,8 +150,11 @@ func (c *Compute) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, er
 		if !lock.Locked {
 			return nil
 		}
+		if err := q.ShareConnections(ctx); err != nil {
+			return fmt.Errorf("lock connections: %w", err)
+		}
 		p := c.policy()
-		read, err := readFleet(ctx, q, p, lock.Now, c.fleet.CapacityCooldown)
+		read, err := c.readFleet(ctx, q, p, lock.Now)
 		if err != nil {
 			return err
 		}
@@ -184,33 +186,17 @@ func (ps *fleetPass) trace(ctx context.Context) {
 	}
 }
 
-// policy is the platform fleet policy.
+// policy is the fleet policy every account plans under.
 func (c *Compute) policy() Policy {
 	return DefaultPolicy()
 }
 
-// connectionPolicy is the policy a connected account plans under. Its
-// hosts are never stopped, so it keeps no stopped reserves: warm CPU keeps
-// the CPU markets' running headroom and warm GPU the GPU markets'. In a
-// market without either an idle host leaves after the keep window, and at
-// once while no active workspace uses the connection.
-func connectionPolicy(p Policy, conn HostingConnectionsRow) Policy {
-	running := func(r MarketReserve) MarketReserve { return MarketReserve{Warm: r.Warm} }
-	c := p
-	c.Spot, c.OnDemand, c.GPU = MarketReserve{}, MarketReserve{}, nil
-	if conn.CpuReserves {
-		c.Spot, c.OnDemand = running(p.Spot), running(p.OnDemand)
-	}
-	if conn.GpuReserves {
-		c.GPU = make(map[string]GPUReserve, len(p.GPU))
-		for model, r := range p.GPU {
-			c.GPU[model] = GPUReserve{Spot: running(r.Spot), OnDemand: running(r.OnDemand)}
-		}
-	}
-	if !conn.InUse {
-		c.Keep = 0
-	}
-	return c
+// unusedPolicy is the policy of an account no active workspace runs in: it
+// keeps no reserves and no headroom and holds no target, so an idle host
+// leaves at once.
+func unusedPolicy(p Policy) Policy {
+	p.Spot, p.OnDemand, p.GPU, p.Keep = MarketReserve{}, MarketReserve{}, nil, 0
+	return p
 }
 
 // fleetPass is one planning pass: its snapshot, its decisions and the
@@ -312,7 +298,7 @@ func newFleetPass(c *Compute, p Policy, r fleetRead) *fleetPass {
 	return ps
 }
 
-// decide plans the platform fleet, then each connected account.
+// decide plans each account that takes new hosts.
 func (ps *fleetPass) decide() error {
 	groups, err := pendingGroups(ps.r.pending)
 	if err != nil {
@@ -326,20 +312,27 @@ func (ps *fleetPass) decide() error {
 			}
 		}
 	}
-	if err := ps.platform(groups); err != nil {
-		return err
+	for _, a := range ps.r.accounts {
+		if !a.hosting {
+			continue
+		}
+		if err := ps.account(a, groups); err != nil {
+			return err
+		}
 	}
-	return ps.connections(groups)
+	return nil
 }
 
-// platform plans the platform fleet and publishes its plan.
-func (ps *fleetPass) platform(groups []pendingGroup) error {
+// account plans one account and publishes its plan: its pending
+// containers on its hosts or new ones within its networks, its reserves
+// while an active workspace runs in it, and its idle hosts' departure.
+func (ps *fleetPass) account(a account, groups []pendingGroup) error {
 	now := ps.r.now
 	var hosts []FleetHost
 	// failed are hosts that could not prove a stop into the reserve.
 	var failed []PlannerHostsRow
 	for _, row := range ps.r.hosts {
-		if !ownedBy(row, nil) {
+		if !a.owns(row.ConnectionID) {
 			continue
 		}
 		if stuckPreparing(row, now) {
@@ -354,11 +347,18 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 	}
 	var pending []DemandGroup
 	for _, g := range groups {
-		if g.connection == nil {
+		if a.owns(g.connection) {
 			pending = append(pending, g.group)
 		}
 	}
-	in := ps.r.inputs(ps.c.fleet.StorageRegion, ps.c.fleet.Networks, nil, hosts)
+	if len(hosts) == 0 && len(pending) == 0 && !a.inUse {
+		return nil
+	}
+	p, holds := ps.p, ps.holds(a)
+	if !a.inUse {
+		p, holds = unusedPolicy(p), nil
+	}
+	in := ps.r.inputs(ps.c.fleet.StorageRegion, a, hosts)
 	// The offer of a host that could not prove a stop cools, so this pass
 	// does not buy its replacement from it.
 	var unproven []OfferCooldown
@@ -368,29 +368,9 @@ func (ps *fleetPass) platform(groups []pendingGroup) error {
 		})
 	}
 	in.Cooldowns = append(in.Cooldowns, unproven...)
-	ps.cool(ownerPlatform, unproven, "its host could not prove a stop into the reserve")
-	hostRoom, reserveRoom := ps.rooms(hosts)
-	recent, started, burst, arrived, disks := shapesByMarket(ps.r.recent)
-	s := FleetSnapshot{
-		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
-		HostRoom: hostRoom, ReserveRoom: reserveRoom, BatchWait: ps.r.batchWait,
-	}
-	s.Holds = ps.holds(nil)
-	plan, cools := planOwner(ps.p, s, ps.c.fleet.CapacityCooldown)
-	ps.cool(ownerPlatform, cools, "the host bought for a container could not take it")
-	bought, err := ps.apply(plan, nil)
-	if err != nil {
-		return err
-	}
-	ps.settleWaits(plan, bought)
-	ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
-	return ps.publish(plan, nil)
-}
-
-// rooms is how many more hosts may run or start and how many more may be
-// held stopped beside hosts. A reserve being prepared or stopping runs, so
-// it holds host room as well as reserve room.
-func (ps *fleetPass) rooms(hosts []FleetHost) (hostRoom, reserveRoom int) {
+	ps.cool(a.key(), unproven, "its host could not prove a stop into the reserve")
+	// A reserve being prepared or stopping runs, so it holds host room as
+	// well as reserve room.
 	held, reserves := 0, 0
 	for _, h := range hosts {
 		if h.reserve() {
@@ -400,54 +380,21 @@ func (ps *fleetPass) rooms(hosts []FleetHost) (hostRoom, reserveRoom int) {
 			held++
 		}
 	}
-	return max(0, ps.c.fleet.MaxHosts-held), max(0, ps.c.fleet.MaxHosts-reserves)
-}
-
-// connections plans each connected account that takes workloads: its
-// pending containers on its hosts or new ones within its own networks, and
-// its idle hosts' departure under connectionPolicy. Its accounts pay for
-// their hosts, so no margin applies.
-func (ps *fleetPass) connections(groups []pendingGroup) error {
-	for _, conn := range ps.r.connections {
-		p := connectionPolicy(ps.p, conn)
-		var hosts []FleetHost
-		for _, row := range ps.r.hosts {
-			if ownedBy(row, &conn.ID) {
-				hosts = append(hosts, fleetHostOf(row, ps.r.now))
-			}
-		}
-		var pending []DemandGroup
-		for _, g := range groups {
-			if g.connection != nil && *g.connection == conn.ID {
-				pending = append(pending, g.group)
-			}
-		}
-		if len(hosts) == 0 && len(pending) == 0 && !conn.CpuReserves && !conn.GpuReserves {
-			continue
-		}
-		var networks map[string]Network
-		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
-			return fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
-		}
-		in := ps.r.inputs(ps.c.fleet.StorageRegion, networks, &conn.ID, hosts)
-		hostRoom, reserveRoom := ps.rooms(hosts)
-		s := FleetSnapshot{
-			Now: ps.r.now, Hosts: hosts, Pending: pending, Offers: in, HostRoom: hostRoom, ReserveRoom: reserveRoom,
-			BatchWait: ps.r.connectionWaits[conn.ID], Holds: ps.holds(&conn.ID),
-		}
-		plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
-		ps.cool(conn.ID.String(), cools, "the host bought for a container could not take it")
-		bought, err := ps.apply(plan, &conn.ID)
-		if err != nil {
-			return err
-		}
-		ps.settleWaits(plan, bought)
-		if err := ps.publish(plan, &conn.ID); err != nil {
-			return err
-		}
-		ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
+	recent, started, burst, arrived, disks := shapesByMarket(ps.r.recent[a.key()])
+	s := FleetSnapshot{
+		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
+		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWaits[a.key()],
+		Holds: holds,
 	}
-	return nil
+	plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
+	ps.cool(a.key(), cools, "the host bought for a container could not take it")
+	bought, err := ps.apply(plan, a)
+	if err != nil {
+		return err
+	}
+	ps.settleWaits(plan, bought)
+	ps.result.BatchWait = max(ps.result.BatchWait, plan.BatchWait)
+	return ps.publish(plan, a)
 }
 
 // planOwner runs PlanFleet with the offers cooled whose bought host serves
@@ -480,9 +427,9 @@ func (ps *fleetPass) cool(owner string, cools []OfferCooldown, why string) {
 	}
 }
 
-// apply turns one owner's plan into writes. It returns, by action index,
+// apply turns one account's plan into writes. It returns, by action index,
 // the host each resume names or each purchase buys.
-func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.UUID, error) {
+func (ps *fleetPass) apply(plan FleetPlan, acct account) (map[int]uuid.UUID, error) {
 	hosts := map[int]uuid.UUID{}
 	for i, a := range plan.Actions {
 		if a.Host != nil {
@@ -494,7 +441,7 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 			if err != nil {
 				return nil, fmt.Errorf("name a host: %w", err)
 			}
-			ps.w.buys = append(ps.w.buys, requested(id, connection, *a.Offer, a))
+			ps.w.buys = append(ps.w.buys, requested(id, acct, *a.Offer, a))
 			ps.reasons[id] = a.Reason
 			hosts[i] = id
 		case ActionResume:
@@ -530,17 +477,14 @@ func (ps *fleetPass) apply(plan FleetPlan, connection *uuid.UUID) (map[int]uuid.
 
 // requested is the host a purchase inserts: the offer's usable capacity,
 // as the launcher and placement expect until the host reports its own.
-func requested(id uuid.UUID, connection *uuid.UUID, o FleetOffer, a FleetAction) requestedHost {
+func requested(id uuid.UUID, acct account, o FleetOffer, a FleetAction) requestedHost {
 	h := requestedHost{
-		ID: id, Kind: KindPlatform, ConnectionID: connection, CPUMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
+		ID: id, Kind: acct.kind(), ConnectionID: acct.connection, CPUMillis: o.Usable.CPUMillis, MemoryBytes: o.Usable.MemoryBytes,
 		GPUType: o.Type.GPU, GPUCount: o.Type.GPUCount, Region: o.Region, AvailabilityZone: o.Zone, AvailabilityZoneID: o.ZoneID,
 		InstanceType: o.Type.Name, Market: o.Market, HourlyMicros: o.HourlyMicros, MarginWaived: a.Reason == ReasonSpotWait,
 	}
 	if !a.Holds.Empty() {
 		h.HoldsCPUMillis, h.HoldsMemoryBytes = &a.Holds.CPUMillis, &a.Holds.MemoryBytes
-	}
-	if connection != nil {
-		h.Kind = KindConnection
 	}
 	switch a.Kind {
 	case ActionBuyReserve:
@@ -580,15 +524,14 @@ func (ps *fleetPass) settleWaits(plan FleetPlan, bought map[int]uuid.UUID) {
 	}
 }
 
-// carried is each market's published plan, which carries its held targets
-// to the next pass. An unreadable plan is left out.
-// carried are the published plans of the platform's markets, or of
-// connection's, from the last passes.
-func (ps *fleetPass) carried(connection *uuid.UUID) map[ReserveMarket]PublishedMarket {
+// carried are the published plans of an account's markets from the last
+// passes, which carry its held targets to the next pass. An unreadable plan
+// is left out.
+func (ps *fleetPass) carried(a account) map[ReserveMarket]PublishedMarket {
 	stored := map[ReserveMarket]PublishedMarket{}
 	for _, m := range ps.r.markets {
 		var plan PublishedMarket
-		if json.Unmarshal(m.Plan, &plan) != nil || !sameOwner(plan.ConnectionID, connection) {
+		if json.Unmarshal(m.Plan, &plan) != nil || !a.owns(plan.ConnectionID) {
 			continue
 		}
 		stored[ReserveMarket{Preemptible: plan.Preemptible, GPU: plan.GPUType}] = plan
@@ -601,47 +544,46 @@ func sameOwner(a, b *uuid.UUID) bool {
 	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
-// marketKey is the fleet_markets key of an owner's market.
-func marketKey(connection *uuid.UUID, m ReserveMarket) string {
-	if connection == nil {
+// marketKey is the fleet_markets key of an account's market.
+func marketKey(a account, m ReserveMarket) string {
+	if a.connection == nil {
 		return m.String()
 	}
-	return connection.String() + "/" + m.String()
+	return a.key() + "/" + m.String()
 }
 
-// holds are each market's held targets from the owner's published plans.
-func (ps *fleetPass) holds(connection *uuid.UUID) map[ReserveMarket]MarketHolds {
+// holds are each market's held targets from the account's published plans.
+func (ps *fleetPass) holds(a account) map[ReserveMarket]MarketHolds {
 	holds := map[ReserveMarket]MarketHolds{}
-	for m, plan := range ps.carried(connection) {
+	for m, plan := range ps.carried(a) {
 		holds[m] = plan.Holds
 	}
 	return holds
 }
 
-// publish writes every market plan of the platform, or of connection, when
-// the pass acted or a market's held targets or reason changed, the
-// platform's also once the last plan is planRefresh old, and logs each
-// platform decision that changed.
-func (ps *fleetPass) publish(plan FleetPlan, connection *uuid.UUID) error {
+// publish writes every market plan of an account when the pass acted, a
+// market's held targets or reason changed, or its last plan is planRefresh
+// old, and logs each decision that changed.
+func (ps *fleetPass) publish(plan FleetPlan, a account) error {
+	stored := ps.carried(a)
 	var last time.Time
-	for key, m := range ps.r.markets {
-		if !strings.Contains(key, "/") && m.GeneratedAt.After(last) {
-			last = m.GeneratedAt
+	for _, m := range plan.Markets {
+		if row, ok := ps.r.markets[marketKey(a, m.Market)]; ok && row.GeneratedAt.After(last) {
+			last = row.GeneratedAt
 		}
 	}
-	stored := ps.carried(connection)
 	moved := slices.ContainsFunc(plan.Markets, func(mp MarketPlan) bool {
 		last := stored[mp.Market]
 		return !holdsEqual(last.Holds, mp.Holds) || last.Reason != mp.Reason
 	})
-	if len(plan.Actions) == 0 && !moved && (connection != nil || ps.r.now.Sub(last) < planRefresh) {
+	if len(plan.Actions) == 0 && !moved && ps.r.now.Sub(last) < planRefresh {
 		return nil
 	}
 	for _, mp := range plan.Markets {
-		key := marketKey(connection, mp.Market)
-		actions := slices.DeleteFunc(slices.Clone(plan.Actions), func(a FleetAction) bool { return a.Market != mp.Market })
+		key := marketKey(a, mp.Market)
+		actions := slices.DeleteFunc(slices.Clone(plan.Actions), func(act FleetAction) bool { return act.Market != mp.Market })
 		published := publishedMarket(mp, actions)
-		published.ConnectionID = connection
+		published.ConnectionID = a.connection
 		raw, err := json.Marshal(published)
 		if err != nil {
 			return fmt.Errorf("encode the plan of market %s: %w", key, err)
@@ -652,7 +594,7 @@ func (ps *fleetPass) publish(plan FleetPlan, connection *uuid.UUID) error {
 		if stored, ok := ps.r.markets[key]; ok {
 			_ = json.Unmarshal(stored.Plan, &before) //nolint:errcheck // An unreadable old plan logs the new decision.
 		}
-		if connection == nil && before.Decision != published.Decision {
+		if before.Decision != published.Decision {
 			ps.note("fleet market plan", "market", key, "decision", published.Decision)
 		}
 		ps.w.markets = append(ps.w.markets, marketRow{Market: key, Plan: raw, GeneratedAt: ps.r.now, ExpiresAt: ps.r.now.Add(planExpiry)})

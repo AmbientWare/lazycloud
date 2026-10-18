@@ -56,10 +56,11 @@ where id = @id and provider = 'aws' and instance_id = @instance_id
 returning id;
 
 -- name: CloudHostIdentity :one
--- What an instance's identity proof must match: its account, through the
--- connection's active authorization when it runs in a customer account.
+-- What an instance's identity proof must match: the account it runs in,
+-- the connection's or @platform_account, and the node role it launched
+-- with.
 select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region, h.node_role_arn,
-       cc.aws_account_id
+       coalesce(cc.aws_account_id, @platform_account::text)::text as aws_account_id
 from hosts h
 left join cloud_connections cc on cc.id = h.connection_id
 where h.id = @id;

@@ -36,6 +36,7 @@ func TestCloudHostEnrollsOnceWithItsInstanceIdentity(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	host := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2",
 		InstanceID: enrollingInstance, Unenrolled: true})
+	run(t, o.pool, "update hosts set node_role_arn = 'arn:aws:iam::111122223333:role/lazycloud-node' where id = $1", host.String())
 	other := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2",
 		InstanceID: "i-0fff0000aaaa11112", Unenrolled: true})
 	// STS names the signer of each instance-profile credential.

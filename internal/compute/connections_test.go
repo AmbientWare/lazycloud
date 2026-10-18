@@ -47,6 +47,8 @@ type customerAWS struct {
 	stacks map[string]*cfnStack
 	// failDelete makes deleting the named stack end in DELETE_FAILED.
 	failDelete map[string]bool
+	// vpcs are the account's networks.
+	vpcs *fakeVPCs
 }
 
 type role struct {
@@ -123,20 +125,10 @@ func newCustomerAWS(e *awsEmulator) *customerAWS {
 		}
 		return deleteStackReply()
 	})
-	// The account runs no fleet instances unless a test says so.
+	// The account runs no fleet instances unless a test says so, and its
+	// networks are what the fleet makes there.
 	e.on("DescribeInstances", func(awsCall) awsReply { return describeInstancesReply() })
-	e.on("DescribeSubnets", func(call awsCall) awsReply {
-		zones := map[string]compute.Subnet{
-			"subnet-a": {ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
-			"subnet-b": {ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
-			"subnet-c": {ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
-		}
-		var subnets []compute.Subnet
-		for _, id := range list(call.Form, "SubnetId") {
-			subnets = append(subnets, zones[id])
-		}
-		return describeSubnetsReply("vpc-customer", subnets...)
-	})
+	c.vpcs = newFakeVPCs(e)
 	return c
 }
 
@@ -187,8 +179,7 @@ func (c *customerAWS) authorize(t *testing.T, o owners, conn compute.Connection,
 		Name: stack.stackName, Status: "CREATE_COMPLETE",
 		ID: "arn:aws:cloudformation:us-east-2:" + account + ":stack/" + stack.stackName + "/" + uuid.NewString(),
 		Outputs: map[string]string{
-			"ConnectionRoleArn": "arn:aws:iam::" + account + ":role/" + stack.params["ConnectionRoleName"],
-			"VpcId":             "vpc-customer", "SecurityGroupId": "sg-customer", "SubnetIds": "subnet-a,subnet-b,subnet-c",
+			"ConnectionRoleArn":       "arn:aws:iam::" + account + ":role/" + stack.params["ConnectionRoleName"],
 			"NodeInstanceProfileName": stack.params["NodeInstanceProfileName"],
 			"NodeRoleArn":             "arn:aws:iam::" + account + ":role/" + stack.params["NodeRoleName"],
 		},
@@ -257,7 +248,20 @@ func connected(t *testing.T, o owners, customer *customerAWS, account identity.U
 	if conn.Phase != compute.ConnReady {
 		t.Fatalf("connection %s (%+v), want ready", conn.Phase, conn.Pending)
 	}
+	setNetworks(t, o, conn.ID.String(), customerNetworks())
 	return conn
+}
+
+// customerNetworks are a connected account's networks as the network
+// owner records them.
+func customerNetworks() map[string]compute.Network {
+	return map[string]compute.Network{
+		"us-east-2": {VPCID: "vpc-customer", SecurityGroupID: "sg-customer", Subnets: []compute.Subnet{
+			{ID: "subnet-a", Zone: "us-east-2a", ZoneID: "use2-az1"},
+			{ID: "subnet-b", Zone: "us-east-2b", ZoneID: "use2-az2"},
+			{ID: "subnet-c", Zone: "us-east-2c", ZoneID: "use2-az3"},
+		}},
+	}
 }
 
 func advance(t *testing.T, o owners) {
@@ -428,12 +432,8 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	var invalid *compute.InvalidError
 	for name, req := range map[string]compute.ConnectRequest{
 		"a role in another account":     {AWSAccountID: "111111111111", RoleARN: "arn:aws:iam::222222222222:role/lazycloud"},
-		"networks without a role":       {AWSAccountID: "111111111111", Networks: fleetNetworks()},
+		"the platform's own account":    {AWSAccountID: "111122223333"},
 		"an external ID without a role": {AWSAccountID: "111111111111", ExternalID: strings.Repeat("x", 40)},
-		"a network keyed by a region alias": {
-			AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud",
-			Networks: map[string]compute.Network{"us-east": fleetNetworks()["us-east-2"]},
-		},
 	} {
 		if _, err := o.compute.Connect(ctx, alice, req); !errors.As(err, &invalid) {
 			t.Errorf("%s: %v, want InvalidError", name, err)
@@ -459,7 +459,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	}
 
 	existing, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{
-		AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud", Networks: fleetNetworks(),
+		AWSAccountID: "222222222222", RoleARN: "arn:aws:iam::222222222222:role/lazycloud",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +469,7 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	}
 }
 
-func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
+func TestValidationProvesTheRole(t *testing.T) {
 	t.Parallel()
 	o, emulator, customer := connectionFleet(t)
 	ready, denied, open, drifted := newUser(t, o.pool, "ready@example.com"), newUser(t, o.pool, "denied@example.com"),
@@ -478,19 +478,6 @@ func TestValidationProvesTheRoleAndReadsTheStackNetwork(t *testing.T) {
 	conn := connected(t, o, customer, ready)
 	if conn.Active == nil || conn.Active.Phase != compute.AuthReady || conn.Pending != nil || !conn.HostsWorkloads() {
 		t.Fatalf("validated connection %+v", conn)
-	}
-	var raw []byte
-	if err := o.pool.QueryRow(t.Context(), "select networks from cloud_authorizations where id = $1", conn.Active.ID).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var networks map[string]compute.Network
-	if err := json.Unmarshal(raw, &networks); err != nil {
-		t.Fatal(err)
-	}
-	east := networks["us-east-2"]
-	if east.VPCID != "vpc-customer" || east.SecurityGroupID != "sg-customer" || len(east.Subnets) != 3 ||
-		east.Subnets[0].Zone != "us-east-2a" || east.Subnets[1].ZoneID != "use2-az2" {
-		t.Fatalf("recorded networks %+v, want the stack's VPC and subnets with their zones", networks)
 	}
 	// The role was proven to refuse AssumeRole without the exact external ID.
 	var probes int
@@ -595,13 +582,20 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 	}
 	// A host launched under the first generation runs as its role, so the
 	// stack stays until the host drained and is gone.
+	// A stopped reserve runs nothing, so it ends at once.
 	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Region: "us-east-2", InstanceID: "i-0000000000000f001"})
-	run(t, o.pool, "update hosts set connection_id = $1, authorization_id = $2 where id = $3", conn.ID, first.Active.ID, uuid.UUID(host))
+	reserve := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseStopped,
+		Region: "us-east-2", InstanceID: "i-0000000000000f002"})
+	run(t, o.pool, "update hosts set connection_id = $1, authorization_id = $2 where id = any($3)", conn.ID, first.Active.ID,
+		[]uuid.UUID{uuid.UUID(host), uuid.UUID(reserve)})
 	advance(t, o)
 	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseDraining) || len(emulator.calls("DeleteStack")) != 0 {
 		t.Fatalf("with a host on the old role: host %s, %d DeleteStack calls; want it draining and the stack kept", phase, len(emulator.calls("DeleteStack")))
 	}
-	run(t, o.pool, "update hosts set phase = 'deleted' where id = $1", uuid.UUID(host))
+	if phase, _ := hostPhase(t, o.pool, reserve); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("stopped reserve on the old role is %s, want terminating", phase)
+	}
+	run(t, o.pool, "update hosts set phase = 'deleted' where id = any($1)", []uuid.UUID{uuid.UUID(host), uuid.UUID(reserve)})
 	due(t, o, conn)
 	advance(t, o)
 	deletes := emulator.calls("DeleteStack")
@@ -682,6 +676,13 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	o, emulator, customer := imagedConnectionFleet(t)
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
+	run(t, o.pool, "delete from fleet_networks where owner = $1", conn.ID.String())
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if creates := emulator.calls("CreateVpc"); len(creates) != 1 || creates[0].AccessKey != assumedKey(conn.Active.RoleARN) {
+		t.Fatalf("CreateVpc calls %v, want the account's network made through its role", creates)
+	}
 	ws := newWorkspace(t, o.pool, "prod", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
 	var conflict *compute.ConflictError
@@ -710,6 +711,9 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 			Tags: map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": uuid.UUID(host).String()}})
 	})
 
+	stopped := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Phase: compute.PhaseStopped,
+		Region: "us-east-2", InstanceID: "i-0000000000000c002"})
+	run(t, o.pool, "update hosts set connection_id = $1 where id = $2", conn.ID, uuid.UUID(stopped))
 	draining, err := o.compute.Disconnect(ctx, alice)
 	if err != nil || draining == nil || draining.Phase != compute.ConnDraining {
 		t.Fatalf("disconnect: %+v %v, want disconnect_draining", draining, err)
@@ -721,6 +725,10 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	if _, err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
+	if phase, _ := hostPhase(t, o.pool, stopped); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("the account's stopped reserve is %s, want terminating", phase)
+	}
+	run(t, o.pool, "update hosts set phase = 'deleted' where id = $1", uuid.UUID(stopped))
 	actuate(t, o)
 	terms := emulator.calls("TerminateInstances")
 	if len(terms) != 1 || terms[0].AccessKey != assumedKey(conn.Active.RoleARN) {
@@ -759,8 +767,70 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 			emulator.calls("ModifyImageAttribute"))
 	}
 	if n := scan[int](t, o.pool, `select (select count(*) from capacity_cooldowns where connection_key = $1::text) +
-(select count(*) from fleet_markets where starts_with(market, $1::text))`, conn.ID); n != 0 {
-		t.Fatalf("%d cooldown and market rows of the removed connection remain", n)
+(select count(*) from fleet_markets where starts_with(market, $1::text)) +
+(select count(*) from fleet_networks where owner = $1::text)`, conn.ID); n != 0 {
+		t.Fatalf("%d cooldown, market and network rows of the removed connection remain", n)
+	}
+	customer.vpcs.with(func() {
+		if len(customer.vpcs.vpcs) != 0 {
+			t.Fatalf("VPCs %v remain in the removed account", customer.vpcs.vpcs)
+		}
+	})
+}
+
+// Two connections reaching one AWS account run in the same networks, so
+// removing one leaves them to the other.
+func TestRemovingOneOfTwoConnectionsToAnAccountKeepsItsNetworks(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, _, customer := connectionFleet(t)
+	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
+	gone := connected(t, o, customer, alice)
+	connected(t, o, customer, bob)
+	run(t, o.pool, "delete from fleet_networks where owner <> 'platform'")
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		due(t, o, gone)
+		advance(t, o)
+	}
+	if phase := phaseOf(t, o, alice); phase != "" {
+		t.Fatalf("alice's connection is %s, want removed", phase)
+	}
+	customer.vpcs.with(func() {
+		if len(customer.vpcs.vpcs) != 1 {
+			t.Fatalf("VPCs %v, want the account's network kept for bob's connection", customer.vpcs.vpcs)
+		}
+	})
+}
+
+// A region whose network AWS refuses records why and waits before the
+// next try, instead of asking again every pass.
+func TestARefusedNetworkWaitsBeforeTheNextTry(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	o, emulator, customer := connectionFleet(t)
+	conn := connected(t, o, customer, newUser(t, o.pool, "alice@example.com"))
+	run(t, o.pool, "delete from fleet_networks where owner = $1", conn.ID.String())
+	emulator.on("CreateVpc", func(awsCall) awsReply {
+		return ec2Error(http.StatusBadRequest, "VpcLimitExceeded", "The maximum number of VPCs has been reached.")
+	})
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err == nil {
+		t.Fatal("ensure with VPCs refused succeeded")
+	}
+	tries := len(emulator.calls("CreateVpc"))
+	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+		t.Fatalf("second pass: %v, want the refused regions left to wait", err)
+	}
+	if n := len(emulator.calls("CreateVpc")); n != tries {
+		t.Fatalf("%d CreateVpc calls after the second pass, want still %d", n, tries)
+	}
+	if reason := scan[string](t, o.pool, "select error from fleet_networks where owner = $1 limit 1", conn.ID.String()); !strings.Contains(reason, "VpcLimitExceeded") {
+		t.Fatalf("recorded failure %q, want AWS's reason", reason)
 	}
 }
 

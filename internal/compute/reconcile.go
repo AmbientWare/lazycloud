@@ -2,7 +2,6 @@ package compute
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -35,51 +34,45 @@ func (c *Compute) Reconcile(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	for _, p := range pairs {
-		if err := c.reconcileRegion(ctx, logger, p.connection, p.region); err != nil {
+		if err := c.reconcileRegion(ctx, logger, p.account, p.region); err != nil {
 			if ctx.Err() != nil {
 				return err
 			}
-			logger.ErrorContext(ctx, "reconcile region", "connection_id", p.connection, "region", p.region, "error", err)
+			logger.ErrorContext(ctx, "reconcile region", "owner", p.account.key(), "region", p.region, "error", err)
 		}
 	}
 	return nil
 }
 
-type ownerRegion struct {
-	connection *uuid.UUID
-	region     string
+type accountRegion struct {
+	account account
+	region  string
 }
 
-// reconcileRegions are every region the fleet may hold instances in: the
-// platform's networks, each managed connection's networks, and any region a
-// cloud host still records, so an orphan is found where no host lives.
-func (c *Compute) reconcileRegions(ctx context.Context) ([]ownerRegion, error) {
-	seen := map[string]bool{}
-	var out []ownerRegion
-	add := func(connection *uuid.UUID, region string) {
-		key := region
-		if connection != nil {
-			key = connection.String() + "/" + region
-		}
-		if region != "" && !seen[key] {
-			seen[key] = true
-			out = append(out, ownerRegion{connection: connection, region: region})
-		}
-	}
-	for region := range c.fleet.Networks {
-		add(nil, region)
-	}
-	connections, err := c.queries.ManagedConnectionNetworks(ctx)
+// reconcileRegions are every region the fleet may hold instances in: each
+// managed account's networks, and any region a cloud host of an account
+// with an active role still records, so an orphan is found where no host
+// lives.
+func (c *Compute) reconcileRegions(ctx context.Context) ([]accountRegion, error) {
+	accounts, err := c.accounts(ctx, c.queries)
 	if err != nil {
-		return nil, fmt.Errorf("list connection networks: %w", err)
+		return nil, err
 	}
-	for _, conn := range connections {
-		var networks map[string]Network
-		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
-			return nil, fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
+	byKey := map[string]account{}
+	seen := map[string]bool{}
+	var out []accountRegion
+	add := func(a account, region string) {
+		if key := a.key() + "/" + region; region != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, accountRegion{account: a, region: region})
 		}
-		for region := range networks {
-			add(&conn.ID, region)
+	}
+	for _, a := range accounts {
+		byKey[a.key()] = a
+		if a.managed {
+			for region := range a.networks {
+				add(a, region)
+			}
 		}
 	}
 	pairs, err := c.queries.FleetRegions(ctx)
@@ -87,7 +80,9 @@ func (c *Compute) reconcileRegions(ctx context.Context) ([]ownerRegion, error) {
 		return nil, fmt.Errorf("list fleet regions: %w", err)
 	}
 	for _, p := range pairs {
-		add(p.ConnectionID, p.Region)
+		if a, ok := byKey[hostOwner(p.ConnectionID)]; ok {
+			add(a, p.Region)
+		}
 	}
 	return out, nil
 }
@@ -99,19 +94,15 @@ type observedInstance struct {
 	started time.Time
 }
 
-func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, connection *uuid.UUID, region string) error {
-	scope, err := c.scopeOf(ctx, connection)
-	if err != nil {
-		return err
-	}
+func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, acct account, region string) error {
 	// Hosts first: an instance launched after this read is not in it, so
 	// it cannot look like an orphan, and one launched just before may not
 	// be listed by EC2 yet, which launchGrace covers.
-	hosts, err := c.queries.FleetHostsInRegion(ctx, FleetHostsInRegionParams{Region: region, ConnectionID: connection})
+	hosts, err := c.queries.FleetHostsInRegion(ctx, FleetHostsInRegionParams{Region: region, ConnectionID: acct.connection})
 	if err != nil {
 		return fmt.Errorf("list region hosts: %w", err)
 	}
-	client := c.aws().ec2(scope, region)
+	client := c.aws().ec2(acct.scope, region)
 	observed := map[string]observedInstance{}
 	pages := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}}},
@@ -194,12 +185,8 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			logger.ErrorContext(ctx, "reconcile host", "host_id", h.ID, "instance_id", instance, "error", err)
 		}
 	}
-	if connection == nil {
-		// Reserves are platform hosts; only the platform holds persistent
-		// Spot requests.
-		if err := c.cancelOrphanSpotRequests(ctx, logger, client); err != nil {
-			logger.ErrorContext(ctx, "cancel orphan spot requests", "region", region, "error", err)
-		}
+	if err := c.cancelOrphanSpotRequests(ctx, logger, client); err != nil {
+		logger.ErrorContext(ctx, "cancel orphan spot requests", "region", region, "error", err)
 	}
 	var orphans []string
 	var tagged []uuid.UUID
@@ -231,7 +218,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		if recorded, alive := keeps[observed[instance].host]; alive && (recorded == nil || *recorded == instance) {
 			continue
 		}
-		if err := c.terminate(ctx, scope, region, instance); err != nil {
+		if err := c.terminate(ctx, acct.scope, region, instance); err != nil {
 			logger.ErrorContext(ctx, "terminate orphan", "instance_id", instance, "error", err)
 			continue
 		}
@@ -301,28 +288,16 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 // host is gone, with every instance they launched. A request whose launch
 // answer was lost still has a live host and is spared.
 func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Logger, client *ec2.Client) error {
-	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
-		Filters: []ec2types.Filter{
-			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
-			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
-		},
-	})
-	var requests []ec2types.SpotInstanceRequest
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("describe spot requests: %w", err)
-		}
-		requests = append(requests, page.SpotInstanceRequests...)
+	requests, err := c.liveSpotRequests(ctx, client)
+	if err != nil {
+		return err
 	}
 	hosts := map[string]uuid.UUID{}
 	var tagged []uuid.UUID
 	for _, r := range requests {
-		for _, t := range r.Tags {
-			if id, err := uuid.Parse(aws.ToString(t.Value)); err == nil && aws.ToString(t.Key) == tagHost {
-				hosts[aws.ToString(r.SpotInstanceRequestId)] = id
-				tagged = append(tagged, id)
-			}
+		if id, ok := hostTag(r.Tags); ok {
+			hosts[aws.ToString(r.SpotInstanceRequestId)] = id
+			tagged = append(tagged, id)
 		}
 	}
 	if len(requests) == 0 {
@@ -352,4 +327,24 @@ func (c *Compute) cancelOrphanSpotRequests(ctx context.Context, logger *slog.Log
 		logger.WarnContext(ctx, "orphan spot request cancelled", "spot_request_id", request)
 	}
 	return nil
+}
+
+// liveSpotRequests are the fleet's tagged Spot requests that can still
+// launch an instance.
+func (c *Compute) liveSpotRequests(ctx context.Context, client *ec2.Client) ([]ec2types.SpotInstanceRequest, error) {
+	pages := ec2.NewDescribeSpotInstanceRequestsPaginator(client, &ec2.DescribeSpotInstanceRequestsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}},
+			{Name: aws.String("state"), Values: []string{"open", "active", "disabled"}},
+		},
+	})
+	var requests []ec2types.SpotInstanceRequest
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe spot requests: %w", err)
+		}
+		requests = append(requests, page.SpotInstanceRequests...)
+	}
+	return requests, nil
 }

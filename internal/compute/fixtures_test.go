@@ -1,6 +1,7 @@
 package compute_test
 
 import (
+	"encoding/json"
 	"log/slog"
 	"regexp"
 	"testing"
@@ -32,9 +33,30 @@ func newOwners(t *testing.T, config compute.Config) owners {
 	t.Helper()
 	pool := dbtest.New(t)
 	e := execution.NewExecution(pool)
-	return owners{
+	o := owners{
 		pool: pool, compute: compute.NewCompute(pool, e, config), execution: e,
 		scheduling: scheduling.NewScheduling(pool, e, discard()),
+	}
+	platform := map[string]compute.Network{}
+	for _, region := range config.Fleet.Regions {
+		if n, ok := fleetNetworks()[region]; ok {
+			platform[region] = n
+		}
+	}
+	setNetworks(t, o, "platform", platform)
+	return o
+}
+
+// setNetworks records owner's networks as the network owner would.
+func setNetworks(t *testing.T, o owners, owner string, networks map[string]compute.Network) {
+	t.Helper()
+	run(t, o.pool, "delete from fleet_networks where owner = $1", owner)
+	for region, n := range networks {
+		raw, err := json.Marshal(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run(t, o.pool, "insert into fleet_networks (owner, region, network, checked_at) values ($1, $2, $3, now())", owner, region, raw)
 	}
 }
 
@@ -68,6 +90,13 @@ func newWorkspace(t *testing.T, pool *pgxpool.Pool, name string, owner identity.
 	id := scan[uuid.UUID](t, pool, "insert into workspaces (name) values ($1) returning id", name)
 	run(t, pool, "insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", id, uuid.UUID(owner))
 	return id
+}
+
+// used puts an active workspace on the platform's account, which keeps
+// reserves only while one runs there.
+func used(t *testing.T, o owners) {
+	t.Helper()
+	newWorkspace(t, o.pool, "used", newUser(t, o.pool, "used@example.com"))
 }
 
 // newRelease inserts an active function in workspace whose active release

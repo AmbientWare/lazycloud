@@ -31,7 +31,7 @@ config:
   LAZYCLOUD_FLEET_ACCOUNT_ID: "000000000000"
   LAZYCLOUD_FLEET_NODE_ROLE_ARN: arn:aws:iam::000000000000:role/compute-node-example
   LAZYCLOUD_FLEET_INSTANCE_PROFILE: compute-node-example
-  LAZYCLOUD_FLEET_NETWORKS: '{"us-east-2":{"vpc_id":"vpc-0example","security_group_id":"sg-0example","subnets":[{"id":"subnet-0example","zone":"us-east-2a","zone_id":"use2-az1"}]}}'
+  LAZYCLOUD_FLEET_REGIONS: us-east-2
   LAZYCLOUD_AWS_PRINCIPAL_ARN: arn:aws:iam::000000000000:role/example-control-plane
 server:
   config:

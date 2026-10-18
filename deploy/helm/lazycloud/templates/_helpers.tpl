@@ -37,8 +37,8 @@ its secret keys as references. (list $ "server").
 {{- $component := index $root.Values $name -}}
 {{- $owned := include "lazycloud.ownedKeys" . | fromJsonArray -}}
 {{- $config := merge (deepCopy ($component.config | default dict)) $root.Values.config -}}
-{{- if and (hasKey $config "LAZYCLOUD_FLEET_NETWORKS") (not (hasKey $config "LAZYCLOUD_FLEET_IMAGES")) }}
-{{- fail "LAZYCLOUD_FLEET_NETWORKS needs LAZYCLOUD_FLEET_IMAGES: without the baked node images platform hosts run workloads without gVisor" }}
+{{- if and (hasKey $config "LAZYCLOUD_FLEET_REGIONS") (not (hasKey $config "LAZYCLOUD_FLEET_IMAGES")) }}
+{{- fail "LAZYCLOUD_FLEET_REGIONS needs LAZYCLOUD_FLEET_IMAGES: without the baked node images fleet hosts run workloads without gVisor" }}
 {{- end }}
 {{- range $key := keys $config | sortAlpha }}
 {{- if has $key $owned }}

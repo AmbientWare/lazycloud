@@ -76,32 +76,6 @@ describe("AWS connection dialog", () => {
     ]);
   });
 
-  it("turns warm GPU off and explains it", async () => {
-    const sent: string[] = [];
-    const ready = connection("ready", {
-      hosts_workloads: true,
-      can_manage_existing_capacity: true,
-      available_actions: ["reconnect", "remove"],
-    });
-    vi.stubGlobal("fetch", async (request: Request) => {
-      sent.push(`${request.method} ${new URL(request.url).pathname} ${await request.text()}`);
-      return Response.json({ ...ready, warm_gpu: false });
-    });
-    const { queryClient } = renderDialog(ready);
-
-    fireEvent.click(screen.getByRole("button", { name: "About warm GPU" }));
-    expect(await screen.findByText(/Keeps one more GPU host running/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("switch", { name: "Warm GPU" }));
-    await vi.waitFor(() =>
-      expect(queryClient.getQueryData(accountQueryKeys.compute.awsConnection())).toMatchObject({
-        warm_cpu: true,
-        warm_gpu: false,
-      }),
-    );
-    expect(sent).toEqual(['PATCH /v1/aws-connection {"warm_gpu":false}']);
-  });
-
   it("forgets after confirmation and links what stays in AWS", async () => {
     const leftovers: Schemas["AwsLeftover"][] = [
       {
@@ -181,8 +155,6 @@ function connection(
     revision: 1,
     hosts_workloads: false,
     can_manage_existing_capacity: false,
-    warm_cpu: true,
-    warm_gpu: true,
     available_actions: [],
     detail: "AWS connection state",
     created_at: "2026-07-20T00:00:00Z",

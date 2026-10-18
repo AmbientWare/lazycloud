@@ -67,7 +67,7 @@ func quotaRoom(quotas []VCPUQuota, used map[QuotaKey]int64) map[QuotaKey]int64 {
 type OfferInputs struct {
 	Now     time.Time
 	Catalog []CatalogType
-	// Networks are the platform's launchable regions.
+	// Networks are the account's launchable regions.
 	Networks  map[string]Network
 	Spot      []SpotQuote
 	Cooldowns []OfferCooldown

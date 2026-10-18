@@ -64,8 +64,6 @@ def _connection(phase: str, **extra: object) -> dict[str, object]:
         "revision": 2,
         "hosts_workloads": phase == "ready",
         "can_manage_existing_capacity": phase == "ready",
-        "warm_cpu": True,
-        "warm_gpu": True,
         "available_actions": [],
         "detail": "",
         "created_at": NOW,
@@ -133,13 +131,6 @@ def test_cloud_connect_opens_the_stack_in_the_aws_console(
     assert json.loads(as_json.stdout)["authorization"]["console_url"] == CREATE_STACK_URL
     assert opened == [CREATE_STACK_URL]
 
-    networks: dict[str, object] = {
-        "us-east-2": {
-            "vpc_id": "vpc-1",
-            "subnet_ids": ["subnet-a", "subnet-b"],
-            "security_group_id": "sg-1",
-        }
-    }
     existing = CliRunner().invoke(
         cli,
         [
@@ -151,8 +142,6 @@ def test_cloud_connect_opens_the_stack_in_the_aws_console(
             ACCOUNT,
             "--role-arn",
             ROLE,
-            "--networks-json",
-            json.dumps(networks),
         ],
     )
     assert existing.exit_code == 0, existing.output
@@ -160,7 +149,6 @@ def test_cloud_connect_opens_the_stack_in_the_aws_console(
     assert fake_api.calls("POST", "/v1/aws-connection")[-1].json() == {
         "account_id": ACCOUNT,
         "role_arn": ROLE,
-        "networks": networks,
     }
     shown = CliRunner().invoke(
         cli, ["cloud", "connect", "aws", "--account-id", ACCOUNT, "--role-arn", ROLE]

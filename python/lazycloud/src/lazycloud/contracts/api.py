@@ -1749,27 +1749,6 @@ class AwsCustomerAction(APIModel):
     url: str
 
 
-class AwsConnectionUpdate(APIModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    warm_cpu: bool | None = None
-    warm_gpu: bool | None = None
-
-
-class SubnetId(RootModel[str]):
-    root: Annotated[str, Field(max_length=128, min_length=1)]
-
-
-class AwsNetwork(APIModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    vpc_id: Annotated[str, Field(max_length=128, min_length=1)]
-    subnet_ids: Annotated[list[SubnetId], Field(min_length=2)]
-    security_group_id: Annotated[str, Field(max_length=128, min_length=1)]
-
-
 class AwsConnectionRequest(APIModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -1781,10 +1760,6 @@ class AwsConnectionRequest(APIModel):
             description="An existing role to assume; it must require the external ID.",
             pattern="^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$",
         ),
-    ] = None
-    networks: Annotated[
-        dict[str, AwsNetwork] | None,
-        Field(description="Per-region VPC, subnets and security group for an existing role."),
     ] = None
     external_id: Annotated[
         str | None,
@@ -3080,12 +3055,6 @@ class AwsConnection(APIModel):
         bool, Field(description="New workloads can be placed in the account.")
     ]
     can_manage_existing_capacity: bool
-    warm_cpu: Annotated[
-        bool, Field(description="Keeps CPU hosts ready while a workspace uses the connection.")
-    ]
-    warm_gpu: Annotated[
-        bool, Field(description="Keeps GPU hosts ready while a workspace uses the connection.")
-    ]
     available_actions: list[AwsConnectionAction]
     detail: str
     customer_action: AwsCustomerAction | None = None

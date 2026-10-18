@@ -43,7 +43,7 @@ locals {
   default_tags = { "lazycloud:deployment" = var.deployment, "lazycloud:managed-by" = "terraform" }
 }
 
-# Resources in other regions, the fleet networks and layer copies, set
+# Resources in other regions, the layer copies, set
 # their own region argument.
 provider "aws" {
   region = var.region

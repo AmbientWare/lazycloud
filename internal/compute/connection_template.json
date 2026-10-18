@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "LazyCloud: lets LazyCloud launch and stop compute instances in this account and keep its workspaces' volumes and disks in buckets here.",
+  "Description": "LazyCloud: lets LazyCloud run its compute fleet in this account, in every region it runs in: its networks, instances and reserves, and its workspaces' volumes and disks in buckets here.",
   "Parameters": {
     "TargetAccountId": {"Type": "String", "AllowedPattern": "^[0-9]{12}$"},
     "PlatformPrincipalArn": {"Type": "String"},
@@ -14,10 +14,12 @@
   },
   "Rules": {
     "TargetAccountMustMatch": {
-      "Assertions": [{
-        "Assert": {"Fn::Equals": [{"Ref": "TargetAccountId"}, {"Ref": "AWS::AccountId"}]},
-        "AssertDescription": "Open this authorization in the selected AWS account."
-      }]
+      "Assertions": [
+        {
+          "Assert": {"Fn::Equals": [{"Ref": "TargetAccountId"}, {"Ref": "AWS::AccountId"}]},
+          "AssertDescription": "Open this authorization in the selected AWS account."
+        }
+      ]
     }
   },
   "Resources": {
@@ -37,115 +39,159 @@
             }
           ]
         },
-        "Policies": [{
-          "PolicyName": "lazycloud-compute",
-          "PolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "Describe",
-                "Effect": "Allow",
-                "Action": [
-                  "ec2:DescribeInstances", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
-                  "ec2:DescribeAvailabilityZones", "ec2:DescribeImages", "ec2:DescribeSpotPriceHistory",
-                  "sts:GetCallerIdentity", "ssm:GetParameters"
-                ],
-                "Resource": "*"
-              },
-              {
-                "Sid": "LaunchTagged",
-                "Effect": "Allow",
-                "Action": "ec2:RunInstances",
-                "Resource": [
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"}
-                ],
-                "Condition": {"StringEquals": {"aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
-              },
-              {
-                "Sid": "TagAtLaunch",
-                "Effect": "Allow",
-                "Action": "ec2:CreateTags",
-                "Resource": [
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"}
-                ],
-                "Condition": {"StringEquals": {"ec2:CreateAction": "RunInstances", "aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
-              },
-              {
-                "Sid": "LaunchInNetwork",
-                "Effect": "Allow",
-                "Action": "ec2:RunInstances",
-                "Resource": [
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:network-interface/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*::image/*"},
-                  {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:key-pair/*"}
-                ]
-              },
-              {
-                "Sid": "ManageTagged",
-                "Effect": "Allow",
-                "Action": ["ec2:TerminateInstances", "ec2:StopInstances", "ec2:GetConsoleOutput"],
-                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
-                "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
-              },
-              {
-                "Sid": "PassNodeRole",
-                "Effect": "Allow",
-                "Action": "iam:PassRole",
-                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${NodeRoleName}"},
-                "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}
-              },
-              {
-                "Sid": "SpotServiceRole",
-                "Effect": "Allow",
-                "Action": "iam:CreateServiceLinkedRole",
-                "Resource": "*",
-                "Condition": {"StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}}
-              },
-              {
-                "Sid": "WorkspaceBuckets",
-                "Effect": "Allow",
-                "Action": [
-                  "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucketCORS", "s3:PutLifecycleConfiguration",
-                  "s3:ListBucket", "s3:ListBucketMultipartUploads"
-                ],
-                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"},
-                "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
-              },
-              {
-                "Sid": "WorkspaceObjects",
-                "Effect": "Allow",
-                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
-                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*/*"},
-                "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
-              },
-              {
-                "Sid": "OwnStacks",
-                "Effect": "Allow",
-                "Action": ["cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:DeleteStack"],
-                "Resource": {"Fn::Sub": "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${StackPrefix}*/*"}
-              },
-              {
-                "Sid": "DeleteOwnResources",
-                "Effect": "Allow",
-                "Action": [
-                  "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteRouteTable", "ec2:DeleteRoute",
-                  "ec2:DisassociateRouteTable", "ec2:DeleteInternetGateway", "ec2:DetachInternetGateway",
-                  "ec2:DeleteSecurityGroup", "ec2:DeleteVpcEndpoints", "ec2:DescribeVpcs", "ec2:DescribeRouteTables",
-                  "ec2:DescribeInternetGateways", "ec2:DescribeVpcEndpoints",
-                  "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:GetRole", "iam:RemoveRoleFromInstanceProfile",
-                  "iam:DeleteInstanceProfile", "iam:GetInstanceProfile", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"
-                ],
-                "Resource": "*",
-                "Condition": {"StringEquals": {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}}
-              }
-            ]
+        "Policies": [
+          {
+            "PolicyName": "lazycloud-compute",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "Describe",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeInstances", "ec2:DescribeVolumes", "ec2:DescribeSpotInstanceRequests", "ec2:DescribeImages",
+                    "ec2:DescribeAvailabilityZones", "ec2:DescribeVpcs", "ec2:DescribeSubnets", "ec2:DescribeInternetGateways",
+                    "ec2:DescribeRouteTables", "ec2:DescribeSecurityGroups", "ec2:DescribeVpcEndpoints",
+                    "ec2:DescribeSecurityGroupRules", "servicequotas:GetServiceQuota", "sts:GetCallerIdentity",
+                    "ssm:GetParameters"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "LaunchTagged",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*"}
+                  ],
+                  "Condition": {"StringEquals": {"aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "LaunchInFleetNetworks",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:network-interface/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*::image/*"}
+                  ]
+                },
+                {
+                  "Sid": "LaunchInFleetSubnets",
+                  "Effect": "Allow",
+                  "Action": "ec2:RunInstances",
+                  "Resource": [
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:subnet/*"},
+                    {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:security-group/*"}
+                  ],
+                  "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "TagAtCreation",
+                  "Effect": "Allow",
+                  "Action": "ec2:CreateTags",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:*"},
+                  "Condition": {
+                    "StringEquals": {
+                      "ec2:CreateAction": [
+                        "RunInstances", "AuthorizeSecurityGroupIngress", "CreateVpc", "CreateSubnet", "CreateInternetGateway",
+                        "CreateRouteTable", "CreateSecurityGroup", "CreateVpcEndpoint"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Sid": "ActOnTagged",
+                  "Effect": "Allow",
+                  "Action": ["ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances"],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*"},
+                  "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "CancelTaggedSpotRequests",
+                  "Effect": "Allow",
+                  "Action": "ec2:CancelSpotInstanceRequests",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:spot-instances-request/*"},
+                  "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "CreateFleetNetworks",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateInternetGateway", "ec2:CreateRouteTable",
+                    "ec2:CreateSecurityGroup", "ec2:CreateVpcEndpoint", "ec2:AuthorizeSecurityGroupIngress"
+                  ],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:*"},
+                  "Condition": {"StringEquals": {"aws:RequestTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "ManageFleetNetworks",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup", "ec2:CreateVpcEndpoint",
+                    "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute", "ec2:AttachInternetGateway",
+                    "ec2:DetachInternetGateway", "ec2:CreateRoute", "ec2:AssociateRouteTable", "ec2:AuthorizeSecurityGroupIngress",
+                    "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteInternetGateway", "ec2:DeleteRouteTable",
+                    "ec2:DeleteSecurityGroup", "ec2:DeleteVpcEndpoints"
+                  ],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:*"},
+                  "Condition": {"StringEquals": {"aws:ResourceTag/lazycloud:fleet": {"Ref": "FleetName"}}}
+                },
+                {
+                  "Sid": "PassNodeRole",
+                  "Effect": "Allow",
+                  "Action": "iam:PassRole",
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${NodeRoleName}"},
+                  "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}
+                },
+                {
+                  "Sid": "SpotServiceRole",
+                  "Effect": "Allow",
+                  "Action": "iam:CreateServiceLinkedRole",
+                  "Resource": "*",
+                  "Condition": {"StringEquals": {"iam:AWSServiceName": "spot.amazonaws.com"}}
+                },
+                {
+                  "Sid": "WorkspaceBuckets",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:CreateBucket", "s3:DeleteBucket", "s3:PutBucketCORS", "s3:PutLifecycleConfiguration", "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads"
+                  ],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*"},
+                  "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
+                },
+                {
+                  "Sid": "WorkspaceObjects",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"
+                  ],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${BucketPrefix}-${AWS::AccountId}-*/*"},
+                  "Condition": {"StringEquals": {"s3:ResourceAccount": {"Ref": "AWS::AccountId"}}}
+                },
+                {
+                  "Sid": "OwnStacks",
+                  "Effect": "Allow",
+                  "Action": ["cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:DeleteStack"],
+                  "Resource": {"Fn::Sub": "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${StackPrefix}*/*"}
+                },
+                {
+                  "Sid": "DeleteOwnResources",
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:GetRole", "iam:RemoveRoleFromInstanceProfile",
+                    "iam:DeleteInstanceProfile", "iam:GetInstanceProfile", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+                    "iam:DetachRolePolicy"
+                  ],
+                  "Resource": "*",
+                  "Condition": {"StringEquals": {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}}
+                }
+              ]
+            }
           }
-        }]
+        ]
       }
     },
     "NodeRole": {
@@ -157,87 +203,19 @@
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}]
-        }
+        },
+        "ManagedPolicyArns": [{"Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"}]
       }
     },
     "NodeInstanceProfile": {
       "Type": "AWS::IAM::InstanceProfile",
       "DependsOn": "ConnectionRole",
       "Properties": {"InstanceProfileName": {"Ref": "NodeInstanceProfileName"}, "Roles": [{"Ref": "NodeRole"}]}
-    },
-    "Vpc": {
-      "Type": "AWS::EC2::VPC",
-      "DependsOn": "ConnectionRole",
-      "Properties": {
-        "CidrBlock": "10.86.0.0/16", "EnableDnsSupport": true, "EnableDnsHostnames": true,
-        "Tags": [{"Key": "Name", "Value": {"Fn::Sub": "${AWS::StackName}-vpc"}}, {"Key": "lazycloud:fleet", "Value": {"Ref": "FleetName"}}]
-      }
-    },
-    "InternetGateway": {
-      "Type": "AWS::EC2::InternetGateway",
-      "DependsOn": "ConnectionRole",
-      "Properties": {"Tags": [{"Key": "lazycloud:fleet", "Value": {"Ref": "FleetName"}}]}
-    },
-    "GatewayAttachment": {
-      "Type": "AWS::EC2::VPCGatewayAttachment",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "InternetGatewayId": {"Ref": "InternetGateway"}}
-    },
-    "RouteTable": {
-      "Type": "AWS::EC2::RouteTable",
-      "Properties": {"VpcId": {"Ref": "Vpc"}, "Tags": [{"Key": "lazycloud:fleet", "Value": {"Ref": "FleetName"}}]}
-    },
-    "DefaultRoute": {
-      "Type": "AWS::EC2::Route",
-      "DependsOn": "GatewayAttachment",
-      "Properties": {"RouteTableId": {"Ref": "RouteTable"}, "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": {"Ref": "InternetGateway"}}
-    },
-    "SubnetA": {
-      "Type": "AWS::EC2::Subnet",
-      "Properties": {
-        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.1.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZoneId": "use2-az1"
-      }
-    },
-    "SubnetB": {
-      "Type": "AWS::EC2::Subnet",
-      "Properties": {
-        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.2.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZoneId": "use2-az2"
-      }
-    },
-    "SubnetC": {
-      "Type": "AWS::EC2::Subnet",
-      "Properties": {
-        "VpcId": {"Ref": "Vpc"}, "CidrBlock": "10.86.3.0/24", "MapPublicIpOnLaunch": true,
-        "AvailabilityZoneId": "use2-az3"
-      }
-    },
-    "SubnetARoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetA"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetBRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetB"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "SubnetCRoutes": {"Type": "AWS::EC2::SubnetRouteTableAssociation", "Properties": {"SubnetId": {"Ref": "SubnetC"}, "RouteTableId": {"Ref": "RouteTable"}}},
-    "ObjectStorageEndpoint": {
-      "Type": "AWS::EC2::VPCEndpoint",
-      "Properties": {
-        "VpcEndpointType": "Gateway", "VpcId": {"Ref": "Vpc"}, "RouteTableIds": [{"Ref": "RouteTable"}],
-        "ServiceName": {"Fn::Sub": "com.amazonaws.${AWS::Region}.s3"}
-      }
-    },
-    "NodeSecurityGroup": {
-      "Type": "AWS::EC2::SecurityGroup",
-      "Properties": {
-        "GroupDescription": "LazyCloud compute instances: outbound only",
-        "VpcId": {"Ref": "Vpc"},
-        "SecurityGroupEgress": [{"IpProtocol": "-1", "CidrIp": "0.0.0.0/0", "Description": "Outbound traffic"}],
-        "Tags": [{"Key": "lazycloud:fleet", "Value": {"Ref": "FleetName"}}]
-      }
     }
   },
   "Outputs": {
     "ConnectionRoleArn": {"Value": {"Fn::GetAtt": ["ConnectionRole", "Arn"]}},
     "NodeRoleArn": {"Value": {"Fn::GetAtt": ["NodeRole", "Arn"]}},
-    "NodeInstanceProfileName": {"Value": {"Ref": "NodeInstanceProfile"}},
-    "VpcId": {"Value": {"Ref": "Vpc"}},
-    "SecurityGroupId": {"Value": {"Fn::GetAtt": ["NodeSecurityGroup", "GroupId"]}},
-    "SubnetIds": {"Value": {"Fn::Join": [",", [{"Ref": "SubnetA"}, {"Ref": "SubnetB"}, {"Ref": "SubnetC"}]]}}
+    "NodeInstanceProfileName": {"Value": {"Ref": "NodeInstanceProfile"}}
   }
 }

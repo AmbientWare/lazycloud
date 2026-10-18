@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 )
@@ -16,10 +17,10 @@ import (
 //	LAZYCLOUD_FLEET_ACCOUNT_ID        platform AWS account
 //	LAZYCLOUD_FLEET_NODE_ROLE_ARN     role platform instances run as
 //	LAZYCLOUD_FLEET_INSTANCE_PROFILE  its instance profile
-//	LAZYCLOUD_FLEET_NETWORKS          {"us-east-2": {"vpc_id", "security_group_id", "subnets": [{"id", "zone", "zone_id"}]}}
+//	LAZYCLOUD_FLEET_REGIONS           comma-separated regions every account runs hosts in
 //	LAZYCLOUD_OBJECT_STORE_REGION     region of the registry and object store hosts read
 //	LAZYCLOUD_FLEET_IMAGES            {"cpu": {"us-east-2": "ami-..."}, "gpu": {...}}; unset uses stock Amazon Linux
-//	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per owner, and platform reserves (20)
+//	LAZYCLOUD_FLEET_MAX_HOSTS         running cloud hosts per account, and its reserves (20)
 //	LAZYCLOUD_AWS_PRINCIPAL_ARN       principal connection roles trust
 //	LAZYCLOUD_WORKSPACE_BUCKET_PREFIX workspace bucket names' prefix (lazycloud-ws)
 //	LAZYCLOUD_AWS_TEMPLATE_BUCKET     public-read bucket the server publishes the connection template to
@@ -39,9 +40,12 @@ func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	if f.BucketPrefix == "" {
 		f.BucketPrefix = "lazycloud-ws"
 	}
-	if raw := getenv("LAZYCLOUD_FLEET_NETWORKS"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &f.Networks); err != nil {
-			return Fleet{}, fmt.Errorf("LAZYCLOUD_FLEET_NETWORKS: %w", err)
+	for _, region := range strings.Split(getenv("LAZYCLOUD_FLEET_REGIONS"), ",") {
+		if region = strings.TrimSpace(region); region != "" {
+			if !awsRegionPattern.MatchString(region) {
+				return Fleet{}, fmt.Errorf("LAZYCLOUD_FLEET_REGIONS: %q is not an AWS region", region)
+			}
+			f.Regions = append(f.Regions, region)
 		}
 	}
 	if raw := getenv("LAZYCLOUD_FLEET_IMAGES"); raw != "" {
@@ -54,9 +58,9 @@ func LoadFleet(ctx context.Context, getenv func(string) string) (Fleet, error) {
 	if f.MaxHosts, err = intEnv(getenv, "LAZYCLOUD_FLEET_MAX_HOSTS"); err != nil {
 		return Fleet{}, err
 	}
-	// Without networks or a principal the platform makes no AWS call, so
-	// it reads no AWS credentials either.
-	if len(f.Networks) == 0 && f.PrincipalARN == "" {
+	// Without regions or a principal the platform makes no AWS call, so it
+	// reads no AWS credentials either.
+	if len(f.Regions) == 0 && f.PrincipalARN == "" {
 		return f, nil
 	}
 	if f.AWS, err = config.LoadDefaultConfig(ctx); err != nil {

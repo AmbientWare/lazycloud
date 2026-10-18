@@ -8,7 +8,6 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,10 +32,10 @@ var connectionTemplate string
 
 // TemplateVersion names the connection template; validation refuses stacks
 // made from another one.
-const TemplateVersion = "2026-10-16.v1"
+const TemplateVersion = "2026-10-17.v1"
 
-// connectionRegion is where connection stacks are created. The template's
-// subnets name this region's zone IDs, which are the same in every account.
+// connectionRegion is where connection stacks are created; the stack holds
+// only IAM, which is global.
 const connectionRegion = "us-east-2"
 
 // TemplateSHA256 is the hex digest of the connection template.
@@ -176,7 +175,6 @@ type Authorization struct {
 	externalID         string
 	nodeRoleARN        string
 	nodeInstanceProfle string
-	networks           map[string]Network
 	expiresAt          *time.Time
 	// deleteRequested is when the platform last asked CloudFormation to
 	// delete the stack.
@@ -189,14 +187,10 @@ type Connection struct {
 	AWSAccountID string
 	Phase        ConnectionPhase
 	Revision     int
-	// WarmCPU and WarmGPU keep the platform's CPU and GPU reserves in the
-	// account's markets while a workspace uses the connection.
-	WarmCPU     bool
-	WarmGPU     bool
-	Active      *Authorization
-	Pending     *Authorization
-	Retiring    *Authorization
-	NextRetryAt *time.Time
+	Active       *Authorization
+	Pending      *Authorization
+	Retiring     *Authorization
+	NextRetryAt  *time.Time
 	// Customer is what the customer must do in AWS while the connection
 	// waits on them.
 	Customer  *CustomerStep
@@ -229,7 +223,7 @@ func (c Connection) removing() bool {
 // acceptsWork decides whether a connection in phase, whose active
 // authorization is in active, takes new workspaces and hosts: the active
 // authorization works and the connection is neither being removed nor
-// waiting on the customer. HostingConnections applies the same rule in
+// waiting on the customer. ConnectionAccounts applies the same rule in
 // SQL.
 func acceptsWork(phase ConnectionPhase, active AuthorizationPhase) bool {
 	switch phase {
@@ -319,7 +313,6 @@ type ConnectRequest struct {
 	// RoleARN names an existing role; without it the customer creates the
 	// managed stack.
 	RoleARN    string
-	Networks   map[string]Network
 	ExternalID string
 }
 
@@ -336,17 +329,14 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 		// at a role another account set up.
 		return Connection{}, &InvalidError{Message: "LazyCloud generates the external ID; make the role require the one it returns"}
 	}
+	if req.AWSAccountID == c.fleet.AccountID {
+		// The platform's own fleet and its networks run there.
+		return Connection{}, &InvalidError{Message: "LazyCloud's own AWS account cannot be connected"}
+	}
 	if req.RoleARN != "" {
 		m := roleARNPattern.FindStringSubmatch(req.RoleARN)
 		if m == nil || m[2] != req.AWSAccountID {
 			return Connection{}, &InvalidError{Message: "AWS role ARN must belong to account_id"}
-		}
-	} else if len(req.Networks) > 0 {
-		return Connection{}, &InvalidError{Message: "AWS network may only be supplied with an existing role"}
-	}
-	for region := range req.Networks {
-		if !awsRegionPattern.MatchString(region) {
-			return Connection{}, &InvalidError{Message: fmt.Sprintf("AWS network key %q is not an AWS region such as us-east-2", region)}
 		}
 	}
 	if c.fleet.PrincipalARN == "" {
@@ -406,13 +396,8 @@ func (c *Compute) insertAuthorization(ctx context.Context, q *Queries, conn Clou
 		}
 		externalID = base64.RawURLEncoding.EncodeToString(raw)
 	}
-	networks, err := json.Marshal(nonNilMap(req.Networks))
-	if err != nil {
-		return fmt.Errorf("encode networks: %w", err)
-	}
 	params := InsertAuthorizationParams{
 		ConnectionID: conn.ID, Generation: int32(gen), ExternalID: externalID, Region: connectionRegion, //nolint:gosec // Generations are small.
-		Networks: networks,
 	}
 	if req.RoleARN != "" {
 		params.Mode, params.RoleArn = string(ModeExistingRole), req.RoleARN
@@ -459,13 +444,6 @@ func connectionSuffix(conn CloudConnection) string {
 
 func stackPrefix(suffix string) string { return "lazycloud-connection-" + suffix }
 
-func nonNilMap(m map[string]Network) map[string]Network {
-	if m == nil {
-		return map[string]Network{}
-	}
-	return m
-}
-
 // AccountConnection returns the account's connection, or nil without one.
 func (c *Compute) AccountConnection(ctx context.Context, account identity.UserID) (*Connection, error) {
 	row, err := c.queries.ConnectionOfAccount(ctx, uuid.UUID(account))
@@ -509,7 +487,7 @@ func (c *Compute) connectionByID(ctx context.Context, id uuid.UUID) (Connection,
 func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	conn := Connection{
 		ID: row.ID, AWSAccountID: row.AwsAccountID, Phase: ConnectionPhase(row.Phase), Revision: int(row.Revision),
-		WarmCPU: row.WarmCpu, WarmGPU: row.WarmGpu, NextRetryAt: row.NextStepAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
+		NextRetryAt: row.NextStepAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, removalRequested: row.RemovalRequestedAt,
 	}
 	if row.ActionUrl != nil && row.ActionLabel != nil {
 		conn.Customer = &CustomerStep{URL: *row.ActionUrl, Label: *row.ActionLabel}
@@ -553,8 +531,6 @@ func authorizationOf(a CloudAuthorization) Authorization {
 		code := AuthorizationError(*a.ErrorCode)
 		auth.ErrorCode = &code
 	}
-	// The column holds what validation or Connect wrote.
-	_ = json.Unmarshal(a.Networks, &auth.networks)
 	return auth
 }
 
@@ -699,7 +675,7 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 		}
 		req := ConnectRequest{AWSAccountID: row.AwsAccountID, RoleARN: roleARN}
 		if roleARN != "" {
-			req.ExternalID, req.Networks = conn.Active.externalID, conn.Active.networks
+			req.ExternalID = conn.Active.externalID
 		}
 		if err := c.insertAuthorization(ctx, q, row, int(gen), req); err != nil {
 			return err
@@ -737,45 +713,6 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 	})
 	if err != nil {
 		return Connection{}, fmt.Errorf("cancel reconnect: %w", err)
-	}
-	return c.connectionByID(ctx, id)
-}
-
-// ConnectionSettings changes a connection's settings; a nil field keeps its
-// current value.
-type ConnectionSettings struct {
-	WarmCPU *bool
-	WarmGPU *bool
-}
-
-// UpdateConnection changes the account's connection settings and wakes the
-// fleet pass, which plans the account's markets with or without each
-// reserve.
-func (c *Compute) UpdateConnection(ctx context.Context, account identity.UserID, set ConnectionSettings) (Connection, error) {
-	if set.WarmCPU == nil && set.WarmGPU == nil {
-		return Connection{}, &InvalidError{Message: "connection update must set warm_cpu or warm_gpu"}
-	}
-	var id uuid.UUID
-	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
-		q := c.queries.WithTx(tx)
-		row, auths, err := lockAccountConnection(ctx, q, account)
-		if err != nil {
-			return err
-		}
-		id = row.ID
-		if connectionOf(row, auths).removing() {
-			return &ConflictError{Message: "AWS account connection is being removed"}
-		}
-		if (set.WarmCPU == nil || *set.WarmCPU == row.WarmCpu) && (set.WarmGPU == nil || *set.WarmGPU == row.WarmGpu) {
-			return nil
-		}
-		if err := q.UpdateConnectionSettings(ctx, UpdateConnectionSettingsParams{ID: row.ID, WarmCpu: set.WarmCPU, WarmGpu: set.WarmGPU}); err != nil {
-			return fmt.Errorf("update connection settings: %w", err)
-		}
-		return notifyChannel(ctx, tx, row.ID)
-	})
-	if err != nil {
-		return Connection{}, fmt.Errorf("update connection: %w", err)
 	}
 	return c.connectionByID(ctx, id)
 }

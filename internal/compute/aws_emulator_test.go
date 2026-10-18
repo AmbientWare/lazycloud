@@ -293,19 +293,6 @@ func terminateInstancesReply(call awsCall) awsReply {
 	return ok(b.String())
 }
 
-func describeSubnetsReply(vpc string, subnets ...compute.Subnet) awsReply {
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
-<DescribeSubnetsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-0000</requestId><subnetSet>`)
-	for _, s := range subnets {
-		fmt.Fprintf(&b, `<item><subnetId>%s</subnetId><state>available</state><vpcId>%s</vpcId>`+
-			`<availabilityZone>%s</availabilityZone><availabilityZoneId>%s</availabilityZoneId></item>`,
-			esc(s.ID), esc(vpc), esc(s.Zone), esc(s.ZoneID))
-	}
-	b.WriteString(`</subnetSet></DescribeSubnetsResponse>`)
-	return ok(b.String())
-}
-
 func assumeRoleReply(accessKey, roleARN, session string) awsReply {
 	account := strings.Split(roleARN, ":")[4]
 	role := roleARN[strings.LastIndex(roleARN, "/")+1:]

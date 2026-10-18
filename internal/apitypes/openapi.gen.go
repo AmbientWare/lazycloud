@@ -2565,12 +2565,6 @@ type AwsConnection struct {
 	RetiringAuthorization *AwsAuthorizationGeneration `json:"retiring_authorization,omitempty"`
 	Revision              int                         `json:"revision"`
 	UpdatedAt             time.Time                   `json:"updated_at"`
-
-	// WarmCpu Keeps CPU hosts ready while a workspace uses the connection.
-	WarmCpu bool `json:"warm_cpu"`
-
-	// WarmGpu Keeps GPU hosts ready while a workspace uses the connection.
-	WarmGpu bool `json:"warm_gpu"`
 }
 
 // AwsConnectionAction defines model for AwsConnectionAction.
@@ -2603,17 +2597,8 @@ type AwsConnectionRequest struct {
 	// ExternalId The external ID an existing role already requires.
 	ExternalId *string `json:"external_id,omitempty"`
 
-	// Networks Per-region VPC, subnets and security group for an existing role.
-	Networks *map[string]AwsNetwork `json:"networks,omitempty"`
-
 	// RoleArn An existing role to assume; it must require the external ID.
 	RoleArn *string `json:"role_arn,omitempty"`
-}
-
-// AwsConnectionUpdate The settings to change; an omitted one keeps its value.
-type AwsConnectionUpdate struct {
-	WarmCpu *bool `json:"warm_cpu,omitempty"`
-	WarmGpu *bool `json:"warm_gpu,omitempty"`
 }
 
 // AwsCustomerAction A step the customer takes in the AWS Console.
@@ -2637,13 +2622,6 @@ type AwsLeftover struct {
 
 // AwsLeftoverKind defines model for AwsLeftover.Kind.
 type AwsLeftoverKind string
-
-// AwsNetwork defines model for AwsNetwork.
-type AwsNetwork struct {
-	SecurityGroupId string   `json:"security_group_id"`
-	SubnetIds       []string `json:"subnet_ids"`
-	VpcId           string   `json:"vpc_id"`
-}
 
 // AwsReconnectRequest defines model for AwsReconnectRequest.
 type AwsReconnectRequest struct {
@@ -6312,9 +6290,6 @@ type ListWorkloadsParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
-
-// UpdateAwsConnectionJSONRequestBody defines body for UpdateAwsConnection for application/json ContentType.
-type UpdateAwsConnectionJSONRequestBody = AwsConnectionUpdate
 
 // ConnectAwsJSONRequestBody defines body for ConnectAws for application/json ContentType.
 type ConnectAwsJSONRequestBody = AwsConnectionRequest

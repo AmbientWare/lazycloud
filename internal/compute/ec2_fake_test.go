@@ -120,6 +120,12 @@ func (f *fakeEC2) addRequest(r fakeSpotRequest, host string) {
 	f.requests[r.ID] = &r
 }
 
+func (f *fakeEC2) setRequest(id string, update func(*fakeSpotRequest)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	update(f.requests[id])
+}
+
 func (f *fakeEC2) set(id string, update func(*fakeInstance)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

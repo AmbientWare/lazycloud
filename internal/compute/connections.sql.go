@@ -28,7 +28,10 @@ func (q *Queries) AbandonConnectionHosts(ctx context.Context, connectionID *uuid
 
 const accountConnectedElsewhere = `-- name: AccountConnectedElsewhere :one
 select exists (
-    select 1 from cloud_connections where aws_account_id = $1 and id <> $2
+    select 1 from cloud_connections cc
+    join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
+    where cc.aws_account_id = $1 and cc.id <> $2
+      and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 )::bool
 `
 
@@ -37,7 +40,9 @@ type AccountConnectedElsewhereParams struct {
 	ID           uuid.UUID
 }
 
-// Whether another connection reaches the same AWS account.
+// Whether another live connection reaches the same AWS account: one with a
+// ready active authorization that is not being removed, which runs in the
+// account's networks and may launch its images.
 func (q *Queries) AccountConnectedElsewhere(ctx context.Context, arg AccountConnectedElsewhereParams) (bool, error) {
 	row := q.db.QueryRow(ctx, accountConnectedElsewhere, arg.AwsAccountID, arg.ID)
 	var column_1 bool
@@ -85,16 +90,15 @@ func (q *Queries) AuthorizationLiveHosts(ctx context.Context, authorizationID *u
 const authorizationValidated = `-- name: AuthorizationValidated :exec
 update cloud_authorizations
 set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
-    stack_id = coalesce($1, stack_id), networks = $2,
-    node_role_arn = coalesce($3, node_role_arn),
-    node_instance_profile = coalesce($4, node_instance_profile),
+    stack_id = coalesce($1, stack_id),
+    node_role_arn = coalesce($2, node_role_arn),
+    node_instance_profile = coalesce($3, node_instance_profile),
     expires_at = null, updated_at = now()
-where id = $5
+where id = $4
 `
 
 type AuthorizationValidatedParams struct {
 	StackID             *string
-	Networks            []byte
 	NodeRoleArn         *string
 	NodeInstanceProfile *string
 	ID                  uuid.UUID
@@ -103,7 +107,6 @@ type AuthorizationValidatedParams struct {
 func (q *Queries) AuthorizationValidated(ctx context.Context, arg AuthorizationValidatedParams) error {
 	_, err := q.db.Exec(ctx, authorizationValidated,
 		arg.StackID,
-		arg.Networks,
 		arg.NodeRoleArn,
 		arg.NodeInstanceProfile,
 		arg.ID,
@@ -166,7 +169,7 @@ func (q *Queries) ConnectionAccess(ctx context.Context, id uuid.UUID) (Connectio
 }
 
 const connectionAuthorizations = `-- name: ConnectionAuthorizations :many
-select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step from cloud_authorizations where connection_id = $1 and slot is not null order by generation
+select id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step from cloud_authorizations where connection_id = $1 and slot is not null order by generation
 `
 
 // The connection's authorizations that hold a slot.
@@ -195,7 +198,6 @@ func (q *Queries) ConnectionAuthorizations(ctx context.Context, connectionID uui
 			&i.TemplateSha256,
 			&i.NodeRoleArn,
 			&i.NodeInstanceProfile,
-			&i.Networks,
 			&i.ErrorCode,
 			&i.ErrorMessage,
 			&i.LastValidationStartedAt,
@@ -260,7 +262,7 @@ func (q *Queries) ConnectionLiveHosts(ctx context.Context, connectionID *uuid.UU
 }
 
 const connectionOfAccount = `-- name: ConnectionOfAccount :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu from cloud_connections where account_id = $1
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1
 `
 
 func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) (CloudConnection, error) {
@@ -279,8 +281,6 @@ func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
@@ -288,7 +288,7 @@ func (q *Queries) ConnectionOfAccount(ctx context.Context, accountID uuid.UUID) 
 const connectionRegions = `-- name: ConnectionRegions :many
 select h.region::text from hosts h where h.connection_id = $1::uuid and h.region <> ''
 union
-select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = $1::uuid
+select n.region from fleet_networks n where n.owner = $1::uuid::text
 order by 1
 `
 
@@ -343,27 +343,41 @@ with markets as (
     delete from fleet_markets where starts_with(market, $1::uuid::text || '/')
 ), cooldowns as (
     delete from capacity_cooldowns where connection_key = $1::uuid::text
+), quotas as (
+    delete from fleet_quotas where owner = $1::uuid::text
+), networks as (
+    delete from fleet_networks where owner = $1::uuid::text
 )
 delete from cloud_connections where id = $1::uuid
 `
 
 // The connection goes with the fleet state keyed by it: its published
-// markets and its pools' cooldowns.
+// markets, its pools' cooldowns, its quotas and its networks.
 func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConnection, id)
 	return err
 }
 
 const drainAuthorizationHosts = `-- name: DrainAuthorizationHosts :many
-update hosts
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-where authorization_id = $1 and phase in ('ready', 'joining')
-returning id
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    where h.authorization_id = $1::uuid and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    where h.authorization_id = $1::uuid and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained
 `
 
-// Hosts launched under a replaced authorization stop taking work; retirement
-// terminates each once it is empty.
+// Hosts launched under a replaced authorization stop taking work, and
+// retirement terminates each once it is empty; a reserve, which runs no
+// work, terminates at once.
 func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, drainAuthorizationHosts, authorizationID)
 	if err != nil {
@@ -387,12 +401,12 @@ func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *
 const insertAuthorization = `-- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at, setup_step)
+                                  node_instance_profile, expires_at, setup_step)
 values ($1, $2, $3, 'pending', 'awaiting_authorization', $4, $5, $6,
         $7, $8, $9, $10,
-        $11, $12, now() + interval '1 day',
+        $11, now() + interval '1 day',
         case when $3::text = 'managed_stack' then 'waiting_for_stack' end)
-returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, networks, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step
+returning id, connection_id, generation, mode, slot, phase, role_arn, external_id, region, stack_name, stack_id, template_version, template_sha256, node_role_arn, node_instance_profile, error_code, error_message, last_validation_started_at, last_validated_at, expires_at, created_at, updated_at, stack_delete_requested_at, stack_deleted_at, setup_step
 `
 
 type InsertAuthorizationParams struct {
@@ -407,7 +421,6 @@ type InsertAuthorizationParams struct {
 	TemplateSha256      *string
 	NodeRoleArn         *string
 	NodeInstanceProfile *string
-	Networks            []byte
 }
 
 func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizationParams) (CloudAuthorization, error) {
@@ -423,7 +436,6 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		arg.TemplateSha256,
 		arg.NodeRoleArn,
 		arg.NodeInstanceProfile,
-		arg.Networks,
 	)
 	var i CloudAuthorization
 	err := row.Scan(
@@ -442,7 +454,6 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 		&i.TemplateSha256,
 		&i.NodeRoleArn,
 		&i.NodeInstanceProfile,
-		&i.Networks,
 		&i.ErrorCode,
 		&i.ErrorMessage,
 		&i.LastValidationStartedAt,
@@ -460,7 +471,7 @@ func (q *Queries) InsertAuthorization(ctx context.Context, arg InsertAuthorizati
 const insertConnection = `-- name: InsertConnection :one
 insert into cloud_connections (account_id, aws_account_id, phase, next_step_at)
 values ($1, $2, 'awaiting_authorization', now())
-returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu
+returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at
 `
 
 type InsertConnectionParams struct {
@@ -484,8 +495,6 @@ func (q *Queries) InsertConnection(ctx context.Context, arg InsertConnectionPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
@@ -523,7 +532,7 @@ func (q *Queries) LiveConnectionInstances(ctx context.Context, connectionID *uui
 }
 
 const lockConnection = `-- name: LockConnection :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu from cloud_connections where id = $1 for update
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where id = $1 for update
 `
 
 func (q *Queries) LockConnection(ctx context.Context, id uuid.UUID) (CloudConnection, error) {
@@ -542,14 +551,12 @@ func (q *Queries) LockConnection(ctx context.Context, id uuid.UUID) (CloudConnec
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
 
 const lockConnectionOfAccount = `-- name: LockConnectionOfAccount :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu from cloud_connections where account_id = $1 for update
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1 for update
 `
 
 func (q *Queries) LockConnectionOfAccount(ctx context.Context, accountID uuid.UUID) (CloudConnection, error) {
@@ -568,14 +575,12 @@ func (q *Queries) LockConnectionOfAccount(ctx context.Context, accountID uuid.UU
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
 
 const lockWorkspaceConnection = `-- name: LockWorkspaceConnection :one
-select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu from cloud_connections where account_id = $1 for share
+select id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at from cloud_connections where account_id = $1 for share
 `
 
 // The account's connection, share-locked so its phase holds until the
@@ -596,8 +601,6 @@ func (q *Queries) LockWorkspaceConnection(ctx context.Context, accountID uuid.UU
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
@@ -704,7 +707,7 @@ set phase = $1, revision = revision + 1, next_step_at = $2,
     step_attempts = $3, action_url = $4, action_label = $5,
     updated_at = now()
 where id = $6
-returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at, warm_cpu, warm_gpu
+returning id, account_id, aws_account_id, phase, revision, next_step_at, step_attempts, action_url, action_label, created_at, updated_at, removal_requested_at
 `
 
 type SetConnectionPhaseParams struct {
@@ -741,8 +744,6 @@ func (q *Queries) SetConnectionPhase(ctx context.Context, arg SetConnectionPhase
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RemovalRequestedAt,
-		&i.WarmCpu,
-		&i.WarmGpu,
 	)
 	return i, err
 }
@@ -782,24 +783,5 @@ where id = $1
 // work, until the check decides.
 func (q *Queries) StartValidation(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, startValidation, id)
-	return err
-}
-
-const updateConnectionSettings = `-- name: UpdateConnectionSettings :exec
-update cloud_connections
-set warm_cpu = coalesce($1::boolean, warm_cpu),
-    warm_gpu = coalesce($2::boolean, warm_gpu),
-    updated_at = now()
-where id = $3
-`
-
-type UpdateConnectionSettingsParams struct {
-	WarmCpu *bool
-	WarmGpu *bool
-	ID      uuid.UUID
-}
-
-func (q *Queries) UpdateConnectionSettings(ctx context.Context, arg UpdateConnectionSettingsParams) error {
-	_, err := q.db.Exec(ctx, updateConnectionSettings, arg.WarmCpu, arg.WarmGpu, arg.ID)
 	return err
 }

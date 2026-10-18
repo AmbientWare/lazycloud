@@ -2678,8 +2678,7 @@ export interface paths {
         delete: operations["disconnectAws"];
         options?: never;
         head?: never;
-        /** Change the connection's settings */
-        patch: operations["updateAwsConnection"];
+        patch?: never;
         trace?: never;
     };
     "/v1/aws-connection/validate": {
@@ -5452,10 +5451,6 @@ export interface components {
             /** @description New workloads can be placed in the account. */
             hosts_workloads: boolean;
             can_manage_existing_capacity: boolean;
-            /** @description Keeps CPU hosts ready while a workspace uses the connection. */
-            warm_cpu: boolean;
-            /** @description Keeps GPU hosts ready while a workspace uses the connection. */
-            warm_gpu: boolean;
             available_actions: components["schemas"]["AwsConnectionAction"][];
             detail: string;
             customer_action?: components["schemas"]["AwsCustomerAction"];
@@ -5474,24 +5469,10 @@ export interface components {
         AwsConnectionEnvelope: {
             connection?: components["schemas"]["AwsConnection"];
         };
-        /** @description The settings to change; an omitted one keeps its value. */
-        AwsConnectionUpdate: {
-            warm_cpu?: boolean;
-            warm_gpu?: boolean;
-        };
-        AwsNetwork: {
-            vpc_id: string;
-            subnet_ids: string[];
-            security_group_id: string;
-        };
         AwsConnectionRequest: {
             account_id: string;
             /** @description An existing role to assume; it must require the external ID. */
             role_arn?: string;
-            /** @description Per-region VPC, subnets and security group for an existing role. */
-            networks?: {
-                [key: string]: components["schemas"]["AwsNetwork"];
-            };
             /** @description The external ID an existing role already requires. */
             external_id?: string;
         };
@@ -10511,31 +10492,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AwsConnectionEnvelope"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    updateAwsConnection: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AwsConnectionUpdate"];
-            };
-        };
-        responses: {
-            /** @description The connection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AwsConnection"];
                 };
             };
             default: components["responses"]["Error"];

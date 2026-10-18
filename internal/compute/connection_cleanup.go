@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -192,7 +194,8 @@ var errDrainTimeout = errors.New("the instances did not end within the drain's b
 // revoke removes a disconnected account from AWS through its access
 // authorization: the active one, or the pending one for a setup that never
 // finished. It terminates every instance tagged as one of the connection's
-// hosts, then deletes every generation's stack not yet confirmed deleted.
+// hosts, deletes its networks, then deletes every generation's stack not
+// yet confirmed deleted.
 // The access stack goes last because it holds the role. The connection is
 // deleted once every stack is gone.
 func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
@@ -219,6 +222,9 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	if conn.Active != nil && conn.Phase == ConnRevoking {
 		left, err := c.sweepInstances(ctx, scope, conn)
 		if err != nil || left > 0 {
+			return outcome{err: err, action: c.instancesAction(conn)}
+		}
+		if waiting, err := c.deleteNetworks(ctx, scope, conn); err != nil || waiting {
 			return outcome{err: err, action: c.instancesAction(conn)}
 		}
 	}
@@ -262,8 +268,41 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	return c.finishRevoke(ctx, conn)
 }
 
-// sweepInstances terminates the running instances tagged as hosts of conn
-// in each of its regions, including those whose host already ended or
+// deleteNetworks deletes the connection's network in every region it may
+// have one, once its instances are gone, and reports whether one still
+// waits: on AWS to release what the instances held, or on a network pass
+// holding the networks lock. Another live connection to the same AWS
+// account runs in the same networks, so they stay while one does.
+func (c *Compute) deleteNetworks(ctx context.Context, scope awsScope, conn Connection) (bool, error) {
+	shared, err := c.queries.AccountConnectedElsewhere(ctx, AccountConnectedElsewhereParams{AwsAccountID: conn.AWSAccountID, ID: conn.ID})
+	if err != nil {
+		return false, fmt.Errorf("read connections of the account: %w", err)
+	}
+	if shared {
+		return false, nil
+	}
+	release, locked, err := c.networksLock(ctx)
+	if err != nil || !locked {
+		return !locked, err
+	}
+	defer release()
+	regions, err := c.queries.ConnectionRegions(ctx, conn.ID)
+	if err != nil {
+		return false, fmt.Errorf("read connection regions: %w", err)
+	}
+	waiting := false
+	for _, region := range slices.Compact(slices.Sorted(slices.Values(append(regions, c.fleet.Regions...)))) {
+		gone, err := c.deleteNetwork(ctx, scope, region)
+		if err != nil {
+			return false, err
+		}
+		waiting = waiting || !gone
+	}
+	return waiting, nil
+}
+
+// sweepInstances cancels the Spot requests and terminates the running
+// instances tagged as hosts of conn in each of its regions, including those whose host already ended or
 // whose launch answer was lost, and reports how many have not ended yet.
 func (c *Compute) sweepInstances(ctx context.Context, scope awsScope, conn Connection) (int, error) {
 	regions, err := c.queries.ConnectionRegions(ctx, conn.ID)
@@ -273,6 +312,28 @@ func (c *Compute) sweepInstances(ctx context.Context, scope awsScope, conn Conne
 	left := 0
 	for _, region := range regions {
 		client := c.aws().ec2(scope, region)
+		// A persistent Spot request relaunches the instance the sweep ends.
+		requests, err := c.liveSpotRequests(ctx, client)
+		if err != nil {
+			return 0, refusedOr(err, "list spot requests in %s", region)
+		}
+		byHost := map[uuid.UUID][]string{}
+		for _, r := range requests {
+			if id, ok := hostTag(r.Tags); ok {
+				byHost[id] = append(byHost[id], aws.ToString(r.SpotInstanceRequestId))
+			}
+		}
+		owned, err := c.queries.ConnectionHostsAmong(ctx, ConnectionHostsAmongParams{Ids: slices.Collect(maps.Keys(byHost)), ConnectionID: &conn.ID})
+		if err != nil {
+			return 0, fmt.Errorf("read connection hosts: %w", err)
+		}
+		for _, id := range owned {
+			for _, request := range byHost[id] {
+				if err := endSpotRequest(ctx, client, request); err != nil {
+					return 0, refusedOr(err, "cancel spot requests in %s", region)
+				}
+			}
+		}
 		hosts := map[uuid.UUID][]string{}
 		pages := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{
 			Filters: []ec2types.Filter{{Name: aws.String("tag:" + tagFleet), Values: []string{c.fleet.Name}}},
@@ -287,19 +348,13 @@ func (c *Compute) sweepInstances(ctx context.Context, scope awsScope, conn Conne
 					if i.State == nil || i.State.Name == ec2types.InstanceStateNameTerminated || i.State.Name == ec2types.InstanceStateNameShuttingDown {
 						continue
 					}
-					for _, t := range i.Tags {
-						if id, err := uuid.Parse(aws.ToString(t.Value)); err == nil && aws.ToString(t.Key) == tagHost {
-							hosts[id] = append(hosts[id], aws.ToString(i.InstanceId))
-						}
+					if id, ok := hostTag(i.Tags); ok {
+						hosts[id] = append(hosts[id], aws.ToString(i.InstanceId))
 					}
 				}
 			}
 		}
-		ids := make([]uuid.UUID, 0, len(hosts))
-		for id := range hosts {
-			ids = append(ids, id)
-		}
-		owned, err := c.queries.ConnectionHostsAmong(ctx, ConnectionHostsAmongParams{Ids: ids, ConnectionID: &conn.ID})
+		owned, err = c.queries.ConnectionHostsAmong(ctx, ConnectionHostsAmongParams{Ids: slices.Collect(maps.Keys(hosts)), ConnectionID: &conn.ID})
 		if err != nil {
 			return 0, fmt.Errorf("read connection hosts: %w", err)
 		}
@@ -441,11 +496,11 @@ func (c *Compute) unshareImages(ctx context.Context, conn Connection) error {
 			regions[region] = true
 		}
 	}
-	for region := range c.fleet.Networks {
+	for _, region := range c.fleet.Regions {
 		regions[region] = true
 	}
 	for region := range regions {
-		client := c.aws().ec2(awsScope{key: string(KindPlatform)}, region)
+		client := c.aws().ec2(c.platformAccount(false).scope, region)
 		pages := ec2.NewDescribeImagesPaginator(client, &ec2.DescribeImagesInput{
 			Owners: []string{"self"}, ExecutableUsers: []string{conn.AWSAccountID},
 		})
@@ -555,4 +610,15 @@ func stackURL(region, id, name string) string {
 		return stacksURL(region) + "/stackinfo?stackId=" + url.QueryEscape(id)
 	}
 	return stacksURL(region) + "?filteringText=" + url.QueryEscape(name)
+}
+
+// hostTag is the host id an EC2 resource's tags name.
+func hostTag(tags []ec2types.Tag) (uuid.UUID, bool) {
+	for _, t := range tags {
+		if aws.ToString(t.Key) == tagHost {
+			id, err := uuid.Parse(aws.ToString(t.Value))
+			return id, err == nil
+		}
+	}
+	return uuid.UUID{}, false
 }

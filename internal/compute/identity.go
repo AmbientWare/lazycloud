@@ -56,7 +56,7 @@ const maxProofResponse = 32 << 10
 // proof names the host in a signed header, so it cannot enroll another
 // host, and a host enrolls once.
 func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityProof, report HostReport) (HostID, string, error) {
-	row, err := c.queries.CloudHostIdentity(ctx, uuid.UUID(host))
+	row, err := c.queries.CloudHostIdentity(ctx, CloudHostIdentityParams{ID: uuid.UUID(host), PlatformAccount: c.fleet.AccountID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return HostID{}, "", &IdentityError{Message: "the host is not a launched instance"}
 	}
@@ -66,13 +66,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 	if row.InstanceID == nil {
 		return HostID{}, "", &IdentityError{Message: "the host has no instance yet"}
 	}
-	// The role the host launched with; platform hosts run as the fleet's.
-	account, role := c.fleet.AccountID, deref(row.NodeRoleArn)
-	if HostKind(row.Kind) == KindConnection {
-		account = deref(row.AwsAccountID)
-	} else if role == "" {
-		role = c.fleet.NodeRoleARN
-	}
+	account, role := row.AwsAccountID, deref(row.NodeRoleArn)
 	caller, err := c.verifyProof(ctx, host, proof)
 	if err != nil {
 		return HostID{}, "", err

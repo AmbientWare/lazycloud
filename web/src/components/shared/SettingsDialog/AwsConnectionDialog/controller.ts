@@ -9,7 +9,6 @@ import {
   reconnectAwsConnection,
   removeAwsConnection,
   retryAwsConnection,
-  updateAwsConnection,
   validateAwsConnection,
 } from "@/lib/queries/compute";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
@@ -49,9 +48,6 @@ export type AwsConnectionController = {
   retry: () => void;
   remove: () => void;
   forget: () => void;
-  settingsPending: boolean;
-  settingsError: Error | null;
-  updateSettings: (update: Schemas["AwsConnectionUpdate"]) => void;
 };
 
 export function useAwsConnectionController({
@@ -112,14 +108,6 @@ export function useAwsConnectionController({
     },
   });
 
-  // Settings are not lifecycle actions: the dialog stays open.
-  const settings = useMutation({
-    mutationFn: updateAwsConnection,
-    onSuccess: (connection) => {
-      queryClient.setQueryData(accountQueryKeys.compute.awsConnection(), connection);
-    },
-  });
-
   const run = (command: AwsConnectionCommand) => {
     if (activeActionRef.current !== null) return;
     activeActionRef.current = command.action;
@@ -146,8 +134,5 @@ export function useAwsConnectionController({
     retry: () => run({ action: "retry" }),
     remove: () => run({ action: "remove" }),
     forget: () => run({ action: "forget" }),
-    settingsPending: settings.isPending,
-    settingsError: settings.error,
-    updateSettings: (update) => settings.mutate(update),
   };
 }

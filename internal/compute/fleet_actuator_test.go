@@ -615,6 +615,7 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 func TestARefusedStopCoolsItsOfferSoTheNextPassBuysElsewhere(t *testing.T) {
 	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
+	used(t, o)
 	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c021")
 	run(t, o.pool, "update hosts set instance_type = 'c6a.2xlarge' where id = $1", uuid.UUID(host))
 	ec2.add(fakeInstance{ID: "i-0000000000000c021", State: "running", Type: "c6a.2xlarge"}, host.String())
@@ -869,5 +870,52 @@ func TestADrainedHostTerminatingWakesItsSessionAndThePlanners(t *testing.T) {
 	}
 	if !woke["lc_host"] || !woke["lc_compute"] {
 		t.Fatalf("woke %v, want the host's session and the planners", woke)
+	}
+}
+
+// A connected account's reserve launches, hibernates and resumes as a
+// platform reserve does, every call through the account's role.
+func TestAConnectedAccountsReserveSleepsAndWakesThroughItsRole(t *testing.T) {
+	t.Parallel()
+	o, emulator, customer := connectionFleet(t)
+	ec2 := newFakeEC2(emulator)
+	publish(t, o.compute)
+	conn := connected(t, o, customer, newUser(t, o.pool, "alice@example.com"))
+	host := compute.HostID(scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, connection_id, phase, cpu_millis, memory_bytes, region, instance_type, market, reserve_mode)
+values ('r', 'offline', 'connection', 'aws', $1, 'requested', 1500, 6::bigint << 30, 'us-east-2', 'm7i.large', 'spot', 'hibernate')
+returning id`, conn.ID))
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want the reserve", n)
+	}
+	key := assumedKey(conn.Active.RoleARN)
+	runs := emulator.calls("RunInstances")
+	if len(runs) != 1 || runs[0].AccessKey != key || runs[0].Form.Get("HibernationOptions.Configured") != "true" ||
+		runs[0].Form.Get("InstanceMarketOptions.SpotOptions.SpotInstanceType") != "persistent" {
+		t.Fatalf("RunInstances %v, want a hibernating persistent Spot reserve through the connection role", runs)
+	}
+	instance := scan[string](t, o.pool, "select instance_id from hosts where id = $1", uuid.UUID(host))
+	ec2.set(instance, func(i *fakeInstance) { i.State, i.Launched = "running", time.Now().Add(-3*time.Minute) })
+	run(t, o.pool, "update hosts set phase = 'stopping', launch_lease_until = null where id = $1", uuid.UUID(host))
+	if r := actuate(t, o); r.Stopped != 1 {
+		t.Fatalf("actuate %+v, want the reserve hibernated", r)
+	}
+	ec2.set(instance, func(i *fakeInstance) { i.State = "stopped" })
+	ec2.setRequest(ec2.get(instance).SpotRequest, func(r *fakeSpotRequest) { r.State = "disabled" })
+	expireLeases(t, o)
+	actuate(t, o)
+	if f := stopOf(t, o, host); f.Phase != "stopped" {
+		t.Fatalf("reserve %+v, want stopped", f)
+	}
+	run(t, o.pool, "update hosts set phase = 'resuming' where id = $1", uuid.UUID(host))
+	expireLeases(t, o)
+	if r := actuate(t, o); r.Started != 1 {
+		t.Fatalf("actuate %+v, want the reserve started", r)
+	}
+	for _, action := range []string{"StopInstances", "StartInstances"} {
+		calls := emulator.calls(action)
+		if len(calls) != 1 || calls[0].AccessKey != key {
+			t.Fatalf("%s %v, want one through the connection role", action, calls)
+		}
 	}
 }

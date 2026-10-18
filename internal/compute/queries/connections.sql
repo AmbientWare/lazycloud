@@ -19,10 +19,10 @@ returning *;
 -- name: InsertAuthorization :one
 insert into cloud_authorizations (connection_id, generation, mode, slot, phase, role_arn, external_id, region,
                                   stack_name, template_version, template_sha256, node_role_arn,
-                                  node_instance_profile, networks, expires_at, setup_step)
+                                  node_instance_profile, expires_at, setup_step)
 values (@connection_id, @generation, @mode, 'pending', 'awaiting_authorization', @role_arn, @external_id, @region,
         sqlc.narg(stack_name), sqlc.narg(template_version), sqlc.narg(template_sha256), sqlc.narg(node_role_arn),
-        sqlc.narg(node_instance_profile), @networks, now() + interval '1 day',
+        sqlc.narg(node_instance_profile), now() + interval '1 day',
         case when @mode::text = 'managed_stack' then 'waiting_for_stack' end)
 returning *;
 
@@ -54,7 +54,7 @@ where id = @id;
 -- name: AuthorizationValidated :exec
 update cloud_authorizations
 set phase = 'ready', error_code = null, error_message = null, setup_step = null, last_validated_at = now(),
-    stack_id = coalesce(sqlc.narg(stack_id), stack_id), networks = @networks,
+    stack_id = coalesce(sqlc.narg(stack_id), stack_id),
     node_role_arn = coalesce(sqlc.narg(node_role_arn), node_role_arn),
     node_instance_profile = coalesce(sqlc.narg(node_instance_profile), node_instance_profile),
     expires_at = null, updated_at = now()
@@ -69,11 +69,15 @@ where id = @id;
 
 -- name: DeleteConnection :exec
 -- The connection goes with the fleet state keyed by it: its published
--- markets and its pools' cooldowns.
+-- markets, its pools' cooldowns, its quotas and its networks.
 with markets as (
     delete from fleet_markets where starts_with(market, sqlc.arg(id)::uuid::text || '/')
 ), cooldowns as (
     delete from capacity_cooldowns where connection_key = sqlc.arg(id)::uuid::text
+), quotas as (
+    delete from fleet_quotas where owner = sqlc.arg(id)::uuid::text
+), networks as (
+    delete from fleet_networks where owner = sqlc.arg(id)::uuid::text
 )
 delete from cloud_connections where id = sqlc.arg(id)::uuid;
 
@@ -108,13 +112,23 @@ select count(*)::int from hosts
 where authorization_id = @authorization_id and phase not in ('deleted', 'failed');
 
 -- name: DrainAuthorizationHosts :many
--- Hosts launched under a replaced authorization stop taking work; retirement
--- terminates each once it is empty.
-update hosts
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-where authorization_id = @authorization_id and phase in ('ready', 'joining')
-returning id;
+-- Hosts launched under a replaced authorization stop taking work, and
+-- retirement terminates each once it is empty; a reserve, which runs no
+-- work, terminates at once.
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    where h.authorization_id = sqlc.narg(authorization_id)::uuid and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    where h.authorization_id = sqlc.narg(authorization_id)::uuid and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained;
 
 -- name: ConnectionAccess :one
 -- The connected account, the role its active authorization grants and how
@@ -138,7 +152,7 @@ update cloud_authorizations set stack_deleted_at = now(), updated_at = now() whe
 -- any its hosts record.
 select h.region::text from hosts h where h.connection_id = sqlc.arg(connection)::uuid and h.region <> ''
 union
-select jsonb_object_keys(a.networks) from cloud_authorizations a where a.connection_id = sqlc.arg(connection)::uuid
+select n.region from fleet_networks n where n.owner = sqlc.arg(connection)::uuid::text
 order by 1;
 
 -- name: ConnectionHostsAmong :many
@@ -160,9 +174,14 @@ set phase = 'failed', state = 'retired', failure = 'unknown', launch_lease_until
 where connection_id = @connection_id and phase not in ('deleted', 'failed');
 
 -- name: AccountConnectedElsewhere :one
--- Whether another connection reaches the same AWS account.
+-- Whether another live connection reaches the same AWS account: one with a
+-- ready active authorization that is not being removed, which runs in the
+-- account's networks and may launch its images.
 select exists (
-    select 1 from cloud_connections where aws_account_id = @aws_account_id and id <> @id
+    select 1 from cloud_connections cc
+    join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
+    where cc.aws_account_id = @aws_account_id and cc.id <> @id
+      and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
 )::bool;
 
 -- name: LockWorkspaceConnection :one
@@ -177,10 +196,3 @@ where id = @id;
 
 -- name: RequestRemoval :exec
 update cloud_connections set removal_requested_at = now() where id = @id;
-
--- name: UpdateConnectionSettings :exec
-update cloud_connections
-set warm_cpu = coalesce(sqlc.narg(warm_cpu)::boolean, warm_cpu),
-    warm_gpu = coalesce(sqlc.narg(warm_gpu)::boolean, warm_gpu),
-    updated_at = now()
-where id = @id;

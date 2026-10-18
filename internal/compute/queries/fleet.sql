@@ -109,13 +109,24 @@ where connection_key = @connection_key and region = @region and availability_zon
   and instance_type = @instance_type and market = @market;
 
 -- name: DrainConnectionHosts :many
--- A disconnecting account's hosts stop taking work.
-update hosts h
-set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
-    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
-from cloud_connections cc
-where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
-returning h.id;
+-- A disconnecting account's hosts stop taking work; its reserves, which
+-- run no work, terminate at once.
+with ended as (
+    update hosts h
+    set phase = 'terminating', phase_message = 'Shutting down', phase_at = now(), state = 'retired', token_hash = null,
+        updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('preparing', 'stopping', 'stopped', 'resuming')
+    returning h.id
+), drained as (
+    update hosts h
+    set phase = 'draining', capacity_state = 'draining', capacity_reason = 'disconnecting',
+        phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+    from cloud_connections cc
+    where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase in ('ready', 'joining')
+    returning h.id
+)
+select id from ended union all select id from drained;
 
 -- name: CancelConnectionLaunches :exec
 -- A disconnecting account buys nothing more.
@@ -124,17 +135,6 @@ set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'ret
 from cloud_connections cc
 where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase = 'requested'
   and (h.launch_lease_until is null or h.launch_lease_until < now());
-
--- name: ManagedConnectionNetworks :many
--- Connections whose capacity the platform still manages, with the
--- networks of their active authorization; Connection.ManagesCapacity
--- applies the same rule. A removal sweeps its own instances.
-select cc.id, a.networks
-from cloud_connections cc
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
-   or (cc.phase = 'action_required'
-       and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring'));
 
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
@@ -167,9 +167,65 @@ update hosts
 set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
 where id = @id and phase = @from_phase;
 
--- name: ConnectionScope :one
-select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
-       a.node_role_arn, cc.phase, a.phase as authorization_phase
+-- name: ConnectionAccounts :many
+-- The connected accounts with an active authorization, or only the one of
+-- @connection_id: the role the fleet's calls there use;
+-- whether it takes new hosts (acceptsWork), whether the platform still
+-- manages its instances (Connection.ManagesCapacity), and whether an
+-- active workspace uses it.
+select cc.id, a.id as authorization_id, a.role_arn, a.external_id, a.node_instance_profile, a.node_role_arn,
+       (a.phase = 'ready'
+        and cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required'))::boolean as hosting,
+       (a.phase = 'ready'
+        and (cc.phase not in ('revoking', 'verifying_revocation', 'action_required')
+             or cc.phase = 'action_required'
+                and exists (select 1 from cloud_authorizations r where r.connection_id = cc.id and r.slot = 'retiring')))::boolean
+           as managed,
+       exists (select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active')::boolean as in_use
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
-where cc.id = @id;
+where sqlc.narg(connection_id)::uuid is null or cc.id = sqlc.narg(connection_id)::uuid
+order by cc.id;
+
+-- name: ShareConnections :exec
+-- A planning pass share-locks every connection, so none leaves hosting
+-- while the pass that read it writes hosts into it.
+select id from cloud_connections for share;
+
+-- name: PlatformInUse :one
+-- Whether an active workspace runs on the platform's own account.
+select exists (select 1 from workspaces where connection_id is null and state = 'active')::boolean;
+
+
+-- name: FleetNetworks :many
+-- The networks of every account, or only of @owner, by owner key and
+-- region.
+select owner, region, network from fleet_networks
+where network is not null and (sqlc.narg(owner)::text is null or owner = sqlc.narg(owner)::text)
+order by owner, region;
+
+-- name: CheckedNetworks :many
+-- The account regions whose network was found or made within
+-- @ensured_seconds, or failed within @failed_seconds, so the pass leaves
+-- them be.
+select owner, region from fleet_networks
+where checked_at > now() - make_interval(secs => case when error is null then @ensured_seconds::float8 else @failed_seconds::float8 end);
+
+-- name: TryNetworksLock :one
+-- One session makes or deletes fleet networks at a time, so no two touch
+-- one account's.
+select pg_try_advisory_lock(hashtextextended('fleet-networks', 0))::bool;
+
+-- name: ReleaseNetworksLock :exec
+select pg_advisory_unlock(hashtextextended('fleet-networks', 0));
+
+-- name: UpsertFleetNetwork :exec
+insert into fleet_networks (owner, region, network, checked_at)
+values (@owner, @region, @network, now())
+on conflict (owner, region) do update set network = excluded.network, checked_at = excluded.checked_at, error = null;
+
+-- name: FailFleetNetwork :exec
+insert into fleet_networks (owner, region, checked_at, error)
+values (@owner, @region, now(), @error)
+on conflict (owner, region) do update set checked_at = excluded.checked_at, error = excluded.error;
+

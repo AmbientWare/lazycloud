@@ -115,14 +115,9 @@ func (h HostCapacity) Accepts(r Requirement) bool {
 		if h.Kind != KindMachine || h.Name != r.Machine || !slices.Contains(h.Workspaces, r.Workspace) {
 			return false
 		}
-	case r.Connection != nil:
-		if h.Kind != KindConnection || h.Connection == nil || *h.Connection != *r.Connection {
-			return false
-		}
-	default:
-		if h.Kind != KindPlatform {
-			return false
-		}
+	// A fleet host serves its own account's workspaces.
+	case h.Kind == KindMachine || !sameOwner(h.Connection, r.Connection):
+		return false
 	}
 	if r.Region != "" && ProductRegion(h.Region) != r.Region {
 		return false
@@ -171,10 +166,10 @@ func (h HostCapacity) Evicts(r Requirement) bool {
 	return r.GPUsNeeded() > 0 && (h.FreeCPUMillis < r.CPUMillis || h.FreeMemoryBytes < r.MemoryBytes)
 }
 
-// floorHost reports an on-demand platform CPU host, which keeps the
-// on-demand warm floor; keepsFloor one with floor free.
+// floorHost reports an on-demand fleet CPU host, which keeps the on-demand
+// warm floor; keepsFloor one with floor free.
 func (h HostCapacity) floorHost() bool {
-	return h.Kind == KindPlatform && h.Market == MarketOnDemand && h.GPUCount == 0
+	return h.Kind != KindMachine && h.Market == MarketOnDemand && h.GPUCount == 0
 }
 
 func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
@@ -190,14 +185,14 @@ func (h HostCapacity) keepsFloor(floor FleetCapacity) bool {
 // evict CPU work from; then the tightest fit, whose free CPU and memory as
 // fractions of its size sum lowest after placement, which keeps large
 // holes for large containers.
-// Spot-tolerant work borrows an on-demand platform CPU host only while one
-// of them still keeps floor free afterwards, so work that cannot run on
-// Spot starts at once.
+// Spot-tolerant work borrows an on-demand fleet CPU host only while one
+// of its account's still keeps floor free afterwards, so work that cannot
+// run on Spot starts at once.
 func ChooseHost(hosts []HostCapacity, r Requirement, floor FleetCapacity) int {
 	holders := 0
 	if r.Preemptible && !floor.Empty() {
 		for _, h := range hosts {
-			if h.keepsFloor(floor) {
+			if h.keepsFloor(floor) && sameOwner(h.Connection, r.Connection) {
 				holders++
 			}
 		}

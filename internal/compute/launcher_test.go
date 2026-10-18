@@ -632,7 +632,7 @@ func TestAMoveSkipsPoolsWhoseQuotaIsFull(t *testing.T) {
 		run(t, o.pool, `insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, instance_type, market)
 values ('busy', 'online', 'platform', 'aws', 'ready', 1000, 1::bigint << 30, 'us-east-2', $1, 'spot')`, typ)
 	}
-	run(t, o.pool, "insert into fleet_quotas (region, quota_class, market, vcpus, observed_at) values ('us-east-2', 'standard', 'spot', 64, now())")
+	run(t, o.pool, "insert into fleet_quotas (owner, region, quota_class, market, vcpus, observed_at) values ('platform', 'us-east-2', 'standard', 'spot', 64, now())")
 	typ, _ := compute.CatalogTypeNamed("c6a.2xlarge")
 	usable := typ.Usable(0)
 	run(t, o.pool, `insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone,

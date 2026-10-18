@@ -101,14 +101,15 @@ group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
 order by 4, 5, 6, 2 desc, 3 desc;
 
 -- name: RecentShapes :many
--- By purchase market and GPU model: the largest CPU, memory and GPUs placed
--- platform containers reserved, the most disks one attached, and the bytes
--- of platform volumes they read with how many started, among the newest
+-- By account (its owner key: platform or the connection id), purchase market and
+-- GPU model: the largest CPU, memory and GPUs placed fleet containers
+-- reserved, the most disks one attached, and the bytes of volumes they
+-- read with how many started, among the newest
 -- containers created within the window, up to the sample (recent); the
 -- largest shape among those created within the warm window (started),
 -- which sizes the warm floor; the largest batch of them within the warm
 -- window (burst), which the market keeps room for; and what the placed
--- Spot-tolerant platform CPU containers of the sample created within the
+-- Spot-tolerant CPU containers of the sample created within the
 -- arrival window reserve, less their largest batch (arrived): a steady rate
 -- of work, which a single burst is not. A batch is
 -- arrivals less than batch_quiet apart, at most batch_max long, as
@@ -116,7 +117,8 @@ order by 4, 5, 6, 2 desc, 3 desc;
 -- most sample_size containers whatever the history; the subqueries make
 -- its bounds constants the index can use.
 with recent as (
-    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class, c.billing_owner, c.assigned_at,
+    select c.id, c.created_at, c.cpu_millis, c.memory_bytes, c.gpu_count, c.gpu_type, c.rate_class,
+           coalesce(case when c.billing_owner = 'connected_cloud' then ws.connection_id::text end, 'platform') as owner,
            coalesce(jsonb_array_length(r.spec -> 'disks'), 0) as disks,
            coalesce(volume_read_bytes(c.workspace_id, r.spec -> 'volumes'), 0) as read_bytes
     from (
@@ -128,67 +130,70 @@ with recent as (
         limit @sample_size
     ) c
     left join releases r on r.id = c.release_id
+    left join workspaces ws on ws.id = c.workspace_id
+    where c.billing_owner <> 'self_hosted' and c.assigned_at is not null
 )
-select 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
+select owner::text as owner, 'recent'::text as kind, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type,
        max(cpu_millis)::bigint as cpu_millis, max(memory_bytes)::bigint as memory_bytes, max(gpu_count)::int as gpus,
        max(disks)::int as disks, sum(read_bytes)::bigint as read_bytes, count(*)::int as starts
 from recent
-where billing_owner = 'platform_fleet' and assigned_at is not null
-group by 2, 3
+group by 1, 3, 4
 union all
-select 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
+select owner, 'started', (rate_class in ('auto', 'pinned'))::bool, gpu_type,
        max(cpu_millis)::bigint, max(memory_bytes)::bigint, max(gpu_count)::int, 0, 0, count(*)::int
 from recent
-where billing_owner = 'platform_fleet' and assigned_at is not null
-  and id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
-group by 2, 3
+where id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
+group by 1, 3, 4
 union all
-select 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
+select owner, 'burst', preemptible, gpu_type, max(cpu)::bigint, max(memory)::bigint, max(gpus)::int, 0, 0, 0
 from (
-    select preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
+    select owner, preemptible, gpu_type, sum(cpu_millis) as cpu, sum(memory_bytes) as memory, sum(gpu_count) as gpus
     from (
-        select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by preemptible, gpu_type, run)) / @batch_max_seconds::float8) as part
+        select owner, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by owner, preemptible, gpu_type, run))
+                     / @batch_max_seconds::float8) as part
         from (
-            select preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
-                   count(*) filter (where opens) over (partition by preemptible, gpu_type order by created_at, id) as run
+            select owner, preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
+                   count(*) filter (where opens) over (partition by owner, preemptible, gpu_type order by created_at, id) as run
             from (
-                select id, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count, created_at,
-                       coalesce(created_at - lag(created_at) over (partition by (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
+                select id, owner, (rate_class in ('auto', 'pinned'))::bool as preemptible, gpu_type, cpu_millis, memory_bytes, gpu_count,
+                       created_at,
+                       coalesce(created_at - lag(created_at)
+                                over (partition by owner, (rate_class in ('auto', 'pinned')), gpu_type order by created_at, id),
                                 interval '1 day') >= make_interval(secs => @batch_quiet_seconds::float8) as opens
                 from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null
-                  and id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
+                where id > (select uuidv7(- make_interval(secs => @warm_seconds::float8)))
             ) gaps
         ) runs
     ) parts
-    group by preemptible, gpu_type, run, part
+    group by owner, preemptible, gpu_type, run, part
 ) batches
-group by preemptible, gpu_type
+group by owner, preemptible, gpu_type
 union all
-select 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
+select owner, 'arrived', true, '', (sum(cpu) - max(cpu))::bigint, (sum(memory) - max(memory))::bigint, 0, 0, 0, 0
 from (
-    select sum(cpu_millis) as cpu, sum(memory_bytes) as memory
+    select owner, sum(cpu_millis) as cpu, sum(memory_bytes) as memory
     from (
-        select cpu_millis, memory_bytes, run,
-               floor(extract(epoch from created_at - min(created_at) over (partition by run)) / @batch_max_seconds::float8) as part
+        select owner, cpu_millis, memory_bytes, run,
+               floor(extract(epoch from created_at - min(created_at) over (partition by owner, run)) / @batch_max_seconds::float8) as part
         from (
-            select cpu_millis, memory_bytes, created_at, count(*) filter (where opens) over (order by created_at, id) as run
+            select owner, cpu_millis, memory_bytes, created_at,
+                   count(*) filter (where opens) over (partition by owner order by created_at, id) as run
             from (
-                select id, cpu_millis, memory_bytes, created_at,
-                       coalesce(created_at - lag(created_at) over (order by created_at, id), interval '1 day')
+                select id, owner, cpu_millis, memory_bytes, created_at,
+                       coalesce(created_at - lag(created_at) over (partition by owner order by created_at, id), interval '1 day')
                            >= make_interval(secs => @batch_quiet_seconds::float8) as opens
                 from recent
-                where billing_owner = 'platform_fleet' and assigned_at is not null and gpu_count = 0
+                where gpu_count = 0
                   and rate_class in ('auto', 'pinned')
                   and id > (select uuidv7(- make_interval(secs => @arrival_seconds::float8)))
             ) gaps
         ) runs
     ) parts
-    group by run, part
+    group by owner, run, part
 ) batches
-having count(*) > 0
-order by 1, 2, 3;
+group by owner
+order by 1, 2, 3, 4;
 
 -- name: BatchWaits :many
 -- How long, in seconds, each owner's arrival batch stays open: until quiet
@@ -249,25 +254,6 @@ order by connection_key, region, availability_zone_id, instance_type, market;
 select market::text as market, plan, generated_at, expires_at
 from fleet_markets
 order by market;
-
--- name: HostingConnections :many
--- Connections that take new workloads, with the networks of their active
--- authorization, whether an active workspace uses the connection, and
--- whether their markets keep CPU and GPU reserves: the connection's warm
--- CPU or warm GPU is on and an active workspace uses it. Each row is
--- share-locked so no connection leaves hosting while the pass that read it
--- writes hosts into it.
-select cc.id, a.networks, used.active as in_use,
-       (cc.warm_cpu and used.active)::boolean as cpu_reserves,
-       (cc.warm_gpu and used.active)::boolean as gpu_reserves
-from cloud_connections cc
-cross join lateral (
-    select exists (select 1 from workspaces w where w.connection_id = cc.id and w.state = 'active') as active
-) used
-join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
-where cc.phase not in ('disconnect_draining', 'revoking', 'verifying_revocation', 'action_required')
-order by cc.id
-for share of cc;
 
 -- name: InsertRequestedHosts :exec
 -- Hosts to buy, for the launcher. The planner names each id, so container

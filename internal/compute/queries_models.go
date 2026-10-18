@@ -26,7 +26,6 @@ type CloudAuthorization struct {
 	TemplateSha256          *string
 	NodeRoleArn             *string
 	NodeInstanceProfile     *string
-	Networks                []byte
 	ErrorCode               *string
 	ErrorMessage            *string
 	LastValidationStartedAt *time.Time
@@ -52,6 +51,4 @@ type CloudConnection struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	RemovalRequestedAt *time.Time
-	WarmCpu            bool
-	WarmGpu            bool
 }

@@ -179,3 +179,23 @@ func TestGPUWorkEvictsPackedWorkOnlyWhereNoHostHasRoom(t *testing.T) {
 		t.Fatalf("GPU work went to host %d, want the packed host, evicting, when no other fits", i)
 	}
 }
+
+// Spot-tolerant work keeps its own account's on-demand floor free: another
+// account's floor host with room does not count toward it.
+func TestSpotWorkKeepsItsOwnAccountsFloor(t *testing.T) {
+	t.Parallel()
+	connection := uuid.New()
+	floorHost := func(id byte, owner *uuid.UUID) HostCapacity {
+		return HostCapacity{
+			Host: HostID{id}, Kind: KindPlatform, Connection: owner, Provider: ProviderAWS, Market: MarketOnDemand,
+			CPUMillis: 2000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 8 * gib,
+		}
+	}
+	platform, connected := floorHost(1, nil), floorHost(2, &connection)
+	connected.Kind = KindConnection
+	floor := cpuGiB(1000, 4)
+	spot := Requirement{Preemptible: true, CPUMillis: 1500, MemoryBytes: 6 * gib}
+	if i := ChooseHost([]HostCapacity{platform, connected}, spot, floor); i != -1 {
+		t.Fatalf("Spot work went to host %d, want the platform's only floor host kept free", i)
+	}
+}

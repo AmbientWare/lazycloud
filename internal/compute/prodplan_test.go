@@ -38,17 +38,22 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 	p := DefaultPolicy()
 	now := time.Now()
 	cooldown := 10 * time.Minute
-	r, err := readFleet(ctx, New(pool), p, now, cooldown)
+	r, err := readMarkets(ctx, New(pool), p, now, cooldown)
 	if err != nil {
 		t.Fatal(err)
 	}
+	withNet, err := (&Compute{fleet: fleet}).withNetworks(ctx, New(pool), []account{{scope: awsScope{key: ownerPlatform}, awsAccount: fleet.AccountID}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := withNet[0]
 	groups, err := pendingGroups(r.pending)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var hosts []FleetHost
 	for _, row := range r.hosts {
-		if ownedBy(row, nil) && !stuckPreparing(row, now) {
+		if platform.owns(row.ConnectionID) && !stuckPreparing(row, now) {
 			hosts = append(hosts, fleetHostOf(row, now))
 		}
 	}
@@ -58,7 +63,7 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 			pending = append(pending, g.group)
 		}
 	}
-	in := r.inputs(fleet.StorageRegion, fleet.Networks, nil, hosts)
+	in := r.inputs(fleet.StorageRegion, platform, hosts)
 	held, reserves := 0, 0
 	for _, h := range hosts {
 		if h.reserve() {
@@ -68,10 +73,10 @@ func TestPlanOnProdSnapshot(t *testing.T) {
 			held++
 		}
 	}
-	recent, started, burst, arrived, disks := shapesByMarket(r.recent)
+	recent, started, burst, arrived, disks := shapesByMarket(r.recent[ownerPlatform])
 	s := FleetSnapshot{Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
-		HostRoom: max(0, fleet.MaxHosts-held), ReserveRoom: max(0, fleet.MaxHosts-reserves), BatchWait: r.batchWait}
-	s.Holds = (&fleetPass{r: r}).holds(nil)
+		HostRoom: max(0, fleet.MaxHosts-held), ReserveRoom: max(0, fleet.MaxHosts-reserves), BatchWait: r.batchWaits[ownerPlatform]}
+	s.Holds = (&fleetPass{r: r}).holds(platform)
 	fmt.Printf("HOSTS %d (held %d reserves %d) pending groups %d offers spot=%d cooldowns=%d\n", len(hosts), held, reserves, len(pending), len(in.Spot), len(in.Cooldowns))
 	for _, h := range hosts {
 		if h.GPU == "L4" {

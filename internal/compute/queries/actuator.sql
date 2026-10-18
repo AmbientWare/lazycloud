@@ -1,7 +1,7 @@
 -- name: ClaimHostActions :many
 -- Cloud hosts in one of @phases that wait on an EC2 call no other actuator
--- holds, oldest phase change first: a requested host to launch; a platform
--- host stopping or resuming; a host terminating whose last terminate EC2
+-- holds, oldest phase change first: a requested host to launch; a host
+-- stopping or resuming; a host terminating whose last terminate EC2
 -- has had @settle_seconds to list; a draining host that runs nothing, which
 -- moves to terminating and wakes its session and the planners, though an
 -- interrupted one is left for the provider to reclaim until
@@ -18,7 +18,7 @@ with claimed as (
           when 'draining' then r.instance_id is not null
               and (r.interruption_at is null or r.interruption_at < now() - make_interval(secs => @reclaim_grace_seconds::float8))
               and not exists (select 1 from containers c where c.host_id = r.id and c.state <> 'stopped')
-          else r.instance_id is not null and r.kind = 'platform'
+          else r.instance_id is not null
           end
     order by r.phase_at, r.id
     limit @batch_size
