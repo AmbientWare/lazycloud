@@ -8,13 +8,14 @@ on conflict (region, availability_zone_id, instance_type) do update
 set hourly_micros = excluded.hourly_micros, effective_at = excluded.effective_at, observed_at = excluded.observed_at;
 
 -- name: ScoreSpotPools :exec
--- One region's Spot placement scores per zone and type, in one statement,
--- on the prices stored. The arrays have one element per score.
+-- Spot placement scores per zone id and type, in one statement, on the
+-- prices stored. A zone id names one zone in one region. The arrays have
+-- one element per score.
 update spot_prices s
 set placement_score = v.score, scored_at = now()
 from (select unnest(@zone_ids::text[]) as zone_id, unnest(@instance_types::text[]) as instance_type,
              unnest(@scores::smallint[]) as score) v
-where s.region = @region::text and s.availability_zone_id = v.zone_id and s.instance_type = v.instance_type;
+where s.availability_zone_id = v.zone_id and s.instance_type = v.instance_type;
 
 -- name: FreshSpotPrices :many
 -- Spot prices observed recently enough to buy on, with their placement

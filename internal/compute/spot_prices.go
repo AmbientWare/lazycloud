@@ -59,54 +59,43 @@ type SpotQuote struct {
 // pool's placement score. A region whose read fails keeps its last prices
 // or scores. It reports how many prices it stored.
 func (c *Compute) RefreshSpotPrices(ctx context.Context, logger *slog.Logger) (int, error) {
-	stored, regions, failed, err := c.refreshPrices(ctx, logger)
-	if err != nil {
+	stored, zones, failed, err := c.refreshPrices(ctx, logger)
+	if err != nil || len(zones) == 0 {
 		return stored, err
 	}
-	for _, r := range regions {
-		scores, err := placementScores(ctx, r.client, r.name, r.zones, r.types)
-		if err != nil {
-			if ctx.Err() != nil {
-				return stored, err
-			}
-			logger.WarnContext(ctx, "spot placement scores incomplete", "region", r.name, "error", err)
-			failed = errors.Join(failed, fmt.Errorf("%s placement scores: %w", r.name, err))
+	scores, err := placementScores(ctx, c.aws().ec2(c.platformAccount(false).scope, slices.Sorted(maps.Keys(zones))[0]), zones)
+	if err != nil {
+		if ctx.Err() != nil {
+			return stored, err
 		}
-		if len(scores.Scores) > 0 {
-			if err := c.queries.ScoreSpotPools(ctx, scores); err != nil {
-				return stored, fmt.Errorf("store spot placement scores: %w", err)
-			}
+		logger.WarnContext(ctx, "spot placement scores incomplete", "error", err)
+		failed = errors.Join(failed, fmt.Errorf("placement scores: %w", err))
+	}
+	if len(scores.Scores) > 0 {
+		if err := c.queries.ScoreSpotPools(ctx, scores); err != nil {
+			return stored, fmt.Errorf("store spot placement scores: %w", err)
 		}
 	}
 	return stored, failed
 }
 
-// priceRegion is a region whose Spot prices a refresh read.
-type priceRegion struct {
-	name   string
-	client *ec2.Client
-	zones  map[string]bool
-	types  []string
-}
-
 // refreshPrices reads every region's Spot prices, then stores them in one
-// transaction. It returns the regions it read and the reads that failed
-// apart from err, which stopped it.
-func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, []priceRegion, error, error) {
+// transaction. It returns the fleet's zones by region and the reads that
+// failed apart from err, which stopped it.
+func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, map[string]map[string]bool, error, error) {
 	zones, err := c.fleetZones(ctx)
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	var regions []priceRegion
 	var updates []UpsertSpotPricesParams
 	var failed error
 	for _, region := range slices.Sorted(maps.Keys(zones)) {
-		r := priceRegion{name: region, types: spotTypes(region), zones: zones[region]}
-		if len(r.types) == 0 {
+		types := spotTypes(region)
+		if len(types) == 0 {
 			continue
 		}
-		r.client = c.aws().ec2(c.platformAccount(false).scope, region)
-		prices, err := spotQuotes(ctx, r.client, slices.Sorted(maps.Keys(r.zones)), r.types, time.Now())
+		client := c.aws().ec2(c.platformAccount(false).scope, region)
+		prices, err := spotQuotes(ctx, client, slices.Sorted(maps.Keys(zones[region])), types, time.Now())
 		if err != nil {
 			if ctx.Err() != nil {
 				return 0, nil, nil, err
@@ -122,7 +111,7 @@ func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, 
 			params.HourlyMicros = append(params.HourlyMicros, p.HourlyMicros)
 			params.EffectiveAt = append(params.EffectiveAt, p.EffectiveAt)
 		}
-		regions, updates = append(regions, r), append(updates, params)
+		updates = append(updates, params)
 	}
 	stored := 0
 	err = inTx(ctx, c, func(tx pgx.Tx) error {
@@ -138,32 +127,48 @@ func (c *Compute) refreshPrices(ctx context.Context, logger *slog.Logger) (int, 
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	return stored, regions, failed, nil
+	return stored, zones, failed, nil
 }
 
-// placementShape names the shape a type's pools are scored as: its vCPUs
-// and GPUs.
+// placementShape names what a type's pools are scored as: G and P types
+// alone, which AWS scores one by one; any other type as its shape, its
+// vCPUs, which AWS scores only as three or more types.
 func placementShape(t CatalogType) string {
-	return fmt.Sprintf("%d/%s/%d", t.VCPUs(), t.GPU, t.GPUCount)
+	if class, _ := QuotaClassOf(t.Name); class == QuotaG || class == QuotaP {
+		return t.Name
+	}
+	return fmt.Sprintf("%d vCPUs", t.VCPUs())
 }
 
-// placementScores reads AWS's Spot placement score of one instance in each
-// of zones for every shape of types the catalog sells at least
-// placementShapeTypes of, and gives each type its shape's score: a pool is
-// scored as any catalog type of its vCPUs and GPUs. Shapes of fewer types,
-// which include the 2- and 4-vCPU ones bought most, are not read: padding
-// them with types the catalog never launches would score capacity it does
-// not buy. Their pools carry no placement penalty and rank on full cost,
-// and a refused pool moves the launch to the next. A shape whose read
-// fails is left out and the others kept.
-func placementScores(ctx context.Context, client *ec2.Client, region string, zones map[string]bool, types []string) (ScoreSpotPoolsParams, error) {
-	shapes := map[string][]string{}
-	for _, name := range types {
-		if t, ok := CatalogTypeNamed(name); ok {
-			shapes[placementShape(t)] = append(shapes[placementShape(t)], name)
+// placementScores reads AWS's Spot placement score of one instance in every
+// zone of zones, by region, for each shape of the catalog types those
+// regions sell: each G and P type alone, and every other shape of at least
+// placementShapeTypes types. Shapes of fewer types, which include the 2-
+// and 4-vCPU ones, are not read: padding them with types the catalog never
+// launches would score capacity it does not buy. One read covers every
+// fleet region whether or not its prices were read, so the reads are one
+// fixed configuration per shape, which AWS repeats freely; it limits new
+// configurations a day. A shape whose read fails is left out and the
+// others kept.
+func placementScores(ctx context.Context, client *ec2.Client, zones map[string]map[string]bool) (ScoreSpotPoolsParams, error) {
+	regions := slices.Sorted(maps.Keys(zones))
+	all := map[string]bool{}
+	sold := map[string]bool{}
+	for _, region := range regions {
+		maps.Copy(all, zones[region])
+		for _, t := range spotTypes(region) {
+			sold[t] = true
 		}
 	}
-	maps.DeleteFunc(shapes, func(_ string, types []string) bool { return len(types) < placementShapeTypes })
+	shapes := map[string][]string{}
+	for _, t := range FleetCatalog() {
+		if sold[t.Name] {
+			shapes[placementShape(t)] = append(shapes[placementShape(t)], t.Name)
+		}
+	}
+	maps.DeleteFunc(shapes, func(shape string, types []string) bool {
+		return len(types) < placementShapeTypes && shape != types[0]
+	})
 	keys := slices.Sorted(maps.Keys(shapes))
 	scores := make([]map[string]int16, len(keys))
 	errs := make([]error, len(keys))
@@ -171,15 +176,15 @@ func placementScores(ctx context.Context, client *ec2.Client, region string, zon
 	group.SetLimit(placementScoreCalls)
 	for n, key := range keys {
 		group.Go(func() error {
-			scores[n], errs[n] = shapeScores(ctx, client, region, shapes[key])
+			scores[n], errs[n] = shapeScores(ctx, client, regions, all, shapes[key])
 			return nil
 		})
 	}
 	_ = group.Wait() // Each read records its own error.
-	params := ScoreSpotPoolsParams{Region: region}
+	var params ScoreSpotPoolsParams
 	for n, key := range keys {
 		for _, zone := range slices.Sorted(maps.Keys(scores[n])) {
-			if !zones[zone] {
+			if !all[zone] {
 				continue
 			}
 			for _, name := range shapes[key] {
@@ -192,28 +197,42 @@ func placementScores(ctx context.Context, client *ec2.Client, region string, zon
 	return params, errors.Join(errs...)
 }
 
+// placementScoreZones is the most zones AWS returns for one placement score
+// read, the best scored, without a next page.
+const placementScoreZones = 10
+
 // shapeScores reads the placement score of one Spot instance of any of
-// types in each zone of region.
-func shapeScores(ctx context.Context, client *ec2.Client, region string, types []string) (map[string]int16, error) {
-	out := map[string]int16{}
-	pages := ec2.NewGetSpotPlacementScoresPaginator(client, &ec2.GetSpotPlacementScoresInput{
+// types in each of zones, which lie in regions. When AWS returns its most
+// zones, a zone it left out scores no higher than the lowest it returned,
+// which the zone gets; a zone that sells none of types has no price to
+// score.
+func shapeScores(ctx context.Context, client *ec2.Client, regions []string, zones map[string]bool, types []string) (map[string]int16, error) {
+	out, err := client.GetSpotPlacementScores(ctx, &ec2.GetSpotPlacementScoresInput{
 		InstanceTypes: types, TargetCapacity: aws.Int32(1), TargetCapacityUnitType: ec2types.TargetCapacityUnitTypeUnits,
-		SingleAvailabilityZone: aws.Bool(true), RegionNames: []string{region},
+		SingleAvailabilityZone: aws.Bool(true), RegionNames: regions,
 	})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("get spot placement scores for %s: %w", strings.Join(types, ","), err)
+	if err != nil {
+		return nil, fmt.Errorf("get spot placement scores for %s: %w", strings.Join(types, ","), err)
+	}
+	scores := map[string]int16{}
+	lowest := int16(10)
+	for _, s := range out.SpotPlacementScores {
+		score := aws.ToInt32(s.Score)
+		if !slices.Contains(regions, aws.ToString(s.Region)) || aws.ToString(s.AvailabilityZoneId) == "" || score < 1 || score > 10 {
+			return nil, fmt.Errorf("placement score %d for %s %s outside the request", score, aws.ToString(s.Region), aws.ToString(s.AvailabilityZoneId))
 		}
-		for _, s := range page.SpotPlacementScores {
-			score := aws.ToInt32(s.Score)
-			if aws.ToString(s.Region) != region || aws.ToString(s.AvailabilityZoneId) == "" || score < 1 || score > 10 {
-				return nil, fmt.Errorf("placement score %d for %s %s outside the request", score, aws.ToString(s.Region), aws.ToString(s.AvailabilityZoneId))
-			}
-			out[aws.ToString(s.AvailabilityZoneId)] = int16(score)
+		scores[aws.ToString(s.AvailabilityZoneId)] = int16(score)
+		lowest = min(lowest, int16(score))
+	}
+	if len(out.SpotPlacementScores) < placementScoreZones {
+		return scores, nil
+	}
+	for zone := range zones {
+		if _, scored := scores[zone]; !scored {
+			scores[zone] = lowest
 		}
 	}
-	return out, nil
+	return scores, nil
 }
 
 // SpotPrices are the Spot prices fresh enough to buy on.

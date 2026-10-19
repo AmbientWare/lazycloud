@@ -1515,6 +1515,7 @@ class MachineFailure(str, Enum):
     machine_record_deleted = "machine_record_deleted"
     provider_stopped = "provider_stopped"
     provider_terminated = "provider_terminated"
+    no_capacity = "no_capacity"
     unknown = "unknown"
 
 
@@ -1747,6 +1748,31 @@ class AwsSetupStep(str, Enum):
 class AwsCustomerAction(APIModel):
     label: str
     url: str
+
+
+class QuotaClass(str, Enum):
+    standard = "standard"
+    g = "g"
+
+
+class Market1(str, Enum):
+    on_demand = "on_demand"
+    spot = "spot"
+
+
+class AwsBlockedQuota(APIModel):
+    region: str
+    quota_class: Annotated[
+        QuotaClass, Field(description="standard is CPU families; g is G and VT.")
+    ]
+    market: Market1
+    vcpus: Annotated[int, Field(description="The quota in vCPUs.")]
+    needed_vcpus: Annotated[
+        int, Field(description="The vCPUs of the smallest machine LazyCloud buys in the class.")
+    ]
+    request_url: Annotated[
+        str, Field(description="The AWS Service Quotas page where the customer requests more.")
+    ]
 
 
 class AwsConnectionRequest(APIModel):
@@ -3065,6 +3091,10 @@ class AwsConnection(APIModel):
     active_authorization: AwsAuthorizationGeneration | None = None
     pending_authorization: AwsAuthorizationGeneration | None = None
     retiring_authorization: AwsAuthorizationGeneration | None = None
+    blocked_quotas: Annotated[
+        list[AwsBlockedQuota] | None,
+        Field(description="EC2 vCPU quotas too small for one machine; reads only."),
+    ] = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 

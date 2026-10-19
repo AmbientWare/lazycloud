@@ -5237,7 +5237,7 @@ export interface components {
         /** @enum {string} */
         MachineLifecycle: "requested" | "provisioning" | "booting" | "joining" | "ready" | "draining" | "stopping" | "stopped" | "resuming" | "terminating" | "deleted" | "failed";
         /** @enum {string} */
-        MachineFailure: "agent_download_failed" | "runtime_install_failed" | "network_join_failed" | "provider_identity_failed" | "agent_enrollment_failed" | "worker_image_pull_failed" | "worker_start_failed" | "worker_readiness_failed" | "bootstrap_timed_out" | "host_preflight_failed" | "service_lost" | "machine_record_deleted" | "provider_stopped" | "provider_terminated" | "unknown";
+        MachineFailure: "agent_download_failed" | "runtime_install_failed" | "network_join_failed" | "provider_identity_failed" | "agent_enrollment_failed" | "worker_image_pull_failed" | "worker_start_failed" | "worker_readiness_failed" | "bootstrap_timed_out" | "host_preflight_failed" | "service_lost" | "machine_record_deleted" | "provider_stopped" | "provider_terminated" | "no_capacity" | "unknown";
         /** @enum {string} */
         CapacityState: "available" | "draining" | "preempting" | "cordoned";
         PreflightCheck: {
@@ -5461,10 +5461,34 @@ export interface components {
             active_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
             pending_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
             retiring_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
+            /** @description EC2 vCPU quotas too small for one machine; reads only. */
+            blocked_quotas?: components["schemas"]["AwsBlockedQuota"][];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        AwsBlockedQuota: {
+            region: string;
+            /**
+             * @description standard is CPU families; g is G and VT.
+             * @enum {string}
+             */
+            quota_class: "standard" | "g";
+            /** @enum {string} */
+            market: "on_demand" | "spot";
+            /**
+             * Format: int64
+             * @description The quota in vCPUs.
+             */
+            vcpus: number;
+            /**
+             * Format: int64
+             * @description The vCPUs of the smallest machine LazyCloud buys in the class.
+             */
+            needed_vcpus: number;
+            /** @description The AWS Service Quotas page where the customer requests more. */
+            request_url: string;
         };
         AwsConnectionEnvelope: {
             connection?: components["schemas"]["AwsConnection"];
@@ -11674,7 +11698,7 @@ export const activitySeriesKindValues: ReadonlyArray<FlattenedDeepRequired<compo
 export const gpuTypeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["GpuType"]> = ["T4", "A10G", "L4", "L40S", "A100-40", "A100-80", "H100", "H200", "any"];
 export const regionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Region"]> = ["us-east", "us-west", "eu-central", "eu-north", "ap-southeast"];
 export const machineLifecycleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineLifecycle"]> = ["requested", "provisioning", "booting", "joining", "ready", "draining", "stopping", "stopped", "resuming", "terminating", "deleted", "failed"];
-export const machineFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineFailure"]> = ["agent_download_failed", "runtime_install_failed", "network_join_failed", "provider_identity_failed", "agent_enrollment_failed", "worker_image_pull_failed", "worker_start_failed", "worker_readiness_failed", "bootstrap_timed_out", "host_preflight_failed", "service_lost", "machine_record_deleted", "provider_stopped", "provider_terminated", "unknown"];
+export const machineFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineFailure"]> = ["agent_download_failed", "runtime_install_failed", "network_join_failed", "provider_identity_failed", "agent_enrollment_failed", "worker_image_pull_failed", "worker_start_failed", "worker_readiness_failed", "bootstrap_timed_out", "host_preflight_failed", "service_lost", "machine_record_deleted", "provider_stopped", "provider_terminated", "no_capacity", "unknown"];
 export const capacityStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["CapacityState"]> = ["available", "draining", "preempting", "cordoned"];
 export const preflightCheckSeverityValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PreflightCheck"]["severity"]> = ["info", "warning", "error"];
 export const machineProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Machine"]["provider"]> = ["agent"];
@@ -11687,6 +11711,8 @@ export const awsAuthorizationPhaseValues: ReadonlyArray<FlattenedDeepRequired<co
 export const awsAuthorizationErrorValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationError"]> = ["assume_role_denied", "external_id_not_enforced", "account_mismatch", "permission_drift", "stack_drift", "upstream_unavailable"];
 export const awsAuthorizationGenerationAuthorization_modeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsAuthorizationGeneration"]["authorization_mode"]> = ["managed_stack", "existing_role"];
 export const awsSetupStepValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsSetupStep"]> = ["waiting_for_stack", "stack_creating", "stack_failed"];
+export const awsBlockedQuotaQuota_classValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsBlockedQuota"]["quota_class"]> = ["standard", "g"];
+export const awsBlockedQuotaMarketValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsBlockedQuota"]["market"]> = ["on_demand", "spot"];
 export const awsLeftoverKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["AwsLeftover"]["kind"]> = ["stack", "instance"];
 export const fleetStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetState"]> = ["serving", "starting", "draining", "preparing", "stopping", "unavailable", "terminating", "stopped", "hibernate_unverified", "image_saved"];
 export const fleetNodeProviderValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FleetNode"]["provider"]> = ["agent", "aws"];

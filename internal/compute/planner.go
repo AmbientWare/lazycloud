@@ -384,7 +384,7 @@ func (ps *fleetPass) account(a account, groups []pendingGroup) error {
 	s := FleetSnapshot{
 		Now: now, Hosts: hosts, Pending: pending, Recent: recent, RecentDisks: disks, Started: started, Burst: burst, Arrived: arrived, Offers: in,
 		HostRoom: max(0, ps.c.fleet.MaxHosts-held), ReserveRoom: max(0, ps.c.fleet.MaxHosts-reserves), BatchWait: ps.r.batchWaits[a.key()],
-		Holds: holds,
+		Holds: holds, AtLossSpent: ps.r.atLossSpent,
 	}
 	plan, cools := planOwner(p, s, ps.c.fleet.CapacityCooldown)
 	ps.cool(a.key(), cools, "the host bought for a container could not take it")

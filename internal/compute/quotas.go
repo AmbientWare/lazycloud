@@ -13,11 +13,17 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
+	"github.com/google/uuid"
 )
 
 const (
-	// QuotaInterval paces the EC2 quota read.
-	QuotaInterval = time.Hour
+	// ZoneOfferingInterval paces the zone offering read, which changes
+	// when AWS adds a type to a zone.
+	ZoneOfferingInterval = time.Hour
+	// quotaRecheck is how often an account's quotas are read again, so an
+	// increase AWS approves counts within it. A newly connected account's
+	// are read once its networks are.
+	quotaRecheck = 15 * time.Minute
 	// quotaFresh is how long a quota read stays good; an older one is
 	// unknown, which bounds nothing.
 	quotaFresh = 3 * time.Hour
@@ -78,13 +84,32 @@ type QuotaRoom struct {
 	Refused bool
 }
 
-// RefreshQuotas reads every managed account's EC2 vCPU quotas in each of
-// its regions, one statement per account and region. A region whose read
-// fails keeps its last quotas. It reports how many it stored.
+// RefreshQuotas reads the EC2 vCPU quotas of each managed account in each
+// of its regions not read, or failed, within quotaRecheck, one statement
+// per account and region. A region whose
+// read fails keeps its last quotas. It reports how many it stored.
 func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, error) {
 	accounts, err := c.accounts(ctx, c.queries)
 	if err != nil {
 		return 0, err
+	}
+	rows, err := c.queries.Quotas(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read quotas: %w", err)
+	}
+	type place struct{ owner, region string }
+	fresh := map[place]int{}
+	for _, r := range rows {
+		if r.CheckedAt != nil && time.Since(*r.CheckedAt) < quotaRecheck {
+			fresh[place{r.Owner, r.Region}]++
+		}
+	}
+	codes := quotaCodes()
+	var classes, markets []string
+	for _, class := range slices.Sorted(maps.Keys(codes)) {
+		for _, market := range slices.Sorted(maps.Keys(codes[class])) {
+			classes, markets = append(classes, string(class)), append(markets, string(market))
+		}
 	}
 	stored := 0
 	var failed error
@@ -93,10 +118,16 @@ func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, 
 			continue
 		}
 		for _, region := range slices.Sorted(maps.Keys(a.networks)) {
+			if fresh[place{a.key(), region}] == len(classes) {
+				continue
+			}
 			params, err := c.readQuotas(ctx, a, region)
 			if err != nil {
 				if ctx.Err() != nil {
 					return stored, err
+				}
+				if err := c.queries.CheckQuotas(ctx, CheckQuotasParams{Owner: a.key(), Region: region, Classes: classes, Markets: markets}); err != nil {
+					return stored, fmt.Errorf("record the failed quota read: %w", err)
 				}
 				logger.WarnContext(ctx, "ec2 quotas unavailable", "owner", a.key(), "region", region, "error", err)
 				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
@@ -169,4 +200,57 @@ func (c *Compute) refuseQuota(ctx context.Context, q *Queries, owner, region, in
 		return fmt.Errorf("refuse quota: %w", err)
 	}
 	return nil
+}
+
+// BlockedQuota is a vCPU quota of a connected account too small for the
+// smallest machine the fleet buys in its class, region and market, and the
+// Service Quotas page where the customer asks AWS for more.
+type BlockedQuota struct {
+	Region string
+	Class  QuotaClass
+	Market Market
+	// VCPUs is the quota; Needs the vCPUs of the smallest machine.
+	VCPUs, Needs int64
+	URL          string
+}
+
+// BlockedQuotas are the connection's standard and G quotas, as last read,
+// that leave no room for one machine. P quotas start at zero in most
+// accounts and only P work needs them.
+func (c *Compute) BlockedQuotas(ctx context.Context, connection uuid.UUID) ([]BlockedQuota, error) {
+	rooms, err := quotaRooms(ctx, c.queries, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	codes := quotaCodes()
+	var out []BlockedQuota
+	for _, r := range rooms[hostOwner(&connection)] {
+		if !r.Known || r.Refused || (r.Class != QuotaStandard && r.Class != QuotaG) {
+			continue
+		}
+		needs := smallestVCPUs(r.Class, r.Region)
+		if needs == 0 || r.VCPUs >= needs {
+			continue
+		}
+		out = append(out, BlockedQuota{
+			Region: r.Region, Class: r.Class, Market: r.Market, VCPUs: r.VCPUs, Needs: needs,
+			URL: fmt.Sprintf("https://%s.console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s", r.Region, codes[r.Class][r.Market]),
+		})
+	}
+	return out, nil
+}
+
+// smallestVCPUs is the vCPUs of the smallest catalog type of class sold in
+// region, 0 for none.
+func smallestVCPUs(class QuotaClass, region string) int64 {
+	var smallest int64
+	for _, t := range FleetCatalog() {
+		if c, ok := QuotaClassOf(t.Name); !ok || c != class {
+			continue
+		}
+		if _, sold := t.OnDemandMicros(region); sold && (smallest == 0 || t.VCPUs() < smallest) {
+			smallest = t.VCPUs()
+		}
+	}
+	return smallest
 }

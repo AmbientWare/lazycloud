@@ -87,9 +87,12 @@ func (r offerRead) inputs(storageRegion string, a account, hosts []FleetHost) Of
 // fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
 	offerRead
-	pending  []PendingDemandRow
-	markets  map[string]FleetMarketsRow
-	accounts []account
+	// atLossSpent is what the platform's hosts bought at a loss cost to
+	// run today, in micros.
+	atLossSpent int64
+	pending     []PendingDemandRow
+	markets     map[string]FleetMarketsRow
+	accounts    []account
 	// batchWaits are how long each account's arrival batch stays open, by
 	// account key.
 	batchWaits map[string]time.Duration
@@ -115,6 +118,9 @@ func readMarkets(ctx context.Context, q *Queries, p Policy, now time.Time, coold
 		return fleetRead{}, err
 	}
 	r := fleetRead{offerRead: offers, markets: map[string]FleetMarketsRow{}, batchWaits: map[string]time.Duration{}}
+	if r.atLossSpent, err = q.AtLossSpentToday(ctx); err != nil {
+		return r, fmt.Errorf("read today's spend at a loss: %w", err)
+	}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}
@@ -343,11 +349,15 @@ func shapesByMarket(rows []RecentShapesRow) (recent, started, burst, arrived map
 	return recent, started, burst, arrived, disks
 }
 
-// offerCooldowns are the cooldowns of one account, by its key.
+// offerCooldowns are the cooldowns an account, by its key, launches under:
+// its own, and every account's in a zone. EC2 has the same capacity in a
+// zone, by zone id, for every account, so a pool one account was refused
+// in cools for all; a cooldown of a whole region is a quota refusal or a
+// launch whose zone was unknown, and stays the account's.
 func offerCooldowns(rows []PlannerCooldownsRow, owner string) []OfferCooldown {
 	var out []OfferCooldown
 	for _, r := range rows {
-		if r.ConnectionKey != owner {
+		if r.ConnectionKey != owner && r.AvailabilityZoneID == "" {
 			continue
 		}
 		out = append(out, OfferCooldown{Region: r.Region, ZoneID: r.AvailabilityZoneID, InstanceType: r.InstanceType, Market: Market(r.Market), Until: r.Until})

@@ -21,14 +21,25 @@ const (
 	launchGrace = 2 * time.Minute
 )
 
+// stopStuck is how long after its first request a stop EC2 took may still
+// be stopping: two forced stops, each given providerDeadline.
+const stopStuck = 3 * providerDeadline
+
+// hostHistory is how long host phase changes are kept.
+const hostHistory = 30 * 24 * time.Hour
+
 // Reconcile compares cloud hosts with what EC2 reports for the fleet tag in
 // each owner's regions and writes phases only: a host whose instance is
 // gone ends, deleted when the fleet asked or failed otherwise, and its
 // containers stop through execution; a host whose instance must end, as
 // one stopped unasked, one that never enrolled or one lost for long,
 // terminates with its failure recorded, and the actuator ends the instance.
-// Reconcile ends only instances and Spot requests no live host records.
+// Reconcile ends only instances and Spot requests no live host records,
+// and drops host phase history older than hostHistory.
 func (c *Compute) Reconcile(ctx context.Context, logger *slog.Logger) error {
+	if _, err := c.queries.PurgeHostPhaseChanges(ctx, hostHistory.Seconds()); err != nil {
+		logger.ErrorContext(ctx, "purge host phase history", "error", err)
+	}
 	pairs, err := c.reconcileRegions(ctx)
 	if err != nil {
 		return err
@@ -160,8 +171,24 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, acct
 			err = c.hostGone(ctx, h.ID, phase, "", "")
 		case gone:
 			err = c.hostGone(ctx, h.ID, phase, FailureProviderGone, "The provider terminated the instance")
+		// A stop EC2 took is the actuator's to finish, so time the scheduler
+		// was down never ends it: an instance EC2 reports stopped is
+		// recorded by the actuator, and one still stopping ends only after
+		// the actuator's forced stops ran out, stopStuck from the first
+		// request. A stop EC2 never took ends after the window from the
+		// request. A resume whose instance runs ends once it ran
+		// BootTimeout without the agent returning.
+		case phase == PhaseStopping && o.state == ec2types.InstanceStateNameStopped:
+		case phase == PhaseStopping && stopped:
+			if h.StopRequestedAt != nil && time.Since(*h.StopRequestedAt) > stopStuck {
+				err = end(FailureUnknown, "The reserve did not stop in time")
+			}
 		case phase == PhaseStopping && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
 			err = end(FailureUnknown, "The reserve did not stop in time")
+		case phase == PhaseResuming && seen && !stopped:
+			if time.Since(o.started) > c.fleet.BootTimeout {
+				err = end(FailureBootstrapTimedOut, "The reserve did not resume in time")
+			}
 		case phase == PhaseResuming && time.Since(h.PhaseAt) > c.fleet.BootTimeout+providerDeadline:
 			err = end(FailureBootstrapTimedOut, "The reserve did not resume in time")
 		case phase == PhaseStopped && !stopped && time.Since(o.started) > c.fleet.BootTimeout:

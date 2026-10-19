@@ -199,6 +199,42 @@ func (e AwsAuthorizationPhase) Valid() bool {
 	}
 }
 
+// Defines values for AwsBlockedQuotaMarket.
+const (
+	AwsBlockedQuotaMarketOnDemand AwsBlockedQuotaMarket = "on_demand"
+	AwsBlockedQuotaMarketSpot     AwsBlockedQuotaMarket = "spot"
+)
+
+// Valid indicates whether the value is a known member of the AwsBlockedQuotaMarket enum.
+func (e AwsBlockedQuotaMarket) Valid() bool {
+	switch e {
+	case AwsBlockedQuotaMarketOnDemand:
+		return true
+	case AwsBlockedQuotaMarketSpot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsBlockedQuotaQuotaClass.
+const (
+	G        AwsBlockedQuotaQuotaClass = "g"
+	Standard AwsBlockedQuotaQuotaClass = "standard"
+)
+
+// Valid indicates whether the value is a known member of the AwsBlockedQuotaQuotaClass enum.
+func (e AwsBlockedQuotaQuotaClass) Valid() bool {
+	switch e {
+	case G:
+		return true
+	case Standard:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AwsConnectionAction.
 const (
 	AwsAuthorize       AwsConnectionAction = "authorize"
@@ -483,16 +519,16 @@ func (e ChangeTopic) Valid() bool {
 
 // Defines values for ComputeInstanceMarket.
 const (
-	OnDemand ComputeInstanceMarket = "on_demand"
-	Spot     ComputeInstanceMarket = "spot"
+	ComputeInstanceMarketOnDemand ComputeInstanceMarket = "on_demand"
+	ComputeInstanceMarketSpot     ComputeInstanceMarket = "spot"
 )
 
 // Valid indicates whether the value is a known member of the ComputeInstanceMarket enum.
 func (e ComputeInstanceMarket) Valid() bool {
 	switch e {
-	case OnDemand:
+	case ComputeInstanceMarketOnDemand:
 		return true
-	case Spot:
+	case ComputeInstanceMarketSpot:
 		return true
 	default:
 		return false
@@ -1467,6 +1503,7 @@ const (
 	HostPreflightFailed    MachineFailure = "host_preflight_failed"
 	MachineRecordDeleted   MachineFailure = "machine_record_deleted"
 	NetworkJoinFailed      MachineFailure = "network_join_failed"
+	NoCapacity             MachineFailure = "no_capacity"
 	ProviderIdentityFailed MachineFailure = "provider_identity_failed"
 	ProviderStopped        MachineFailure = "provider_stopped"
 	ProviderTerminated     MachineFailure = "provider_terminated"
@@ -1492,6 +1529,8 @@ func (e MachineFailure) Valid() bool {
 	case MachineRecordDeleted:
 		return true
 	case NetworkJoinFailed:
+		return true
+	case NoCapacity:
 		return true
 	case ProviderIdentityFailed:
 		return true
@@ -2540,13 +2579,40 @@ type AwsAuthorizationGenerationAuthorizationMode string
 // AwsAuthorizationPhase defines model for AwsAuthorizationPhase.
 type AwsAuthorizationPhase string
 
+// AwsBlockedQuota defines model for AwsBlockedQuota.
+type AwsBlockedQuota struct {
+	Market AwsBlockedQuotaMarket `json:"market"`
+
+	// NeededVcpus The vCPUs of the smallest machine LazyCloud buys in the class.
+	NeededVcpus int64 `json:"needed_vcpus"`
+
+	// QuotaClass standard is CPU families; g is G and VT.
+	QuotaClass AwsBlockedQuotaQuotaClass `json:"quota_class"`
+	Region     string                    `json:"region"`
+
+	// RequestUrl The AWS Service Quotas page where the customer requests more.
+	RequestUrl string `json:"request_url"`
+
+	// Vcpus The quota in vCPUs.
+	Vcpus int64 `json:"vcpus"`
+}
+
+// AwsBlockedQuotaMarket defines model for AwsBlockedQuota.Market.
+type AwsBlockedQuotaMarket string
+
+// AwsBlockedQuotaQuotaClass standard is CPU families; g is G and VT.
+type AwsBlockedQuotaQuotaClass string
+
 // AwsConnection defines model for AwsConnection.
 type AwsConnection struct {
 	// AccountId The 12-digit AWS account id.
-	AccountId                 string                      `json:"account_id"`
-	ActiveAuthorization       *AwsAuthorizationGeneration `json:"active_authorization,omitempty"`
-	AvailableActions          []AwsConnectionAction       `json:"available_actions"`
-	CanManageExistingCapacity bool                        `json:"can_manage_existing_capacity"`
+	AccountId           string                      `json:"account_id"`
+	ActiveAuthorization *AwsAuthorizationGeneration `json:"active_authorization,omitempty"`
+	AvailableActions    []AwsConnectionAction       `json:"available_actions"`
+
+	// BlockedQuotas EC2 vCPU quotas too small for one machine; reads only.
+	BlockedQuotas             *[]AwsBlockedQuota `json:"blocked_quotas,omitempty"`
+	CanManageExistingCapacity bool               `json:"can_manage_existing_capacity"`
 
 	// ConsoleUrl The AWS Console link that creates the pending stack.
 	ConsoleUrl *string   `json:"console_url,omitempty"`

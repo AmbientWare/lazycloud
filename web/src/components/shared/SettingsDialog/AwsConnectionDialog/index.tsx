@@ -345,6 +345,10 @@ function ConnectionActions({
         </dl>
       ) : null}
 
+      {showCapacity && connection.blocked_quotas?.length ? (
+        <BlockedQuotas quotas={connection.blocked_quotas} />
+      ) : null}
+
       {customerAction ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
           <p className="leading-5">
@@ -404,6 +408,48 @@ function ConnectionActions({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+const quotaClassLabels: Record<Schemas["AwsBlockedQuota"]["quota_class"], string> = {
+  standard: "CPU",
+  g: "GPU",
+};
+
+const quotaMarketLabels: Record<Schemas["AwsBlockedQuota"]["market"], string> = {
+  on_demand: "On-Demand",
+  spot: "Spot",
+};
+
+/** Quotas too small for one machine, each with the AWS page that raises it. */
+function BlockedQuotas({ quotas }: { quotas: Schemas["AwsBlockedQuota"][] }) {
+  return (
+    <div className="space-y-2 border border-border bg-card p-4 text-xs">
+      <p className="leading-5">
+        AWS limits this account below the smallest machine LazyCloud buys here. Ask AWS to raise
+        these quotas.
+      </p>
+      <ul className="divide-y divide-border">
+        {quotas.map((quota) => (
+          <li
+            key={`${quota.region}/${quota.quota_class}/${quota.market}`}
+            className="flex items-center justify-between gap-3 py-2"
+          >
+            <span>
+              {quotaMarketLabels[quota.market]} {quotaClassLabels[quota.quota_class]} in{" "}
+              <span className="mono">{quota.region}</span>: {quota.vcpus} vCPUs, needs{" "}
+              {quota.needed_vcpus}
+            </span>
+            <Button asChild variant="outline" size="sm">
+              <a href={quota.request_url} target="_blank" rel="noopener">
+                Request more
+                <ExternalLink />
+              </a>
+            </Button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -472,7 +518,12 @@ function SetupTrack({
           title={step === "stack_creating" ? "AWS is creating the stack" : "AWS creates the stack"}
         >
           {step === "stack_creating" ? (
-            <p>Usually about 3 minutes. This updates by itself.</p>
+            <p>
+              {connection.pending_authorization?.error_message
+                ? `${connection.pending_authorization.error_message}. `
+                : null}
+              Usually about 3 minutes in all. This updates by itself.
+            </p>
           ) : null}
         </SetupStepRow>
       )}

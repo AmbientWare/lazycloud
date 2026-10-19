@@ -52,7 +52,8 @@ limit @max_rows;
 
 -- name: ConnectionInstances :many
 -- The cloud hosts of the account's connection, newest first after the
--- cursor; failed and deleted ones for a day.
+-- cursor; failed and deleted ones for a day, except launches EC2 had no
+-- capacity for, which never became instances.
 select h.id, h.connection_id, h.region, h.availability_zone, h.instance_id, h.instance_type, h.market,
        h.phase, h.phase_message, h.phase_at, h.failure, h.state, h.last_seen_at, h.capacity_state,
        h.capacity_reason, h.gpu_type, h.gpu_count, h.cpu_millis, h.memory_bytes, h.launch_attempts,
@@ -61,6 +62,7 @@ from hosts h
 join cloud_connections cc on cc.id = h.connection_id
 where cc.account_id = @account_id and h.kind = 'connection'
   and (h.phase not in ('deleted', 'failed') or h.phase_at > now() - interval '1 day')
+  and h.failure is distinct from 'no_capacity'
   and h.id < @before_id
 order by h.id desc
 limit @max_rows;

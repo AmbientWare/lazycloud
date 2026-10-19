@@ -6835,6 +6835,7 @@ components:
         - machine_record_deleted
         - provider_stopped
         - provider_terminated
+        - no_capacity
         - unknown
 
     CapacityState:
@@ -7149,8 +7150,34 @@ components:
         active_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
         pending_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
         retiring_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
+        blocked_quotas:
+          description: EC2 vCPU quotas too small for one machine; reads only.
+          type: array
+          items: { $ref: "#/components/schemas/AwsBlockedQuota" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    AwsBlockedQuota:
+      type: object
+      required: [region, quota_class, market, vcpus, needed_vcpus, request_url]
+      properties:
+        region: { type: string }
+        quota_class:
+          description: standard is CPU families; g is G and VT.
+          type: string
+          enum: [standard, g]
+        market: { type: string, enum: [on_demand, spot] }
+        vcpus:
+          description: The quota in vCPUs.
+          type: integer
+          format: int64
+        needed_vcpus:
+          description: The vCPUs of the smallest machine LazyCloud buys in the class.
+          type: integer
+          format: int64
+        request_url:
+          description: The AWS Service Quotas page where the customer requests more.
+          type: string
 
     AwsConnectionEnvelope:
       type: object

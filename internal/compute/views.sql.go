@@ -81,6 +81,7 @@ from hosts h
 join cloud_connections cc on cc.id = h.connection_id
 where cc.account_id = $1 and h.kind = 'connection'
   and (h.phase not in ('deleted', 'failed') or h.phase_at > now() - interval '1 day')
+  and h.failure is distinct from 'no_capacity'
   and h.id < $2
 order by h.id desc
 limit $3
@@ -119,7 +120,8 @@ type ConnectionInstancesRow struct {
 }
 
 // The cloud hosts of the account's connection, newest first after the
-// cursor; failed and deleted ones for a day.
+// cursor; failed and deleted ones for a day, except launches EC2 had no
+// capacity for, which never became instances.
 func (q *Queries) ConnectionInstances(ctx context.Context, arg ConnectionInstancesParams) ([]ConnectionInstancesRow, error) {
 	rows, err := q.db.Query(ctx, connectionInstances, arg.AccountID, arg.BeforeID, arg.MaxRows)
 	if err != nil {

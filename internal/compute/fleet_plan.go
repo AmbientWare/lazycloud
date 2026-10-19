@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 )
 
@@ -170,6 +172,9 @@ type FleetSnapshot struct {
 	BatchWait time.Duration
 	// Holds are each market's held targets, from the published plans.
 	Holds map[ReserveMarket]MarketHolds
+	// AtLossSpent is what the platform's hosts bought at a loss cost to run
+	// today, in micros.
+	AtLossSpent int64
 }
 
 // FleetActionKind is what an action asks for.
@@ -1314,15 +1319,32 @@ func (ps *pass) buyClass(c *demandClass, r ranking) {
 // the Spot wait while no Spot offer of a model it accepts can host it
 // within the margin a host of its own with the margin set aside: Spot of
 // any model it accepts first, then on-demand.
+// The platform buys at a loss only hosts whose hourly cost the container
+// alone, at its rate, bills at least 100-LossCapPercent percent of, and
+// none once today's at-loss hosts' cost times LossCapPercent reaches
+// LossBudget; work it does not buy for waits for Spot.
 func (ps *pass) buyAtLoss(c *demandClass) {
 	waited := func(it coverItem) bool { return ps.s.Now.Sub(it.since) >= ps.p.SpotWait && !ps.spotOffered(it.need) }
 	if !slices.ContainsFunc(c.groups, func(g itemGroup) bool { return slices.ContainsFunc(g.items, waited) }) {
 		return
 	}
 	in := ps.s.Offers
+	if !in.OwnerPays && ps.s.AtLossSpent*ps.p.LossCapPercent/100 >= ps.p.LossBudget {
+		return
+	}
 	in.WaiveMargin = true
 	r := ranking{offers: RankOffers(ps.p, c.need, false, in), refs: sizeRefs(ps.p, c.need, false, in)}
 	r.soon = RankOffers(ps.p, c.need, false, availableSoon(ps.p, in))
+	rates := indexRates(in.Rates)
+	// overCap reports an offer whose loss on what it alone bills it at its
+	// rate passes the cap.
+	overCap := func(it coverItem, o FleetOffer) bool {
+		if in.OwnerPays {
+			return false
+		}
+		rate, ok := rates[billing.RateClassFor(it.need.Region != "" || it.need.Zone != "", true)][billing.GPUType(o.Type.GPU)]
+		return !ok || hourRevenue(rate, reservedShape(it.need))*100 < o.HourlyMicros*(100-ps.p.LossCapPercent)*1000
+	}
 	for i := range c.groups {
 		g := &c.groups[i]
 		for _, it := range slices.Clone(g.items) {
@@ -1333,7 +1355,7 @@ func (ps *pass) buyAtLoss(c *demandClass) {
 			for _, market := range []Market{MarketSpot, MarketOnDemand} {
 				for _, model := range ps.gpuModels(c.need, r.offers) {
 					ps.coverClass(alone, ReserveMarket{Preemptible: true, GPU: model}, slices.DeleteFunc(slices.Clone(r.offers), func(o FleetOffer) bool {
-						return o.Type.GPU != model || o.Market != market
+						return o.Type.GPU != model || o.Market != market || overCap(it, o)
 					}), r, nil, true)
 				}
 			}

@@ -146,6 +146,11 @@ type FleetOffer struct {
 // than ordinary Spot price spread.
 const placementPenaltyPercent = 4
 
+// placementFloor is the highest placement score of a Spot pool the fleet
+// does not buy: EC2 refuses launches in pools AWS scores 1, so one there
+// wastes a try and the walk after it.
+const placementFloor = 1
+
 // Key names the offer.
 func (o FleetOffer) Key() string {
 	return o.Region + "/" + o.ZoneID + "/" + o.Type.Name + "/" + string(o.Market)
@@ -205,9 +210,7 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, need Requirement) 
 	if !ok || o.Usable.CPUMillis <= 0 || o.Usable.MemoryBytes <= 0 {
 		return rejectUnpricedCapacity, true
 	}
-	revenue := int64(o.Usable.CPUMillis)*rate.CPUHour/1000 +
-		o.Usable.MemoryBytes/gib*rate.MemoryGiBHour + o.Usable.MemoryBytes%gib*rate.MemoryGiBHour/gib +
-		int64(o.Usable.GPUs)*rate.GPUCardHour
+	revenue := hourRevenue(rate, o.Usable)
 	if revenue <= 0 {
 		return rejectUnpricedCapacity, true
 	}
@@ -215,6 +218,14 @@ func marginRejection(p Policy, rates rateIndex, o FleetOffer, need Requirement) 
 		return rejectInsufficientMargin, true
 	}
 	return "", false
+}
+
+// hourRevenue is what capacity bills an hour at rate, in thousandths of a
+// micro.
+func hourRevenue(rate billing.ComputeRate, capacity FleetCapacity) int64 {
+	return int64(capacity.CPUMillis)*rate.CPUHour/1000 +
+		capacity.MemoryBytes/gib*rate.MemoryGiBHour + capacity.MemoryBytes%gib*rate.MemoryGiBHour/gib +
+		int64(capacity.GPUs)*rate.GPUCardHour
 }
 
 // cooled reports whether a cooldown holds an offer in a zone back at now.
@@ -339,6 +350,9 @@ func RankOffers(p Policy, need Requirement, reserve bool, in OfferInputs) []Flee
 					if market == MarketSpot {
 						q, quoted := spot[spotPool{region, subnet.ZoneID, t.Name}]
 						if !quoted {
+							continue
+						}
+						if q.PlacementScore != 0 && q.PlacementScore <= placementFloor {
 							continue
 						}
 						compute = q.HourlyMicros

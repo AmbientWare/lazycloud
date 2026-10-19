@@ -410,6 +410,18 @@ func (s *Server) GetAwsConnection(ctx context.Context, _ GetAwsConnectionRequest
 	out := GetAwsConnection200JSONResponse{}
 	if conn != nil {
 		c := s.connectionOut(*conn)
+		blocked, err := s.owners.Compute.BlockedQuotas(ctx, conn.ID)
+		if err != nil {
+			return nil, err
+		}
+		quotas := make([]apitypes.AwsBlockedQuota, len(blocked))
+		for n, q := range blocked {
+			quotas[n] = apitypes.AwsBlockedQuota{
+				Region: q.Region, QuotaClass: apitypes.AwsBlockedQuotaQuotaClass(q.Class), Market: apitypes.AwsBlockedQuotaMarket(q.Market),
+				Vcpus: q.VCPUs, NeededVcpus: q.Needs, RequestUrl: q.URL,
+			}
+		}
+		c.BlockedQuotas = &quotas
 		out.Connection = &c
 	}
 	return out, nil

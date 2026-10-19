@@ -229,3 +229,27 @@ insert into fleet_networks (owner, region, checked_at, error)
 values (@owner, @region, now(), @error)
 on conflict (owner, region) do update set checked_at = excluded.checked_at, error = excluded.error;
 
+
+-- name: PurgeHostPhaseChanges :execrows
+-- Host phase history older than the retention.
+delete from host_phase_changes where at < now() - make_interval(secs => @seconds::float8);
+
+-- name: AtLossSpentToday :one
+-- What the platform's hosts bought at a loss cost to run since midnight
+-- UTC, in micros: each one's hourly price over the time its instance ran,
+-- from its phase history.
+with changes as (
+    select h.id, h.hourly_micros, c.phase, c.at,
+           lead(c.at, 1, now()) over (partition by c.host_id order by c.at) as until
+    from hosts h
+    join host_phase_changes c on c.host_id = h.id
+    where h.provider = 'aws' and h.margin_waived and h.connection_id is null and h.hourly_micros is not null
+      and c.host_id in (select x.host_id from host_phase_changes x join hosts w on w.id = x.host_id
+                        where w.provider = 'aws' and w.margin_waived and x.at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
+                        union select id from hosts where provider = 'aws' and margin_waived and phase not in ('deleted', 'failed'))
+)
+select coalesce(sum(hourly_micros * extract(epoch from
+           least(until, now()) - greatest(at, date_trunc('day', now() at time zone 'utc') at time zone 'utc')) / 3600), 0)::bigint
+from changes
+where phase in ('provisioning', 'booting', 'joining', 'ready', 'draining', 'preparing', 'stopping', 'resuming')
+  and until > date_trunc('day', now() at time zone 'utc') at time zone 'utc';
