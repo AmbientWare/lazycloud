@@ -609,6 +609,53 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 	}
 }
 
+// Time the scheduler was down never ends a stop EC2 took: a reserve EC2
+// stopped while no scheduler ran past the window is recorded stopped, not
+// failed, as the 30 reserves ended on 2026-10-15 should have been.
+func TestAStopEC2TookSurvivesTheSchedulerBeingDown(t *testing.T) {
+	t.Parallel()
+	o, _, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c030")
+	ec2.add(fakeInstance{ID: "i-0000000000000c030", State: "stopped"}, host.String())
+	ago(t, o, host, "phase_at", 45*time.Minute)
+	ago(t, o, host, "stop_requested_at", 45*time.Minute)
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	actuate(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseStopped) {
+		t.Fatalf("reserve EC2 stopped during the outage is %s, want stopped", phase)
+	}
+}
+
+// A host's phase changes are kept in order, which wake counts, time
+// asleep and time to ready are read from; and what the platform's hosts
+// bought at a loss cost today counts the time their instances ran.
+func TestHostHistoryRecordsEachPhaseAndTheCostOfAtLossHosts(t *testing.T) {
+	t.Parallel()
+	o, _, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c031")
+	ec2.add(fakeInstance{ID: "i-0000000000000c031", State: "stopped"}, host.String())
+	actuate(t, o)
+	if got := scan[string](t, o.pool, `select string_agg(phase, ' ' order by at) from host_phase_changes where host_id = $1`, uuid.UUID(host)); got != "stopping stopped" {
+		t.Fatalf("history %q, want stopping then stopped", got)
+	}
+
+	ready := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseReady, Market: compute.MarketOnDemand,
+		Region: "us-east-2", Zone: "us-east-2a", InstanceID: "i-0000000000000c032"})
+	run(t, o.pool, `update hosts set margin_waived = true, hourly_micros = 3600000 where id = $1`, uuid.UUID(ready))
+	run(t, o.pool, `update host_phase_changes set at = greatest(now() - interval '10 minutes', date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+where host_id = $1`, uuid.UUID(ready))
+	ran := scan[float64](t, o.pool, `select extract(epoch from now() - min(at)) from host_phase_changes where host_id = $1`, uuid.UUID(ready))
+	spent, err := compute.New(o.pool).AtLossSpentToday(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(ran * 1000); spent < want-2000 || spent > want+2000 {
+		t.Fatalf("spent %d micros, want about %d for %.0f s at $3.60 an hour", spent, want, ran)
+	}
+}
+
 // A stop EC2 refuses outright, as under a role without ec2:StopInstances,
 // retires the host and cools its offer, so the next reserve pass buys the
 // reserve elsewhere instead of a host that would be refused the same way.

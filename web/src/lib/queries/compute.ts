@@ -9,11 +9,13 @@ import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./
  * account's capacity, connection and machines change slowly.
  */
 const ACCOUNT_CAPACITY_POLL_INTERVAL_MS = 30_000;
-/**
- * While the server moves the connection between phases, including the check
- * that follows the customer creating the stack in the AWS Console.
- */
+/** While the server moves the connection between phases. */
 const CONNECTION_TRANSITION_POLL_INTERVAL_MS = 5_000;
+/**
+ * While the customer creates the stack in the AWS Console, which the server
+ * checks every 2 seconds.
+ */
+const CONNECTION_SETUP_POLL_INTERVAL_MS = 2_000;
 /** While the join dialog waits for a host to come up. */
 const FOLLOWED_MACHINE_POLL_INTERVAL_MS = 5_000;
 
@@ -71,10 +73,16 @@ export function awsConnectionQueryOptions(enabled = true) {
     queryKey: accountQueryKeys.compute.awsConnection(),
     enabled,
     queryFn: async () => (await ok(api.GET("/v1/aws-connection"))).connection ?? null,
-    refetchInterval: (query) =>
-      query.state.data && connectionIsTransitioning(query.state.data)
+    refetchInterval: (query) => {
+      const connection = query.state.data;
+      if (!connection) return ACCOUNT_CAPACITY_POLL_INTERVAL_MS;
+      if (connection.pending_authorization?.setup_step && !connection.active_authorization) {
+        return CONNECTION_SETUP_POLL_INTERVAL_MS;
+      }
+      return connectionIsTransitioning(connection)
         ? CONNECTION_TRANSITION_POLL_INTERVAL_MS
-        : ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
+        : ACCOUNT_CAPACITY_POLL_INTERVAL_MS;
+    },
     meta: workspaceLiveQueryMeta(true),
   });
 }

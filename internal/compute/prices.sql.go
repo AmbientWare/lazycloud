@@ -67,27 +67,22 @@ func (q *Queries) FreshSpotPrices(ctx context.Context, arg FreshSpotPricesParams
 const scoreSpotPools = `-- name: ScoreSpotPools :exec
 update spot_prices s
 set placement_score = v.score, scored_at = now()
-from (select unnest($2::text[]) as zone_id, unnest($3::text[]) as instance_type,
-             unnest($4::smallint[]) as score) v
-where s.region = $1::text and s.availability_zone_id = v.zone_id and s.instance_type = v.instance_type
+from (select unnest($1::text[]) as zone_id, unnest($2::text[]) as instance_type,
+             unnest($3::smallint[]) as score) v
+where s.availability_zone_id = v.zone_id and s.instance_type = v.instance_type
 `
 
 type ScoreSpotPoolsParams struct {
-	Region        string
 	ZoneIds       []string
 	InstanceTypes []string
 	Scores        []int16
 }
 
-// One region's Spot placement scores per zone and type, in one statement,
-// on the prices stored. The arrays have one element per score.
+// Spot placement scores per zone id and type, in one statement, on the
+// prices stored. A zone id names one zone in one region. The arrays have
+// one element per score.
 func (q *Queries) ScoreSpotPools(ctx context.Context, arg ScoreSpotPoolsParams) error {
-	_, err := q.db.Exec(ctx, scoreSpotPools,
-		arg.Region,
-		arg.ZoneIds,
-		arg.InstanceTypes,
-		arg.Scores,
-	)
+	_, err := q.db.Exec(ctx, scoreSpotPools, arg.ZoneIds, arg.InstanceTypes, arg.Scores)
 	return err
 }
 

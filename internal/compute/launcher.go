@@ -138,7 +138,7 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 		if h.Replaces != nil {
 			// A rightsize is optional: its refusal keeps the host it would
 			// replace.
-			return false, c.failLaunch(ctx, h, message, cool)
+			return false, c.failLaunch(ctx, h, refusal.failure(), message, cool)
 		}
 		if err := read(); err != nil {
 			return false, err
@@ -148,7 +148,7 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 			return false, err
 		}
 		if !ok {
-			return false, c.failLaunch(ctx, h, message, cool)
+			return false, c.failLaunch(ctx, h, refusal.failure(), message, cool)
 		}
 		lease := actionLease
 		if tried == passPools {
@@ -179,6 +179,15 @@ type poolRefusal struct {
 }
 
 func (r *poolRefusal) message() string { return describeAWSError(r.err) }
+
+// failure is what a host fails as when no pool is left after the refusal:
+// a quota the customer can raise, or EC2 having none of the pool.
+func (r *poolRefusal) failure() Failure {
+	if quotaRefusal(awsCode(r.err)) {
+		return FailureUnknown
+	}
+	return FailureNoCapacity
+}
 
 // cooldown is how far the refusal cools its pool: the zone for capacity or
 // price, the region and quota class for quota.
@@ -304,9 +313,13 @@ func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in Off
 		need.Read = cmp.Or(need.Read, VolumeReadOf(w.ReadRegion, w.ReadBytes))
 	}
 	hibernate, reserve := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate, h.ReserveMode != nil
+	// A reserve waits for no one, so its walk never steps up a size: a
+	// larger pool of a market refusing the smaller ones fails the same way.
+	size, _ := CatalogTypeNamed(h.InstanceType)
 	walkable := func(in OfferInputs) []FleetOffer {
 		return slices.DeleteFunc(RankOffers(p, need, reserve, in), func(o FleetOffer) bool {
 			return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
+				reserve && (o.Type.VCPUs() > size.VCPUs() || o.Type.MemoryBytes > size.MemoryBytes) ||
 				slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 					return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 				})
@@ -367,23 +380,23 @@ func (c *Compute) hostSpan(ctx context.Context, host uuid.UUID, name string, att
 func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHostActionsRow) (bool, *poolRefusal, error) {
 	target, err := c.launchTarget(ctx, h)
 	if err != nil {
-		return false, nil, c.failLaunch(ctx, h, err.Error(), nil)
+		return false, nil, c.failLaunch(ctx, h, FailureUnknown, err.Error(), nil)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return false, nil, c.failLaunch(ctx, h, "no agent release is published", nil)
+		return false, nil, c.failLaunch(ctx, h, FailureUnknown, "no agent release is published", nil)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return false, nil, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), nil)
+		return false, nil, c.failLaunch(ctx, h, FailureUnknown, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), nil)
 	}
 	image, ok := c.nodeImage(h.Region, h.GpuCount > 0)
 	if !ok {
-		return false, nil, c.failLaunch(ctx, h, "no node image for "+h.Region, nil)
+		return false, nil, c.failLaunch(ctx, h, FailureUnknown, "no node image for "+h.Region, nil)
 	}
 	if err := c.shareImage(ctx, target, h.Region, image); err != nil {
 		if accessDenied(err) || strings.HasPrefix(awsCode(err), "InvalidAMI") {
-			return false, nil, c.failLaunch(ctx, h, "share node image: "+describeAWSError(err), nil)
+			return false, nil, c.failLaunch(ctx, h, FailureUnknown, "share node image: "+describeAWSError(err), nil)
 		}
 		return false, nil, fmt.Errorf("share node image: %w", err)
 	}
@@ -453,9 +466,9 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 		case capacityRefusal(code):
 			return false, &poolRefusal{err: fmt.Errorf("run instance: %w", err), zoneID: subnet.ZoneID}, nil
 		case strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return false, nil, c.failLaunch(ctx, h, describeAWSError(err), &poolCooldown{})
+			return false, nil, c.failLaunch(ctx, h, FailureUnknown, describeAWSError(err), &poolCooldown{})
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return false, nil, c.failLaunch(ctx, h, describeAWSError(err), nil)
+			return false, nil, c.failLaunch(ctx, h, FailureUnknown, describeAWSError(err), nil)
 		}
 		return false, nil, fmt.Errorf("run instance: %w", err)
 	}
@@ -631,9 +644,9 @@ func (c *Compute) shareImage(ctx context.Context, target launchTarget, region, i
 	return nil
 }
 
-// failLaunch fails a host that could not launch; a cooldown, when given,
-// also skips its pool until the cooldown ends.
-func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, message string, cool *poolCooldown) error {
+// failLaunch fails a host that could not launch for failure; a cooldown,
+// when given, also skips its pool until the cooldown ends.
+func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, failure Failure, message string, cool *poolCooldown) error {
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if cool != nil {
@@ -642,7 +655,7 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, message
 			}
 		}
 		if _, err := q.FailLaunch(ctx, FailLaunchParams{
-			ID: h.ID, Token: h.ActionToken, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message),
+			ID: h.ID, Token: h.ActionToken, Failure: ptr(string(failure)), Message: truncate("Launch failed: " + message),
 		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}

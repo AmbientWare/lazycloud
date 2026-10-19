@@ -496,6 +496,34 @@ values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us
 	}
 }
 
+// A refused reserve's walk never steps up a size: with only m7i.large's
+// pool refused and m7i.xlarge quoted, the reserve fails rather than buying
+// the larger type, which a market refusing the smaller fails the same way.
+func TestARefusedReserveDoesNotStepUpASize(t *testing.T) {
+	t.Parallel()
+	o, emulator, _ := launchFleet(t, compute.Fleet{})
+	emulator.on("RunInstances", refuseFirstPool(t, "InsufficientInstanceCapacity"))
+	run(t, o.pool, `
+insert into spot_prices (region, availability_zone_id, instance_type, hourly_micros, effective_at, observed_at)
+values ('us-east-2', 'use2-az1', 'm7i.large', 40000, now(), now()), ('us-east-2', 'use2-az2', 'm7i.xlarge', 50000, now(), now())`)
+	small, _ := compute.CatalogTypeNamed("m7i.large")
+	usable := small.Usable(0)
+	host := scan[uuid.UUID](t, o.pool, `
+insert into hosts (name, state, kind, provider, phase, cpu_millis, memory_bytes, region, availability_zone, availability_zone_id,
+    instance_type, market, reserve_mode)
+values ('r', 'offline', 'platform', 'aws', 'requested', $1, $2, 'us-east-2', 'us-east-2a', 'use2-az1', 'm7i.large', 'spot', 'hibernate') returning id`,
+		int64(usable.CPUMillis), usable.MemoryBytes)
+	launch(t, o)
+	for _, c := range emulator.calls("RunInstances") {
+		if c.Form.Get("InstanceType") != "m7i.large" {
+			t.Fatalf("the reserve's walk launched %s, want m7i.large only", pool(c))
+		}
+	}
+	if phase, _ := hostPhase(t, o.pool, compute.HostID(host)); phase != string(compute.PhaseFailed) {
+		t.Fatalf("reserve is %s, want failed", phase)
+	}
+}
+
 // A refused launch moves to the cheapest pool that holds what the planner
 // bought the host to hold, a smaller type among them: an r7i.2xlarge bought
 // for a 4 CPU slot moves to a c6a.2xlarge, not to another type with its

@@ -145,7 +145,10 @@ const (
 	FailureServiceLost       Failure = "service_lost"
 	FailureProviderStopped   Failure = "provider_stopped"
 	FailureProviderGone      Failure = "provider_terminated"
-	FailureUnknown           Failure = "unknown"
+	// FailureNoCapacity is a launch EC2 refused in every pool it could
+	// move to for capacity or price; the planner buys elsewhere.
+	FailureNoCapacity Failure = "no_capacity"
+	FailureUnknown    Failure = "unknown"
 )
 
 // CapacityState says whether a ready host takes new work.

@@ -76,11 +76,17 @@ type ticks struct {
 	layerSweep time.Duration
 	// purge paces deletion of finished callbacks.
 	purge time.Duration
-	// fleet paces capacity planning, launches, retirement, preemption
-	// and connection steps; compute wakes cut it short.
+	// fleet paces capacity planning, launches, retirement and preemption;
+	// compute wakes cut it short.
 	fleet time.Duration
+	// connections paces connection steps, so a setup check comes due
+	// within this of its time.
+	connections time.Duration
 	// networks paces the fleet network check.
 	networks time.Duration
+	// quotas paces the check for EC2 quotas due a read, so a newly
+	// connected account's are read within it of its networks.
+	quotas time.Duration
 	// reconcile paces comparing cloud hosts with the provider.
 	reconcile time.Duration
 	// rollup paces folding container metric samples into minute
@@ -106,7 +112,7 @@ func productionTicks() ticks {
 	return ticks{
 		tick: time.Second, safety: 30 * time.Second, leaderCheck: 10 * time.Second, contendedRetry: 100 * time.Millisecond,
 		hostLoss: 5 * time.Second, buildRecovery: 10 * time.Second, sweep: 30 * time.Second, layerSweep: 10 * time.Minute,
-		purge: time.Minute, fleet: 5 * time.Second, networks: 15 * time.Second, reconcile: time.Minute, rollup: 30 * time.Second,
+		purge: time.Minute, fleet: 5 * time.Second, connections: time.Second, networks: 15 * time.Second, quotas: 15 * time.Second, reconcile: time.Minute, rollup: 30 * time.Second,
 		email: 5 * time.Second, housekeeping: time.Minute, deletion: 2 * time.Second,
 		metering: 15 * time.Second, payments: 5 * time.Second, retention: time.Minute,
 	}
@@ -119,7 +125,7 @@ func (t ticks) validate() error {
 	}{
 		{"tick", t.tick}, {"safety", t.safety}, {"leader check", t.leaderCheck}, {"contended retry", t.contendedRetry},
 		{"host loss", t.hostLoss}, {"build recovery", t.buildRecovery}, {"sweep", t.sweep}, {"layer sweep", t.layerSweep},
-		{"purge", t.purge}, {"fleet", t.fleet}, {"networks", t.networks}, {"reconcile", t.reconcile}, {"rollup", t.rollup},
+		{"purge", t.purge}, {"fleet", t.fleet}, {"connections", t.connections}, {"networks", t.networks}, {"quotas", t.quotas}, {"reconcile", t.reconcile}, {"rollup", t.rollup},
 		{"email", t.email}, {"housekeeping", t.housekeeping}, {"deletion", t.deletion},
 		{"metering", t.metering}, {"payments", t.payments}, {"retention", t.retention},
 	} {
@@ -454,7 +460,7 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	// Connection steps wait on AWS calls in customer accounts, so they run
 	// on a loop of their own and hold up no actuation.
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.fleet}, connectionWake, nil, timed("connections", func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: t.connections}, connectionWake, nil, timed("connections", func(ctx context.Context) bool {
 			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "connection pass", "error", err)
 			}
@@ -481,10 +487,15 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 		}))
 	})
 	group.Go(func() error {
-		return p.loop(ctx, cadence{every: compute.QuotaInterval}, nil, nil, every("ec2_quotas", compute.QuotaInterval, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: t.quotas}, nil, nil, timed("ec2_quotas", func(ctx context.Context) bool {
 			if _, err := comp.RefreshQuotas(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "ec2 quota refresh incomplete", "error", err)
 			}
+			return false
+		}))
+	})
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: compute.ZoneOfferingInterval}, nil, nil, every("zone_offerings", compute.ZoneOfferingInterval, func(ctx context.Context) bool {
 			if _, err := comp.RefreshZoneOfferings(ctx, logger); err != nil && ctx.Err() == nil {
 				logger.WarnContext(ctx, "zone offering refresh incomplete", "error", err)
 			}

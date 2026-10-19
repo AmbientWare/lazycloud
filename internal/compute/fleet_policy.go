@@ -240,6 +240,12 @@ type Policy struct {
 	// of a model it accepts can host it within the purchase margin before it
 	// buys a host of its own with the margin set aside, Spot first.
 	SpotWait time.Duration
+	// LossCapPercent is the most of a host's hourly cost the platform buys
+	// at a loss for Spot-tolerant GPU work past SpotWait, counting only
+	// what that work bills; LossBudget, in micros, bounds what those hosts
+	// may lose a day at that share of their cost.
+	LossCapPercent int64
+	LossBudget     int64
 	// QueueTimeout is how long pending fleet work waits for a host that has
 	// not launched before execution ends it as a start failure.
 	QueueTimeout time.Duration
@@ -302,8 +308,11 @@ func DefaultPolicy() Policy {
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		Keep:          2 * time.Minute,
 		SpotWait:      2 * time.Minute,
-		QueueTimeout:  20 * time.Minute,
-		SpotPriceAge:  time.Hour,
+		// At-loss GPU hosts lose at most 15% of their cost an hour, and at
+		// most $20 a day across the platform.
+		LossCapPercent: 15, LossBudget: 20_000_000,
+		QueueTimeout: 20 * time.Minute,
+		SpotPriceAge: time.Hour,
 		Starts: StartTimes{
 			Launch: 23 * time.Second, GPULaunch: 150 * time.Second, Resume: 15 * time.Second, GPUResume: 70 * time.Second,
 			SpotDisable: 66 * time.Second, SpotDisableMax: 180 * time.Second,

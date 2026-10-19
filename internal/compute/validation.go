@@ -298,7 +298,7 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 	}
 	stack := out.Stacks[0]
 	if a.SetupStep != nil && stack.StackStatus == cftypes.StackStatusCreateInProgress {
-		return validated{}, setupFailure(SetupStackCreating, ErrStackDrift, "authorization stack %s is still being created", a.StackName)
+		return validated{}, setupFailure(SetupStackCreating, ErrStackDrift, "%s", stackProgress(ctx, clients.cloudFormation(scope, a.Region), stack))
 	}
 	if a.SetupStep != nil && stack.StackStatus != cftypes.StackStatusCreateComplete {
 		return validated{}, setupFailure(SetupStackFailed, ErrStackDrift, "stack %s failed (%s): %s", a.StackName, stack.StackStatus,
@@ -359,22 +359,56 @@ func accountOfRole(arn string) string {
 	return ""
 }
 
-// setupChecks is how long after it starts a setup is checked every few
-// seconds; later checks back off. CloudFormation creates the stack in about
-// three minutes once the customer starts it.
+// setupChecks is how long after it starts a setup is checked every
+// setupCheck; later checks back off. CloudFormation creates the stack in
+// about three minutes once the customer starts it.
 const setupChecks = 30 * time.Minute
 
-// nextCheck is when a failed validation runs again: soon while the
-// customer sets up the stack, so the connection turns ready within seconds
-// of the stack, and otherwise backing off up to five minutes apart.
+// setupCheck is how often a setup is checked while the customer sets up
+// the stack, so each step shows within seconds of AWS reaching it. A
+// check before the role exists is one refused AssumeRole.
+const setupCheck = 2 * time.Second
+
+// nextCheck is when a failed validation runs again: every setupCheck
+// while the customer sets up the stack, and otherwise backing off up to
+// five minutes apart.
 func nextCheck(a Authorization, failure *validationFailure, attempts int) time.Duration {
 	if failure.step != nil && time.Since(a.CreatedAt) < setupChecks {
-		if *failure.step == SetupStackCreating {
-			return 10 * time.Second
-		}
-		return 15 * time.Second
+		return setupCheck
 	}
 	return time.Duration(math.Min(math.Pow(2, float64(attempts-1)), 300)) * time.Second
+}
+
+// stackProgress says what CloudFormation is creating in stack: the
+// resource whose newest event is CREATE_IN_PROGRESS.
+func stackProgress(ctx context.Context, cf *cloudformation.Client, stack cftypes.Stack) string {
+	creating := "AWS is creating the stack"
+	out, err := cf.DescribeStackEvents(ctx, &cloudformation.DescribeStackEventsInput{StackName: stack.StackId})
+	if err != nil {
+		return creating
+	}
+	seen := map[string]bool{}
+	// Events are newest first.
+	for _, e := range out.StackEvents {
+		resource := aws.ToString(e.LogicalResourceId)
+		if seen[resource] || resource == aws.ToString(stack.StackName) {
+			continue
+		}
+		seen[resource] = true
+		if e.ResourceStatus != cftypes.ResourceStatusCreateInProgress {
+			continue
+		}
+		switch resource {
+		case "ConnectionRole":
+			return "AWS is creating the connection role"
+		case "NodeRole":
+			return "AWS is creating the node role"
+		case "NodeInstanceProfile":
+			return "AWS is creating the node instance profile"
+		}
+		return creating
+	}
+	return creating
 }
 
 // stackFailure is why CloudFormation failed to create stack: its earliest
