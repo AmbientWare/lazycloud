@@ -1,0 +1,57 @@
+{
+  "awsRegion": "us-east-1",
+  "cloudflared": {
+    "tunnelId": "a25a4c07-3b74-417d-bc80-b80e327e7407"
+  },
+  "config": {
+    "LAZYCLOUD_AWS_PRINCIPAL_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-control-plane",
+    "LAZYCLOUD_FLEET_ACCOUNT_ID": "534742592531",
+    "LAZYCLOUD_FLEET_INSTANCE_PROFILE": "lazycloud-prod-fleet-node",
+    "LAZYCLOUD_FLEET_NAME": "lazycloud-prod",
+    "LAZYCLOUD_FLEET_NODE_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-fleet-node",
+    "LAZYCLOUD_FLEET_REGIONS": "us-east-1,us-east-2,us-west-1,us-west-2",
+    "LAZYCLOUD_OBJECT_STORE_BUCKET": "lazycloud-prod-objects-534742592531",
+    "LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET": "lazycloud-prod-layers-534742592531",
+    "LAZYCLOUD_OBJECT_STORE_REGION": "us-east-1",
+    "LAZYCLOUD_WORKSPACE_BUCKET_PREFIX": "lazycloud-prod-workspace",
+    "LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER": "aws",
+    "LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-workspace-storage"
+  },
+  "domain": "lazycloud.dev",
+  "externalSecrets": {
+    "documents": {
+      "operator": "lazycloud-prod/operator",
+      "platform": "lazycloud-prod/platform"
+    },
+    "enabled": true,
+    "readerRoleArn": "arn:aws:iam::534742592531:role/lazycloud-prod-secrets-reader",
+    "region": "us-east-1"
+  },
+  "image": {
+    "registry": "534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/release"
+  },
+  "networkPolicy": {
+    "hostCIDRs": [
+      "10.80.0.0/16"
+    ],
+    "nodeCIDRs": [
+      "10.80.0.0/16"
+    ]
+  },
+  "server": {
+    "config": {
+      "LAZYCLOUD_AWS_TEMPLATE_BUCKET": "lazycloud-prod-templates-534742592531",
+      "LAZYCLOUD_CLOUDFLARE_ZONE_ID": "7de4ad3cd44f8592d1c47db937c59f4f",
+      "LAZYCLOUD_IMAGE_REGISTRY": "534742592531.dkr.ecr.us-east-1.amazonaws.com",
+      "LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN": "arn:aws:iam::534742592531:role/lazycloud-prod-registry-hosts",
+      "LAZYCLOUD_IMAGE_REPOSITORY": "lazycloud/workload-images",
+      "LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS": "{\"us-east-2\":\"lazycloud-prod-layers-us-east-2-534742592531\",\"us-west-1\":\"lazycloud-prod-layers-us-west-1-534742592531\",\"us-west-2\":\"lazycloud-prod-layers-us-west-2-534742592531\"}"
+    },
+    "hostService": {
+      "certificateArn": "arn:aws:acm:us-east-1:534742592531:certificate/dd25d7ba-6c25-4262-b82b-aef7d2b0ce18"
+    }
+  },
+  "release": {
+    "version": "0.1.144"
+  }
+}
