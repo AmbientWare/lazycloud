@@ -244,7 +244,8 @@ with changes as (
     from hosts h
     join host_phase_changes c on c.host_id = h.id
     where h.provider = 'aws' and h.margin_waived and h.connection_id is null and h.hourly_micros is not null
-      and c.host_id in (select host_id from host_phase_changes where at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
+      and c.host_id in (select x.host_id from host_phase_changes x join hosts w on w.id = x.host_id
+                        where w.provider = 'aws' and w.margin_waived and x.at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
                         union select id from hosts where provider = 'aws' and margin_waived and phase not in ('deleted', 'failed'))
 )
 select coalesce(sum(hourly_micros * extract(epoch from

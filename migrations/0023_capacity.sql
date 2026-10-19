@@ -5,13 +5,12 @@ alter table hosts add constraint hosts_failure_check check (failure in (
     'agent_enrollment_failed', 'worker_image_pull_failed', 'worker_start_failed',
     'worker_readiness_failed', 'bootstrap_timed_out', 'host_preflight_failed', 'service_lost',
     'machine_record_deleted', 'provider_stopped', 'provider_terminated', 'no_capacity', 'unknown'
-)) not valid;
-alter table hosts validate constraint hosts_failure_check;
+));
 
 -- Each phase and capacity state a host enters, with when: wakes, time
 -- asleep, time to ready and what a host cost are read from it. Written by
 -- the triggers below, in the transaction that changes the host, at the
--- statement's clock so changes within one transaction keep their order;
+-- time of each change so changes within one transaction keep their order;
 -- purged by age.
 create table host_phase_changes (
     host_id uuid not null references hosts (id) on delete cascade,

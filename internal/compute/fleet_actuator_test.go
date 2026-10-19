@@ -629,6 +629,23 @@ func TestAStopEC2TookSurvivesTheSchedulerBeingDown(t *testing.T) {
 	}
 }
 
+// A stop EC2 took but never finished ends once two forced stops ran out
+// from its first request.
+func TestAStopStuckStoppingEndsAfterTheForcedStops(t *testing.T) {
+	t.Parallel()
+	o, _, ec2 := reserveFleet(t)
+	host := reserve(t, o, compute.PhaseStopping, compute.MarketOnDemand, compute.ReserveStop, "i-0000000000000c033")
+	ec2.add(fakeInstance{ID: "i-0000000000000c033", State: "stopping"}, host.String())
+	ago(t, o, host, "stop_requested_at", 31*time.Minute)
+	ago(t, o, host, "force_stop_at", time.Minute)
+	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
+		t.Fatal(err)
+	}
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseTerminating) {
+		t.Fatalf("reserve stopping 31 minutes after its first request is %s, want terminating", phase)
+	}
+}
+
 // A host's phase changes are kept in order, which wake counts, time
 // asleep and time to ready are read from; and what the platform's hosts
 // bought at a loss cost today counts the time their instances ran.

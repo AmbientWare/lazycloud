@@ -315,12 +315,14 @@ func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in Off
 	hibernate, reserve := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate, h.ReserveMode != nil
 	// A reserve waits for no one, so its walk never steps up a size: a
 	// larger pool of a market refusing the smaller ones fails the same way.
-	// Its size is the fewest vCPUs of a catalog type of its GPU that holds
-	// what it was bought for.
+	// Its size is the fewest vCPUs of an offer that could host it, cooling
+	// or not.
 	var size int64
-	for _, t := range in.Catalog {
-		if t.GPU == h.GpuType && t.Usable(in.ReportedMemory[t.Name]).Covers(reservedShape(need)) && (size == 0 || t.VCPUs() < size) {
-			size = t.VCPUs()
+	all := in
+	all.Cooldowns = nil
+	for _, o := range RankOffers(p, need, reserve, all) {
+		if o.Market == market && o.Type.GPU == h.GpuType && o.Hibernate == hibernate && (size == 0 || o.Type.VCPUs() < size) {
+			size = o.Type.VCPUs()
 		}
 	}
 	walkable := func(in OfferInputs) []FleetOffer {
