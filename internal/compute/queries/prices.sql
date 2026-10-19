@@ -32,3 +32,9 @@ order by region, availability_zone_id, instance_type;
 -- the scheduler was down longer than max_age_seconds.
 select (exists (select 1 from spot_prices)
         and not exists (select 1 from spot_prices where observed_at > now() - make_interval(secs => @max_age_seconds::float8)))::bool;
+
+-- name: PoolScore :one
+-- The fresh placement score of one Spot pool; 0 when none is fresh.
+select coalesce(max(placement_score) filter (where scored_at > now() - make_interval(secs => @fresh_seconds::float8)), 0)::int
+from spot_prices
+where availability_zone_id = @zone_id and instance_type = @instance_type;

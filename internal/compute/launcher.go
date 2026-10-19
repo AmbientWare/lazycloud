@@ -159,7 +159,8 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 			return false, err
 		}
 		logger.InfoContext(ctx, "launch moved to the next pool", "host_id", h.ID,
-			"left", h.Region+"/"+h.AvailabilityZone+"/"+h.InstanceType, "next", next.Key(), "reason", message)
+			"left", h.Region+"/"+h.AvailabilityZone+"/"+h.InstanceType, "left_score", c.poolScore(ctx, logger, h.Market, refusal.zoneID, h.InstanceType),
+			"next", next.Key(), "reason", message)
 		if lease == 0 {
 			return false, nil
 		}
@@ -513,8 +514,24 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 		}
 	}
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
-		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
+		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market),
+		"score", c.poolScore(ctx, logger, h.Market, subnet.ZoneID, h.InstanceType))
 	return true, nil, nil
+}
+
+// poolScore is the fresh placement score of a Spot pool, for the launch
+// logs that measure how scores predict launches; 0 for On-Demand or no
+// fresh score.
+func (c *Compute) poolScore(ctx context.Context, logger *slog.Logger, market *string, zoneID, instanceType string) int32 {
+	if market == nil || Market(*market) != MarketSpot || zoneID == "" {
+		return 0
+	}
+	score, err := c.queries.PoolScore(ctx, PoolScoreParams{FreshSeconds: placementScoreFresh.Seconds(), ZoneID: zoneID, InstanceType: instanceType})
+	if err != nil {
+		logger.WarnContext(ctx, "read the pool's placement score", "zone_id", zoneID, "instance_type", instanceType, "error", err)
+		return 0
+	}
+	return score
 }
 
 // launchToken is the client token of h's launch: the host id in the pool

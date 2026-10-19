@@ -135,8 +135,10 @@ func (q *Queries) OverdueAttempts(ctx context.Context, arg OverdueAttemptsParams
 }
 
 const stalePendingContainers = `-- name: StalePendingContainers :many
-select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
+select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait,
+       (w.connection_id is not null)::bool as connected
 from containers c
+join workspaces w on w.id = c.workspace_id
 left join releases r on r.id = c.release_id
 left join hosts h on h.id = c.capacity_host_id
 where c.state = 'pending'
@@ -159,6 +161,7 @@ type StalePendingContainersRow struct {
 	ID        uuid.UUID
 	CreatedAt time.Time
 	Wait      string
+	Connected bool
 }
 
 // Fleet containers, in any account, pending longer than the queue timeout
@@ -181,7 +184,12 @@ func (q *Queries) StalePendingContainers(ctx context.Context, arg StalePendingCo
 	var items []StalePendingContainersRow
 	for rows.Next() {
 		var i StalePendingContainersRow
-		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Wait); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Wait,
+			&i.Connected,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
