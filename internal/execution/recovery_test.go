@@ -228,7 +228,7 @@ update workspaces set connection_id = conn.id from conn where workspaces.id = $1
 	var theirs uuid.UUID
 	if err := pool.QueryRow(t.Context(), `
 insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, created_at, capacity_wait)
-values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour', 'cooldown') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
+values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 1000, 1 << 29, now() - interval '1 hour', 'quota') returning id`, connected.workspace, connected.release).Scan(&theirs); err != nil {
 		t.Fatal(err)
 	}
 	machine := newRelease(t, pool, `{"placement": {"machine": "studio"}}`)
@@ -253,6 +253,14 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 	}
 	if state := containerState(t, pool, theirs); state != ContainerStopped {
 		t.Errorf("the connected account's stale container is %s, want stopped", state)
+	}
+	// A quota in the customer's own account is theirs to raise.
+	var theirMessage string
+	if err := pool.QueryRow(t.Context(), "select coalesce(exit_message, '') from containers where id = $1", theirs).Scan(&theirMessage); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(theirMessage, compute.WaitQuota.Message()) || !strings.Contains(theirMessage, "Service Quotas") {
+		t.Errorf("the connected account's quota wait ended with %q, want the quota and where to raise it", theirMessage)
 	}
 	if state := containerState(t, pool, spare); state != ContainerStopped {
 		t.Errorf("the served release's stale container is %s, want stopped", state)

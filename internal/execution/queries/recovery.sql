@@ -45,8 +45,10 @@ for update;
 -- not launched. In (created_at, id) order after the cursor, with why the
 -- planner says they wait. Work waiting on the host limit or arrivals waits
 -- on; work pinned to a joined machine waits for it.
-select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait
+select c.id, c.created_at, coalesce(c.capacity_wait, '')::text as wait,
+       (w.connection_id is not null)::bool as connected
 from containers c
+join workspaces w on w.id = c.workspace_id
 left join releases r on r.id = c.release_id
 left join hosts h on h.id = c.capacity_host_id
 where c.state = 'pending'

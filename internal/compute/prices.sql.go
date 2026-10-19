@@ -64,6 +64,26 @@ func (q *Queries) FreshSpotPrices(ctx context.Context, arg FreshSpotPricesParams
 	return items, nil
 }
 
+const poolScore = `-- name: PoolScore :one
+select coalesce(max(placement_score) filter (where scored_at > now() - make_interval(secs => $1::float8)), 0)::int
+from spot_prices
+where availability_zone_id = $2 and instance_type = $3
+`
+
+type PoolScoreParams struct {
+	FreshSeconds float64
+	ZoneID       string
+	InstanceType string
+}
+
+// The fresh placement score of one Spot pool; 0 when none is fresh.
+func (q *Queries) PoolScore(ctx context.Context, arg PoolScoreParams) (int32, error) {
+	row := q.db.QueryRow(ctx, poolScore, arg.FreshSeconds, arg.ZoneID, arg.InstanceType)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const scoreSpotPools = `-- name: ScoreSpotPools :exec
 update spot_prices s
 set placement_score = v.score, scored_at = now()

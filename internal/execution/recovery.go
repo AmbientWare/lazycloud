@@ -208,10 +208,11 @@ func (e *Execution) timeOutPending(ctx context.Context, logger *slog.Logger) (in
 				if timedOut = n == 1; !timedOut {
 					return nil
 				}
-				return e.containerExited(ctx, tx, ContainerID(container.ID), ContainerExit{
-					Reason:  StopStartFailed,
-					Message: fmt.Sprintf("no capacity within %s: %s", timeout, compute.CapacityWait(container.Wait).Message()),
-				})
+				message := fmt.Sprintf("no capacity within %s: %s", timeout, compute.CapacityWait(container.Wait).Message())
+				if compute.CapacityWait(container.Wait) == compute.WaitQuota && container.Connected {
+					message += "; raise it in AWS Service Quotas, linked from your AWS connection"
+				}
+				return e.containerExited(ctx, tx, ContainerID(container.ID), ContainerExit{Reason: StopStartFailed, Message: message})
 			})
 			switch {
 			case err == nil && timedOut:
