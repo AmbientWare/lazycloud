@@ -3,11 +3,12 @@
 The functions carry the resources the recording shows for each name; each task
 sleeps its recorded runtime. Arrivals are submitted at their recorded offsets,
 shifted so the first is at zero. How the fleet served them is read from the
-stack afterwards with report.sql, not from this client.
+stack afterwards with report.sql, not from this client. Run it from this
+directory: the app uploads the directory it runs from.
 
     LAZYCLOUD_ENDPOINT=https://api.lazycloud.dev LAZYCLOUD_TOKEN=... LAZYCLOUD_WORKSPACE=<ws> \\
-    uv run python acceptance/mixedload/mixedload.py [recording.json] [speed]
-    uv run python acceptance/mixedload/mixedload.py bursts
+    cd acceptance/mixedload && uv run python mixedload.py [recording.json] [speed]
+    cd acceptance/mixedload && uv run python mixedload.py bursts
 
 speed scales the offsets (2 runs the schedule twice as fast); 1 by default.
 bursts sends two bursts of 30 one-CPU tasks 90 seconds apart instead.

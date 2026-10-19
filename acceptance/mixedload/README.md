@@ -6,13 +6,15 @@ fleet served it from the stack's database. Use it before and after a change
 to placement, the planner, reserves or launches, on a stack nothing else
 loads.
 
-Run the recording, or two bursts of 30 one-CPU tasks 90 seconds apart:
+Run the recording, or two bursts of 30 one-CPU tasks 90 seconds apart, from
+this directory: the app uploads the directory it runs from.
 
 ```sh
+cd acceptance/mixedload
 export LAZYCLOUD_ENDPOINT=https://api.lazycloud.dev LAZYCLOUD_TOKEN=... LAZYCLOUD_WORKSPACE=<workspace>
-uv run python acceptance/mixedload/mixedload.py            # recording.json at its recorded pace
-uv run python acceptance/mixedload/mixedload.py recording.json 2   # twice as fast
-uv run python acceptance/mixedload/mixedload.py bursts
+uv run python mixedload.py                     # recording.json at its recorded pace
+uv run python mixedload.py recording.json 2    # twice as fast
+uv run python mixedload.py bursts
 ```
 
 Each run deploys a new app, `mixedload_<MMDDHHMM>`, printed first. Then:
