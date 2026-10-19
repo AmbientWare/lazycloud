@@ -1,77 +1,76 @@
 "use client";
 
-import { useState } from "react";
+import type { ReactNode } from "react";
 
-import type { GalleryItem, ShareLink } from "./api";
+import type { GalleryItem } from "./api";
 
-export function Gallery({
-  items,
-  onShare,
-  onReuse,
-}: {
-  items: GalleryItem[];
-  onShare: (jobId: string, index: number) => Promise<ShareLink>;
-  onReuse: (item: GalleryItem) => void;
-}) {
-  if (items.length === 0) {
-    return <p className="muted empty">Finished images appear here.</p>;
-  }
+export type GalleryImage = { item: GalleryItem; index: number; url: string };
+
+export function galleryImages(items: GalleryItem[]): GalleryImage[] {
+  return items.flatMap((item) => item.image_urls.map((url, index) => ({ item, index, url })));
+}
+
+// Justified rows: each tile grows in proportion to its width over its height,
+// so every tile in a row ends up the same height. The filler after the last
+// tile keeps a short final row from stretching.
+export function GalleryGrid({ children }: { children: ReactNode }) {
   return (
-    <section className="gallery">
-      {items.map((item) => (
-        <GalleryCard key={item.job_id} item={item} onShare={onShare} onReuse={onReuse} />
-      ))}
-    </section>
+    <div className="flex flex-wrap gap-x-3 gap-y-5 [--row-height:9.5rem] after:grow-[999] after:content-[''] sm:[--row-height:13rem] lg:[--row-height:16rem]">
+      {children}
+    </div>
   );
 }
 
-function GalleryCard({
-  item,
-  onShare,
-  onReuse,
+export function Tile({
+  ratio,
+  caption,
+  children,
 }: {
-  item: GalleryItem;
-  onShare: (jobId: string, index: number) => Promise<ShareLink>;
-  onReuse: (item: GalleryItem) => void;
+  ratio: number;
+  caption: string;
+  children: ReactNode;
 }) {
-  const [note, setNote] = useState<string | null>(null);
-
-  const share = async (index: number) => {
-    setNote("Creating a share link…");
-    try {
-      const link = await onShare(item.job_id, index);
-      await navigator.clipboard.writeText(link.url);
-      setNote(`Link copied. It works until ${new Date(link.expires_at).toLocaleString()}.`);
-    } catch (error) {
-      setNote(error instanceof Error ? error.message : "Sharing failed");
-    }
-  };
-
   return (
-    <article className="panel card">
-      <div className={`images count-${item.image_count}`}>
-        {item.image_urls.map((url, index) => (
-          <figure key={url}>
-            <a href={url} target="_blank" rel="noreferrer">
-              <img src={url} alt={item.prompt} loading="lazy" />
-            </a>
-            <button type="button" className="overlay" onClick={() => share(index)}>
-              Share
-            </button>
-          </figure>
-        ))}
+    <figure
+      className="m-0 grid min-w-0 content-start gap-2"
+      style={{ flexGrow: ratio, flexBasis: `calc(var(--row-height) * ${ratio})` }}
+    >
+      <div className="relative overflow-hidden rounded-md bg-muted" style={{ aspectRatio: ratio }}>
+        {children}
       </div>
-      <p className="prompt">{item.prompt}</p>
-      <p className="muted meta">
-        {item.style} · {item.aspect} · seed {item.seed} ·{" "}
-        {new Date(item.created_at).toLocaleString()}
-      </p>
-      <div className="row">
-        <button type="button" onClick={() => onReuse(item)}>
-          Use these settings
-        </button>
-        {note && <small className="muted">{note}</small>}
-      </div>
-    </article>
+      <figcaption className="truncate font-serif text-[0.95rem] text-muted-foreground">
+        {caption}
+      </figcaption>
+    </figure>
+  );
+}
+
+export function ImageTile({
+  image,
+  ratio,
+  onOpen,
+}: {
+  image: GalleryImage;
+  ratio: number;
+  onOpen: () => void;
+}) {
+  const { item, index, url } = image;
+  const position = item.image_count > 1 ? ` (${index + 1} of ${item.image_count})` : "";
+  return (
+    <Tile ratio={ratio} caption={item.prompt}>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open image: ${item.prompt}${position}`}
+        className="group absolute inset-0 cursor-zoom-in outline-none focus-visible:ring-3 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          className="size-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]"
+        />
+      </button>
+    </Tile>
   );
 }

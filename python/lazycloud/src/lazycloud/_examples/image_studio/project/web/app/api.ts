@@ -2,9 +2,11 @@
 
 export type Choice = { id: string; label: string };
 
+export type AspectChoice = Choice & { width: number; height: number };
+
 export type Options = {
   styles: Choice[];
-  aspects: Choice[];
+  aspects: AspectChoice[];
   max_prompt_chars: number;
   max_images: number;
 };
