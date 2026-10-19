@@ -277,7 +277,7 @@ func (c *Compute) imaged(region string, gpu bool) bool {
 // Pools are priced as the planner buys: a reserve by what it costs to keep
 // stopped, any other host by what it costs to serve.
 func fallbackPool(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) (FleetOffer, bool) {
-	offers, _ := walkPools(p, h, waiters, in, imaged)
+	offers := walkPools(p, h, waiters, in, imaged)
 	if len(offers) == 0 {
 		return FleetOffer{}, false
 	}
@@ -289,8 +289,8 @@ func fallbackPool(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in 
 }
 
 // walkPools are the pools h's walk may move to, as fallbackPool picks
-// from, and the size rule for what h was bought to hold.
-func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) ([]FleetOffer, func(FleetOffer) bool) {
+// from, under the size rule for what h was bought to hold.
+func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in OfferInputs, imaged func(region string, gpu bool) bool) []FleetOffer {
 	market := Market(*h.Market)
 	need := Requirement{CPUMillis: h.CpuMillis, MemoryBytes: h.MemoryBytes, GPUCount: int(h.GpuCount), Preemptible: market == MarketSpot}
 	if h.HoldsCpuMillis != nil && h.HoldsMemoryBytes != nil {
@@ -343,7 +343,7 @@ func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in Off
 		soon = walkable(availableSoon(p, in))
 	}
 	keeps := func(o FleetOffer) bool { return p.sized(o, reservedShape(need), need.Disks, refs, soon) }
-	return slices.DeleteFunc(offers, func(o FleetOffer) bool { return !keeps(o) }), keeps
+	return slices.DeleteFunc(offers, func(o FleetOffer) bool { return !keeps(o) })
 }
 
 // movePool cools h's refused pool and moves h to next in one transaction,
