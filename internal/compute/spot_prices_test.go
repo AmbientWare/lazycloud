@@ -28,7 +28,10 @@ func spotPriceReply(prices ...[4]string) awsReply {
 }
 
 // placementScoreReply answers a placement score read with scores by zone
-// id, each in the region its id names.
+// id, each in the region its id names. Recorded from GetSpotPlacementScores
+// in account 534742592531 on 2026-10-19 (g5.2xlarge, the four US regions,
+// one instance in a single zone): ten zones, best first, and no NextToken,
+// also with MaxResults 100.
 func placementScoreReply(scores map[string]int) awsReply {
 	regions := map[string]string{"use1": "us-east-1", "use2": "us-east-2", "usw1": "us-west-1", "usw2": "us-west-2"}
 	var b strings.Builder

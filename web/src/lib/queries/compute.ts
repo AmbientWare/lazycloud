@@ -13,9 +13,10 @@ const ACCOUNT_CAPACITY_POLL_INTERVAL_MS = 30_000;
 const CONNECTION_TRANSITION_POLL_INTERVAL_MS = 5_000;
 /**
  * While the customer creates the stack in the AWS Console, which the server
- * checks every 2 seconds.
+ * checks every 2 seconds for the setup's first 30 minutes.
  */
 const CONNECTION_SETUP_POLL_INTERVAL_MS = 2_000;
+const CONNECTION_SETUP_WINDOW_MS = 30 * 60_000;
 /** While the join dialog waits for a host to come up. */
 const FOLLOWED_MACHINE_POLL_INTERVAL_MS = 5_000;
 
@@ -76,7 +77,12 @@ export function awsConnectionQueryOptions(enabled = true) {
     refetchInterval: (query) => {
       const connection = query.state.data;
       if (!connection) return ACCOUNT_CAPACITY_POLL_INTERVAL_MS;
-      if (connection.pending_authorization?.setup_step && !connection.active_authorization) {
+      const pending = connection.pending_authorization;
+      if (
+        pending?.setup_step &&
+        !connection.active_authorization &&
+        Date.now() - Date.parse(pending.created_at) < CONNECTION_SETUP_WINDOW_MS
+      ) {
         return CONNECTION_SETUP_POLL_INTERVAL_MS;
       }
       return connectionIsTransitioning(connection)

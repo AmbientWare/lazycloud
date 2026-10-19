@@ -5,11 +5,13 @@ alter table hosts add constraint hosts_failure_check check (failure in (
     'agent_enrollment_failed', 'worker_image_pull_failed', 'worker_start_failed',
     'worker_readiness_failed', 'bootstrap_timed_out', 'host_preflight_failed', 'service_lost',
     'machine_record_deleted', 'provider_stopped', 'provider_terminated', 'no_capacity', 'unknown'
-));
+)) not valid;
+alter table hosts validate constraint hosts_failure_check;
 
 -- Each phase and capacity state a host enters, with when: wakes, time
 -- asleep, time to ready and what a host cost are read from it. Written by
--- the triggers below, in the transaction that changes the host, and
+-- the triggers below, in the transaction that changes the host, at the
+-- statement's clock so changes within one transaction keep their order;
 -- purged by age.
 create table host_phase_changes (
     host_id uuid not null references hosts (id) on delete cascade,
@@ -20,27 +22,21 @@ create table host_phase_changes (
 );
 create index host_phase_changes_at on host_phase_changes (at);
 
-create function record_created_host_phases() returns trigger
+create function record_host_phase() returns trigger
 language plpgsql as $$
 begin
     insert into host_phase_changes (host_id, at, phase, capacity_state)
-    select n.id, now(), n.phase, n.capacity_state from new_rows n
-    on conflict do nothing;
-    return null;
-end $$;
-
-create function record_updated_host_phases() returns trigger
-language plpgsql as $$
-begin
-    insert into host_phase_changes (host_id, at, phase, capacity_state)
-    select n.id, now(), n.phase, n.capacity_state
-    from new_rows n join old_rows o on o.id = n.id
-    where n.phase <> o.phase or n.capacity_state <> o.capacity_state
+    values (new.id, clock_timestamp(), new.phase, new.capacity_state)
     on conflict do nothing;
     return null;
 end $$;
 
 create trigger hosts_phase_created after insert on hosts
-    referencing new table as new_rows for each statement execute function record_created_host_phases();
-create trigger hosts_phase_updated after update on hosts
-    referencing old table as old_rows new table as new_rows for each statement execute function record_updated_host_phases();
+    for each row execute function record_host_phase();
+create trigger hosts_phase_updated after update of phase, capacity_state on hosts
+    for each row when (old.phase is distinct from new.phase or old.capacity_state is distinct from new.capacity_state)
+    execute function record_host_phase();
+
+-- When each quota was last read, or a read of it failed, which paces the
+-- next read.
+alter table fleet_quotas add column checked_at timestamptz;

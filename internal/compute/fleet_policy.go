@@ -308,8 +308,8 @@ func DefaultPolicy() Policy {
 		Batch:         BatchWindow{Quiet: time.Second, Max: 5 * time.Second},
 		Keep:          2 * time.Minute,
 		SpotWait:      2 * time.Minute,
-		// At-loss GPU hosts lose at most 15% of their cost an hour, and at
-		// most $20 a day across the platform.
+		// At-loss GPU hosts lose at most 15% of their cost an hour, and
+		// none are bought once today's could lose $20.
 		LossCapPercent: 15, LossBudget: 20_000_000,
 		QueueTimeout: 20 * time.Minute,
 		SpotPriceAge: time.Hour,

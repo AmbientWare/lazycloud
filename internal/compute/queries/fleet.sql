@@ -139,7 +139,7 @@ where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase =
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
 select id, phase, phase_message, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
-       force_stop_at, interruption_at, failure
+       interruption_at, failure
 from hosts
 where provider = 'aws' and region = @region
   and connection_id is not distinct from sqlc.narg(connection_id)::uuid
@@ -240,12 +240,12 @@ delete from host_phase_changes where at < now() - make_interval(secs => @seconds
 -- from its phase history.
 with changes as (
     select h.id, h.hourly_micros, c.phase, c.at,
-           lead(c.at, 1, now()) over (partition by c.host_id order by c.at, c.phase) as until
+           lead(c.at, 1, now()) over (partition by c.host_id order by c.at) as until
     from hosts h
     join host_phase_changes c on c.host_id = h.id
-    where h.margin_waived and h.connection_id is null and h.hourly_micros is not null
+    where h.provider = 'aws' and h.margin_waived and h.connection_id is null and h.hourly_micros is not null
       and c.host_id in (select host_id from host_phase_changes where at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
-                        union select id from hosts where margin_waived and phase not in ('deleted', 'failed'))
+                        union select id from hosts where provider = 'aws' and margin_waived and phase not in ('deleted', 'failed'))
 )
 select coalesce(sum(hourly_micros * extract(epoch from
            least(until, now()) - greatest(at, date_trunc('day', now() at time zone 'utc') at time zone 'utc')) / 3600), 0)::bigint

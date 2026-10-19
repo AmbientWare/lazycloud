@@ -315,11 +315,18 @@ func walkPools(p Policy, h ClaimHostActionsRow, waiters []HostWaitersRow, in Off
 	hibernate, reserve := h.ReserveMode != nil && ReserveMode(*h.ReserveMode) == ReserveHibernate, h.ReserveMode != nil
 	// A reserve waits for no one, so its walk never steps up a size: a
 	// larger pool of a market refusing the smaller ones fails the same way.
-	size, _ := CatalogTypeNamed(h.InstanceType)
+	// Its size is the fewest vCPUs of a catalog type of its GPU that holds
+	// what it was bought for.
+	var size int64
+	for _, t := range in.Catalog {
+		if t.GPU == h.GpuType && t.Usable(in.ReportedMemory[t.Name]).Covers(reservedShape(need)) && (size == 0 || t.VCPUs() < size) {
+			size = t.VCPUs()
+		}
+	}
 	walkable := func(in OfferInputs) []FleetOffer {
 		return slices.DeleteFunc(RankOffers(p, need, reserve, in), func(o FleetOffer) bool {
 			return o.Market != market || o.Type.GPU != h.GpuType || o.Hibernate != hibernate || !imaged(o.Region, o.Type.GPUCount > 0) ||
-				reserve && (o.Type.VCPUs() > size.VCPUs() || o.Type.MemoryBytes > size.MemoryBytes) ||
+				reserve && o.Type.VCPUs() > size ||
 				slices.ContainsFunc(waiters, func(w HostWaitersRow) bool {
 					return (w.Region != "" && ProductRegion(o.Region) != w.Region) || (w.Zone != "" && o.Zone != w.Zone && o.ZoneID != w.Zone)
 				})

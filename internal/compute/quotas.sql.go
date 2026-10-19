@@ -10,8 +10,33 @@ import (
 	"time"
 )
 
+const checkQuotas = `-- name: CheckQuotas :exec
+insert into fleet_quotas (owner, region, quota_class, market, checked_at)
+select $1::text, $2::text, unnest($3::text[]), unnest($4::text[]), now()
+on conflict (owner, region, quota_class, market) do update set checked_at = excluded.checked_at
+`
+
+type CheckQuotasParams struct {
+	Owner   string
+	Region  string
+	Classes []string
+	Markets []string
+}
+
+// A read of one account's quotas in one region that failed: the region
+// waits the recheck before the next, and its quotas stay as last read.
+func (q *Queries) CheckQuotas(ctx context.Context, arg CheckQuotasParams) error {
+	_, err := q.db.Exec(ctx, checkQuotas,
+		arg.Owner,
+		arg.Region,
+		arg.Classes,
+		arg.Markets,
+	)
+	return err
+}
+
 const quotas = `-- name: Quotas :many
-select owner, region, quota_class, market, vcpus, observed_at, coalesce(refused_until > now(), false)::bool as refused
+select owner, region, quota_class, market, vcpus, observed_at, checked_at, coalesce(refused_until > now(), false)::bool as refused
 from fleet_quotas
 order by owner, region, quota_class, market
 `
@@ -23,6 +48,7 @@ type QuotasRow struct {
 	Market     string
 	Vcpus      *int32
 	ObservedAt *time.Time
+	CheckedAt  *time.Time
 	Refused    bool
 }
 
@@ -42,6 +68,7 @@ func (q *Queries) Quotas(ctx context.Context) ([]QuotasRow, error) {
 			&i.Market,
 			&i.Vcpus,
 			&i.ObservedAt,
+			&i.CheckedAt,
 			&i.Refused,
 		); err != nil {
 			return nil, err
@@ -82,10 +109,10 @@ func (q *Queries) RefuseQuota(ctx context.Context, arg RefuseQuotaParams) error 
 }
 
 const upsertQuotas = `-- name: UpsertQuotas :exec
-insert into fleet_quotas (owner, region, quota_class, market, vcpus, observed_at)
-select $1::text, $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::integer[]), now()
+insert into fleet_quotas (owner, region, quota_class, market, vcpus, observed_at, checked_at)
+select $1::text, $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::integer[]), now(), now()
 on conflict (owner, region, quota_class, market) do update
-set vcpus = excluded.vcpus, observed_at = excluded.observed_at
+set vcpus = excluded.vcpus, observed_at = excluded.observed_at, checked_at = excluded.checked_at
 `
 
 type UpsertQuotasParams struct {

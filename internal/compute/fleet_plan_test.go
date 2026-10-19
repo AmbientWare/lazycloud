@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/cpu"
+
 	"github.com/google/uuid"
 )
 
@@ -1377,18 +1379,23 @@ func TestSpotGPUWorkBuysAtALossOnlyWithinTheCapAndTheBudget(t *testing.T) {
 		name   string
 		capPct int64
 		spent  int64
+		gpus   int
 		buys   bool
 	}{
-		{"loss under the cap", 100, 0, true},
-		{"loss over the cap", 1, 0, false},
-		{"budget spent", 100, 1_000_000_000, false},
+		{"loss under the cap", 100, 0, 1, true},
+		{"loss over the cap", 1, 0, 1, false},
+		{"budget spent", 100, 1_000_000_000, 1, false},
+		// Four cards bill four times one; valued as one card, no host for
+		// them would pass the cap.
+		{"four cards under the cap", 60, 0, 4, true},
 	} {
 		p := gpuPolicy()
 		p.LossCapPercent, p.LossBudget = c.capPct, 1_000_000
 		s := gpuPlanSnapshot(t)
 		s.Offers.Cooldowns = slices.Concat(spotCooled("L4"), spotCooled("A10G"))
 		s.AtLossSpent = c.spent
-		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
+		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: c.gpus,
+			CPUMillis: cpu.Millis(c.gpus * 1000), MemoryBytes: int64(c.gpus) * 4 * gib},
 			Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow.Add(-p.SpotWait)}}}}
 		if bought := boughtForWork(PlanFleet(p, s)); (len(bought) == 1) != c.buys {
 			t.Errorf("%s: bought %v, want a purchase %t", c.name, bought, c.buys)

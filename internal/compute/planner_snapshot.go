@@ -29,9 +29,6 @@ type offerRead struct {
 	// reported is the memory hosts of each type advertise, once one has
 	// reported.
 	reported map[string]int64
-	// atLossSpent is what the platform's hosts bought at a loss cost to
-	// run today, in micros.
-	atLossSpent int64
 }
 
 func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time, cooldown time.Duration) (offerRead, error) {
@@ -68,9 +65,6 @@ func readOffers(ctx context.Context, q *Queries, p Policy, now time.Time, cooldo
 	if r.rates, err = billing.FleetComputeRates(now); err != nil {
 		return r, fmt.Errorf("read the fleet's compute rates: %w", err)
 	}
-	if r.atLossSpent, err = q.AtLossSpentToday(ctx); err != nil {
-		return r, fmt.Errorf("read today's spend at a loss: %w", err)
-	}
 	return r, nil
 }
 
@@ -93,9 +87,12 @@ func (r offerRead) inputs(storageRegion string, a account, hosts []FleetHost) Of
 // fleetRead is what one planning pass reads, all in its transaction.
 type fleetRead struct {
 	offerRead
-	pending  []PendingDemandRow
-	markets  map[string]FleetMarketsRow
-	accounts []account
+	// atLossSpent is what the platform's hosts bought at a loss cost to
+	// run today, in micros.
+	atLossSpent int64
+	pending     []PendingDemandRow
+	markets     map[string]FleetMarketsRow
+	accounts    []account
 	// batchWaits are how long each account's arrival batch stays open, by
 	// account key.
 	batchWaits map[string]time.Duration
@@ -121,6 +118,9 @@ func readMarkets(ctx context.Context, q *Queries, p Policy, now time.Time, coold
 		return fleetRead{}, err
 	}
 	r := fleetRead{offerRead: offers, markets: map[string]FleetMarketsRow{}, batchWaits: map[string]time.Duration{}}
+	if r.atLossSpent, err = q.AtLossSpentToday(ctx); err != nil {
+		return r, fmt.Errorf("read today's spend at a loss: %w", err)
+	}
 	if r.pending, err = q.PendingDemand(ctx, demandBatch); err != nil {
 		return r, fmt.Errorf("read pending demand: %w", err)
 	}

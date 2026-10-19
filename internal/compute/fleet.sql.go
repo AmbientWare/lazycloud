@@ -39,12 +39,12 @@ func (q *Queries) AlignWalk(ctx context.Context, walk uuid.UUID) error {
 const atLossSpentToday = `-- name: AtLossSpentToday :one
 with changes as (
     select h.id, h.hourly_micros, c.phase, c.at,
-           lead(c.at, 1, now()) over (partition by c.host_id order by c.at, c.phase) as until
+           lead(c.at, 1, now()) over (partition by c.host_id order by c.at) as until
     from hosts h
     join host_phase_changes c on c.host_id = h.id
-    where h.margin_waived and h.connection_id is null and h.hourly_micros is not null
+    where h.provider = 'aws' and h.margin_waived and h.connection_id is null and h.hourly_micros is not null
       and c.host_id in (select host_id from host_phase_changes where at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
-                        union select id from hosts where margin_waived and phase not in ('deleted', 'failed'))
+                        union select id from hosts where provider = 'aws' and margin_waived and phase not in ('deleted', 'failed'))
 )
 select coalesce(sum(hourly_micros * extract(epoch from
            least(until, now()) - greatest(at, date_trunc('day', now() at time zone 'utc') at time zone 'utc')) / 3600), 0)::bigint
@@ -350,7 +350,7 @@ func (q *Queries) FailLaunch(ctx context.Context, arg FailLaunchParams) (int64, 
 
 const fleetHostsInRegion = `-- name: FleetHostsInRegion :many
 select id, phase, phase_message, state, instance_id, launched_at, last_seen_at, phase_at, updating_until, stop_requested_at,
-       force_stop_at, interruption_at, failure
+       interruption_at, failure
 from hosts
 where provider = 'aws' and region = $1
   and connection_id is not distinct from $2::uuid
@@ -374,7 +374,6 @@ type FleetHostsInRegionRow struct {
 	PhaseAt         time.Time
 	UpdatingUntil   *time.Time
 	StopRequestedAt *time.Time
-	ForceStopAt     *time.Time
 	InterruptionAt  *time.Time
 	Failure         *string
 }
@@ -400,7 +399,6 @@ func (q *Queries) FleetHostsInRegion(ctx context.Context, arg FleetHostsInRegion
 			&i.PhaseAt,
 			&i.UpdatingUntil,
 			&i.StopRequestedAt,
-			&i.ForceStopAt,
 			&i.InterruptionAt,
 			&i.Failure,
 		); err != nil {

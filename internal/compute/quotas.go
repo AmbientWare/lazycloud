@@ -85,8 +85,8 @@ type QuotaRoom struct {
 }
 
 // RefreshQuotas reads the EC2 vCPU quotas of each managed account in each
-// of its regions that were never read or were read longer than
-// quotaRecheck ago, one statement per account and region. A region whose
+// of its regions not read, or failed, within quotaRecheck, one statement
+// per account and region. A region whose
 // read fails keeps its last quotas. It reports how many it stored.
 func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, error) {
 	accounts, err := c.accounts(ctx, c.queries)
@@ -100,13 +100,16 @@ func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, 
 	type place struct{ owner, region string }
 	fresh := map[place]int{}
 	for _, r := range rows {
-		if r.ObservedAt != nil && time.Since(*r.ObservedAt) < quotaRecheck {
+		if r.CheckedAt != nil && time.Since(*r.CheckedAt) < quotaRecheck {
 			fresh[place{r.Owner, r.Region}]++
 		}
 	}
-	read := 0
-	for _, codes := range quotaCodes() {
-		read += len(codes)
+	codes := quotaCodes()
+	var classes, markets []string
+	for _, class := range slices.Sorted(maps.Keys(codes)) {
+		for _, market := range slices.Sorted(maps.Keys(codes[class])) {
+			classes, markets = append(classes, string(class)), append(markets, string(market))
+		}
 	}
 	stored := 0
 	var failed error
@@ -115,13 +118,16 @@ func (c *Compute) RefreshQuotas(ctx context.Context, logger *slog.Logger) (int, 
 			continue
 		}
 		for _, region := range slices.Sorted(maps.Keys(a.networks)) {
-			if fresh[place{a.key(), region}] == read {
+			if fresh[place{a.key(), region}] == len(classes) {
 				continue
 			}
 			params, err := c.readQuotas(ctx, a, region)
 			if err != nil {
 				if ctx.Err() != nil {
 					return stored, err
+				}
+				if err := c.queries.CheckQuotas(ctx, CheckQuotasParams{Owner: a.key(), Region: region, Classes: classes, Markets: markets}); err != nil {
+					return stored, fmt.Errorf("record the failed quota read: %w", err)
 				}
 				logger.WarnContext(ctx, "ec2 quotas unavailable", "owner", a.key(), "region", region, "error", err)
 				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))

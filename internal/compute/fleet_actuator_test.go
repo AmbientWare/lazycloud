@@ -610,8 +610,8 @@ func TestAStopThatCannotHappenRetiresTheHostInsteadOfWaiting(t *testing.T) {
 }
 
 // Time the scheduler was down never ends a stop EC2 took: a reserve EC2
-// stopped while no scheduler ran past the window is recorded stopped, not
-// failed, as the 30 reserves ended on 2026-10-15 should have been.
+// stopped while no scheduler ran, past the window and past a forced stop,
+// is recorded stopped, not failed.
 func TestAStopEC2TookSurvivesTheSchedulerBeingDown(t *testing.T) {
 	t.Parallel()
 	o, _, ec2 := reserveFleet(t)
@@ -619,6 +619,7 @@ func TestAStopEC2TookSurvivesTheSchedulerBeingDown(t *testing.T) {
 	ec2.add(fakeInstance{ID: "i-0000000000000c030", State: "stopped"}, host.String())
 	ago(t, o, host, "phase_at", 45*time.Minute)
 	ago(t, o, host, "stop_requested_at", 45*time.Minute)
+	ago(t, o, host, "force_stop_at", 30*time.Minute)
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}

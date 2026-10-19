@@ -10,8 +10,9 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
-// Each region's quotas are stored as read, a failed region stores none,
-// and a quota refusal holds the class at no room. The planner subtracts
+// Each region's quotas are stored as read, a failed region stores none and
+// is not read again before the recheck, and a quota refusal holds the
+// class at no room. The planner subtracts
 // what the fleet runs (TestQuotaRoomsAndSpotPricesSteerPurchases).
 func TestQuotaReadsAreStoredAndARefusalCoolsTheClass(t *testing.T) {
 	t.Parallel()
@@ -32,6 +33,11 @@ func TestQuotaReadsAreStoredAndARefusalCoolsTheClass(t *testing.T) {
 	stored, err := o.compute.RefreshQuotas(t.Context(), discard())
 	if stored != 6 || err == nil || !strings.Contains(err.Error(), "us-west-1") {
 		t.Fatalf("refresh stored %d (%v), want six us-east-2 quotas and the us-west-1 failure", stored, err)
+	}
+	// Read or failed, a region waits the recheck before the next read.
+	reads := len(emulator.calls("GetServiceQuota"))
+	if _, err := o.compute.RefreshQuotas(t.Context(), discard()); err != nil || len(emulator.calls("GetServiceQuota")) != reads {
+		t.Fatalf("a second refresh read %d quotas (%v), want none before the recheck", len(emulator.calls("GetServiceQuota"))-reads, err)
 	}
 	// A G Spot launch refused for quota cools every G Spot type there.
 	ec2.refuse = func(call awsCall) (awsReply, bool) {
@@ -83,8 +89,8 @@ values ('g', 'offline', 'platform', 'aws', 'requested', 3500, 14::bigint << 30, 
 	if q := got["us-east-2/g/on_demand"]; vcpus(q) != 8 || q.refused {
 		t.Errorf("G on-demand quota %d (refused %t), want 8 and not cooled", vcpus(q), q.refused)
 	}
-	if _, read := got["us-west-1/standard/spot"]; read {
-		t.Errorf("us-west-1 quotas %v stored after a failed read", got)
+	if q := got["us-west-1/standard/spot"]; q.vcpus != nil {
+		t.Errorf("us-west-1 quota %d stored after a failed read, want none", vcpus(q))
 	}
 }
 
