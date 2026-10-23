@@ -10,20 +10,24 @@ import (
 func TestGPUModelsUseThePlatformVocabulary(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]string{
-		"Tesla T4":                  "T4",
-		"NVIDIA A10G":               "A10G",
-		"NVIDIA L4":                 "L4",
-		"NVIDIA L40S":               "L40S",
-		"NVIDIA L40":                "L40",
-		"NVIDIA A100-SXM4-40GB":     "A100-40",
-		"NVIDIA A100 80GB PCIe":     "A100-80",
-		"NVIDIA H100 80GB HBM3":     "H100",
-		"NVIDIA H200":               "H200",
-		"NVIDIA GH200 480GB":        "GH200",
-		"NVIDIA GeForce RTX 3090":   "RTX3090",
-		"Quadro RTX 6000":           "RTX6000",
-		"NVIDIA RTX A6000":          "RTXA6000",
-		"  NVIDIA GeForce RTX 4090": "RTX4090",
+		"Tesla T4":              "T4",
+		"NVIDIA A10G":           "A10G",
+		"NVIDIA L4":             "L4",
+		"NVIDIA L40S":           "L40S",
+		"NVIDIA L40":            "L40",
+		"NVIDIA A100-SXM4-40GB": "A100-40",
+		"NVIDIA A100 80GB PCIe": "A100-80",
+		"NVIDIA H100 80GB HBM3": "H100",
+		"NVIDIA H200":           "H200",
+		"NVIDIA GH200 480GB":    "GH200",
+		"NVIDIA B200":           "B200",
+		"NVIDIA B300":           "B300",
+		"NVIDIA RTX PRO 4500 Blackwell Server Edition": "RTXPro4500",
+		"NVIDIA RTX PRO 6000 Blackwell Server Edition": "RTXPro6000",
+		"NVIDIA GeForce RTX 3090":                      "RTX3090",
+		"Quadro RTX 6000":                              "RTX6000",
+		"NVIDIA RTX A6000":                             "RTXA6000",
+		"  NVIDIA GeForce RTX 4090":                    "RTX4090",
 	} {
 		if got := gpuModel(name); got != want {
 			t.Errorf("gpuModel(%q) = %q, want %q", name, got, want)

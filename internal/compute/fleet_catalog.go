@@ -220,9 +220,9 @@ func rootDiskMicros(region string, gib, mibps int64) int64 {
 }
 
 // FleetCatalog is what the platform fleet buys, with on-demand prices in
-// priceRegions as the AWS price list
-// published 2026-09-25 has them (testdata/fleet/on_demand_prices.json).
-// Every type runs two threads per core, its DefaultThreadsPerCore.
+// priceRegions as the AWS price list has them
+// (testdata/fleet/on_demand_prices.json).
+// Every type runs its DefaultThreadsPerCore: one on g7, two on the rest.
 func FleetCatalog() []CatalogType {
 	cpuType := func(name string, vcpus int, memGiB int64, hibernates bool, prices [4]int64) CatalogType {
 		return CatalogType{Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, Hibernates: hibernates, prices: prices}
@@ -233,6 +233,10 @@ func FleetCatalog() []CatalogType {
 			Name: name, Architecture: "amd64", Topology: twoPerCore(vcpus), MemoryBytes: memGiB * gib, GPU: model, GPUCount: cards,
 			InstanceStore: true, prices: prices,
 		}
+	}
+	oneThreadPerCore := func(t CatalogType) CatalogType {
+		t.Topology.Cores = t.Topology.Threads
+		return t
 	}
 	return []CatalogType{
 		cpuType("m7i.large", 2, 8, true, [4]int64{100800, 117600, 100800, 100800}),
@@ -277,6 +281,8 @@ func FleetCatalog() []CatalogType {
 		gpu("g6.12xlarge", 48, 192, "L4", 4, [4]int64{4601600, 0, 4601600, 4601600}),
 		gpu("g6.24xlarge", 96, 384, "L4", 4, [4]int64{6675200, 0, 6675200, 6675200}),
 		gpu("g6.48xlarge", 192, 768, "L4", 8, [4]int64{13350400, 0, 13350400, 13350400}),
+		gpu("gr6.4xlarge", 16, 128, "L4", 1, [4]int64{1539200, 0, 1539200, 1539200}),
+		gpu("gr6.8xlarge", 32, 256, "L4", 1, [4]int64{2446400, 0, 2446400, 2446400}),
 		gpu("g6e.xlarge", 4, 32, "L40S", 1, [4]int64{1861000, 0, 1861000, 1861000}),
 		gpu("g6e.2xlarge", 8, 64, "L40S", 1, [4]int64{2242080, 0, 2242080, 2242080}),
 		gpu("g6e.4xlarge", 16, 128, "L40S", 1, [4]int64{3004240, 0, 3004240, 3004240}),
@@ -285,10 +291,24 @@ func FleetCatalog() []CatalogType {
 		gpu("g6e.12xlarge", 48, 384, "L40S", 4, [4]int64{10492640, 0, 10492640, 10492640}),
 		gpu("g6e.24xlarge", 96, 768, "L40S", 4, [4]int64{15065590, 0, 15065590, 15065590}),
 		gpu("g6e.48xlarge", 192, 1536, "L40S", 8, [4]int64{30131180, 0, 30131180, 30131180}),
+		oneThreadPerCore(gpu("g7.2xlarge", 8, 32, "RTXPro4500", 1, [4]int64{2520000, 0, 2520000, 2520000})),
+		oneThreadPerCore(gpu("g7.4xlarge", 16, 64, "RTXPro4500", 1, [4]int64{3042080, 0, 3042080, 3042080})),
+		oneThreadPerCore(gpu("g7.8xlarge", 32, 128, "RTXPro4500", 1, [4]int64{4086240, 0, 4086240, 4086240})),
+		oneThreadPerCore(gpu("g7.12xlarge", 48, 192, "RTXPro4500", 2, [4]int64{7128320, 0, 7128320, 7128320})),
+		oneThreadPerCore(gpu("g7.24xlarge", 96, 384, "RTXPro4500", 4, [4]int64{14256640, 0, 14256640, 14256640})),
+		oneThreadPerCore(gpu("g7.48xlarge", 192, 768, "RTXPro4500", 8, [4]int64{28513280, 0, 28513280, 28513280})),
+		gpu("g7e.2xlarge", 8, 64, "RTXPro6000", 1, [4]int64{3363120, 0, 3363120, 3363120}),
+		gpu("g7e.4xlarge", 16, 128, "RTXPro6000", 1, [4]int64{3998160, 0, 3998160, 3998160}),
+		gpu("g7e.8xlarge", 32, 256, "RTXPro6000", 1, [4]int64{5268240, 0, 5268240, 5268240}),
+		gpu("g7e.12xlarge", 48, 512, "RTXPro6000", 2, [4]int64{8286080, 0, 8286080, 8286080}),
+		gpu("g7e.24xlarge", 96, 1024, "RTXPro6000", 4, [4]int64{16572160, 0, 16572160, 16572160}),
+		gpu("g7e.48xlarge", 192, 2048, "RTXPro6000", 8, [4]int64{33144320, 0, 33144320, 33144320}),
 		gpu("p4d.24xlarge", 96, 1152, "A100-40", 8, [4]int64{21957640, 0, 21957642, 21957640}),
 		gpu("p4de.24xlarge", 96, 1152, "A100-80", 8, [4]int64{0, 0, 27447050, 27447050}),
 		gpu("p5.4xlarge", 16, 256, "H100", 1, [4]int64{6880000, 0, 6880000, 6880000}),
 		gpu("p5.48xlarge", 192, 2048, "H100", 8, [4]int64{55040000, 68800000, 55040000, 55040000}),
 		gpu("p5en.48xlarge", 192, 2048, "H200", 8, [4]int64{63296000, 79120000, 63296000, 63296000}),
+		gpu("p6-b200.48xlarge", 192, 2048, "B200", 8, [4]int64{113932800, 0, 113932800, 113932800}),
+		gpu("p6-b300.48xlarge", 192, 4096, "B300", 8, [4]int64{0, 0, 142416000, 142416000}),
 	}
 }

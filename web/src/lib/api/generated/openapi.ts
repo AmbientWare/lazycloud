@@ -5215,7 +5215,7 @@ export interface components {
          * @description A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80. The platform fleet runs only the models the pricing catalog marks enabled; work only it can serve that names only other models is refused with unsupported.
          * @enum {string}
          */
-        GpuType: "T4" | "A10G" | "L4" | "L40S" | "A100-40" | "A100-80" | "H100" | "H200" | "any";
+        GpuType: "T4" | "A10G" | "L4" | "RTXPro4500" | "L40S" | "A100-40" | "A100-80" | "RTXPro6000" | "H100" | "H200" | "B200" | "B300" | "any";
         /**
          * @description A product region. Only us-east (us-east-1 and us-east-2) and us-west (us-west-1 and us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
          * @enum {string}
@@ -11695,7 +11695,7 @@ export const lifecycleStageKindValues: ReadonlyArray<FlattenedDeepRequired<compo
 export const activityMeasureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityMeasure"]> = ["containers", "tasks", "cpu", "memory", "gpu"];
 export const activityUnitValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivityUnit"]> = ["starts", "cores", "gibibytes", "gpus"];
 export const activitySeriesKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ActivitySeriesKind"]> = ["app", "unassigned", "other"];
-export const gpuTypeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["GpuType"]> = ["T4", "A10G", "L4", "L40S", "A100-40", "A100-80", "H100", "H200", "any"];
+export const gpuTypeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["GpuType"]> = ["T4", "A10G", "L4", "RTXPro4500", "L40S", "A100-40", "A100-80", "RTXPro6000", "H100", "H200", "B200", "B300", "any"];
 export const regionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Region"]> = ["us-east", "us-west", "eu-central", "eu-north", "ap-southeast"];
 export const machineLifecycleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineLifecycle"]> = ["requested", "provisioning", "booting", "joining", "ready", "draining", "stopping", "stopped", "resuming", "terminating", "deleted", "failed"];
 export const machineFailureValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["MachineFailure"]> = ["agent_download_failed", "runtime_install_failed", "network_join_failed", "provider_identity_failed", "agent_enrollment_failed", "worker_image_pull_failed", "worker_start_failed", "worker_readiness_failed", "bootstrap_timed_out", "host_preflight_failed", "service_lost", "machine_record_deleted", "provider_stopped", "provider_terminated", "no_capacity", "unknown"];
