@@ -1,5 +1,5 @@
 {
- "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02",
+ "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02; gr6, g7, g7e and p6 types from the AWS Price List API, fetched 2026-10-23",
  "published": {
   "us-east-2": "2026-09-25T17:45:21Z",
   "us-west-1": "2026-09-25T17:45:21Z",
@@ -199,6 +199,76 @@
    "us-east-2": 1861000,
    "us-west-2": 1861000
   },
+  "g7.12xlarge": {
+   "us-east-1": 7128320,
+   "us-east-2": 7128320,
+   "us-west-2": 7128320
+  },
+  "g7.24xlarge": {
+   "us-east-1": 14256640,
+   "us-east-2": 14256640,
+   "us-west-2": 14256640
+  },
+  "g7.2xlarge": {
+   "us-east-1": 2520000,
+   "us-east-2": 2520000,
+   "us-west-2": 2520000
+  },
+  "g7.48xlarge": {
+   "us-east-1": 28513280,
+   "us-east-2": 28513280,
+   "us-west-2": 28513280
+  },
+  "g7.4xlarge": {
+   "us-east-1": 3042080,
+   "us-east-2": 3042080,
+   "us-west-2": 3042080
+  },
+  "g7.8xlarge": {
+   "us-east-1": 4086240,
+   "us-east-2": 4086240,
+   "us-west-2": 4086240
+  },
+  "g7e.12xlarge": {
+   "us-east-1": 8286080,
+   "us-east-2": 8286080,
+   "us-west-2": 8286080
+  },
+  "g7e.24xlarge": {
+   "us-east-1": 16572160,
+   "us-east-2": 16572160,
+   "us-west-2": 16572160
+  },
+  "g7e.2xlarge": {
+   "us-east-1": 3363120,
+   "us-east-2": 3363120,
+   "us-west-2": 3363120
+  },
+  "g7e.48xlarge": {
+   "us-east-1": 33144320,
+   "us-east-2": 33144320,
+   "us-west-2": 33144320
+  },
+  "g7e.4xlarge": {
+   "us-east-1": 3998160,
+   "us-east-2": 3998160,
+   "us-west-2": 3998160
+  },
+  "g7e.8xlarge": {
+   "us-east-1": 5268240,
+   "us-east-2": 5268240,
+   "us-west-2": 5268240
+  },
+  "gr6.4xlarge": {
+   "us-east-1": 1539200,
+   "us-east-2": 1539200,
+   "us-west-2": 1539200
+  },
+  "gr6.8xlarge": {
+   "us-east-1": 2446400,
+   "us-east-2": 2446400,
+   "us-west-2": 2446400
+  },
   "m6a.2xlarge": {
    "us-east-1": 345600,
    "us-east-2": 345600,
@@ -284,6 +354,15 @@
    "us-east-2": 63296000,
    "us-west-1": 79120000,
    "us-west-2": 63296000
+  },
+  "p6-b200.48xlarge": {
+   "us-east-1": 113932800,
+   "us-east-2": 113932800,
+   "us-west-2": 113932800
+  },
+  "p6-b300.48xlarge": {
+   "us-east-1": 142416000,
+   "us-west-2": 142416000
   },
   "r6a.2xlarge": {
    "us-east-1": 453600,

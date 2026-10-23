@@ -254,6 +254,7 @@ func nvidiaRuntimeInstalled() bool {
 // gpuAliases maps compact names to the platform's model vocabulary, most
 // specific first.
 var gpuAliases = [...]struct{ alias, model string }{ //nolint:gochecknoglobals // constant table
+	{"RTXPRO6000", "RTXPro6000"}, {"RTXPRO4500", "RTXPro4500"}, {"B300", "B300"}, {"B200", "B200"},
 	{"GH200", "GH200"}, {"H200", "H200"}, {"H100", "H100"},
 	{"L40S", "L40S"}, {"L40", "L40"}, {"L4", "L4"}, {"T4", "T4"}, {"A10G", "A10G"},
 }
