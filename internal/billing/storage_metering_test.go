@@ -120,10 +120,10 @@ func TestAdmitRefusesGPUModelsTheFleetDoesNotOffer(t *testing.T) {
 	owner := f.user()
 	ws := f.workspace(owner)
 	f.setAccount(owner, "payment_method_attached_at = now()")
-	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100, GPUA10080}})
+	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100, GPURTXPro6000}})
 	var unavailable *GPUUnavailableError
-	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "H100, A100-80 are coming soon") {
-		t.Fatalf("H100 or A100-80 on the fleet: %v", err)
+	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "H100, RTXPro6000 are coming soon") {
+		t.Fatalf("H100 or RTXPro6000 on the fleet: %v", err)
 	}
 	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUH100, GPUL4}})
 	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUL4}) {

@@ -587,10 +587,12 @@ func checkCatalog(t *testing.T, client *ec2.Client, region string) {
 				model, cards = aws.ToString(g.Name), cards+int(aws.ToInt32(g.Count))
 			}
 		}
-		// The catalog names an A100 by its memory (A100-40, A100-80); EC2
-		// names the card alone.
+		// EC2 names the RTX PRO cards apart from the catalog (DescribeInstanceTypes, 2026-10-27).
+		if name, ok := map[string]string{"RTX PRO 4500": "RTXPro4500", "RTX PRO Server 6000": "RTXPro6000"}[model]; ok {
+			model = name
+		}
 		if vcpus != typ.VCPUs() || int64(typ.Topology.Cores)*threads != vcpus || memory != typ.MemoryBytes ||
-			!strings.HasPrefix(strings.ToLower(typ.GPU), strings.ToLower(model)) || cards != typ.GPUCount {
+			model != typ.GPU || cards != typ.GPUCount {
 			t.Errorf("%s in %s: EC2 has %d vCPU at %d per core, %d MiB, %d %s; the catalog %d vCPU on %d cores, %d MiB, %d %s",
 				typ.Name, region, vcpus, threads, memory>>20, cards, model,
 				typ.VCPUs(), typ.Topology.Cores, typ.MemoryBytes>>20, typ.GPUCount, typ.GPU)

@@ -1,5 +1,5 @@
 {
- "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02",
+ "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02; gr6, g7 and g7e types from the AWS Price List API, fetched 2026-10-23",
  "published": {
   "us-east-2": "2026-09-25T17:45:21Z",
   "us-west-1": "2026-09-25T17:45:21Z",
@@ -199,6 +199,76 @@
    "us-east-2": 1861000,
    "us-west-2": 1861000
   },
+  "g7.12xlarge": {
+   "us-east-1": 7128320,
+   "us-east-2": 7128320,
+   "us-west-2": 7128320
+  },
+  "g7.24xlarge": {
+   "us-east-1": 14256640,
+   "us-east-2": 14256640,
+   "us-west-2": 14256640
+  },
+  "g7.2xlarge": {
+   "us-east-1": 2520000,
+   "us-east-2": 2520000,
+   "us-west-2": 2520000
+  },
+  "g7.48xlarge": {
+   "us-east-1": 28513280,
+   "us-east-2": 28513280,
+   "us-west-2": 28513280
+  },
+  "g7.4xlarge": {
+   "us-east-1": 3042080,
+   "us-east-2": 3042080,
+   "us-west-2": 3042080
+  },
+  "g7.8xlarge": {
+   "us-east-1": 4086240,
+   "us-east-2": 4086240,
+   "us-west-2": 4086240
+  },
+  "g7e.12xlarge": {
+   "us-east-1": 8286080,
+   "us-east-2": 8286080,
+   "us-west-2": 8286080
+  },
+  "g7e.24xlarge": {
+   "us-east-1": 16572160,
+   "us-east-2": 16572160,
+   "us-west-2": 16572160
+  },
+  "g7e.2xlarge": {
+   "us-east-1": 3363120,
+   "us-east-2": 3363120,
+   "us-west-2": 3363120
+  },
+  "g7e.48xlarge": {
+   "us-east-1": 33144320,
+   "us-east-2": 33144320,
+   "us-west-2": 33144320
+  },
+  "g7e.4xlarge": {
+   "us-east-1": 3998160,
+   "us-east-2": 3998160,
+   "us-west-2": 3998160
+  },
+  "g7e.8xlarge": {
+   "us-east-1": 5268240,
+   "us-east-2": 5268240,
+   "us-west-2": 5268240
+  },
+  "gr6.4xlarge": {
+   "us-east-1": 1539200,
+   "us-east-2": 1539200,
+   "us-west-2": 1539200
+  },
+  "gr6.8xlarge": {
+   "us-east-1": 2446400,
+   "us-east-2": 2446400,
+   "us-west-2": 2446400
+  },
   "m6a.2xlarge": {
    "us-east-1": 345600,
    "us-east-2": 345600,
@@ -259,15 +329,6 @@
    "us-west-1": 235200,
    "us-west-2": 201600
   },
-  "p4d.24xlarge": {
-   "us-east-1": 21957642,
-   "us-east-2": 21957640,
-   "us-west-2": 21957640
-  },
-  "p4de.24xlarge": {
-   "us-east-1": 27447050,
-   "us-west-2": 27447050
-  },
   "p5.48xlarge": {
    "us-east-1": 55040000,
    "us-east-2": 55040000,
@@ -278,12 +339,6 @@
    "us-east-1": 6880000,
    "us-east-2": 6880000,
    "us-west-2": 6880000
-  },
-  "p5en.48xlarge": {
-   "us-east-1": 63296000,
-   "us-east-2": 63296000,
-   "us-west-1": 79120000,
-   "us-west-2": 63296000
   },
   "r6a.2xlarge": {
    "us-east-1": 453600,

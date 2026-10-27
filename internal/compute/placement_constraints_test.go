@@ -78,7 +78,7 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gpu := compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib, GPUType: "A100-80", GPUCount: 2}
+	gpu := compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib, GPUType: "L40S", GPUCount: 2}
 	machine, _, err := o.compute.Enroll(t.Context(), joinToken(t, cmd), compute.HostReport{Hostname: "gpu-box", Capacity: gpu})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gpu := compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib, GPUType: "A100-80", GPUCount: 2}
+	gpu := compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib, GPUType: "L40S", GPUCount: 2}
 	machine, _, err := o.compute.Enroll(t.Context(), joinToken(t, cmd), compute.HostReport{Hostname: "gpu-box", Capacity: gpu})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 		t.Fatal(err)
 	}
 	onFleet := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["L4"]}}`), 1000, gib)
-	onMachine := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["A100-80"]}, "placement": {"machine": "gpu-box"}}`), 1000, gib)
+	onMachine := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["L40S"]}, "placement": {"machine": "gpu-box"}}`), 1000, gib)
 	cpuOnMachine := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-box"}}`), 1000, gib)
 	run(t, o.pool, "update containers set gpu_count = 1 where id = any($1)", []uuid.UUID{onFleet, onMachine})
 	place(t, o)
@@ -153,7 +153,7 @@ func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
 		owner     string
 	}{
 		{onFleet, fleet, "L4", "platform_fleet"},
-		{onMachine, machine, "A100-80", "self_hosted"},
+		{onMachine, machine, "L40S", "self_hosted"},
 		{cpuOnMachine, machine, "", "self_hosted"},
 	} {
 		var gpuType, owner string

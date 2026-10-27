@@ -42,6 +42,7 @@ class GpuType(StringEnum):
     RTX5090 = "RTX5090"
     RTX6000 = "RTX6000"
     RTX6000Ada = "RTX6000Ada"
+    RTXPro4500 = "RTXPro4500"
     RTXPro6000 = "RTXPro6000"
     T4 = "T4"
     V100 = "V100"
@@ -52,23 +53,19 @@ SUPPORTED_GPU_TYPES: tuple[GpuType, ...] = (
     GpuType.T4,
     GpuType.A10G,
     GpuType.L4,
+    GpuType.RTXPro4500,
     GpuType.L40S,
-    GpuType.A100_40,
-    GpuType.A100_80,
+    GpuType.RTXPro6000,
     GpuType.H100,
-    GpuType.H200,
 )
-"""Models with scheduling and billing contracts, including customer-owned hardware.
-
-Managed offerings are the subset in PLATFORM_GPU_TYPES. Removing a managed
-offering must preserve customer hardware and historical billing identities.
-"""
+"""Models with scheduling and billing contracts, on the platform fleet or customer hardware."""
 
 SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_GPU_TYPES)
 
 
 _GPU_ALIASES: tuple[tuple[str, str], ...] = (
     ("RTXPRO6000", "RTXPro6000"),
+    ("RTXPRO4500", "RTXPro4500"),
     ("RTX6000ADA", "RTX6000Ada"),
     ("RTX4000ADA", "RTX4000Ada"),
     ("RTX6000", "RTX6000"),
@@ -145,11 +142,9 @@ def gpu_preference(value: GpuInput) -> tuple[str, ...]:
     Strict where `normalize_gpu_type` is forgiving, and they are not the same
     question. That one reads a label a worker or a provider reports and must
     take whatever it is handed; this one reads what an author asked for, where
-    a name the platform cannot schedule has no honest reading. `a100` is the
-    one that proves it: it normalises to a real vocabulary member, and no
-    worker ever reports it, because a card is a 40GB or an 80GB one. Accepted
-    quietly it becomes a workload that places nowhere and says `offer_unavailable`
-    at deploy time, hours from the line that caused it.
+    a name the platform cannot schedule has no honest reading. Accepted quietly
+    it becomes a workload that places nowhere and says `offer_unavailable` at
+    deploy time, hours from the line that caused it.
 
     Order is the whole point of the sequence form. Earlier entries are
     preferred, and `any` is only meaningful last, since nothing after "whatever
@@ -165,7 +160,7 @@ def gpu_preference(value: GpuInput) -> tuple[str, ...]:
         if normalized == NO_GPU:
             continue
         if normalized != GPU_ANY and normalized not in SUPPORTED_GPU_NAMES:
-            raise ValueError(_unschedulable_gpu_message(entry, normalized))
+            raise ValueError(_unschedulable_gpu_message(entry))
         if normalized not in preference:
             preference.append(normalized)
     if GPU_ANY in preference and preference[-1] != GPU_ANY:
@@ -178,17 +173,7 @@ def gpu_preference(value: GpuInput) -> tuple[str, ...]:
     return tuple(preference)
 
 
-def _unschedulable_gpu_message(entry: object, normalized: str) -> str:
-    # A model with sized variants is the common mistake and the one worth
-    # answering directly, rather than making the reader scan the whole list for
-    # the name they nearly wrote.
-    sized = sorted(name for name in SUPPORTED_GPU_NAMES if name.startswith(f"{normalized}-"))
-    if sized:
-        return (
-            f"gpu {entry!r} does not name a card the platform runs: {normalized} comes "
-            f"in more than one size and they are not interchangeable. "
-            f"Name one of {', '.join(sized)}."
-        )
+def _unschedulable_gpu_message(entry: object) -> str:
     supported = ", ".join(sorted(SUPPORTED_GPU_NAMES))
     return f"gpu {entry!r} is not a GPU this platform schedules. Available: {supported}, any."
 

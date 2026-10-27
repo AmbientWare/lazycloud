@@ -1448,11 +1448,10 @@ class GpuType(str, Enum):
     T4 = "T4"
     A10G = "A10G"
     L4 = "L4"
+    RTXPro4500 = "RTXPro4500"
     L40S = "L40S"
-    A100_40 = "A100-40"
-    A100_80 = "A100-80"
+    RTXPro6000 = "RTXPro6000"
     H100 = "H100"
-    H200 = "H200"
     any = "any"
 
 

@@ -6781,12 +6781,12 @@ components:
 
     GpuType:
       description: >-
-        A GPU model, or any for whatever model has capacity. A100 is not a
-        model: name A100-40 or A100-80. The platform fleet runs only the
-        models the pricing catalog marks enabled; work only it can serve
-        that names only other models is refused with unsupported.
+        A GPU model, or any for whatever model has capacity. The platform
+        fleet runs only the models the pricing catalog marks enabled; work
+        only it can serve that names only other models is refused with
+        unsupported.
       type: string
-      enum: [T4, A10G, L4, L40S, A100-40, A100-80, H100, H200, any]
+      enum: [T4, A10G, L4, RTXPro4500, L40S, RTXPro6000, H100, any]
 
     Region:
       description: >-

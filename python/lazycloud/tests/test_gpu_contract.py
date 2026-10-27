@@ -28,14 +28,6 @@ def test_every_supported_model_is_already_its_own_normalized_form() -> None:
         assert normalize_gpu_type(gpu.value) == gpu.value
 
 
-def test_a_model_with_two_sizes_is_refused_rather_than_guessed() -> None:
-    with pytest.raises(ValueError) as refusal:
-        gpu_preference("a100")
-
-    assert "A100-40" in str(refusal.value)
-    assert "A100-80" in str(refusal.value)
-
-
 def test_an_order_is_kept_and_a_wildcard_cannot_hide_what_follows_it() -> None:
     assert gpu_preference(["h100", "l4"]) == ("H100", "L4")
     assert gpu_preference(["h100", "H100", "l4"]) == ("H100", "L4")

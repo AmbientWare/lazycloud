@@ -37,11 +37,11 @@ def embed(texts: list[str]) -> list[list[float]]:
     ...
 ```
 
-Models are `GpuType.T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`, `H100`, and
-`H200`. A list is a preference order:
-`gpu=[GpuType.L40S, GpuType.A10G, GpuType.Any]` takes the first model with free
-capacity, and `GpuType.Any` at the end takes whatever is left. Plain
-`GpuType.A100` is rejected because the two sizes aren't interchangeable.
+Models are `GpuType.T4`, `A10G`, `L4`, `RTXPro4500`, `L40S`, `RTXPro6000`
+and `H100`. A list is a preference order: `gpu=[GpuType.L40S, GpuType.A10G,
+GpuType.Any]` takes the first model with free capacity, and `GpuType.Any` at
+the end takes whatever is left. Each model bills at its own rate, so a
+fallback can cost more than the first choice.
 `gpu_count` sets GPUs per container, and your [plan](/platform/plans) sets
 which models you can use.
 

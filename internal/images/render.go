@@ -170,7 +170,7 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 		// One model, not a preference: it is the machine the image is
 		// built on.
 		if gpu := apitypes.GpuType(*def.Gpu); !gpu.Valid() || gpu == apitypes.Any {
-			return spec{}, invalid("gpu %q is not a GPU model; name one such as L4 or A100-80", *def.Gpu)
+			return spec{}, invalid("gpu %q is not a GPU model; name one such as L4 or H100", *def.Gpu)
 		}
 		s.gpu = *def.Gpu
 	}
