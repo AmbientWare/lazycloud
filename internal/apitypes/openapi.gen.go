@@ -1119,14 +1119,9 @@ func (e FleetState) Valid() bool {
 
 // Defines values for GpuType.
 const (
-	A10040     GpuType = "A100-40"
-	A10080     GpuType = "A100-80"
 	A10G       GpuType = "A10G"
 	Any        GpuType = "any"
-	B200       GpuType = "B200"
-	B300       GpuType = "B300"
 	H100       GpuType = "H100"
-	H200       GpuType = "H200"
 	L4         GpuType = "L4"
 	L40S       GpuType = "L40S"
 	RTXPro4500 GpuType = "RTXPro4500"
@@ -1137,21 +1132,11 @@ const (
 // Valid indicates whether the value is a known member of the GpuType enum.
 func (e GpuType) Valid() bool {
 	switch e {
-	case A10040:
-		return true
-	case A10080:
-		return true
 	case A10G:
 		return true
 	case Any:
 		return true
-	case B200:
-		return true
-	case B300:
-		return true
 	case H100:
-		return true
-	case H200:
 		return true
 	case L4:
 		return true
@@ -3769,7 +3754,7 @@ type GpuRate struct {
 	NanosPerCardHour CardRates `json:"nanos_per_card_hour"`
 }
 
-// GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80. The platform fleet runs only the models the pricing catalog marks enabled; work only it can serve that names only other models is refused with unsupported.
+// GpuType A GPU model, or any for whatever model has capacity. The platform fleet runs only the models the pricing catalog marks enabled; work only it can serve that names only other models is refused with unsupported.
 type GpuType string
 
 // HealthCheck An HTTP GET that must answer 2xx or 3xx before the container takes traffic.

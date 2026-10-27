@@ -440,7 +440,7 @@ app = lazycloud.App("reports")
 
 
 @app.function(
-    gpu=[lazycloud.GpuType.H100, "a100-80gb", lazycloud.GpuType.Any],
+    gpu=[lazycloud.GpuType.H100, "nvidia-l40s", lazycloud.GpuType.Any],
     gpu_count=2,
     region="us-west",
     availability_zone="usw2-az1",
@@ -474,7 +474,7 @@ def test_deploy_maps_gpu_and_placement_options(
     assert specs["train"]["resources"] == {
         "cpu_millis": 125,
         "memory_mib": 128,
-        "gpu": ["H100", "A100-80", "any"],
+        "gpu": ["H100", "L40S", "any"],
         "gpu_count": 2,
     }
     assert specs["train"]["placement"] == {
@@ -493,7 +493,7 @@ def test_deploy_maps_gpu_and_placement_options(
 @pytest.mark.parametrize(
     ("options", "message"),
     [
-        ('gpu="A100"', "A100 comes in more than one size"),
+        ('gpu="A100"', "is not a GPU this platform schedules"),
         ('gpu=["any", "T4"]', "nothing after it is ever reached: T4"),
         ('gpu="T4", gpu_count=-1', "gpu_count cannot be negative"),
         ('region="mars"', "'mars' is not a valid ProductRegion"),

@@ -75,8 +75,6 @@ const (
 	GPURTXPro6000 GPUType = "RTXPro6000"
 	GPUH100       GPUType = "H100"
 	GPUH200       GPUType = "H200"
-	GPUB200       GPUType = "B200"
-	GPUB300       GPUType = "B300"
 	noGPU         GPUType = ""
 )
 
@@ -92,8 +90,7 @@ type GPUModel struct {
 func GPUModels() []GPUModel {
 	return []GPUModel{
 		{GPUT4, true}, {GPUA10G, true}, {GPUL4, true}, {GPURTXPro4500, false}, {GPUL40S, true},
-		{GPUA10040, false}, {GPUA10080, false}, {GPURTXPro6000, false}, {GPUH100, false}, {GPUH200, false},
-		{GPUB200, false}, {GPUB300, false},
+		{GPURTXPro6000, false}, {GPUH100, false},
 	}
 }
 
@@ -481,7 +478,7 @@ func rateHistory() []rateChange {
 			septemberGPUs[n].fleetHour = 1_000_000_000
 		case GPUL4:
 			septemberGPUs[n].fleetHour = 750_000_000
-		case GPURTXPro4500, GPUL40S, GPUA10040, GPUA10080, GPURTXPro6000, GPUH100, GPUH200, GPUB200, GPUB300, noGPU, GPUAny:
+		case GPURTXPro4500, GPUL40S, GPUA10040, GPUA10080, GPURTXPro6000, GPUH100, GPUH200, noGPU, GPUAny:
 		}
 	}
 	spotGPUs := []gpuRate{
@@ -490,8 +487,7 @@ func rateHistory() []rateChange {
 	}
 	octoberGPUs := []gpuRate{
 		{GPUT4, 550_000_000}, {GPUA10G, 1_000_000_000}, {GPUL4, 720_000_000}, {GPURTXPro4500, 950_000_000},
-		{GPUL40S, 1_800_000_000}, {GPUA10040, 1_950_000_000}, {GPUA10080, 2_300_000_000}, {GPURTXPro6000, 2_800_000_000},
-		{GPUH100, 3_250_000_000}, {GPUH200, 4_150_000_000}, {GPUB200, 6_100_000_000}, {GPUB300, 7_100_000_000},
+		{GPUL40S, 1_800_000_000}, {GPURTXPro6000, 2_800_000_000}, {GPUH100, 3_650_000_000},
 	}
 	initial := computeRates(shapesFrom(shapeRate{OwnerPlatformFleet, 0, 55_126_800, 7_560_000}), initialGPUs)
 	september := shapesFrom(shapeRate{OwnerPlatformFleet, 0, 44_000_000, 7_500_000})
@@ -522,7 +518,7 @@ func rateHistory() []rateChange {
 			disk: &DiskRate{StoredGiBMonth: 50_000_000, AttachedGiBMonth: 200_000_000},
 		},
 		{
-			version: "2026-10-23.a", effectiveAt: time.Date(2026, 10, 23, 16, 50, 0, 0, time.UTC),
+			version: "2026-10-27.a", effectiveAt: time.Date(2026, 10, 27, 5, 0, 0, 0, time.UTC),
 			compute: gpuOnly(placementRates(computeRates(september, octoberGPUs), all)),
 		},
 	}

@@ -1,5 +1,5 @@
 {
- "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02; gr6, g7, g7e and p6 types from the AWS Price List API, fetched 2026-10-23",
+ "source": "AWS public EC2 on-demand Linux price list (b0.p.awsstatic.com ec2-ondemand-without-sec-sel), fetched 2026-10-02; gr6, g7 and g7e types from the AWS Price List API, fetched 2026-10-23",
  "published": {
   "us-east-2": "2026-09-25T17:45:21Z",
   "us-west-1": "2026-09-25T17:45:21Z",
@@ -329,15 +329,6 @@
    "us-west-1": 235200,
    "us-west-2": 201600
   },
-  "p4d.24xlarge": {
-   "us-east-1": 21957642,
-   "us-east-2": 21957640,
-   "us-west-2": 21957640
-  },
-  "p4de.24xlarge": {
-   "us-east-1": 27447050,
-   "us-west-2": 27447050
-  },
   "p5.48xlarge": {
    "us-east-1": 55040000,
    "us-east-2": 55040000,
@@ -348,21 +339,6 @@
    "us-east-1": 6880000,
    "us-east-2": 6880000,
    "us-west-2": 6880000
-  },
-  "p5en.48xlarge": {
-   "us-east-1": 63296000,
-   "us-east-2": 63296000,
-   "us-west-1": 79120000,
-   "us-west-2": 63296000
-  },
-  "p6-b200.48xlarge": {
-   "us-east-1": 113932800,
-   "us-east-2": 113932800,
-   "us-west-2": 113932800
-  },
-  "p6-b300.48xlarge": {
-   "us-east-1": 142416000,
-   "us-west-2": 142416000
   },
   "r6a.2xlarge": {
    "us-east-1": 453600,
