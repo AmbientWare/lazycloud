@@ -103,7 +103,8 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 	t.Parallel()
 	in := offerInputs(t)
 	in.Networks = map[string]Network{"us-east-1": oneZone("us-east-1a", "use1-az1")}
-	need := Requirement{GPUs: []string{"H100", GPUAny}, CPUMillis: 1000, MemoryBytes: gib}
+	soon := comingSoonGPU(t)
+	need := Requirement{GPUs: []string{soon, GPUAny}, CPUMillis: 1000, MemoryBytes: gib}
 	offers := RankOffers(DefaultPolicy(), need, false, in)
 	if len(offers) == 0 {
 		t.Fatal("no offer for any model")
@@ -114,9 +115,22 @@ func TestOffersHoldOnlyFleetGPUModelsUnlessTheOwnerPays(t *testing.T) {
 		}
 	}
 	in.OwnerPays = true
-	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 || offers[0].Type.GPU != "H100" {
+	if offers := RankOffers(DefaultPolicy(), need, false, in); len(offers) == 0 || offers[0].Type.GPU != soon {
 		t.Fatalf("connected account offers %v", offerKeys(offers))
 	}
+}
+
+// comingSoonGPU is a model the rate card prices and the catalog sells but
+// the platform fleet does not offer.
+func comingSoonGPU(t *testing.T) string {
+	t.Helper()
+	for _, m := range billing.GPUModels() {
+		if !m.Enabled && slices.ContainsFunc(FleetCatalog(), func(c CatalogType) bool { return c.GPU == string(m.Type) }) {
+			return string(m.Type)
+		}
+	}
+	t.Skip("the rate card lists no coming-soon model the catalog sells")
+	return ""
 }
 
 func TestOfferCostIsComputeVolumesPublicIPv4AndTransfer(t *testing.T) {
@@ -214,7 +228,7 @@ func TestAnUnscoredPoolRanksAtItsShapesWorstScore(t *testing.T) {
 	}
 }
 
-func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
+func TestPurchaseMarginKeepsThePolicysShareOfRateCardRevenue(t *testing.T) {
 	t.Parallel()
 	p := DefaultPolicy()
 	rates := indexRates(fleetRates(t))
@@ -224,7 +238,8 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 		return int64(usable.CPUMillis)*r.CPUHour/1000 + usable.MemoryBytes/gib*r.MemoryGiBHour +
 			usable.MemoryBytes%gib*r.MemoryGiBHour/gib + int64(cards)*r.GPUCardHour
 	}
-	ceiling := func(revenue int64) int64 { return revenue * 70 / 100_000 }
+	ceiling := func(revenue int64) int64 { return revenue * (100 - p.MarginPercent) / 100_000 }
+	gpu := string(billing.GPUModels()[0].Type)
 	cases := []struct {
 		name        string
 		market      Market
@@ -237,7 +252,7 @@ func TestPurchaseMarginKeepsThirtyPercentOfRateCardRevenue(t *testing.T) {
 		{"Spot", MarketSpot, true, "", "", 0, billing.ClassAuto},
 		{"on-demand", MarketOnDemand, false, "", "", 0, billing.ClassNonPreemptible},
 		{"Spot-tolerant work on on-demand keeps its lower rate", MarketOnDemand, true, "", "", 0, billing.ClassAuto},
-		{"on-demand GPU", MarketOnDemand, false, "", "L4", 1, billing.ClassNonPreemptible},
+		{"on-demand GPU", MarketOnDemand, false, "", gpu, 1, billing.ClassNonPreemptible},
 		{"Spot work pinned to a region pays the pinned rate", MarketSpot, true, "us-west", "", 0, billing.ClassPinned},
 	}
 	for _, c := range cases {

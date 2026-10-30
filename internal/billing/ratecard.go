@@ -89,7 +89,7 @@ type GPUModel struct {
 // GPUModels are the priced models in published order.
 func GPUModels() []GPUModel {
 	return []GPUModel{
-		{GPUT4, true}, {GPUA10G, true}, {GPUL4, true}, {GPURTXPro4500, false}, {GPUL40S, true},
+		{GPUT4, true}, {GPUA10G, true}, {GPUL4, true}, {GPUL40S, true}, {GPUA10040, false},
 		{GPURTXPro6000, false}, {GPUH100, false},
 	}
 }
@@ -489,6 +489,10 @@ func rateHistory() []rateChange {
 		{GPUT4, 550_000_000}, {GPUA10G, 1_000_000_000}, {GPUL4, 720_000_000}, {GPURTXPro4500, 950_000_000},
 		{GPUL40S, 1_800_000_000}, {GPURTXPro6000, 2_800_000_000}, {GPUH100, 3_650_000_000},
 	}
+	october30GPUs := []gpuRate{
+		{GPUL4, 780_000_000}, {GPUL40S, 1_900_000_000}, {GPURTXPro6000, 2_970_000_000},
+		{GPUA10040, 2_060_000_000}, {GPUH100, 3_870_000_000},
+	}
 	initial := computeRates(shapesFrom(shapeRate{OwnerPlatformFleet, 0, 55_126_800, 7_560_000}), initialGPUs)
 	september := shapesFrom(shapeRate{OwnerPlatformFleet, 0, 44_000_000, 7_500_000})
 	all := func(RateClass) bool { return true }
@@ -520,6 +524,10 @@ func rateHistory() []rateChange {
 		{
 			version: "2026-10-27.a", effectiveAt: time.Date(2026, 10, 27, 5, 0, 0, 0, time.UTC),
 			compute: gpuOnly(placementRates(computeRates(september, octoberGPUs), all)),
+		},
+		{
+			version: "2026-10-30.a", effectiveAt: time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC),
+			compute: gpuOnly(placementRates(computeRates(september, october30GPUs), all)),
 		},
 	}
 }

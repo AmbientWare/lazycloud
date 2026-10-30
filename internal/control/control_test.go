@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -175,26 +176,27 @@ func TestDeployRefusesGPUModelsOnlyWhereTheFleetMustServeThem(t *testing.T) {
 	t.Parallel()
 	pool, ws := fixture(t)
 	c := NewControl(pool)
-	h100 := function("train")
-	h100.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
+	soon, offered := comingSoonGPU(t)
+	train := function("train")
+	train.Resources.Gpu = &[]apitypes.GpuType{soon}
 	deployOne := func(spec apitypes.WorkloadSpec) error {
 		_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 		return err
 	}
 	var refused *RefusedError
-	if err := deployOne(h100); !errors.As(err, &refused) || len(refused.Refusals) != 1 ||
+	if err := deployOne(train); !errors.As(err, &refused) || len(refused.Refusals) != 1 ||
 		refused.Refusals[0].Gate != apitypes.GpuUnavailable || !strings.Contains(refused.Refusals[0].Message, "coming soon") {
-		t.Fatalf("H100 on the fleet: %v", err)
+		t.Fatalf("%s on the fleet: %v", soon, err)
 	}
-	fallback := h100
-	fallback.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100, apitypes.L4}
+	fallback := train
+	fallback.Resources.Gpu = &[]apitypes.GpuType{soon, offered}
 	if err := deployOne(fallback); err != nil {
-		t.Fatalf("H100 then L4 on the fleet: %v", err)
+		t.Fatalf("%s then %s on the fleet: %v", soon, offered, err)
 	}
-	pinned := h100
+	pinned := train
 	pinned.Placement = &apitypes.Placement{Machine: new("gpu-1")}
 	if err := deployOne(pinned); err != nil {
-		t.Fatalf("H100 on a joined machine: %v", err)
+		t.Fatalf("%s on a joined machine: %v", soon, err)
 	}
 	if _, err := pool.Exec(t.Context(), `
 with owner as (select user_id from workspace_members where workspace_id = $1 and role = 'owner'),
@@ -202,7 +204,25 @@ with owner as (select user_id from workspace_members where workspace_id = $1 and
 update workspaces set connection_id = (select id from conn) where id = $1`, uuid.UUID(ws)); err != nil {
 		t.Fatal(err)
 	}
-	if err := deployOne(h100); err != nil {
-		t.Fatalf("H100 in a connected account: %v", err)
+	if err := deployOne(train); err != nil {
+		t.Fatalf("%s in a connected account: %v", soon, err)
 	}
+}
+
+// comingSoonGPU is a model the rate card lists but the fleet does not
+// offer, and the first model it offers.
+func comingSoonGPU(t *testing.T) (soon, offered apitypes.GpuType) {
+	t.Helper()
+	for _, m := range billing.GPUModels() {
+		switch {
+		case !m.Enabled && soon == "":
+			soon = apitypes.GpuType(m.Type)
+		case m.Enabled && offered == "":
+			offered = apitypes.GpuType(m.Type)
+		}
+	}
+	if soon == "" || offered == "" {
+		t.Skip("the rate card needs an offered and a coming-soon model")
+	}
+	return soon, offered
 }

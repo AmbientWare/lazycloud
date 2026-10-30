@@ -587,8 +587,9 @@ func checkCatalog(t *testing.T, client *ec2.Client, region string) {
 				model, cards = aws.ToString(g.Name), cards+int(aws.ToInt32(g.Count))
 			}
 		}
-		// EC2 names the RTX PRO cards apart from the catalog (DescribeInstanceTypes, 2026-10-27).
-		if name, ok := map[string]string{"RTX PRO 4500": "RTXPro4500", "RTX PRO Server 6000": "RTXPro6000"}[model]; ok {
+		// EC2 names the RTX PRO 6000 and the A100 apart from the catalog,
+		// which names an A100 by its memory (DescribeInstanceTypes, 2026-10-27).
+		if name, ok := map[string]string{"RTX PRO Server 6000": "RTXPro6000", "A100": "A100-40"}[model]; ok {
 			model = name
 		}
 		if vcpus != typ.VCPUs() || int64(typ.Topology.Cores)*threads != vcpus || memory != typ.MemoryBytes ||
@@ -701,7 +702,7 @@ func checkQuotas(t *testing.T, o owners, cfg aws.Config, networks map[string]com
 			t.Errorf("quota %s is %q, want %q", code, name, want)
 		}
 	}
-	for _, typ := range []string{"m7i.large", "c6a.2xlarge", "r6a.2xlarge", "g4dn.xlarge", "g6e.xlarge", "p5.48xlarge"} {
+	for _, typ := range []string{"m7i.large", "c6a.2xlarge", "r6a.2xlarge", "g4dn.xlarge", "g6e.xlarge", "g7e.2xlarge"} {
 		class, _ := compute.QuotaClassOf(typ)
 		t.Logf("%s counts against the %s quotas", typ, class)
 	}

@@ -440,7 +440,7 @@ app = lazycloud.App("reports")
 
 
 @app.function(
-    gpu=[lazycloud.GpuType.H100, "nvidia-l40s", lazycloud.GpuType.Any],
+    gpu=[lazycloud.GpuType.RTXPro6000, "nvidia-l40s", lazycloud.GpuType.Any],
     gpu_count=2,
     region="us-west",
     availability_zone="usw2-az1",
@@ -474,7 +474,7 @@ def test_deploy_maps_gpu_and_placement_options(
     assert specs["train"]["resources"] == {
         "cpu_millis": 125,
         "memory_mib": 128,
-        "gpu": ["H100", "L40S", "any"],
+        "gpu": ["RTXPro6000", "L40S", "any"],
         "gpu_count": 2,
     }
     assert specs["train"]["placement"] == {

@@ -294,7 +294,7 @@ func DefaultPolicy() Policy {
 	oneCard := CatalogType{Topology: twoPerCore(8), MemoryBytes: 32 * gib, GPUCount: 1}.Usable(0)
 	limit := CatalogType{Topology: twoPerCore(32), MemoryBytes: 64 * gib, GPUCount: 1}
 	return Policy{
-		MarginPercent:    30,
+		MarginPercent:    5,
 		Provision:        300 * time.Second,
 		CostHorizon:      time.Hour,
 		MaxGrowthActions: 16,

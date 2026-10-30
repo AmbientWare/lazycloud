@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -141,8 +142,24 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
+	var catalog apitypes.PricingCatalog
+	if status := e.do("GET", "/v1/pricing", "", nil, &catalog); status != http.StatusOK {
+		t.Fatalf("pricing: %d", status)
+	}
+	var soon, needsCard apitypes.GpuType
+	for _, rate := range catalog.GpuRates {
+		switch {
+		case !rate.Enabled && soon == "":
+			soon = apitypes.GpuType(rate.GpuType)
+		case rate.Enabled && needsCard == "" && !slices.Contains(catalog.NoPaymentMethod.GpuTypes, rate.GpuType):
+			needsCard = apitypes.GpuType(rate.GpuType)
+		}
+	}
+	if soon == "" || needsCard == "" {
+		t.Skip("the catalog needs a coming-soon model and an offered one that needs a payment method")
+	}
 	unoffered := e.deploy().Releases[0].Spec
-	unoffered.Resources.Gpu = &[]apitypes.GpuType{apitypes.H100}
+	unoffered.Resources.Gpu = &[]apitypes.GpuType{soon}
 	var apiErr apitypes.Error
 	status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
 		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{unoffered}}, &apiErr)
@@ -158,7 +175,7 @@ func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := unoffered
-	refused.Resources.Gpu = &[]apitypes.GpuType{apitypes.L40S}
+	refused.Resources.Gpu = &[]apitypes.GpuType{needsCard}
 	refused.Secrets = &[]apitypes.SecretName{"MISSING_TOKEN"}
 	gates := func(refusals *[]apitypes.DeploymentRefusal) map[apitypes.DeploymentGate]bool {
 		out := map[apitypes.DeploymentGate]bool{}

@@ -140,6 +140,10 @@ constraints.
   happened: that a call is gone, which queries run by name, or that an
   internal type keeps its shape. Guard costs by how they scale with
   replicas, history or backlog, not by exact counts.
+- Tests prove that a mechanism works, never today's settings. A test that
+  needs a price, a margin, a limit or which models are offered reads it
+  from the owner's config or injects its own through the owner's inputs,
+  so changing a setting breaks no test.
 - Test an owner through its entry points: state and inputs in, decisions and
   state out. A rewrite of the owner keeps its tests and passes them as the
   spec of what it must still do.

@@ -383,17 +383,18 @@ func TestAnyGPUDemandGoesToAReservedCardTheFleetHoldsThenTheCheapestPerCard(t *t
 		hosts []FleetHost
 		want  string
 	}{
-		{"no stock", nil, "g4dn.xlarge"},
-		{"L4 in stock", []FleetHost{loaded("g6.2xlarge", "L4")}, "g6.2xlarge"},
-		{"L40S is not a reserved card", []FleetHost{loaded("g6e.4xlarge", "L40S")}, "g4dn.xlarge"},
+		{"no stock", nil, "T4"},
+		{"L4 in stock", []FleetHost{loaded("g6.2xlarge", "L4")}, "L4"},
+		{"L40S is not a reserved card", []FleetHost{loaded("g6e.4xlarge", "L40S")}, "T4"},
 	} {
 		s := planSnapshot(t, c.hosts...)
 		s.Offers.Catalog = FleetCatalog()
 		g, _ := pendingOne(need, nil)
 		s.Pending = []DemandGroup{g}
 		plan := PlanFleet(p, s)
-		if got := boughtForWork(plan); !slices.Equal(got, []string{c.want}) {
-			t.Errorf("%s: bought %v", c.name, got)
+		got := boughtForWork(plan)
+		if len(got) != 1 || mustType(t, got[0]).GPU != c.want {
+			t.Errorf("%s: bought %v, want a %s host", c.name, got, c.want)
 		}
 	}
 }
@@ -402,10 +403,10 @@ func TestGPUWorkFallsThroughToTheModelItListsNext(t *testing.T) {
 	t.Parallel()
 	s := planSnapshot(t)
 	s.Offers.Catalog = FleetCatalog()
-	g, _ := pendingOne(Requirement{GPUs: []string{"H100", "L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}, nil)
+	// The fleet does not offer the coming-soon model, so the L4 serves.
+	g, _ := pendingOne(Requirement{GPUs: []string{comingSoonGPU(t), "L4"}, GPUCount: 1, CPUMillis: 2000, MemoryBytes: 8 * gib}, nil)
 	s.Pending = []DemandGroup{g}
 	plan := PlanFleet(planPolicy(FleetCapacity{}, FleetCapacity{}), s)
-	// Both H100 types fail the margin, so the L4 serves.
 	if buys := actionsOf(plan, ActionBuy); len(buys) != 1 || buys[0].Offer.Type.GPU != "L4" || buys[0].Market != (ReserveMarket{GPU: "L4"}) {
 		t.Fatalf("actions %+v", plan.Actions)
 	}
@@ -870,6 +871,16 @@ func gpuReserve(t *testing.T, id byte, market Market) FleetHost {
 	return h
 }
 
+// marginOnlyOnSpot sells s's Spot at a thousandth of its quotes, so under
+// a 90 percent margin a Spot host clears it and no on-demand host does.
+func marginOnlyOnSpot(s FleetSnapshot) FleetSnapshot {
+	s.Offers.Spot = slices.Clone(s.Offers.Spot)
+	for i := range s.Offers.Spot {
+		s.Offers.Spot[i].HourlyMicros /= 1000
+	}
+	return s
+}
+
 // spotCooled cools every Spot pool of model's types in the plan zone.
 func spotCooled(model string) []OfferCooldown {
 	var out []OfferCooldown
@@ -1003,23 +1014,26 @@ func TestPlanCoolsOnlyOffersTooSmallForTheirContainer(t *testing.T) {
 // A smaller size whose pools stop cooling within the batch window still
 // holds the size rule's step: with every g6.xlarge pool cooling for two
 // more seconds, the L4 job buys no g6.2xlarge or g6.4xlarge, and buys the
-// g6.xlarge once it frees.
+// g6.xlarge once it frees. Spot sells at a thousandth of on-demand and the
+// policy keeps 90 percent, so only Spot clears the margin.
 func TestASizeCoolingForSecondsHoldsTheStepUp(t *testing.T) {
 	t.Parallel()
 	in := offerInputs(t)
 	for _, typ := range []string{"g6.xlarge", "g6.2xlarge", "g6.4xlarge"} {
 		price, _ := mustType(t, typ).OnDemandMicros("us-east-2")
-		in.Spot = append(in.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ, HourlyMicros: price * 4 / 10, ObservedAt: offerNow})
+		in.Spot = append(in.Spot, SpotQuote{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: typ, HourlyMicros: price / 1000, ObservedAt: offerNow})
 	}
+	p := demandOnly()
+	p.MarginPercent = 90
 	in.Cooldowns = []OfferCooldown{{Region: "us-east-2", ZoneID: "use2-az1", InstanceType: "g6.xlarge", Market: MarketSpot, Until: offerNow.Add(2 * time.Second)}}
 	s := FleetSnapshot{Now: offerNow, Offers: in, HostRoom: 10, ReserveRoom: 10,
 		Pending: []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4"}, CPUMillis: 2000, MemoryBytes: 13056 << 20},
 			Containers: []PendingContainer{{ID: uuid.New(), Since: offerNow}}}}}
-	if bought := boughtForWork(PlanFleet(demandOnly(), s)); len(bought) > 0 {
+	if bought := boughtForWork(PlanFleet(p, s)); len(bought) > 0 {
 		t.Fatalf("bought %v while g6.xlarge cools for two seconds", bought)
 	}
 	s.Now, s.Offers.Now = offerNow.Add(3*time.Second), offerNow.Add(3*time.Second)
-	if bought := boughtForWork(PlanFleet(demandOnly(), s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
+	if bought := boughtForWork(PlanFleet(p, s)); !slices.Equal(bought, []string{"g6.xlarge"}) {
 		t.Fatalf("bought %v once g6.xlarge freed, want a g6.xlarge", bought)
 	}
 }
@@ -1344,12 +1358,12 @@ func TestARefusedPoolBuysWhatItsAbsenceWould(t *testing.T) {
 // cooling Spot pools.
 func TestSpotGPUWorkBuysOnDemandOnceItHasWaitedTheSpotWait(t *testing.T) {
 	p := gpuPolicy()
-	p.LossCapPercent = 100
+	p.MarginPercent, p.LossCapPercent = 90, 100
 	for _, c := range []struct {
 		waited time.Duration
 		buys   bool
 	}{{0, false}, {p.SpotWait, true}} {
-		s := gpuPlanSnapshot(t)
+		s := marginOnlyOnSpot(gpuPlanSnapshot(t))
 		s.Offers.Cooldowns = slices.Concat(spotCooled("L4"), spotCooled("A10G"))
 		id := uuid.New()
 		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: 1, CPUMillis: 1000, MemoryBytes: 4 * gib},
@@ -1390,8 +1404,8 @@ func TestSpotGPUWorkBuysAtALossOnlyWithinTheCapAndTheBudget(t *testing.T) {
 		{"four cards under the cap", 60, 0, 4, true},
 	} {
 		p := gpuPolicy()
-		p.LossCapPercent, p.LossBudget = c.capPct, 1_000_000
-		s := gpuPlanSnapshot(t)
+		p.MarginPercent, p.LossCapPercent, p.LossBudget = 90, c.capPct, 1_000_000
+		s := marginOnlyOnSpot(gpuPlanSnapshot(t))
 		s.Offers.Cooldowns = slices.Concat(spotCooled("L4"), spotCooled("A10G"))
 		s.AtLossSpent = c.spent
 		s.Pending = []DemandGroup{{Need: Requirement{Preemptible: true, GPUs: []string{"L4", "A10G"}, GPUCount: c.gpus,

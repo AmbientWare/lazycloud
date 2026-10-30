@@ -6786,7 +6786,7 @@ components:
         only it can serve that names only other models is refused with
         unsupported.
       type: string
-      enum: [T4, A10G, L4, RTXPro4500, L40S, RTXPro6000, H100, any]
+      enum: [T4, A10G, L4, L40S, A100-40, RTXPro6000, H100, any]
 
     Region:
       description: >-

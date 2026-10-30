@@ -1119,12 +1119,12 @@ func (e FleetState) Valid() bool {
 
 // Defines values for GpuType.
 const (
+	A10040     GpuType = "A100-40"
 	A10G       GpuType = "A10G"
 	Any        GpuType = "any"
 	H100       GpuType = "H100"
 	L4         GpuType = "L4"
 	L40S       GpuType = "L40S"
-	RTXPro4500 GpuType = "RTXPro4500"
 	RTXPro6000 GpuType = "RTXPro6000"
 	T4         GpuType = "T4"
 )
@@ -1132,6 +1132,8 @@ const (
 // Valid indicates whether the value is a known member of the GpuType enum.
 func (e GpuType) Valid() bool {
 	switch e {
+	case A10040:
+		return true
 	case A10G:
 		return true
 	case Any:
@@ -1141,8 +1143,6 @@ func (e GpuType) Valid() bool {
 	case L4:
 		return true
 	case L40S:
-		return true
-	case RTXPro4500:
 		return true
 	case RTXPro6000:
 		return true
