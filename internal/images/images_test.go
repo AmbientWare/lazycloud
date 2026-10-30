@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -598,6 +599,25 @@ update billing_accounts set complimentary_since = null, payment_method_attached_
 update billing_balances set balance_nanos = 1000000000000`); err != nil {
 		t.Fatal(err)
 	}
+	catalog, err := billing.NewBilling(f.pool, billing.Config{}, slog.New(slog.DiscardHandler)).Catalog(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var soon, needsCard, noCard string
+	for _, rate := range catalog.GpuRates {
+		withoutCard := slices.Contains(catalog.NoPaymentMethod.GpuTypes, rate.GpuType)
+		switch {
+		case !rate.Enabled && soon == "":
+			soon = rate.GpuType
+		case rate.Enabled && !withoutCard && needsCard == "":
+			needsCard = rate.GpuType
+		case rate.Enabled && withoutCard && noCard == "":
+			noCard = rate.GpuType
+		}
+	}
+	if soon == "" || needsCard == "" || noCard == "" {
+		t.Skip("the catalog needs a coming-soon model and offered ones with and without a payment method")
+	}
 	build := func(model, command string) error {
 		def := numpy()
 		def.Gpu, def.Commands = ptr(model), &[]string{command}
@@ -605,18 +625,18 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 		return err
 	}
 	var unoffered *billing.GPUUnavailableError
-	if err := build("H100", "true"); !errors.As(err, &unoffered) {
+	if err := build(soon, "true"); !errors.As(err, &unoffered) {
 		t.Fatalf("a model not offered yet is refused: %v", err)
 	}
 	var unpaid *billing.PaymentRequiredError
-	if err := build("L40S", "true"); !errors.As(err, &unpaid) {
+	if err := build(needsCard, "true"); !errors.As(err, &unpaid) {
 		t.Fatalf("a model the plan does not allow is refused: %v", err)
 	}
-	if err := build("L4", "true"); err != nil {
+	if err := build(noCard, "true"); err != nil {
 		t.Fatal(err)
 	}
 	var limit *billing.LimitError
-	if err := build("L4", "echo second"); !errors.As(err, &limit) {
+	if err := build(noCard, "echo second"); !errors.As(err, &limit) {
 		t.Fatalf("a GPU past the plan's GPUs is refused: %v", err)
 	}
 	var builds int

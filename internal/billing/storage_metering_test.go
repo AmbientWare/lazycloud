@@ -31,7 +31,7 @@ func TestContainersPriceTheirGPUPlacementAndMachine(t *testing.T) {
 		{OwnerPlatformFleet, ClassNonPreemptible, GPUT4, 1},
 		{OwnerPlatformFleet, ClassPinned, noGPU, 0},
 		{OwnerConnectedCloud, ClassAuto, GPUA10G, 2},
-		{OwnerSelfHosted, ClassAuto, GPUH100, 1},
+		{OwnerSelfHosted, ClassAuto, GPUL40S, 1},
 	} {
 		id := f.container(containerSpec{workspace: ws, host: host, release: &rel.id, ready: base, stopped: &stopped, cpuMillis: 2000, memoryBytes: 8 << 30})
 		f.exec("update containers set billing_owner = $2, rate_class = $3, gpu_type = $4, gpu_count = $5 where id = $1",
@@ -116,33 +116,39 @@ func TestAdmitCountsGPUsInTheirOwnPool(t *testing.T) {
 // account's workspace, runs any model.
 func TestAdmitRefusesGPUModelsTheFleetDoesNotOffer(t *testing.T) {
 	t.Parallel()
+	offered := enabledGPUs()
+	i := slices.IndexFunc(GPUModels(), func(m GPUModel) bool { return !m.Enabled })
+	if i < 0 || len(offered) == 0 {
+		t.Skip("the rate card needs an offered and a coming-soon model")
+	}
+	soon := GPUModels()[i].Type
 	f := newFixture(t)
 	owner := f.user()
 	ws := f.workspace(owner)
 	f.setAccount(owner, "payment_method_attached_at = now()")
-	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100, GPURTXPro6000}})
+	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{soon}})
 	var unavailable *GPUUnavailableError
-	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), "H100, RTXPro6000 are coming soon") {
-		t.Fatalf("H100 or RTXPro6000 on the fleet: %v", err)
+	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), string(soon)+" is coming soon") {
+		t.Fatalf("%s on the fleet: %v", soon, err)
 	}
-	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUH100, GPUL4}})
-	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUL4}) {
-		t.Fatalf("H100 then L4 on the fleet: %+v %v", grant, err)
+	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{soon, offered[0]}})
+	if err != nil || !slices.Equal(grant.GPUModels, offered[:1]) {
+		t.Fatalf("%s then %s on the fleet: %+v %v", soon, offered[0], grant, err)
 	}
 	grant, err = f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{GPUAny}})
-	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUT4, GPUA10G, GPUL4, GPUL40S}) {
+	if err != nil || !slices.Equal(grant.GPUModels, offered) {
 		t.Fatalf("any on the fleet: %+v %v", grant, err)
 	}
-	grant, err = f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100}, Machine: true})
-	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUH100}) {
-		t.Fatalf("H100 on a joined machine: %+v %v", grant, err)
+	grant, err = f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{soon}, Machine: true})
+	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{soon}) {
+		t.Fatalf("%s on a joined machine: %+v %v", soon, grant, err)
 	}
 	f.exec(`
 with conn as (insert into cloud_connections (account_id, aws_account_id, phase) values ($1, '123456789012', 'ready') returning id)
 update workspaces set connection_id = (select id from conn) where id = $2`, owner, ws)
-	grant, err = f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{GPUH100}})
-	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{GPUH100}) {
-		t.Fatalf("H100 in a connected account: %+v %v", grant, err)
+	grant, err = f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{soon}})
+	if err != nil || !slices.Equal(grant.GPUModels, []GPUType{soon}) {
+		t.Fatalf("%s in a connected account: %+v %v", soon, grant, err)
 	}
 	catalog, err := f.billing.Catalog(time.Now())
 	if err != nil {

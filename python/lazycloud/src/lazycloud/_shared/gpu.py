@@ -42,7 +42,6 @@ class GpuType(StringEnum):
     RTX5090 = "RTX5090"
     RTX6000 = "RTX6000"
     RTX6000Ada = "RTX6000Ada"
-    RTXPro4500 = "RTXPro4500"
     RTXPro6000 = "RTXPro6000"
     T4 = "T4"
     V100 = "V100"
@@ -53,8 +52,8 @@ SUPPORTED_GPU_TYPES: tuple[GpuType, ...] = (
     GpuType.T4,
     GpuType.A10G,
     GpuType.L4,
-    GpuType.RTXPro4500,
     GpuType.L40S,
+    GpuType.A100_40,
     GpuType.RTXPro6000,
     GpuType.H100,
 )
@@ -65,7 +64,6 @@ SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_G
 
 _GPU_ALIASES: tuple[tuple[str, str], ...] = (
     ("RTXPRO6000", "RTXPro6000"),
-    ("RTXPRO4500", "RTXPro4500"),
     ("RTX6000ADA", "RTX6000Ada"),
     ("RTX4000ADA", "RTX4000Ada"),
     ("RTX6000", "RTX6000"),

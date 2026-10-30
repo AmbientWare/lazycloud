@@ -29,8 +29,8 @@ def test_every_supported_model_is_already_its_own_normalized_form() -> None:
 
 
 def test_an_order_is_kept_and_a_wildcard_cannot_hide_what_follows_it() -> None:
-    assert gpu_preference(["h100", "l4"]) == ("H100", "L4")
-    assert gpu_preference(["h100", "H100", "l4"]) == ("H100", "L4")
+    assert gpu_preference(["l40s", "l4"]) == ("L40S", "L4")
+    assert gpu_preference(["l40s", "L40S", "l4"]) == ("L40S", "L4")
 
     with pytest.raises(ValueError):
-        gpu_preference(["h100", "any", "l4"])
+        gpu_preference(["l40s", "any", "l4"])

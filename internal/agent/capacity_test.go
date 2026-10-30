@@ -20,7 +20,6 @@ func TestGPUModelsUseThePlatformVocabulary(t *testing.T) {
 		"NVIDIA H100 80GB HBM3": "H100",
 		"NVIDIA H200":           "H200",
 		"NVIDIA GH200 480GB":    "GH200",
-		"NVIDIA RTX PRO 4500 Blackwell Server Edition": "RTXPro4500",
 		"NVIDIA RTX PRO 6000 Blackwell Server Edition": "RTXPro6000",
 		"NVIDIA GeForce RTX 3090":                      "RTX3090",
 		"Quadro RTX 6000":                              "RTX6000",

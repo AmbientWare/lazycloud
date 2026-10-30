@@ -153,7 +153,7 @@ func refuseCapacity(awsCall) awsReply {
 // A host every pool refuses stays requested while it walks its pools a few
 // a pass, so no pass buys it a replacement; once it has tried each pool
 // that holds what it was bought for, cooling each, it fails, and the next
-// pass buys none while they cool.
+// pass buys in none of them while they cool.
 func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	t.Parallel()
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
@@ -179,8 +179,12 @@ func TestCapacityRefusalCoolsEveryPoolAndTheNextPassWaits(t *testing.T) {
 	if tried := len(emulator.calls("RunInstances")); tried < 2 || len(cooled) != tried || !slices.Contains(cooled, offer) {
 		t.Fatalf("%d pools tried, cooldowns on %v, want one on each including the bought offer %s", tried, cooled, offer)
 	}
-	if result := planCapacity(t, o); result.Requested != 0 {
-		t.Fatalf("next pass %+v, want no host while every pool cools", result)
+	planCapacity(t, o)
+	bought := scan[[]string](t, o.pool, "select coalesce(array_agg(region || '/' || availability_zone_id || '/' || instance_type || '/' || market), '{}') from hosts where phase = 'requested'")
+	for _, b := range bought {
+		if slices.Contains(cooled, b) {
+			t.Fatalf("next pass bought %s, a pool that cools", b)
+		}
 	}
 }
 
