@@ -6,6 +6,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { ContentTransition } from "@/components/shared/ContentTransition";
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
@@ -112,7 +113,6 @@ function VolumeRow({
   onSelect: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
     mutationFn: () => deleteVolume(workspace, volume.name),
     onSuccess: () =>
@@ -130,37 +130,17 @@ function VolumeRow({
             {formatBytes(volume.size_bytes)}
           </span>
         </button>
-        {!confirming ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 opacity-70 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
-            aria-label={`Delete volume ${volume.name}`}
-            title="Delete volume"
-            onClick={() => setConfirming(true)}
-          >
-            <Trash2 />
-          </Button>
-        ) : null}
+        <ConfirmButton
+          label={`Delete volume ${volume.name}`}
+          icon={Trash2}
+          pending={remove.isPending}
+          onConfirm={() => remove.mutate()}
+          className="opacity-70 focus-within:opacity-100 data-[armed=true]:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        />
       </div>
       <div className="mt-1">
         <ResourceWorkloadLinks workspace={workspace} workloads={volume.used_by} limit={1} />
       </div>
-      {confirming ? (
-        <div className="mt-2 flex items-center gap-1.5">
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? <Loader2 className="animate-spin" /> : "Delete"}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-            Keep
-          </Button>
-        </div>
-      ) : null}
       {remove.isError ? (
         <p className="mt-2 text-xs text-destructive">{remove.error.message}</p>
       ) : null}
@@ -172,7 +152,6 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState("");
-  const [confirmPath, setConfirmPath] = useState("");
   const [transferError, setTransferError] = useState("");
   const query = useQuery(volumeFilesQueryOptions(workspace, volume.name, path));
   const upload = useMutation({
@@ -182,10 +161,7 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
   });
   const remove = useMutation({
     mutationFn: (targetPath: string) => deleteVolumePath(workspace, volume.name, targetPath),
-    onSuccess: () => {
-      setConfirmPath("");
-      void refreshVolumeQueries(queryClient, workspace, volume.name);
-    },
+    onSuccess: () => refreshVolumeQueries(queryClient, workspace, volume.name),
   });
 
   const download = async (item: Schemas["VolumeFile"]) => {
@@ -260,7 +236,6 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
           <div className="divide-y divide-border/60">
             {items.map((item) => {
               const itemName = fileName(item.path);
-              const confirming = confirmPath === item.path;
               return (
                 <div
                   key={item.path}
@@ -290,46 +265,26 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
                       {formatBytes(item.size_bytes)}
                     </span>
                   ) : null}
-                  {confirming ? (
-                    <span className="flex items-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(item.path)}
-                      >
-                        {remove.isPending ? <Loader2 className="animate-spin" /> : "Delete"}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmPath("")}>
-                        Keep
-                      </Button>
-                    </span>
-                  ) : (
-                    <span className="flex items-center">
-                      {!item.is_dir ? (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="size-7"
-                          aria-label={`Download ${itemName}`}
-                          title="Download file"
-                          onClick={() => void download(item)}
-                        >
-                          <Download />
-                        </Button>
-                      ) : null}
+                  <span className="flex items-center">
+                    {!item.is_dir ? (
                       <Button
                         size="icon"
                         variant="ghost"
                         className="size-7"
-                        aria-label={`Delete ${itemName}`}
-                        title="Delete path"
-                        onClick={() => setConfirmPath(item.path)}
+                        aria-label={`Download ${itemName}`}
+                        title="Download file"
+                        onClick={() => void download(item)}
                       >
-                        <Trash2 />
+                        <Download />
                       </Button>
-                    </span>
-                  )}
+                    ) : null}
+                    <ConfirmButton
+                      label={`Delete ${itemName}`}
+                      icon={Trash2}
+                      pending={remove.isPending && remove.variables === item.path}
+                      onConfirm={() => remove.mutate(item.path)}
+                    />
+                  </span>
                 </div>
               );
             })}

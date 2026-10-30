@@ -444,6 +444,64 @@ paths:
               schema: { $ref: "#/components/schemas/User" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/feedback:
+    get:
+      operationId: listFeedback
+      tags: [admin]
+      summary: Every account's feedback, newest first
+      description: Platform administrators only.
+      parameters:
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/FeedbackKind" }
+        - name: search
+          in: query
+          description: Matches the message and the author's email, display name or GitHub login.
+          schema: { type: string, maxLength: 200 }
+        - $ref: "#/components/parameters/Limit"
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the previous page.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of feedback
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedbackPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: submitFeedback
+      summary: Send a feature request, bug report or support question to the platform's administrators
+      description: >-
+        An account sends at most 5 an hour and 20 a day; past either it gets
+        429 `rate_limited`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeedbackRequest" }
+      responses:
+        "204":
+          description: Recorded
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/feedback/{feedback}:
+    parameters:
+      - name: feedback
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: deleteFeedback
+      tags: [admin]
+      summary: Delete a piece of feedback
+      description: Platform administrators only.
+      responses:
+        "204":
+          description: Deleted
+        default: { $ref: "#/components/responses/Error" }
+
   # Function execution
 
   /v1/workspaces/{workspace}/sources:
@@ -4049,6 +4107,8 @@ components:
         # already holds what its plan allows (HTTP 409).
         - payment_required
         - limit_reached
+        # The caller sent as much as a rate limit allows (HTTP 429).
+        - rate_limited
 
     Name:
       type: string
@@ -4099,6 +4159,43 @@ components:
       description: A disabled account cannot sign in or authenticate.
       type: string
       enum: [active, disabled]
+
+    FeedbackKind:
+      type: string
+      enum: [feature, bug, support]
+
+    FeedbackRequest:
+      type: object
+      required: [kind, message]
+      properties:
+        kind: { $ref: "#/components/schemas/FeedbackKind" }
+        message:
+          description: Surrounding whitespace is trimmed; what is left is 1 to 2000 characters.
+          type: string
+          minLength: 1
+          maxLength: 2000
+
+    Feedback:
+      type: object
+      required: [id, kind, message, author, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/FeedbackKind" }
+        message: { type: string }
+        author: { $ref: "#/components/schemas/User" }
+        created_at: { type: string, format: date-time }
+
+    FeedbackPage:
+      type: object
+      required: [feedback]
+      properties:
+        feedback:
+          type: array
+          items: { $ref: "#/components/schemas/Feedback" }
+        next_cursor:
+          description: Present when more feedback follows.
+          type: string
+          format: uuid
 
     PlatformRole:
       description: An account's standing on the platform; administrators reach every workspace.

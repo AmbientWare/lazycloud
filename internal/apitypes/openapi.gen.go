@@ -980,6 +980,7 @@ const (
 	NotFound            ErrorCode = "not_found"
 	PayloadTooLarge     ErrorCode = "payload_too_large"
 	PaymentRequired     ErrorCode = "payment_required"
+	RateLimited         ErrorCode = "rate_limited"
 	TaskNotFinished     ErrorCode = "task_not_finished"
 	TooManyPendingTasks ErrorCode = "too_many_pending_tasks"
 	Unauthenticated     ErrorCode = "unauthenticated"
@@ -1005,6 +1006,8 @@ func (e ErrorCode) Valid() bool {
 	case PayloadTooLarge:
 		return true
 	case PaymentRequired:
+		return true
+	case RateLimited:
 		return true
 	case TaskNotFinished:
 		return true
@@ -1051,6 +1054,27 @@ func (e FailureKind) Valid() bool {
 	case FailureKindTimeout:
 		return true
 	case FailureKindUserError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeedbackKind.
+const (
+	Bug     FeedbackKind = "bug"
+	Feature FeedbackKind = "feature"
+	Support FeedbackKind = "support"
+)
+
+// Valid indicates whether the value is a known member of the FeedbackKind enum.
+func (e FeedbackKind) Valid() bool {
+	switch e {
+	case Bug:
+		return true
+	case Feature:
+		return true
+	case Support:
 		return true
 	default:
 		return false
@@ -3603,6 +3627,34 @@ type ExposePortRequest struct {
 // FailureKind defines model for FailureKind.
 type FailureKind string
 
+// Feedback defines model for Feedback.
+type Feedback struct {
+	Author    User               `json:"author"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Kind      FeedbackKind       `json:"kind"`
+	Message   string             `json:"message"`
+}
+
+// FeedbackKind defines model for FeedbackKind.
+type FeedbackKind string
+
+// FeedbackPage defines model for FeedbackPage.
+type FeedbackPage struct {
+	Feedback []Feedback `json:"feedback"`
+
+	// NextCursor Present when more feedback follows.
+	NextCursor *openapi_types.UUID `json:"next_cursor,omitempty"`
+}
+
+// FeedbackRequest defines model for FeedbackRequest.
+type FeedbackRequest struct {
+	Kind FeedbackKind `json:"kind"`
+
+	// Message Surrounding whitespace is trimmed; what is left is 1 to 2000 characters.
+	Message string `json:"message"`
+}
+
 // FileMatch defines model for FileMatch.
 type FileMatch struct {
 	// Column 1-based, in characters.
@@ -5835,6 +5887,18 @@ type ListDomainsParams struct {
 	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListFeedbackParams defines parameters for ListFeedback.
+type ListFeedbackParams struct {
+	Kind *FeedbackKind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// Search Matches the message and the author's email, display name or GitHub login.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The `next_cursor` of the previous page.
+	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // ListFleetNodesParams defines parameters for ListFleetNodes.
 type ListFleetNodesParams struct {
 	// Cursor The next_cursor of the previous page.
@@ -6386,6 +6450,9 @@ type PollDeviceLoginJSONRequestBody = DeviceTokenRequest
 
 // RegisterDomainJSONRequestBody defines body for RegisterDomain for application/json ContentType.
 type RegisterDomainJSONRequestBody = DomainRequest
+
+// SubmitFeedbackJSONRequestBody defines body for SubmitFeedback for application/json ContentType.
+type SubmitFeedbackJSONRequestBody = FeedbackRequest
 
 // CreateMachineJoinCommandJSONRequestBody defines body for CreateMachineJoinCommand for application/json ContentType.
 type CreateMachineJoinCommandJSONRequestBody = MachineJoinRequest

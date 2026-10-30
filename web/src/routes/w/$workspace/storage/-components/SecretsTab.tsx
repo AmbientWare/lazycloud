@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
@@ -121,7 +122,6 @@ function SecretRow({
   onEdit: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
   const [revealedValue, setRevealedValue] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -159,12 +159,11 @@ function SecretRow({
     }
   };
 
-  const beginDelete = () => {
+  const hideValue = () => {
     revealRequest.current += 1;
     setRevealing(false);
     setRevealedValue(null);
     setRevealError(null);
-    setConfirming(true);
   };
 
   return (
@@ -201,7 +200,7 @@ function SecretRow({
           variant="ghost"
           size="icon"
           className="mr-1 size-7 shrink-0"
-          disabled={revealing || confirming || remove.isPending}
+          disabled={revealing || remove.isPending}
           onClick={() => void toggleReveal()}
           aria-label={`${revealedValue !== null ? "Hide" : "Reveal"} secret ${secret.name}`}
           title={revealedValue !== null ? "Hide secret" : "Reveal secret"}
@@ -216,52 +215,25 @@ function SecretRow({
         </Button>
       </div>
 
-      {confirming ? (
-        <div className="col-start-2 row-start-1 flex items-center justify-end gap-1 sm:col-auto sm:row-auto">
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-            ) : null}
-            Delete
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={() => setConfirming(false)}
-          >
-            Keep
-          </Button>
-        </div>
-      ) : (
-        <div className="col-start-2 row-start-1 flex items-center justify-end gap-1 sm:col-auto sm:row-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={onEdit}
-            aria-label={`Rotate secret ${secret.name}`}
-            title="Rotate secret"
-          >
-            <Pencil />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={beginDelete}
-            aria-label={`Delete secret ${secret.name}`}
-            title="Delete secret"
-          >
-            <Trash2 />
-          </Button>
-        </div>
-      )}
+      <div className="col-start-2 row-start-1 flex items-center justify-end gap-1 sm:col-auto sm:row-auto">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={onEdit}
+          aria-label={`Rotate secret ${secret.name}`}
+          title="Rotate secret"
+        >
+          <Pencil />
+        </Button>
+        <ConfirmButton
+          label={`Delete secret ${secret.name}`}
+          icon={Trash2}
+          onArm={hideValue}
+          pending={remove.isPending}
+          onConfirm={() => remove.mutate()}
+        />
+      </div>
       {remove.isError ? (
         <p className="col-span-2 text-right text-xs text-destructive sm:col-span-3">
           {remove.error.message}

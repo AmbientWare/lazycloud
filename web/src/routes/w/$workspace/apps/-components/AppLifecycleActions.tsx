@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import type { Schemas } from "@/lib/api/client";
 import {
@@ -19,7 +19,6 @@ export function AppLifecycleActions({
   app: Schemas["App"];
   workspace: string;
 }) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -45,68 +44,37 @@ export function AppLifecycleActions({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-      {confirmingDelete ? (
-        <>
-          <span className="px-1 text-xs text-muted-foreground">Delete app?</span>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            disabled={pending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
-            Delete
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={pending}
-            onClick={() => setConfirmingDelete(false)}
-          >
-            Keep
-          </Button>
-        </>
-      ) : (
-        <>
-          {app.state === "active" ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={pending}
-              onClick={() => pause.mutate()}
-            >
-              {pause.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
-              Pause
-            </Button>
-          ) : null}
-          {app.state === "paused" ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              disabled={pending}
-              onClick={() => resume.mutate()}
-            >
-              {resume.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-              Resume
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={`Delete app ${app.name}`}
-            title="Delete app"
-            disabled={pending}
-            onClick={() => setConfirmingDelete(true)}
-          >
-            <Trash2 className="text-destructive" />
-          </Button>
-        </>
-      )}
+      {app.state === "active" ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={() => pause.mutate()}
+        >
+          {pause.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
+          Pause
+        </Button>
+      ) : null}
+      {app.state === "paused" ? (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          disabled={pending}
+          onClick={() => resume.mutate()}
+        >
+          {resume.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+          Resume
+        </Button>
+      ) : null}
+      <ConfirmButton
+        label={`Delete app ${app.name}`}
+        icon={Trash2}
+        disabled={pause.isPending || resume.isPending}
+        pending={remove.isPending}
+        onConfirm={() => remove.mutate()}
+      />
       {error ? (
         <span className="basis-full text-right text-xs text-destructive" role="alert">
           {error.message}

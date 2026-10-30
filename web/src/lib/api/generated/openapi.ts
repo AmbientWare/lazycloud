@@ -424,6 +424,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every account's feedback, newest first
+         * @description Platform administrators only.
+         */
+        get: operations["listFeedback"];
+        put?: never;
+        /**
+         * Send a feature request, bug report or support question to the platform's administrators
+         * @description An account sends at most 5 an hour and 20 a day; past either it gets 429 `rate_limited`.
+         */
+        post: operations["submitFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/feedback/{feedback}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feedback: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a piece of feedback
+         * @description Platform administrators only.
+         */
+        delete: operations["deleteFeedback"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/sources": {
         parameters: {
             query?: never;
@@ -3443,7 +3489,7 @@ export interface components {
             refusals?: components["schemas"]["DeploymentRefusal"][];
         };
         /** @enum {string} */
-        ErrorCode: "invalid_request" | "unauthenticated" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "unsupported" | "too_many_pending_tasks" | "task_not_finished" | "unavailable" | "internal" | "payment_required" | "limit_reached";
+        ErrorCode: "invalid_request" | "unauthenticated" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "unsupported" | "too_many_pending_tasks" | "task_not_finished" | "unavailable" | "internal" | "payment_required" | "limit_reached" | "rate_limited";
         Name: string;
         AppName: string;
         WorkloadName: string;
@@ -3473,6 +3519,30 @@ export interface components {
          * @enum {string}
          */
         UserStatus: "active" | "disabled";
+        /** @enum {string} */
+        FeedbackKind: "feature" | "bug" | "support";
+        FeedbackRequest: {
+            kind: components["schemas"]["FeedbackKind"];
+            /** @description Surrounding whitespace is trimmed; what is left is 1 to 2000 characters. */
+            message: string;
+        };
+        Feedback: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["FeedbackKind"];
+            message: string;
+            author: components["schemas"]["User"];
+            /** Format: date-time */
+            created_at: string;
+        };
+        FeedbackPage: {
+            feedback: components["schemas"]["Feedback"][];
+            /**
+             * Format: uuid
+             * @description Present when more feedback follows.
+             */
+            next_cursor?: string;
+        };
         /**
          * @description An account's standing on the platform; administrators reach every workspace.
          * @enum {string}
@@ -7094,6 +7164,78 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["User"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listFeedback: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["FeedbackKind"];
+                /** @description Matches the message and the author's email, display name or GitHub login. */
+                search?: string;
+                limit?: components["parameters"]["Limit"];
+                /** @description The `next_cursor` of the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of feedback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    submitFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feedback: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -11640,8 +11782,9 @@ type ReadonlyArray<T> = [
 ] extends [
     unknown[]
 ] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
-export const errorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ErrorCode"]> = ["invalid_request", "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large", "unsupported", "too_many_pending_tasks", "task_not_finished", "unavailable", "internal", "payment_required", "limit_reached"];
+export const errorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ErrorCode"]> = ["invalid_request", "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large", "unsupported", "too_many_pending_tasks", "task_not_finished", "unavailable", "internal", "payment_required", "limit_reached", "rate_limited"];
 export const userStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UserStatus"]> = ["active", "disabled"];
+export const feedbackKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FeedbackKind"]> = ["feature", "bug", "support"];
 export const platformRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PlatformRole"]> = ["administrator", "member"];
 export const workspaceStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkspaceState"]> = ["active", "deleting"];
 export const workspaceRoleValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkspaceRole"]> = ["owner", "administrator", "member"];

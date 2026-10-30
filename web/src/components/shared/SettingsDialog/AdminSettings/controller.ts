@@ -22,16 +22,16 @@ type User = Schemas["User"];
 
 type AccountPages = InfiniteData<Schemas["BillingAccountAdminPage"], string | undefined>;
 
-const SEARCH_DEBOUNCE_MS = 250;
+export const SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * A value that settles before anything acts on it.
  *
- * The search runs against every account rather than the page in hand, so each
+ * A search runs against every row rather than the page in hand, so each
  * keystroke would otherwise be a round trip and the answers would arrive out of
  * order.
  */
-function useDebounced<T>(value: T, delayMs: number): T {
+export function useDebounced<T>(value: T, delayMs: number): T {
   const [settled, setSettled] = useState(value);
   useEffect(() => {
     const timer = setTimeout(() => setSettled(value), delayMs);

@@ -1,14 +1,16 @@
-import { Server, Users } from "lucide-react";
+import { MessageSquare, Server, Users } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { FeedbackSettings } from "./FeedbackSettings";
 import { FleetSettings } from "./FleetSettings";
 import { UsersSettings } from "./UsersSettings";
 
 const sections = [
   { value: "users", label: "Users", icon: Users },
   { value: "fleet", label: "Fleet", icon: Server },
+  { value: "feedback", label: "Feedback", icon: MessageSquare },
 ] as const;
 
 const desktopQuery = "(min-width: 640px)";
@@ -51,6 +53,9 @@ export function AdminSettings() {
       </TabsContent>
       <TabsContent value="fleet" className="flex min-h-0 min-w-0 flex-1 flex-col">
         <FleetSettings />
+      </TabsContent>
+      <TabsContent value="feedback" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <FeedbackSettings />
       </TabsContent>
     </Tabs>
   );
