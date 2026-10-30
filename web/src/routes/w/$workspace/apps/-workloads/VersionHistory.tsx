@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
@@ -8,6 +7,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import type { Schemas } from "@/lib/api/client";
 import { invalidateAppLists } from "@/lib/queries/apps";
@@ -94,7 +94,6 @@ function VersionRow({
   deletable: boolean;
   workspace: string;
 }) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const refresh = () => invalidateAppLists(queryClient, workspace);
@@ -146,70 +145,40 @@ function VersionRow({
         </Link>
       </span>
       <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-        {confirmingDelete ? (
-          <>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={pending}
-              onClick={() => remove.mutate()}
-            >
-              {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
-              Delete v{version.version}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={pending}
-              onClick={() => setConfirmingDelete(false)}
-            >
-              Keep
-            </Button>
-          </>
+        {running ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Pause deployment v${version.version}`}
+            title="Pause deployment"
+            disabled={pending}
+            onClick={() => stop.mutate()}
+          >
+            {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
+          </Button>
         ) : (
-          <>
-            {running ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`Pause deployment v${version.version}`}
-                title="Pause deployment"
-                disabled={pending}
-                onClick={() => stop.mutate()}
-              >
-                {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`Resume deployment v${version.version}`}
-                title="Resume deployment"
-                disabled={pending}
-                onClick={() => start.mutate()}
-              >
-                {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-              </Button>
-            )}
-            {canDelete ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`Delete deployment v${version.version}`}
-                title="Delete deployment"
-                disabled={pending}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                <Trash2 className="text-destructive" />
-              </Button>
-            ) : null}
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Resume deployment v${version.version}`}
+            title="Resume deployment"
+            disabled={pending}
+            onClick={() => start.mutate()}
+          >
+            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+          </Button>
         )}
+        {canDelete ? (
+          <ConfirmButton
+            label={`Delete deployment v${version.version}`}
+            icon={Trash2}
+            disabled={start.isPending || stop.isPending}
+            pending={remove.isPending}
+            onConfirm={() => remove.mutate()}
+          />
+        ) : null}
       </span>
       {error ? (
         <span className="col-span-full text-xs text-destructive @2xl:text-right" role="alert">

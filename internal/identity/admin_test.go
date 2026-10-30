@@ -2,6 +2,8 @@ package identity
 
 import (
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,5 +151,158 @@ func TestConcurrentMutualDemotionKeepsAnAdministrator(t *testing.T) {
 	}
 	if refused != 1 || admins != 1 {
 		t.Fatalf("refused %d, administrators left %d", refused, admins)
+	}
+}
+
+func TestFeedbackIsReadAndDeletedOnlyByAdministrators(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := t.Context()
+	admin := f.account("admin@example.com", true)
+	member := f.account("member@example.com", false)
+
+	var invalid *InvalidError
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, strings.Repeat("x", FeedbackMaxLength+1)); !errors.As(err, &invalid) {
+		t.Fatalf("too long: %v", err)
+	}
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, " \n "); !errors.As(err, &invalid) {
+		t.Fatalf("blank: %v", err)
+	}
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, "  deploys hang  "); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackFeature, strings.Repeat("é", FeedbackMaxLength)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.id.ListFeedback(ctx, member, FeedbackFilter{}, nil, 10); !errors.Is(err, ErrAdminRequired) {
+		t.Fatalf("member lists: %v", err)
+	}
+	first, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{}, nil, 1)
+	if err != nil || len(first.Feedback) != 1 || first.Next == nil || first.Feedback[0].Kind != FeedbackFeature {
+		t.Fatalf("first page: %+v %v", first, err)
+	}
+	second, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{}, first.Next, 1)
+	if err != nil || len(second.Feedback) != 1 || second.Next != nil {
+		t.Fatalf("second page: %+v %v", second, err)
+	}
+	if got := second.Feedback[0]; got.Message != "deploys hang" || got.Author.ID != member.User {
+		t.Fatalf("feedback: %+v", got)
+	}
+
+	if err := f.id.DeleteFeedback(ctx, member, second.Feedback[0].ID); !errors.Is(err, ErrAdminRequired) {
+		t.Fatalf("member deletes: %v", err)
+	}
+	if err := f.id.DeleteFeedback(ctx, admin, second.Feedback[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.id.DeleteFeedback(ctx, admin, second.Feedback[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete twice: %v", err)
+	}
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackSupport, "how do volumes work?"); err != nil {
+		t.Fatal(err)
+	}
+	bug, support := FeedbackBug, FeedbackSupport
+	if bugs, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{Kind: &bug}, nil, 10); err != nil || len(bugs.Feedback) != 0 {
+		t.Fatalf("bugs after delete: %+v %v", bugs, err)
+	}
+	if asks, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{Kind: &support}, nil, 10); err != nil || len(asks.Feedback) != 1 || asks.Feedback[0].Kind != FeedbackSupport {
+		t.Fatalf("support: %+v %v", asks, err)
+	}
+	for search, want := range map[string]int{"VOLUMES": 1, "member@": 2, "100%": 0} {
+		found, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{Search: search}, nil, 10)
+		if err != nil || len(found.Feedback) != want {
+			t.Fatalf("search %q: %+v %v", search, found, err)
+		}
+	}
+	feature := FeedbackFeature
+	left, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{Kind: &feature}, nil, 10)
+	if err != nil || len(left.Feedback) != 1 || left.Feedback[0].ID != first.Feedback[0].ID {
+		t.Fatalf("after delete: %+v %v", left, err)
+	}
+}
+
+// Concurrent submissions count each other, so a burst cannot pass the
+// hourly limit; deleting feedback does not refund its sender; one account's
+// limit leaves another's alone; and the daily limit holds across hours.
+func TestFeedbackIsRateLimitedPerAccount(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := t.Context()
+	admin := f.account("admin@example.com", true)
+	spammer := f.account("spammer@example.com", false)
+	other := f.account("other@example.com", false)
+
+	const burst = FeedbackPerHour * 3
+	var (
+		wg              sync.WaitGroup
+		mu              sync.Mutex
+		accepted, limit int
+	)
+	for range burst {
+		wg.Go(func() {
+			err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help")
+			var limited *RateLimitedError
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				accepted++
+			case errors.As(err, &limited):
+				limit++
+			default:
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if accepted != FeedbackPerHour || limit != burst-FeedbackPerHour {
+		t.Fatalf("accepted %d and limited %d of %d", accepted, limit, burst)
+	}
+	var limited *RateLimitedError
+	// Deleting the burst does not hand its sender more sends until
+	// housekeeping removes it a day later.
+	sent, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{}, nil, burst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range sent.Feedback {
+		if err := f.id.DeleteFeedback(ctx, admin, item.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); !errors.As(err, &limited) {
+		t.Fatalf("after deletion: %v", err)
+	}
+	if err := f.id.Housekeeping(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); !errors.As(err, &limited) {
+		t.Fatalf("housekeeping within the day: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `update feedback set deleted_at = now() - interval '25 hours', created_at = now() - interval '25 hours' where deleted_at is not null`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.id.Housekeeping(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	var kept int
+	if err := f.pool.QueryRow(ctx, `select count(*) from feedback`).Scan(&kept); err != nil || kept != 0 {
+		t.Fatalf("after a day, %d rows kept: %v", kept, err)
+	}
+
+	if err := f.id.SubmitFeedback(ctx, other, FeedbackSupport, "help"); err != nil {
+		t.Fatalf("another account: %v", err)
+	}
+
+	// A day's worth sent earlier today fills the daily limit, though none
+	// of it is from the last hour.
+	if _, err := f.pool.Exec(ctx, `insert into feedback (user_id, kind, message, created_at)
+		select $1, 'support', 'help', now() - interval '2 hours' from generate_series(1, $2)`,
+		uuid.UUID(other.User), FeedbackPerDay); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.id.SubmitFeedback(ctx, other, FeedbackSupport, "help"); !errors.As(err, &limited) {
+		t.Fatalf("past the daily limit: %v", err)
 	}
 }

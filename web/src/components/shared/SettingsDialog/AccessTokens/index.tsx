@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
 
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
@@ -143,10 +144,9 @@ function TokenRow({
 }) {
   const active = token.status === "active";
   const owned = controller.actionTokenId === token.id;
-  const confirming =
-    owned && (controller.actionMode === "confirming" || controller.actionMode === "error");
   const running = owned && controller.actionMode === "running";
-  const actionsDisabled = controller.isCommandPending || controller.createMode !== "closed";
+  const actionsDisabled =
+    (controller.isCommandPending && !running) || controller.createMode !== "closed";
 
   return (
     <li className="interactive-row grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border px-4 py-3 last:border-b-0 lg:grid-cols-12 lg:items-center lg:gap-3 lg:px-3 lg:py-2">
@@ -167,31 +167,13 @@ function TokenRow({
       <TokenTime label="Expires" value={token.expires_at} fallback="Never" />
       <TokenTime label="Last used" value={token.last_used_at} fallback="Never" />
       <div className="col-span-2 flex min-w-0 flex-col items-end justify-center gap-1 border-t border-border/70 pt-2 lg:col-span-2 lg:border-0 lg:pt-0">
-        {confirming ? (
-          <span className="flex items-center justify-end gap-1">
-            <Button variant="destructive" size="sm" onClick={controller.confirmAction}>
-              Delete
-            </Button>
-            <Button variant="ghost" size="sm" onClick={controller.cancelAction}>
-              Keep
-            </Button>
-          </span>
-        ) : running ? (
-          <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Working" />
-        ) : (
-          <span className="flex items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Delete ${token.name}`}
-              title="Delete token"
-              disabled={actionsDisabled}
-              onClick={() => controller.beginAction(token)}
-            >
-              <Trash2 className="text-destructive" />
-            </Button>
-          </span>
-        )}
+        <ConfirmButton
+          label={`Delete ${token.name}`}
+          icon={Trash2}
+          disabled={actionsDisabled}
+          pending={running}
+          onConfirm={() => controller.revoke(token)}
+        />
         {controller.actionError && owned ? (
           <p className="text-right text-xs text-destructive" role="alert">
             {controller.actionError.message}

@@ -19,7 +19,7 @@ type Token = Schemas["Token"];
 type TokenPages = InfiniteData<Schemas["TokenList"]>;
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
-type ActionMode = "idle" | "confirming" | "running" | "error";
+type ActionMode = "idle" | "running" | "error";
 
 /** A secret and just enough of its record to name what was created. */
 export type IssuedToken = {
@@ -37,7 +37,7 @@ type CreateState =
 
 type ActionState =
   | { mode: "idle" }
-  | { mode: "confirming" | "running"; tokenId: string }
+  | { mode: "running"; tokenId: string }
   | { mode: "error"; tokenId: string; error: Error };
 
 type ControllerState = {
@@ -63,9 +63,7 @@ export type AccessTokensController = {
   actionMode: ActionMode;
   actionTokenId: string | null;
   actionError: Error | null;
-  beginAction: (token: Token) => void;
-  cancelAction: () => void;
-  confirmAction: () => void;
+  revoke: (token: Token) => void;
   isCommandPending: boolean;
 };
 
@@ -79,8 +77,8 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
   const query = useInfiniteQuery(tokensQueryOptions(showDeviceTokens));
   const tokens = useMemo(() => uniqueTokens(query.data), [query.data]);
   const [state, setState] = useState<ControllerState>(IDLE);
-  // One command at a time, so a double submit cannot mint two credentials and a
-  // confirm cannot race the request it is confirming.
+  // One command at a time, so a double submit cannot mint two credentials or
+  // revoke twice.
   const commandRunning = useRef(false);
 
   const beginCreate = () => {
@@ -128,24 +126,10 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
     setState(IDLE);
   };
 
-  const beginAction = (token: Token) => {
+  /** Asked for once the row's control has confirmed it. */
+  const revoke = (token: Token) => {
     if (commandRunning.current || state.create.mode !== "closed") return;
-    setState({
-      create: { mode: "closed" },
-      action: { mode: "confirming", tokenId: token.id },
-    });
-  };
-
-  const cancelAction = () => {
-    if (commandRunning.current || state.action.mode === "running") return;
-    setState(IDLE);
-  };
-
-  const confirmAction = () => {
-    const action = state.action;
-    if (commandRunning.current) return;
-    if (action.mode !== "confirming" && action.mode !== "error") return;
-    const { tokenId } = action;
+    const tokenId = token.id;
     commandRunning.current = true;
     setState({ create: { mode: "closed" }, action: { mode: "running", tokenId } });
     // Revoked rather than removed: the row is the only record the account has that
@@ -183,9 +167,7 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
     actionMode: state.action.mode,
     actionTokenId: state.action.mode === "idle" ? null : state.action.tokenId,
     actionError: state.action.mode === "error" ? state.action.error : null,
-    beginAction,
-    cancelAction,
-    confirmAction,
+    revoke,
     isCommandPending: state.create.mode === "creating" || state.action.mode === "running",
   };
 }

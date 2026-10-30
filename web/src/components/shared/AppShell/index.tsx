@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   Search,
+  MessageSquare,
   Settings,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitche
 import { useSession } from "@/components/shared/AuthGate/session";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { AccountRail } from "@/components/shared/AppShell/AccountRail";
+import { FeedbackDialog } from "@/components/shared/AppShell/FeedbackDialog";
 import { CreditPrompt } from "@/components/shared/AppShell/CreditPrompt";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
@@ -312,56 +314,71 @@ function MobileMenu({
   onOpenSettings: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { workspace } = useWorkspace();
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => setOpen(true)}
-        aria-label="Open workspace menu"
-        title="Workspace menu"
-      >
-        <Menu className="size-4" />
-      </Button>
-      <SheetContent aria-describedby={undefined} className="max-w-xs gap-0">
-        <DrawerHeader>
-          <SheetTitle>{workspace.name}</SheetTitle>
-        </DrawerHeader>
-        <nav aria-label="Account menu" className="p-3">
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onOpenSettings();
-            }}
-            className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
-          >
-            <Settings className="size-4" aria-hidden="true" />
-            Settings
-          </button>
-        </nav>
-        <div className="mt-auto border-t border-border p-3">
-          <CreditPrompt
-            onOpenSettings={() => {
-              setOpen(false);
-              onOpenSettings();
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onLogout();
-            }}
-            className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <LogOut className="size-4" aria-hidden="true" />
-            Sign out
-          </button>
-        </div>
-      </SheetContent>
-    </Sheet>
+    <>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setOpen(true)}
+          aria-label="Open workspace menu"
+          title="Workspace menu"
+        >
+          <Menu className="size-4" />
+        </Button>
+        <SheetContent aria-describedby={undefined} className="max-w-xs gap-0">
+          <DrawerHeader>
+            <SheetTitle>{workspace.name}</SheetTitle>
+          </DrawerHeader>
+          <nav aria-label="Account menu" className="p-3">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onOpenSettings();
+              }}
+              className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
+            >
+              <Settings className="size-4" aria-hidden="true" />
+              Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setFeedbackOpen(true);
+              }}
+              className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
+            >
+              <MessageSquare className="size-4" aria-hidden="true" />
+              Feedback
+            </button>
+          </nav>
+          <div className="mt-auto border-t border-border p-3">
+            <CreditPrompt
+              onOpenSettings={() => {
+                setOpen(false);
+                onOpenSettings();
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onLogout();
+              }}
+              className="interactive-row flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <LogOut className="size-4" aria-hidden="true" />
+              Sign out
+            </button>
+          </div>
+        </SheetContent>
+      </Sheet>
+      {feedbackOpen ? <FeedbackDialog onClose={() => setFeedbackOpen(false)} /> : null}
+    </>
   );
 }
 

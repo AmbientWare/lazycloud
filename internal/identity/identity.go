@@ -401,8 +401,9 @@ func (i *Identity) CreateSession(ctx context.Context, email string) (Session, er
 	return openSession(ctx, i.queries, UserID(user.ID))
 }
 
-// Housekeeping removes expired sessions and device codes. It is bounded per
-// call; the scheduler runs it periodically.
+// Housekeeping removes expired sessions and device codes, and feedback
+// deleted more than a day ago. It is bounded per call; the scheduler runs it
+// periodically.
 func (i *Identity) Housekeeping(ctx context.Context, logger *slog.Logger) error {
 	const limit = 1000
 	sessions, err := i.queries.PruneSessions(ctx, limit)
@@ -413,8 +414,12 @@ func (i *Identity) Housekeeping(ctx context.Context, logger *slog.Logger) error 
 	if err != nil {
 		return fmt.Errorf("prune device codes: %w", err)
 	}
-	if sessions > 0 || codes > 0 {
-		logger.InfoContext(ctx, "identity housekeeping", "sessions", sessions, "device_codes", codes)
+	feedback, err := i.queries.PruneFeedback(ctx, limit)
+	if err != nil {
+		return fmt.Errorf("prune feedback: %w", err)
+	}
+	if sessions > 0 || codes > 0 || feedback > 0 {
+		logger.InfoContext(ctx, "identity housekeeping", "sessions", sessions, "device_codes", codes, "feedback", feedback)
 	}
 	return nil
 }

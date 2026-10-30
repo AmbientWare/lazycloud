@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2, MailPlus, RefreshCw, X } from "lucide-react";
+import { Loader2, MailPlus, MailX, RefreshCw, UserMinus } from "lucide-react";
 import { toast } from "sonner";
 
 import { useSession } from "@/components/shared/AuthGate/session";
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -295,22 +296,25 @@ function MemberRow({
         ) : (
           <span className="text-xs text-muted-foreground">{ROLE_LABELS[member.role]}</span>
         )}
-        {removable ? (
+        {removable && self ? (
           <Button
-            aria-label={self ? "Leave this workspace" : `Remove ${label}`}
+            aria-label="Leave this workspace"
             disabled={remove.isPending}
             onClick={() => remove.mutate()}
-            size={self ? "sm" : "icon"}
+            size="sm"
             type="button"
-            variant={self ? "outline" : "ghost"}
+            variant="outline"
           >
-            {remove.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : self ? null : (
-              <X className="size-4" />
-            )}
-            {self ? "Leave" : null}
+            {remove.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            Leave
           </Button>
+        ) : removable ? (
+          <ConfirmButton
+            label={`Remove ${label}`}
+            icon={UserMinus}
+            pending={remove.isPending}
+            onConfirm={() => remove.mutate()}
+          />
         ) : null}
       </span>
     </li>
@@ -374,20 +378,13 @@ function InvitationRow({
             <RefreshCw className="size-4" />
           )}
         </Button>
-        <Button
-          aria-label={`Revoke the invitation to ${invitation.email}`}
-          disabled={busy}
-          onClick={() => revoke.mutate()}
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          {revoke.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <X className="size-4" />
-          )}
-        </Button>
+        <ConfirmButton
+          label={`Revoke the invitation to ${invitation.email}`}
+          icon={MailX}
+          disabled={resend.isPending}
+          pending={revoke.isPending}
+          onConfirm={() => revoke.mutate()}
+        />
       </span>
     </li>
   );

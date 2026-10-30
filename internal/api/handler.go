@@ -311,6 +311,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		unconvertible   *images.ConversionError
 		conflict        *identity.ConflictError
 		invalid         *identity.InvalidError
+		rateLimited     *identity.RateLimitedError
 		roleErr         *identity.RoleError
 		accountErr      *identity.AccountError
 		secretMissing   *secrets.NotFoundError
@@ -343,6 +344,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
 	case errors.As(err, &invalid):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
+	case errors.As(err, &rateLimited):
+		writeJSONError(w, http.StatusTooManyRequests, apitypes.RateLimited, rateLimited.Error())
 	case errors.Is(err, identity.ErrExists):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),

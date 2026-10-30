@@ -72,18 +72,16 @@ describe("access tokens controller", () => {
     });
     await waitFor(() => expect(result.current.tokens).toHaveLength(2));
 
-    act(() => result.current.beginAction(result.current.tokens[0]));
-    expect(result.current.actionMode).toBe("confirming");
     act(() => {
-      result.current.confirmAction();
-      result.current.confirmAction();
+      result.current.revoke(target);
+      result.current.revoke(target);
     });
     await waitFor(() => expect(result.current.actionMode).toBe("error"));
     expect(revokeRequests).toBe(1);
     expect(result.current.actionError?.message).toBe("revoke unavailable");
     expect(ids(cachedTokens(queryClient))).toEqual(["target", "sibling"]);
 
-    act(() => result.current.confirmAction());
+    act(() => result.current.revoke(target));
     await waitFor(() => expect(result.current.actionMode).toBe("idle"));
     expect(ids(cachedTokens(queryClient))).toEqual(["sibling"]);
   });

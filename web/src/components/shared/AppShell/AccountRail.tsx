@@ -1,8 +1,9 @@
 import { useId, useRef, useState } from "react";
-import { ChevronUp, LogOut, Settings } from "lucide-react";
+import { ChevronUp, LogOut, MessageSquare, Settings } from "lucide-react";
 
 import { accountName, useSession } from "@/components/shared/AuthGate/session";
 import { CreditPrompt } from "@/components/shared/AppShell/CreditPrompt";
+import { FeedbackDialog } from "@/components/shared/AppShell/FeedbackDialog";
 import { cn } from "@/lib/utils";
 
 /**
@@ -24,6 +25,7 @@ export function AccountRail({
 }) {
   const { user } = useSession();
   const [open, setOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const panelId = useId();
   const container = useRef<HTMLDivElement>(null);
 
@@ -57,6 +59,17 @@ export function AccountRail({
             >
               <Settings className="size-4" aria-hidden="true" />
               Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setFeedbackOpen(true);
+              }}
+              className="interactive-row flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground outline-none transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring"
+            >
+              <MessageSquare className="size-4" aria-hidden="true" />
+              Feedback
             </button>
           </nav>
           <button
@@ -94,6 +107,7 @@ export function AccountRail({
           className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")}
         />
       </button>
+      {feedbackOpen ? <FeedbackDialog onClose={() => setFeedbackOpen(false)} /> : null}
     </div>
   );
 }

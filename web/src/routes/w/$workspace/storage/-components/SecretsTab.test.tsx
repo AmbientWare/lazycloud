@@ -25,7 +25,7 @@ const revealed = (value: string) =>
     updated_at: secret.updated_at,
   });
 
-it("keeps a pending reveal masked during deletion and allows a fresh reveal after keeping it", async () => {
+it("keeps a pending reveal masked during deletion and allows a fresh reveal after it fails", async () => {
   let resolveReveal: ((response: Response) => void) | undefined;
   let response = new Promise<Response>((resolve) => {
     resolveReveal = resolve;
@@ -45,19 +45,15 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
     resolveReveal?.(revealed("test-only-old-value"));
   });
   expect(screen.queryByText("test-only-old-value")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeDisabled();
 
   let finishDelete: ((response: Response) => void) | undefined;
   response = new Promise<Response>((resolve) => {
     finishDelete = resolve;
   });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm: Delete secret API_KEY" }));
     await vi.advanceTimersByTimeAsync(1);
   });
-  expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Keep" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Keep" }));
   expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeDisabled();
   await act(async () => {
     finishDelete?.(
@@ -66,8 +62,6 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.getByText("Deletion failed")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Keep" })).toBeEnabled();
-  fireEvent.click(screen.getByRole("button", { name: "Keep" }));
   response = Promise.resolve(revealed("test-only-current-value"));
   await act(async () =>
     fireEvent.click(screen.getByRole("button", { name: "Reveal secret API_KEY" })),

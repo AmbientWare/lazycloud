@@ -1,15 +1,14 @@
-import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 
+import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { DiskFailure } from "@/components/shared/DiskFailure";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
@@ -71,7 +70,6 @@ export function DisksTab({ workspace }: { workspace: string }) {
 
 function DiskRow({ workspace, disk }: { workspace: string; disk: Schemas["Disk"] }) {
   const queryClient = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
     mutationFn: () => deleteDisk(workspace, disk.name),
     onSuccess: () =>
@@ -96,40 +94,20 @@ function DiskRow({ workspace, disk }: { workspace: string; disk: Schemas["Disk"]
           {formatBytes(disk.stored_bytes)}
         </span>
         <span className="text-muted-foreground">{STATUS_LABELS[disk.status]}</span>
-        {!confirming ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 opacity-70 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
-            aria-label={`Delete disk ${disk.name}`}
-            title={deletable ? "Delete disk" : "Stop the workload using this disk to delete it"}
+        <span
+          className="justify-self-end"
+          title={deletable ? undefined : "Stop the workload using this disk to delete it"}
+        >
+          <ConfirmButton
+            label={`Delete disk ${disk.name} and every file on it`}
+            icon={Trash2}
             disabled={!deletable}
-            onClick={() => setConfirming(true)}
-          >
-            <Trash2 />
-          </Button>
-        ) : (
-          <span />
-        )}
+            pending={remove.isPending}
+            onConfirm={() => remove.mutate()}
+            className="opacity-70 focus-within:opacity-100 data-[armed=true]:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+          />
+        </span>
       </div>
-      {confirming ? (
-        <div className="mt-2 flex items-center gap-1.5">
-          <span className="mr-1 text-xs text-muted-foreground">
-            Deletes every file on the disk.
-          </span>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            {remove.isPending ? <Loader2 className="animate-spin" /> : "Delete"}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-            Keep
-          </Button>
-        </div>
-      ) : null}
       {disk.failure ? <DiskFailure failure={disk.failure} /> : null}
       {remove.isError ? (
         <p className="mt-2 text-xs text-destructive">{remove.error.message}</p>

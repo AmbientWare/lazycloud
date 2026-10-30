@@ -24,6 +24,7 @@ class ErrorCode(str, Enum):
     internal = "internal"
     payment_required = "payment_required"
     limit_reached = "limit_reached"
+    rate_limited = "rate_limited"
 
 
 class Name(RootModel[str]):
@@ -37,6 +38,24 @@ class WorkloadName(RootModel[str]):
 class UserStatus(str, Enum):
     active = "active"
     disabled = "disabled"
+
+
+class FeedbackKind(str, Enum):
+    feature = "feature"
+    bug = "bug"
+    support = "support"
+
+
+class FeedbackRequest(APIModel):
+    kind: FeedbackKind
+    message: Annotated[
+        str,
+        Field(
+            description="Surrounding whitespace is trimmed; what is left is 1 to 2000 characters.",
+            max_length=2000,
+            min_length=1,
+        ),
+    ]
 
 
 class PlatformRole(str, Enum):
@@ -2664,6 +2683,21 @@ class User(APIModel):
     is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
     status: UserStatus
     created_at: AwareDatetime
+
+
+class Feedback(APIModel):
+    id: UUID
+    kind: FeedbackKind
+    message: str
+    author: User
+    created_at: AwareDatetime
+
+
+class FeedbackPage(APIModel):
+    feedback: list[Feedback]
+    next_cursor: Annotated[
+        UUID | None, Field(description="Present when more feedback follows.")
+    ] = None
 
 
 class Workspace(APIModel):

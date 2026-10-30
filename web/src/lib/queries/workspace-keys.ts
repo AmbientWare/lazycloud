@@ -203,6 +203,12 @@ export type AccountScope = {
   status: Schemas["UserStatus"] | null;
 };
 
+/** How the administrator's feedback list is narrowed on the server. */
+export type FeedbackScope = {
+  kind: Schemas["FeedbackKind"] | null;
+  search: string;
+};
+
 /** The unnarrowed list, and the key every mutation patches. */
 export const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
 
@@ -259,6 +265,11 @@ export const accountQueryKeys = {
       summary: () => [...accountRoot, "admin", "fleet", "summary"] as const,
       nodes: () => [...accountRoot, "admin", "fleet", "nodes"] as const,
     },
+    // Keyed on the narrowing, like accounts.
+    feedback: Object.assign(
+      (scope: FeedbackScope) => [...accountRoot, "admin", "feedback", scope] as const,
+      { root: () => [...accountRoot, "admin", "feedback"] as const },
+    ),
     // Keyed on the narrowing, so each search and filter caches its own pages
     // and changing one starts a fresh walk rather than appending to the last.
     accounts: Object.assign(
