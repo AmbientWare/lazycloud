@@ -22,7 +22,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
 import { webhookEventValues } from "@/lib/api/generated/openapi";
-import { DOCS_URL } from "@/lib/env";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
   createWebhook,
@@ -102,19 +101,6 @@ export function WebhookSettings() {
         </Button>
       }
     >
-      <p className="shrink-0 border-b border-border/80 px-4 py-2 text-xs text-muted-foreground">
-        Each request is signed with your workspace&apos;s signing key, so your server can check it
-        came from LazyCloud.{" "}
-        <a
-          href={new URL("/platform/webhooks#verify-a-delivery", DOCS_URL).href}
-          target="_blank"
-          rel="noreferrer"
-          className="text-foreground underline underline-offset-2 hover:text-brand"
-        >
-          How to verify a request
-        </a>
-      </p>
-
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {creating ? (
           <CreateWebhookForm workspace={workspace.name} onDone={() => setCreating(false)} />
