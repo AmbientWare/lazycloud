@@ -143,7 +143,7 @@ func (q *Queries) FinishWebhookDelivery(ctx context.Context, arg FinishWebhookDe
 }
 
 const getWebhook = `-- name: GetWebhook :one
-select id, workspace_id, app_name, url, events, description, enabled, created_at from webhooks where workspace_id = $1 and id = $2
+select id, workspace_id, url, events, description, enabled, created_at, apps from webhooks where workspace_id = $1 and id = $2
 `
 
 type GetWebhookParams struct {
@@ -157,12 +157,12 @@ func (q *Queries) GetWebhook(ctx context.Context, arg GetWebhookParams) (Webhook
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.AppName,
 		&i.Url,
 		&i.Events,
 		&i.Description,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Apps,
 	)
 	return i, err
 }
@@ -203,14 +203,14 @@ func (q *Queries) InsertTestDelivery(ctx context.Context, arg InsertTestDelivery
 }
 
 const insertWebhook = `-- name: InsertWebhook :one
-insert into webhooks (workspace_id, app_name, url, events, description, enabled)
-values ($1, $2, $3, $4::text[], $5, $6)
-returning id, workspace_id, app_name, url, events, description, enabled, created_at
+insert into webhooks (workspace_id, apps, url, events, description, enabled)
+values ($1, $2::text[], $3, $4::text[], $5, $6)
+returning id, workspace_id, url, events, description, enabled, created_at, apps
 `
 
 type InsertWebhookParams struct {
 	WorkspaceID uuid.UUID
-	AppName     *string
+	Apps        []string
 	Url         string
 	Events      []string
 	Description string
@@ -220,7 +220,7 @@ type InsertWebhookParams struct {
 func (q *Queries) InsertWebhook(ctx context.Context, arg InsertWebhookParams) (Webhook, error) {
 	row := q.db.QueryRow(ctx, insertWebhook,
 		arg.WorkspaceID,
-		arg.AppName,
+		arg.Apps,
 		arg.Url,
 		arg.Events,
 		arg.Description,
@@ -230,12 +230,12 @@ func (q *Queries) InsertWebhook(ctx context.Context, arg InsertWebhookParams) (W
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.AppName,
 		&i.Url,
 		&i.Events,
 		&i.Description,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Apps,
 	)
 	return i, err
 }
@@ -296,7 +296,7 @@ func (q *Queries) ListWebhookDeliveries(ctx context.Context, arg ListWebhookDeli
 }
 
 const listWebhooks = `-- name: ListWebhooks :many
-select id, workspace_id, app_name, url, events, description, enabled, created_at from webhooks
+select id, workspace_id, url, events, description, enabled, created_at, apps from webhooks
 where workspace_id = $1 and id > $2::uuid
 order by id
 limit $3
@@ -320,12 +320,12 @@ func (q *Queries) ListWebhooks(ctx context.Context, arg ListWebhooksParams) ([]W
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
-			&i.AppName,
 			&i.Url,
 			&i.Events,
 			&i.Description,
 			&i.Enabled,
 			&i.CreatedAt,
+			&i.Apps,
 		); err != nil {
 			return nil, err
 		}
@@ -429,18 +429,17 @@ func (q *Queries) RetryWebhookDelivery(ctx context.Context, arg RetryWebhookDeli
 const updateWebhook = `-- name: UpdateWebhook :one
 update webhooks
 set url = coalesce($1, url),
-    app_name = case when $2::bool then null else coalesce($3, app_name) end,
-    events = coalesce($4::text[], events),
-    description = coalesce($5, description),
-    enabled = coalesce($6, enabled)
-where workspace_id = $7 and id = $8
-returning id, workspace_id, app_name, url, events, description, enabled, created_at
+    apps = coalesce($2::text[], apps),
+    events = coalesce($3::text[], events),
+    description = coalesce($4, description),
+    enabled = coalesce($5, enabled)
+where workspace_id = $6 and id = $7
+returning id, workspace_id, url, events, description, enabled, created_at, apps
 `
 
 type UpdateWebhookParams struct {
 	Url         *string
-	ClearApp    bool
-	AppName     *string
+	Apps        []string
 	Events      []string
 	Description *string
 	Enabled     *bool
@@ -448,12 +447,11 @@ type UpdateWebhookParams struct {
 	ID          uuid.UUID
 }
 
-// Sets the named fields; clear_app takes the webhook to every app.
+// Sets the named fields; an empty apps takes the webhook to every app.
 func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (Webhook, error) {
 	row := q.db.QueryRow(ctx, updateWebhook,
 		arg.Url,
-		arg.ClearApp,
-		arg.AppName,
+		arg.Apps,
 		arg.Events,
 		arg.Description,
 		arg.Enabled,
@@ -464,12 +462,12 @@ func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (W
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
-		&i.AppName,
 		&i.Url,
 		&i.Events,
 		&i.Description,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Apps,
 	)
 	return i, err
 }

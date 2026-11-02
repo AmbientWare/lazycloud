@@ -35,7 +35,7 @@ func TestWebhookReceivesADeployAndAFailedTask(t *testing.T) {
 	}))
 	defer receiver.Close()
 	if status := p.apiCall(http.MethodPost, "/v1/workspaces/"+p.workspace.Name+"/webhooks", map[string]any{
-		"url": receiver.URL, "app": "reports", "events": []string{"workload.deployed", "task.failed"},
+		"url": receiver.URL, "apps": []string{"reports"}, "events": []string{"workload.deployed", "task.failed"},
 	}, nil); status != http.StatusCreated {
 		t.Fatalf("create webhook: %d", status)
 	}

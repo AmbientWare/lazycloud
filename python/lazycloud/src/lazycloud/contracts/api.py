@@ -31,6 +31,10 @@ class Name(RootModel[str]):
     root: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
 
 
+class AppName(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+
+
 class WorkloadName(RootModel[str]):
     root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
@@ -459,13 +463,12 @@ class Webhook(APIModel):
             min_length=1,
         ),
     ]
-    app: Annotated[
-        str | None,
+    apps: Annotated[
+        list[AppName],
         Field(
-            description="The app whose events the webhook receives; absent for every app.",
-            pattern="^[a-z][a-z0-9_]{0,62}$",
+            description="The apps whose events the webhook receives, by name; empty for every app."
         ),
-    ] = None
+    ]
     events: list[WebhookEvent]
     description: Annotated[str, Field(max_length=200)]
     enabled: bool
@@ -484,11 +487,11 @@ class WebhookCreate(APIModel):
             min_length=1,
         ),
     ]
-    app: Annotated[
-        str | None,
+    apps: Annotated[
+        list[AppName] | None,
         Field(
-            description="Limits the webhook to the app of this name; omit for every app.",
-            pattern="^[a-z][a-z0-9_]{0,62}$",
+            description="Limits the webhook to these apps, by name; omit for every app.",
+            max_length=50,
         ),
     ] = None
     events: Annotated[list[WebhookEvent], Field(min_length=1)]
@@ -508,11 +511,11 @@ class WebhookUpdate(APIModel):
             min_length=1,
         ),
     ] = None
-    app: Annotated[
-        str | None,
+    apps: Annotated[
+        list[AppName] | None,
         Field(
-            description="The app to limit the webhook to; an empty string clears it.",
-            pattern="^([a-z][a-z0-9_]{0,62})?$",
+            description="Replaces the apps the webhook is limited to; empty for every app.",
+            max_length=50,
         ),
     ] = None
     events: Annotated[list[WebhookEvent] | None, Field(min_length=1)] = None

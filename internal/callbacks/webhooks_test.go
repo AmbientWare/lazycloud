@@ -15,7 +15,7 @@ import (
 )
 
 // An event reaches each enabled webhook of its workspace that takes its type
-// and either names its app or none, signed with the workspace signing key;
+// and either names its app among others or names none, signed with the workspace signing key;
 // each webhook records its delivery.
 func TestWebhookEventsReachTheWebhooksThatTakeThem(t *testing.T) {
 	t.Parallel()
@@ -33,20 +33,19 @@ func TestWebhookEventsReachTheWebhooksThatTakeThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := NewWebhooks(pool)
-	create := func(workspace uuid.UUID, path string, app *string, enabled bool, events ...apitypes.WebhookEvent) apitypes.Webhook {
+	create := func(workspace uuid.UUID, path string, apps []string, enabled bool, events ...apitypes.WebhookEvent) apitypes.Webhook {
 		t.Helper()
 		hook, err := hooks.Create(ctx, identity.WorkspaceID(workspace), apitypes.WebhookCreate{
-			Url: server.URL + path, App: app, Events: events, Enabled: &enabled,
+			Url: server.URL + path, Apps: &apps, Events: events, Enabled: &enabled,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return hook
 	}
-	billing, reports := "billing", "reports"
 	every := create(ws, "/every", nil, true, apitypes.WebhookTaskFailed)
-	scoped := create(ws, "/billing", &billing, true, apitypes.WebhookTaskFailed, apitypes.WebhookWorkloadDeployed)
-	create(ws, "/reports", &reports, true, apitypes.WebhookTaskFailed)
+	scoped := create(ws, "/billing", []string{"reports", "billing"}, true, apitypes.WebhookTaskFailed, apitypes.WebhookWorkloadDeployed)
+	create(ws, "/reports", []string{"reports"}, true, apitypes.WebhookTaskFailed)
 	create(ws, "/deploys", nil, true, apitypes.WebhookWorkloadDeployed)
 	create(ws, "/disabled", nil, false, apitypes.WebhookTaskFailed)
 	create(other, "/other", nil, true, apitypes.WebhookTaskFailed)

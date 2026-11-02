@@ -2,11 +2,12 @@ import { useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Plus, Send, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, Plus, Send, Trash2, X } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -15,13 +16,22 @@ import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
 import { webhookEventValues } from "@/lib/api/generated/openapi";
+import { appsQueryOptions } from "@/lib/queries/apps";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
   createWebhook,
@@ -145,7 +155,7 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
   const queryClient = useQueryClient();
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<ReadonlySet<WebhookEvent>>(new Set());
-  const [app, setApp] = useState("");
+  const [apps, setApps] = useState<readonly string[]>([]);
   const [description, setDescription] = useState("");
 
   const create = useMutation({
@@ -153,7 +163,7 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
       createWebhook(workspace, {
         url: url.trim(),
         events: webhookEventValues.filter((event) => events.has(event)),
-        app: app.trim() || undefined,
+        apps: [...apps],
         description: description.trim() || undefined,
       }),
     onSuccess: () => {
@@ -211,16 +221,17 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
           ))}
         </div>
       </fieldset>
-      <label className="grid gap-1.5">
-        <span className="micro-label">Only for app</span>
-        <Input
-          value={app}
+      <div className="grid gap-1.5">
+        <span id="webhook-apps-label" className="micro-label">
+          Only for apps
+        </span>
+        <AppPicker
+          workspace={workspace}
+          value={apps}
+          onChange={setApps}
           disabled={create.isPending}
-          onChange={(event) => setApp(event.target.value)}
-          placeholder="Every app"
-          className="h-8 bg-background"
         />
-      </label>
+      </div>
       <label className="grid gap-1.5">
         <span className="micro-label">Note</span>
         <Input
@@ -256,6 +267,79 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
         </p>
       ) : null}
     </form>
+  );
+}
+
+/** Picks apps from the workspace's list; each pick shows as a badge that removes it. */
+function AppPicker({
+  workspace,
+  value,
+  onChange,
+  disabled,
+}: {
+  workspace: string;
+  value: readonly string[];
+  onChange: (apps: readonly string[]) => void;
+  disabled: boolean;
+}) {
+  const apps = useQuery(appsQueryOptions(workspace));
+  const choices = (apps.data ?? []).map((app) => app.name).filter((name) => !value.includes(name));
+
+  return (
+    <div
+      role="group"
+      aria-labelledby="webhook-apps-label"
+      className="flex min-h-8 flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-1 py-0.5"
+    >
+      {value.map((name) => (
+        <Badge key={name} tone="muted" className="gap-1 pr-0.5 text-foreground">
+          {name}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(value.filter((app) => app !== name))}
+            aria-label={`Remove ${name}`}
+            className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <X className="size-3" aria-hidden="true" />
+          </button>
+        </Badge>
+      ))}
+      <Select
+        key={value.length}
+        disabled={disabled || apps.isPending || choices.length === 0}
+        onValueChange={(name) => onChange([...value, name])}
+      >
+        <SelectTrigger
+          size="sm"
+          aria-label="Add an app"
+          className="w-auto min-w-32 flex-1 border-0 bg-transparent px-1.5 shadow-none data-[size=sm]:h-6"
+        >
+          <SelectValue
+            placeholder={
+              apps.isPending
+                ? "Loading apps"
+                : apps.error
+                  ? "Could not load apps"
+                  : choices.length
+                    ? value.length
+                      ? "Add another app"
+                      : "Every app, or pick some"
+                    : value.length
+                      ? "All apps picked"
+                      : "No apps deployed yet"
+            }
+          />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          {choices.map((name) => (
+            <SelectItem key={name} value={name}>
+              {name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -327,7 +411,7 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
             </span>
             <span className="mt-0.5 block text-xs text-muted-foreground">
               {enabled ? null : <span className="font-medium text-foreground">Paused. </span>}
-              {webhook.app ? `Only ${webhook.app}` : "Every app"}:{" "}
+              {webhook.apps.length ? `Only ${webhook.apps.join(", ")}` : "Every app"}:{" "}
               {webhook.events.map(eventLabel).join(", ").toLowerCase()}
             </span>
             {webhook.description ? (

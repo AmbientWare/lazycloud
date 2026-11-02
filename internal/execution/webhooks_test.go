@@ -15,8 +15,8 @@ func TestAReleaseThatStopsStartingAnnouncesItOnce(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"resources": {"cpu_millis": 500, "memory_mib": 256}, "max_pending_tasks": 10}`)
-	exec(t, pool, `insert into webhooks (workspace_id, app_name, url, events)
-values ($1, 'reports', 'https://example.com/hook', array['task.failed', 'workload.failed'])`, uuid.UUID(f.workspace))
+	exec(t, pool, `insert into webhooks (workspace_id, apps, url, events)
+values ($1, array['reports'], 'https://example.com/hook', array['task.failed', 'workload.failed'])`, uuid.UUID(f.workspace))
 	task := submit(t, e, f, 1)[0]
 
 	for range startFailureLimit + 1 {

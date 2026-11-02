@@ -49,13 +49,13 @@ def webhook_list(
         [
             str(item.id),
             item.url,
-            item.app or ALL_APPS,
+            ", ".join(app.root for app in item.apps) or ALL_APPS,
             ", ".join(event.value for event in item.events),
             item.enabled,
         ]
         for item in webhooks
     ]
-    console.print(table("Webhooks", ["id", "url", "app", "events", "enabled"], rows))
+    console.print(table("Webhooks", ["id", "url", "apps", "events", "enabled"], rows))
 
 
 @webhook_app.command("add", help="Add a webhook that receives the given events.")
@@ -66,8 +66,9 @@ def webhook_add(
         list[WebhookEvent],
         typer.Option("--event", help="An event to send; repeat for several."),
     ],
-    app: Annotated[
-        str | None, typer.Option("--app", help="Only send events from this app.")
+    apps: Annotated[
+        list[str] | None,
+        typer.Option("--app", help="Only send events from this app; repeat for several."),
     ] = None,
     description: Annotated[str | None, typer.Option("--description")] = None,
     disabled: Annotated[
@@ -80,7 +81,7 @@ def webhook_add(
         selected,
         url,
         events,
-        app=app,
+        apps=apps,
         description=description,
         enabled=False if disabled else None,
     )
@@ -91,7 +92,7 @@ def webhook_add(
     )
 
 
-@webhook_app.command("update", help="Change a webhook's URL, events, app, or state.")
+@webhook_app.command("update", help="Change a webhook's URL, events, apps, or state.")
 def webhook_update(
     ctx: typer.Context,
     webhook: UUID,
@@ -100,8 +101,9 @@ def webhook_update(
         list[WebhookEvent] | None,
         typer.Option("--event", help="Replace the events; repeat for several."),
     ] = None,
-    app: Annotated[
-        str | None, typer.Option("--app", help="Only send events from this app.")
+    apps: Annotated[
+        list[str] | None,
+        typer.Option("--app", help="Replace the apps; repeat for several."),
     ] = None,
     all_apps: Annotated[
         bool, typer.Option("--all-apps", help="Send events from every app.")
@@ -110,14 +112,14 @@ def webhook_update(
     enabled: Annotated[bool | None, typer.Option("--enable/--disable")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    if app is not None and all_apps:
+    if apps and all_apps:
         raise typer.BadParameter("choose only one of --app or --all-apps")
     client, selected = _session(workspace)
     updated = client.update_webhook(
         selected,
         webhook,
         url=url,
-        app="" if all_apps else app,
+        apps=[] if all_apps else (apps or None),
         events=events or None,
         description=description,
         enabled=enabled,
