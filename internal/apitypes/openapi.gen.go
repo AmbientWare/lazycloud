@@ -5586,8 +5586,8 @@ type WaitTasksResponse struct {
 
 // Webhook defines model for Webhook.
 type Webhook struct {
-	// App The app whose events the webhook receives; absent for every app.
-	App         *AppName           `json:"app,omitempty"`
+	// Apps The apps whose events the webhook receives, by name; empty for every app.
+	Apps        []AppName          `json:"apps"`
 	CreatedAt   time.Time          `json:"created_at"`
 	Description WebhookDescription `json:"description"`
 	Enabled     bool               `json:"enabled"`
@@ -5600,8 +5600,8 @@ type Webhook struct {
 
 // WebhookCreate defines model for WebhookCreate.
 type WebhookCreate struct {
-	// App Limits the webhook to the app of this name; omit for every app.
-	App         *AppName            `json:"app,omitempty"`
+	// Apps Limits the webhook to these apps, by name; omit for every app.
+	Apps        *[]AppName          `json:"apps,omitempty"`
 	Description *WebhookDescription `json:"description,omitempty"`
 	Enabled     *bool               `json:"enabled,omitempty"`
 	Events      []WebhookEvent      `json:"events"`
@@ -5658,8 +5658,8 @@ type WebhookPage struct {
 
 // WebhookUpdate defines model for WebhookUpdate.
 type WebhookUpdate struct {
-	// App The app to limit the webhook to; an empty string clears it.
-	App         *string             `json:"app,omitempty"`
+	// Apps Replaces the apps the webhook is limited to; empty for every app.
+	Apps        *[]AppName          `json:"apps,omitempty"`
 	Description *WebhookDescription `json:"description,omitempty"`
 	Enabled     *bool               `json:"enabled,omitempty"`
 	Events      *[]WebhookEvent     `json:"events,omitempty"`

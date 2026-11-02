@@ -5307,13 +5307,14 @@ components:
 
     Webhook:
       type: object
-      required: [id, url, events, description, enabled, created_at]
+      required: [id, url, apps, events, description, enabled, created_at]
       properties:
         id: { type: string, format: uuid }
         url: { $ref: "#/components/schemas/WebhookUrl" }
-        app:
-          description: The app whose events the webhook receives; absent for every app.
-          allOf: [{ $ref: "#/components/schemas/AppName" }]
+        apps:
+          description: The apps whose events the webhook receives, by name; empty for every app.
+          type: array
+          items: { $ref: "#/components/schemas/AppName" }
         events:
           type: array
           items: { $ref: "#/components/schemas/WebhookEvent" }
@@ -5327,9 +5328,12 @@ components:
       additionalProperties: false
       properties:
         url: { $ref: "#/components/schemas/WebhookUrl" }
-        app:
-          description: Limits the webhook to the app of this name; omit for every app.
-          allOf: [{ $ref: "#/components/schemas/AppName" }]
+        apps:
+          description: Limits the webhook to these apps, by name; omit for every app.
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/AppName" }
         events:
           type: array
           minItems: 1
@@ -5343,10 +5347,12 @@ components:
       additionalProperties: false
       properties:
         url: { $ref: "#/components/schemas/WebhookUrl" }
-        app:
-          description: The app to limit the webhook to; an empty string clears it.
-          type: string
-          pattern: "^([a-z][a-z0-9_]{0,62})?$"
+        apps:
+          description: Replaces the apps the webhook is limited to; empty for every app.
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/AppName" }
         events:
           type: array
           minItems: 1

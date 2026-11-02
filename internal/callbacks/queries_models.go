@@ -13,12 +13,12 @@ import (
 type Webhook struct {
 	ID          uuid.UUID
 	WorkspaceID uuid.UUID
-	AppName     *string
 	Url         string
 	Events      []string
 	Description string
 	Enabled     bool
 	CreatedAt   time.Time
+	Apps        []string
 }
 
 type WebhookDelivery struct {

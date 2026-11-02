@@ -16,13 +16,13 @@ func TestWebhooksStayInTheirWorkspace(t *testing.T) {
 	}
 	var hook apitypes.Webhook
 	if status := e.do("POST", "/v1/workspaces/acme/webhooks", e.owner, map[string]any{
-		"url": "https://hooks.example.com/lazycloud", "app": "reports", "events": []string{"task.failed"},
-	}, &hook); status != 201 || hook.App == nil || *hook.App != "reports" || !hook.Enabled {
+		"url": "https://hooks.example.com/lazycloud", "apps": []string{"reports", "billing"}, "events": []string{"task.failed"},
+	}, &hook); status != 201 || len(hook.Apps) != 2 || hook.Apps[0] != "reports" || !hook.Enabled {
 		t.Fatalf("create: %d %+v", status, hook)
 	}
 	var updated apitypes.Webhook
 	if status := e.do("PATCH", "/v1/workspaces/acme/webhooks/"+hook.Id.String(), e.owner,
-		map[string]any{"app": "", "enabled": false}, &updated); status != 200 || updated.App != nil || updated.Enabled {
+		map[string]any{"apps": []string{}, "enabled": false}, &updated); status != 200 || len(updated.Apps) != 0 || updated.Enabled {
 		t.Fatalf("update: %d %+v", status, updated)
 	}
 	var apiErr apitypes.Error

@@ -4235,8 +4235,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             url: components["schemas"]["WebhookUrl"];
-            /** @description The app whose events the webhook receives; absent for every app. */
-            app?: components["schemas"]["AppName"];
+            /** @description The apps whose events the webhook receives, by name; empty for every app. */
+            apps: components["schemas"]["AppName"][];
             events: components["schemas"]["WebhookEvent"][];
             description: components["schemas"]["WebhookDescription"];
             enabled: boolean;
@@ -4245,8 +4245,8 @@ export interface components {
         };
         WebhookCreate: {
             url: components["schemas"]["WebhookUrl"];
-            /** @description Limits the webhook to the app of this name; omit for every app. */
-            app?: components["schemas"]["AppName"];
+            /** @description Limits the webhook to these apps, by name; omit for every app. */
+            apps?: components["schemas"]["AppName"][];
             events: components["schemas"]["WebhookEvent"][];
             description?: components["schemas"]["WebhookDescription"];
             /** @default true */
@@ -4254,8 +4254,8 @@ export interface components {
         };
         WebhookUpdate: {
             url?: components["schemas"]["WebhookUrl"];
-            /** @description The app to limit the webhook to; an empty string clears it. */
-            app?: string;
+            /** @description Replaces the apps the webhook is limited to; empty for every app. */
+            apps?: components["schemas"]["AppName"][];
             events?: components["schemas"]["WebhookEvent"][];
             description?: components["schemas"]["WebhookDescription"];
             enabled?: boolean;

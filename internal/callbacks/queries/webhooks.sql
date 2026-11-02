@@ -7,8 +7,8 @@ where w.id = @workspace_id
 for update of w;
 
 -- name: InsertWebhook :one
-insert into webhooks (workspace_id, app_name, url, events, description, enabled)
-values (@workspace_id, sqlc.narg(app_name), @url, @events::text[], @description, @enabled)
+insert into webhooks (workspace_id, apps, url, events, description, enabled)
+values (@workspace_id, @apps::text[], @url, @events::text[], @description, @enabled)
 returning *;
 
 -- name: ListWebhooks :many
@@ -21,10 +21,10 @@ limit @max_rows;
 select * from webhooks where workspace_id = @workspace_id and id = @id;
 
 -- name: UpdateWebhook :one
--- Sets the named fields; clear_app takes the webhook to every app.
+-- Sets the named fields; an empty apps takes the webhook to every app.
 update webhooks
 set url = coalesce(sqlc.narg(url), url),
-    app_name = case when @clear_app::bool then null else coalesce(sqlc.narg(app_name), app_name) end,
+    apps = coalesce(sqlc.narg(apps)::text[], apps),
     events = coalesce(sqlc.narg(events)::text[], events),
     description = coalesce(sqlc.narg(description), description),
     enabled = coalesce(sqlc.narg(enabled), enabled)

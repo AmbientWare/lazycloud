@@ -105,7 +105,7 @@ func (h *Webhooks) Create(ctx context.Context, workspace identity.WorkspaceID, i
 		return apitypes.Webhook{}, err
 	}
 	params := InsertWebhookParams{
-		WorkspaceID: uuid.UUID(workspace), AppName: in.App, Url: target,
+		WorkspaceID: uuid.UUID(workspace), Apps: appNames(in.Apps), Url: target,
 		Events: eventNames(in.Events), Enabled: in.Enabled == nil || *in.Enabled,
 	}
 	if in.Description != nil {
@@ -145,8 +145,8 @@ func (h *Webhooks) Get(ctx context.Context, workspace identity.WorkspaceID, id u
 	return webhookOut(row), nil
 }
 
-// Update changes the fields in names. An empty app takes the webhook to
-// every app.
+// Update changes the fields in names. Empty apps take the webhook to every
+// app.
 func (h *Webhooks) Update(ctx context.Context, workspace identity.WorkspaceID, id uuid.UUID, in apitypes.WebhookUpdate) (apitypes.Webhook, error) {
 	params := UpdateWebhookParams{WorkspaceID: uuid.UUID(workspace), ID: id, Description: in.Description, Enabled: in.Enabled}
 	if in.Url != nil {
@@ -156,11 +156,8 @@ func (h *Webhooks) Update(ctx context.Context, workspace identity.WorkspaceID, i
 		}
 		params.Url = &target
 	}
-	if in.App != nil {
-		params.ClearApp = *in.App == ""
-		if !params.ClearApp {
-			params.AppName = in.App
-		}
+	if in.Apps != nil {
+		params.Apps = appNames(in.Apps)
 	}
 	if in.Events != nil {
 		params.Events = eventNames(*in.Events)
@@ -250,6 +247,19 @@ func webhookURL(value string) (string, error) {
 	return target, nil
 }
 
+// appNames is the distinct names of apps, empty for every app.
+func appNames(apps *[]apitypes.AppName) []string {
+	names := []string{}
+	if apps != nil {
+		for _, app := range *apps {
+			if !slices.Contains(names, app) {
+				names = append(names, app)
+			}
+		}
+	}
+	return names
+}
+
 func eventNames(events []apitypes.WebhookEvent) []string {
 	names := make([]string, 0, len(events))
 	for _, event := range events {
@@ -266,7 +276,7 @@ func webhookOut(row Webhook) apitypes.Webhook {
 		events[n] = apitypes.WebhookEvent(event)
 	}
 	return apitypes.Webhook{
-		Id: row.ID, Url: row.Url, App: row.AppName, Events: events,
+		Id: row.ID, Url: row.Url, Apps: row.Apps, Events: events,
 		Description: row.Description, Enabled: row.Enabled, CreatedAt: row.CreatedAt,
 	}
 }

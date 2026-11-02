@@ -783,13 +783,13 @@ class ApiClient:
         url: str,
         events: Sequence[WebhookEvent],
         *,
-        app: str | None = None,
+        apps: Sequence[str] | None = None,
         description: str | None = None,
         enabled: bool | None = None,
     ) -> Webhook:
         fields: dict[str, object] = {"url": url, "events": list(events)}
-        if app is not None:
-            fields["app"] = app
+        if apps is not None:
+            fields["apps"] = list(apps)
         if description is not None:
             fields["description"] = description
         if enabled is not None:
@@ -812,18 +812,18 @@ class ApiClient:
         webhook: UUID,
         *,
         url: str | None = None,
-        app: str | None = None,
+        apps: Sequence[str] | None = None,
         events: Sequence[WebhookEvent] | None = None,
         description: str | None = None,
         enabled: bool | None = None,
     ) -> Webhook:
-        """Change the given fields; `app=""` lets the webhook receive every app's events."""
+        """Change the given fields; `apps=[]` lets the webhook receive every app's events."""
 
         fields: dict[str, object] = {}
         if url is not None:
             fields["url"] = url
-        if app is not None:
-            fields["app"] = app
+        if apps is not None:
+            fields["apps"] = list(apps)
         if events is not None:
             fields["events"] = list(events)
         if description is not None:

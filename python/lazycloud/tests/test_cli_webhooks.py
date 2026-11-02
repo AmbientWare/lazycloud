@@ -30,10 +30,9 @@ def webhooks_api(fake_api: FakeApi) -> FakeApi:
             "events": body["events"],
             "description": body.get("description", ""),
             "enabled": body.get("enabled", True),
+            "apps": body.get("apps", []),
             "created_at": NOW,
         }
-        if "app" in body:
-            webhook["app"] = body["app"]
         stored.append(webhook)
         return json_reply(webhook, 201)
 
@@ -58,6 +57,8 @@ def test_added_webhooks_list_with_their_events_and_app_scope(webhooks_api: FakeA
             "workload.deployed",
             "--app",
             "tools",
+            "--app",
+            "reports",
             "--disabled",
         ],
     )
@@ -71,9 +72,14 @@ def test_added_webhooks_list_with_their_events_and_app_scope(webhooks_api: FakeA
 
     listed = runner.invoke(cli, ["--json", "webhook", "list"])
     rows = json.loads(listed.stdout)
-    assert [(row["url"], row.get("app"), row["events"], row["enabled"]) for row in rows] == [
-        ("https://hooks.example.com/a", "tools", ["task.failed", "workload.deployed"], False),
-        ("https://hooks.example.com/b", None, ["task.succeeded"], True),
+    assert [(row["url"], row["apps"], row["events"], row["enabled"]) for row in rows] == [
+        (
+            "https://hooks.example.com/a",
+            ["tools", "reports"],
+            ["task.failed", "workload.deployed"],
+            False,
+        ),
+        ("https://hooks.example.com/b", [], ["task.succeeded"], True),
     ]
 
     table = runner.invoke(cli, ["webhook", "list"])
