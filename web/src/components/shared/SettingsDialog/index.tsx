@@ -12,6 +12,7 @@ import { BillingSettings } from "./BillingSettings";
 import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
 import { settingsView, type SettingsView } from "./view";
+import { WebhookSettings } from "./WebhookSettings";
 
 export function SettingsDialog({
   view,
@@ -58,6 +59,7 @@ export function SettingsDialog({
               <LinearTab value="tokens">Tokens</LinearTab>
               <LinearTab value="compute">Compute</LinearTab>
               <LinearTab value="domains">Domains</LinearTab>
+              <LinearTab value="webhooks">Webhooks</LinearTab>
               {admin ? <LinearTab value="admin">Admin</LinearTab> : null}
             </LinearTabsList>
           </div>
@@ -93,6 +95,13 @@ export function SettingsDialog({
             className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
           >
             <DomainSettings onUpgrade={openUpgrade} />
+          </TabsContent>
+
+          <TabsContent
+            value="webhooks"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
+          >
+            <WebhookSettings />
           </TabsContent>
 
           {admin ? (

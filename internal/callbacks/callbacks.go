@@ -1,9 +1,12 @@
-// Package callbacks delivers callbacks: rows execution writes in the
+// Package callbacks owns signed outbound deliveries and the workspace
+// webhooks they reach. Callbacks are rows execution writes in the
 // transaction of each task's retry or terminal transition, and rows the edge
-// writes with the record of each endpoint or ASGI request, posted signed to
-// the release's callback_url. Delivery never changes a task or request. It
-// is apart from notifications because signing reads workspace secrets, which
-// depend on identity, and identity sends its email through notifications.
+// writes with the record of each endpoint or ASGI request, posted to the
+// release's callback_url. Webhook deliveries are rows lc_webhook_event writes
+// in the transaction of each change a workspace's webhooks take. Delivery
+// never changes a task or request. It is apart from notifications because
+// signing reads workspace secrets, which depend on identity, and identity
+// sends its email through notifications.
 package callbacks
 
 import (
@@ -21,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -160,11 +164,27 @@ func isPublic(addr netip.Addr) bool {
 	return true
 }
 
-// Deliver sends due callbacks until none is due and returns how many it
-// sent. At most deliveryConcurrency are in flight: each claim takes as many
-// as there are free slots, so a slow target holds only its own slot while
-// the others keep claiming. It returns once every delivery it started ended.
+// Deliver sends due callbacks and webhook deliveries until none is due and
+// returns how many it sent. The two drain side by side, so a webhook backlog
+// never holds back callbacks. It returns once every delivery it started
+// ended.
 func (c *Callbacks) Deliver(ctx context.Context) (int, error) {
+	var (
+		wg           sync.WaitGroup
+		callbacks    int
+		callbacksErr error
+	)
+	wg.Go(func() { callbacks, callbacksErr = deliverDue(ctx, c.claimCallbacks, c.deliverOne) })
+	webhooks, webhooksErr := deliverDue(ctx, c.claimWebhooks, c.deliverWebhook)
+	wg.Wait()
+	return callbacks + webhooks, errors.Join(callbacksErr, webhooksErr)
+}
+
+// deliverDue delivers what claim leases until nothing is due. At most
+// deliveryConcurrency are in flight: each claim takes as many as there are
+// free slots, so a slow target holds only its own slot while the others keep
+// claiming. It returns once every delivery it started ended.
+func deliverDue[T any](ctx context.Context, claim func(context.Context, int) ([]T, error), deliver func(context.Context, T)) (int, error) {
 	slots := make(chan struct{}, deliveryConcurrency)
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -196,7 +216,7 @@ func (c *Callbacks) Deliver(ctx context.Context) (int, error) {
 				<-slots
 			}
 		}
-		rows, lease, err := c.claim(ctx, free)
+		rows, err := claim(ctx, free)
 		if err != nil || len(rows) == 0 {
 			release(free)
 			return total, err
@@ -205,22 +225,28 @@ func (c *Callbacks) Deliver(ctx context.Context) (int, error) {
 		for _, row := range rows {
 			wg.Go(func() {
 				defer release(1)
-				c.deliverOne(ctx, row, lease[row.ID])
+				deliver(ctx, row)
 			})
 		}
 		total += len(rows)
 	}
 }
 
-// claim leases up to n due callbacks and reads them, with the deliveries
-// count each lease fences.
-func (c *Callbacks) claim(ctx context.Context, n int) ([]CallbackDeliveriesRow, map[int64]int32, error) {
+// claimedCallback is a leased callback with the deliveries count its lease
+// fences.
+type claimedCallback struct {
+	CallbackDeliveriesRow
+	deliveries int32
+}
+
+// claimCallbacks leases up to n due callbacks and reads them.
+func (c *Callbacks) claimCallbacks(ctx context.Context, n int) ([]claimedCallback, error) {
 	claimed, err := c.queries.ClaimDueCallbacks(ctx, ClaimDueCallbacksParams{LeaseSeconds: leaseSeconds, BatchSize: int32(n)}) //nolint:gosec // At most deliveryConcurrency.
 	if err != nil {
-		return nil, nil, fmt.Errorf("claim callbacks: %w", err)
+		return nil, fmt.Errorf("claim callbacks: %w", err)
 	}
 	if len(claimed) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	ids := make([]int64, len(claimed))
 	lease := make(map[int64]int32, len(claimed))
@@ -229,22 +255,32 @@ func (c *Callbacks) claim(ctx context.Context, n int) ([]CallbackDeliveriesRow, 
 	}
 	rows, err := c.queries.CallbackDeliveries(ctx, ids)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read callbacks: %w", err)
+		return nil, fmt.Errorf("read callbacks: %w", err)
 	}
-	return rows, lease, nil
+	out := make([]claimedCallback, len(rows))
+	for i, row := range rows {
+		out[i] = claimedCallback{CallbackDeliveriesRow: row, deliveries: lease[row.ID]}
+	}
+	return out, nil
 }
 
-// Purge deletes callbacks that finished more than a week ago.
+// Purge deletes callbacks and webhook deliveries that finished more than a
+// week ago.
 func (c *Callbacks) Purge(ctx context.Context) (int64, error) {
 	n, err := c.queries.PurgeFinishedCallbacks(ctx, PurgeFinishedCallbacksParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
 	if err != nil {
 		return 0, fmt.Errorf("purge callbacks: %w", err)
 	}
-	return n, nil
+	m, err := c.queries.PurgeFinishedWebhookDeliveries(ctx, PurgeFinishedWebhookDeliveriesParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
+	if err != nil {
+		return n, fmt.Errorf("purge webhook deliveries: %w", err)
+	}
+	return n + m, nil
 }
 
 // deliverOne sends one callback and records the outcome under its lease.
-func (c *Callbacks) deliverOne(ctx context.Context, row CallbackDeliveriesRow, deliveries int32) {
+func (c *Callbacks) deliverOne(ctx context.Context, claimed claimedCallback) {
+	row, deliveries := claimed.CallbackDeliveriesRow, claimed.deliveries
 	log := c.logger.With("task_id", row.TaskID, "request_id", row.RequestID, "event", row.Event, "attempt", row.Attempt, "delivery", deliveries)
 	retry, err := c.send(ctx, row)
 	if ctx.Err() != nil {
@@ -312,18 +348,28 @@ func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry 
 	req.Header.Set("X-Task-Attempt", strconv.Itoa(int(row.Attempt)))
 	req.Header.Set("X-Task-Signature", Sign(key, body, timestamp))
 	req.Header.Set("X-Task-Timestamp", timestamp)
+	if _, retry, err = c.post(req); err != nil {
+		return retry, fmt.Errorf("callback %w", err)
+	}
+	return false, nil
+}
+
+// post sends req and reads at most maxResponseBytes of the answer. status
+// is the answer's code, zero without one; retry reports whether a later
+// attempt could succeed.
+func (c *Callbacks) post(req *http.Request) (status int, retry bool, err error) {
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return !errors.Is(err, errPrivateTarget), fmt.Errorf("post callback: %w", err)
+		return 0, !errors.Is(err, errPrivateTarget), fmt.Errorf("post: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return false, nil
+		return resp.StatusCode, false, nil
 	}
 	retryable := resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooEarly ||
 		resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-	return retryable, fmt.Errorf("callback answered %d", resp.StatusCode)
+	return resp.StatusCode, retryable, fmt.Errorf("answered %d", resp.StatusCode)
 }
 
 // Sign is the X-Task-Signature of body sent at timestamp: hex
@@ -409,15 +455,20 @@ func callbackBody(row CallbackDeliveriesRow, result *CallbackResultRow) ([]byte,
 	return encoded, nil
 }
 
-// NextDue reports when the earliest pending callback is due, and false when
-// none is pending.
+// NextDue reports when the earliest pending callback or webhook delivery is
+// due, and false when none is pending.
 func (c *Callbacks) NextDue(ctx context.Context) (time.Time, bool, error) {
 	next, err := c.queries.NextCallbackAt(ctx)
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("next callback: %w", err)
 	}
+	webhook, err := c.queries.NextWebhookDeliveryAt(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("next webhook delivery: %w", err)
+	}
+	next = append(next, webhook...)
 	if len(next) == 0 {
 		return time.Time{}, false, nil
 	}
-	return next[0], true, nil
+	return slices.MinFunc(next, func(a, b time.Time) int { return a.Compare(b) }), true, nil
 }

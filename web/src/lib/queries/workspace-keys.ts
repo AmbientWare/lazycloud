@@ -190,6 +190,11 @@ export const workspaceQueryKeys = {
     mapValue: (workspace: string, name: string, key: string | null) =>
       [...workspaceRoot(workspace), "collections", "map", name, "value", key] as const,
   },
+  webhooks: {
+    list: (workspace: string) => [...workspaceRoot(workspace), "webhooks", "list"] as const,
+    deliveries: (workspace: string, webhookId: string) =>
+      [...workspaceRoot(workspace), "webhooks", "deliveries", webhookId] as const,
+  },
   logs: {
     history: (workspaceId: string, source: LogSource) =>
       [...workspaceRoot(workspaceId), "logs", "history", source] as const,

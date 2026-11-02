@@ -1,0 +1,78 @@
+---
+title: "Webhooks"
+description: "Get a POST when a task fails, a version deploys or a workload stops starting."
+---
+
+A webhook is a URL that gets your workspace's events. Point one at Slack
+through a relay, at an alerting service or at your own endpoint. Add webhooks
+under **Settings > Webhooks**, with `lazycloud webhook add`, or through the
+API. A workspace holds up to 20.
+
+A webhook takes events from every app, or only from the app you name. It
+keeps the app by name, so deleting and redeploying an app keeps its webhooks.
+
+## Events
+
+| Event | Sent when |
+| --- | --- |
+| `task.succeeded` | A task finishes with a result. |
+| `task.failed` | A task fails for good, after its retries. |
+| `task.cancelled` | A task is cancelled, or its workload stops or is deleted while it waits. |
+| `workload.deployed` | A version becomes active, from a deploy or a start on an earlier version. |
+| `workload.failed` | A version stops starting, on an import error or after three failed container starts. Sent again if a later start retry fails the same way. |
+
+Task events go out for every task, so a large `.map()` sends one per input.
+For alerts, `task.failed` and `workload.failed` are usually enough.
+
+## The request
+
+Each delivery is a JSON `POST`:
+
+```json
+{
+  "id": "0196f0c2-5a7e-7c1a-9b1e-3f1d2c4b5a69",
+  "type": "task.failed",
+  "created_at": "2026-11-02T14:03:11.204Z",
+  "workspace": "acme",
+  "data": {
+    "app": "reports",
+    "workload": { "kind": "function", "name": "summarize", "version": 4 },
+    "task_id": "0196f0c2-4b10-7d2e-8c11-2a9f0e6d7b33",
+    "root_task_id": "0196f0c2-4b10-7d2e-8c11-2a9f0e6d7b33",
+    "status": "failed",
+    "attempt_number": 3,
+    "max_attempts": 3,
+    "error": { "kind": "exception", "type": "ValueError", "message": "empty report" },
+    "finished_at": "2026-11-02T14:03:11.198Z"
+  }
+}
+```
+
+`workload.deployed` data has `app`, `workload` and `previous_version`, absent on
+a first deploy. `workload.failed` data has `app`, `workload`, `reason`
+(`load_error` or `start_failed`) and `message`.
+
+The headers are `X-Webhook-ID`, the event's `id`, `X-Webhook-Event`,
+`X-Webhook-Timestamp` and `X-Webhook-Signature`. Every webhook an event reaches
+gets the same `id`, and retries keep it, so drop repeats by `id`.
+
+A delivery gets 5 seconds and three tries, 250 ms and 750 ms apart. It retries
+on network errors, 408, 425, 429 and any 5xx, and gives up on other answers.
+LazyCloud only sends to hosts that resolve to public addresses.
+
+## Verify a delivery
+
+Webhooks are signed the same way as
+[callbacks](/concepts/tasks-and-logs#verify-a-callback): `X-Webhook-Signature`
+is a hex HMAC-SHA256, keyed by the workspace secret
+`LAZYCLOUD_CALLBACK_SIGNING_KEY`, of the base64-encoded body, a colon and
+`X-Webhook-Timestamp`. The `verify` function on that page works unchanged.
+Read the key with `lazycloud secret show LAZYCLOUD_CALLBACK_SIGNING_KEY --reveal`
+after the first delivery creates it.
+
+## Check deliveries
+
+**Send test** in the dashboard, or `lazycloud webhook test`, sends a
+`webhook.test` event, even to a disabled webhook. Each webhook lists its
+deliveries of the last 7 days with the status code and error of the last try.
+Disable a webhook to pause it without losing its settings.

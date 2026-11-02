@@ -43,6 +43,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -405,7 +406,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
+		Secrets: vault, Webhooks: callbacks.NewWebhooks(pool), Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
 	document, err := api.GetSpec()
 	if err != nil {

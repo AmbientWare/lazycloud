@@ -2293,6 +2293,54 @@ func (e UserStatus) Valid() bool {
 	}
 }
 
+// Defines values for WebhookDeliveryState.
+const (
+	WebhookDeliveryDelivered WebhookDeliveryState = "delivered"
+	WebhookDeliveryFailed    WebhookDeliveryState = "failed"
+	WebhookDeliveryPending   WebhookDeliveryState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the WebhookDeliveryState enum.
+func (e WebhookDeliveryState) Valid() bool {
+	switch e {
+	case WebhookDeliveryDelivered:
+		return true
+	case WebhookDeliveryFailed:
+		return true
+	case WebhookDeliveryPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebhookEvent.
+const (
+	WebhookTaskCancelled    WebhookEvent = "task.cancelled"
+	WebhookTaskFailed       WebhookEvent = "task.failed"
+	WebhookTaskSucceeded    WebhookEvent = "task.succeeded"
+	WebhookWorkloadDeployed WebhookEvent = "workload.deployed"
+	WebhookWorkloadFailed   WebhookEvent = "workload.failed"
+)
+
+// Valid indicates whether the value is a known member of the WebhookEvent enum.
+func (e WebhookEvent) Valid() bool {
+	switch e {
+	case WebhookTaskCancelled:
+		return true
+	case WebhookTaskFailed:
+		return true
+	case WebhookTaskSucceeded:
+		return true
+	case WebhookWorkloadDeployed:
+		return true
+	case WebhookWorkloadFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkloadKind.
 const (
 	WorkloadKindAsgi     WorkloadKind = "asgi"
@@ -5536,6 +5584,93 @@ type WaitTasksResponse struct {
 	Tasks          []FinishedTask       `json:"tasks"`
 }
 
+// Webhook defines model for Webhook.
+type Webhook struct {
+	// App The app whose events the webhook receives; absent for every app.
+	App         *AppName           `json:"app,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Description WebhookDescription `json:"description"`
+	Enabled     bool               `json:"enabled"`
+	Events      []WebhookEvent     `json:"events"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// Url An http or https URL whose host resolves to public addresses.
+	Url WebhookUrl `json:"url"`
+}
+
+// WebhookCreate defines model for WebhookCreate.
+type WebhookCreate struct {
+	// App Limits the webhook to the app of this name; omit for every app.
+	App         *AppName            `json:"app,omitempty"`
+	Description *WebhookDescription `json:"description,omitempty"`
+	Enabled     *bool               `json:"enabled,omitempty"`
+	Events      []WebhookEvent      `json:"events"`
+
+	// Url An http or https URL whose host resolves to public addresses.
+	Url WebhookUrl `json:"url"`
+}
+
+// WebhookDelivery defines model for WebhookDelivery.
+type WebhookDelivery struct {
+	// Attempts How many times it was sent, at most 3.
+	Attempts  int       `json:"attempts"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Event A WebhookEvent, or webhook.test.
+	Event string `json:"event"`
+
+	// EventId The X-Webhook-ID header; every webhook an event reaches shares it.
+	EventId    openapi_types.UUID `json:"event_id"`
+	FinishedAt *time.Time         `json:"finished_at,omitempty"`
+	Id         string             `json:"id"`
+
+	// LastError Why the last attempt failed.
+	LastError *string `json:"last_error,omitempty"`
+
+	// ResponseStatus The status the last attempt was answered with.
+	ResponseStatus *int                 `json:"response_status,omitempty"`
+	State          WebhookDeliveryState `json:"state"`
+}
+
+// WebhookDeliveryPage defines model for WebhookDeliveryPage.
+type WebhookDeliveryPage struct {
+	Deliveries []WebhookDelivery `json:"deliveries"`
+
+	// NextCursor Present when older deliveries follow.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// WebhookDeliveryState defines model for WebhookDeliveryState.
+type WebhookDeliveryState string
+
+// WebhookDescription defines model for WebhookDescription.
+type WebhookDescription = string
+
+// WebhookEvent task.succeeded, task.failed and task.cancelled report a task's end; workload.deployed a version becoming active, by deploy or by start; workload.failed a version that stopped starting on a load error or repeated start failures.
+type WebhookEvent string
+
+// WebhookPage defines model for WebhookPage.
+type WebhookPage struct {
+	// NextCursor Present when more webhooks follow.
+	NextCursor *string   `json:"next_cursor,omitempty"`
+	Webhooks   []Webhook `json:"webhooks"`
+}
+
+// WebhookUpdate defines model for WebhookUpdate.
+type WebhookUpdate struct {
+	// App The app to limit the webhook to; an empty string clears it.
+	App         *string             `json:"app,omitempty"`
+	Description *WebhookDescription `json:"description,omitempty"`
+	Enabled     *bool               `json:"enabled,omitempty"`
+	Events      *[]WebhookEvent     `json:"events,omitempty"`
+
+	// Url An http or https URL whose host resolves to public addresses.
+	Url *WebhookUrl `json:"url,omitempty"`
+}
+
+// WebhookUrl An http or https URL whose host resolves to public addresses.
+type WebhookUrl = string
+
 // Workload A deployed workload, addressed as /apps/{app}/workloads/{kind}/{name}.
 type Workload struct {
 	App       AppName   `json:"app"`
@@ -5822,6 +5957,9 @@ type VersionQuery = int
 
 // VolumePath defines model for VolumePath.
 type VolumePath = VolumeName
+
+// WebhookPath defines model for WebhookPath.
+type WebhookPath = openapi_types.UUID
 
 // WindowSeconds defines model for WindowSeconds.
 type WindowSeconds = int
@@ -6401,6 +6539,20 @@ type StatVolumeFileParams struct {
 	Path *VolumeRelativePath `form:"path,omitempty" json:"path,omitempty"`
 }
 
+// ListWebhooksParams defines parameters for ListWebhooks.
+type ListWebhooksParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListWebhookDeliveriesParams defines parameters for ListWebhookDeliveries.
+type ListWebhookDeliveriesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListWorkloadsParams defines parameters for ListWorkloads.
 type ListWorkloadsParams struct {
 	App  *AppName      `form:"app,omitempty" json:"app,omitempty"`
@@ -6603,3 +6755,9 @@ type AbortVolumeUploadJSONRequestBody = AbortVolumeUploadRequest
 
 // CompleteVolumeUploadJSONRequestBody defines body for CompleteVolumeUpload for application/json ContentType.
 type CompleteVolumeUploadJSONRequestBody = CompleteVolumeUploadRequest
+
+// CreateWebhookJSONRequestBody defines body for CreateWebhook for application/json ContentType.
+type CreateWebhookJSONRequestBody = WebhookCreate
+
+// UpdateWebhookJSONRequestBody defines body for UpdateWebhook for application/json ContentType.
+type UpdateWebhookJSONRequestBody = WebhookUpdate

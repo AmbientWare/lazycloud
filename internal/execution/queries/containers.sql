@@ -19,6 +19,11 @@ set status = 'failed', failure = @failure, finished_at = now()
 where id = any(@ids::uuid[])
 returning id;
 
+-- name: RecordFirstLoadError :execrows
+-- Records the load error of a release that had none, which is when it stops
+-- starting; a concurrent first record waits on the row and then finds one.
+update releases set load_error = @load_error where id = @id and load_error is null;
+
 -- name: RecordLoadError :exec
 update releases set load_error = @load_error where id = @id;
 

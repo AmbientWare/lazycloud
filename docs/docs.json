@@ -105,6 +105,7 @@
           "cli/deployments-and-containers",
           "cli/storage",
           "cli/compute",
+          "cli/webhooks",
           "cli/auth",
           "cli/scaffolding"
         ]
@@ -127,6 +128,7 @@
           "platform/plans",
           "platform/compute",
           "platform/domains",
+          "platform/webhooks",
           "platform/troubleshooting"
         ]
       }
