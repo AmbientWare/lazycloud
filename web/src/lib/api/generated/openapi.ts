@@ -1207,6 +1207,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** The workspace's webhooks, oldest first */
+        get: operations["listWebhooks"];
+        put?: never;
+        /**
+         * Register a URL for the workspace's events
+         * @description A workspace holds at most 20 webhooks. Each delivery is signed with the workspace secret LAZYCLOUD_CALLBACK_SIGNING_KEY, created on the first delivery when it does not exist.
+         */
+        post: operations["createWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/webhooks/{webhook}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getWebhook"];
+        put?: never;
+        post?: never;
+        /** Delete the webhook and its pending deliveries */
+        delete: operations["deleteWebhook"];
+        options?: never;
+        head?: never;
+        /** Change the fields the body names */
+        patch: operations["updateWebhook"];
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/webhooks/{webhook}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a webhook.test event to the webhook, enabled or not */
+        post: operations["testWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/webhooks/{webhook}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        /** The webhook's deliveries of the last 7 days, newest first */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/volumes": {
         parameters: {
             query?: never;
@@ -4139,6 +4223,76 @@ export interface components {
             /** @description Present when more secrets follow. */
             next_cursor?: string;
         };
+        /**
+         * @description task.succeeded, task.failed and task.cancelled report a task's end; workload.deployed a version becoming active, by deploy or by start; workload.failed a version that stopped starting on a load error or repeated start failures.
+         * @enum {string}
+         */
+        WebhookEvent: "task.succeeded" | "task.failed" | "task.cancelled" | "workload.deployed" | "workload.failed";
+        /** @description An http or https URL whose host resolves to public addresses. */
+        WebhookUrl: string;
+        WebhookDescription: string;
+        Webhook: {
+            /** Format: uuid */
+            id: string;
+            url: components["schemas"]["WebhookUrl"];
+            /** @description The app whose events the webhook receives; absent for every app. */
+            app?: components["schemas"]["AppName"];
+            events: components["schemas"]["WebhookEvent"][];
+            description: components["schemas"]["WebhookDescription"];
+            enabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        WebhookCreate: {
+            url: components["schemas"]["WebhookUrl"];
+            /** @description Limits the webhook to the app of this name; omit for every app. */
+            app?: components["schemas"]["AppName"];
+            events: components["schemas"]["WebhookEvent"][];
+            description?: components["schemas"]["WebhookDescription"];
+            /** @default true */
+            enabled?: boolean;
+        };
+        WebhookUpdate: {
+            url?: components["schemas"]["WebhookUrl"];
+            /** @description The app to limit the webhook to; an empty string clears it. */
+            app?: string;
+            events?: components["schemas"]["WebhookEvent"][];
+            description?: components["schemas"]["WebhookDescription"];
+            enabled?: boolean;
+        };
+        WebhookPage: {
+            webhooks: components["schemas"]["Webhook"][];
+            /** @description Present when more webhooks follow. */
+            next_cursor?: string;
+        };
+        /** @enum {string} */
+        WebhookDeliveryState: "pending" | "delivered" | "failed";
+        WebhookDelivery: {
+            id: string;
+            /**
+             * Format: uuid
+             * @description The X-Webhook-ID header; every webhook an event reaches shares it.
+             */
+            event_id: string;
+            /** @description A WebhookEvent, or webhook.test. */
+            event: string;
+            state: components["schemas"]["WebhookDeliveryState"];
+            /** @description How many times it was sent, at most 3. */
+            attempts: number;
+            /** @description The status the last attempt was answered with. */
+            response_status?: number;
+            /** @description Why the last attempt failed. */
+            last_error?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
+        WebhookDeliveryPage: {
+            deliveries: components["schemas"]["WebhookDelivery"][];
+            /** @description Present when older deliveries follow. */
+            next_cursor?: string;
+        };
         Schedule: {
             /** @description The normalized expression. */
             cron: string;
@@ -6468,6 +6622,7 @@ export interface components {
         VersionPath: number;
         TaskPath: string;
         SecretPath: components["schemas"]["SecretName"];
+        WebhookPath: string;
         /** @description The next_cursor of the previous page. */
         Cursor: string;
         Limit: number;
@@ -8350,6 +8505,186 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretValue"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of webhooks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookCreate"];
+            };
+        };
+        responses: {
+            /** @description The webhook */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Webhook"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The webhook */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Webhook"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookUpdate"];
+            };
+        };
+        responses: {
+            /** @description The webhook */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Webhook"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    testWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The delivery, sent shortly */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDelivery"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                webhook: components["parameters"]["WebhookPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deliveries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryPage"];
                 };
             };
             default: components["responses"]["Error"];
@@ -11805,6 +12140,8 @@ export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "preempted", "start_failed", "system", "dependency_failed"];
 export const logEntryStreamValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogEntry"]["stream"]> = ["stdout", "stderr", "system"];
+export const webhookEventValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WebhookEvent"]> = ["task.succeeded", "task.failed", "task.cancelled", "workload.deployed", "workload.failed"];
+export const webhookDeliveryStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WebhookDeliveryState"]> = ["pending", "delivered", "failed"];
 export const scheduleTimezoneValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Schedule"]["timezone"]> = ["UTC"];
 export const presignVolumeFileRequestMethodValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PresignVolumeFileRequest"]["method"]> = ["get", "head", "put", "upload_part"];
 export const diskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["DiskStatus"]> = ["detached", "attached", "saving"];

@@ -36,6 +36,7 @@ from lazycloud.cli.ssh import ssh, ssh_cert, ssh_config, ssh_proxy
 from lazycloud.cli.tasks import task_app
 from lazycloud.cli.update import update
 from lazycloud.cli.volumes import volume_app, volume_cp, volume_ls, volume_mv, volume_rm
+from lazycloud.cli.webhooks import webhook_app
 from lazycloud.cli.workspaces import workspace_app
 from lazycloud.self_update import installed_version
 
@@ -264,6 +265,7 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("machine", machine_app)
     registry.add_group("secret", secret_app)
     registry.add_group("domain", domain_app)
+    registry.add_group("webhook", webhook_app)
     registry.add_group("requests", requests_app)
     registry.add_group("volume", volume_app)
     registry.add_group("disk", disk_app)

@@ -441,6 +441,122 @@ class SecretValue(APIModel):
     updated_at: AwareDatetime
 
 
+class WebhookEvent(str, Enum):
+    WebhookTaskSucceeded = "task.succeeded"
+    WebhookTaskFailed = "task.failed"
+    WebhookTaskCancelled = "task.cancelled"
+    WebhookWorkloadDeployed = "workload.deployed"
+    WebhookWorkloadFailed = "workload.failed"
+
+
+class Webhook(APIModel):
+    id: UUID
+    url: Annotated[
+        str,
+        Field(
+            description="An http or https URL whose host resolves to public addresses.",
+            max_length=2048,
+            min_length=1,
+        ),
+    ]
+    app: Annotated[
+        str | None,
+        Field(
+            description="The app whose events the webhook receives; absent for every app.",
+            pattern="^[a-z][a-z0-9_]{0,62}$",
+        ),
+    ] = None
+    events: list[WebhookEvent]
+    description: Annotated[str, Field(max_length=200)]
+    enabled: bool
+    created_at: AwareDatetime
+
+
+class WebhookCreate(APIModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    url: Annotated[
+        str,
+        Field(
+            description="An http or https URL whose host resolves to public addresses.",
+            max_length=2048,
+            min_length=1,
+        ),
+    ]
+    app: Annotated[
+        str | None,
+        Field(
+            description="Limits the webhook to the app of this name; omit for every app.",
+            pattern="^[a-z][a-z0-9_]{0,62}$",
+        ),
+    ] = None
+    events: Annotated[list[WebhookEvent], Field(min_length=1)]
+    description: Annotated[str | None, Field(max_length=200)] = None
+    enabled: bool = True
+
+
+class WebhookUpdate(APIModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    url: Annotated[
+        str | None,
+        Field(
+            description="An http or https URL whose host resolves to public addresses.",
+            max_length=2048,
+            min_length=1,
+        ),
+    ] = None
+    app: Annotated[
+        str | None,
+        Field(
+            description="The app to limit the webhook to; an empty string clears it.",
+            pattern="^([a-z][a-z0-9_]{0,62})?$",
+        ),
+    ] = None
+    events: Annotated[list[WebhookEvent] | None, Field(min_length=1)] = None
+    description: Annotated[str | None, Field(max_length=200)] = None
+    enabled: bool | None = None
+
+
+class WebhookPage(APIModel):
+    webhooks: list[Webhook]
+    next_cursor: Annotated[str | None, Field(description="Present when more webhooks follow.")] = (
+        None
+    )
+
+
+class WebhookDeliveryState(str, Enum):
+    WebhookDeliveryPending = "pending"
+    WebhookDeliveryDelivered = "delivered"
+    WebhookDeliveryFailed = "failed"
+
+
+class WebhookDelivery(APIModel):
+    id: str
+    event_id: Annotated[
+        UUID,
+        Field(description="The X-Webhook-ID header; every webhook an event reaches shares it."),
+    ]
+    event: Annotated[str, Field(description="A WebhookEvent, or webhook.test.")]
+    state: WebhookDeliveryState
+    attempts: Annotated[int, Field(description="How many times it was sent, at most 3.")]
+    response_status: Annotated[
+        int | None, Field(description="The status the last attempt was answered with.")
+    ] = None
+    last_error: Annotated[str | None, Field(description="Why the last attempt failed.")] = None
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+
+
+class WebhookDeliveryPage(APIModel):
+    deliveries: list[WebhookDelivery]
+    next_cursor: Annotated[
+        str | None, Field(description="Present when older deliveries follow.")
+    ] = None
+
+
 class Schedule(APIModel):
     cron: Annotated[str, Field(description="The normalized expression.")]
     timezone: Literal["UTC"]

@@ -36,3 +36,14 @@ where w.app_id = @app_id and w.desired_state <> 'deleted'
   and not (w.kind || ':' || w.name = any(@keep::text[]))
 returning w.name,
           (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions;
+
+-- name: EnqueueDeployedWebhook :exec
+-- The workload.deployed event of a release that became active, replacing
+-- the previous one when there was one.
+select lc_webhook_event(a.workspace_id, a.name, 'workload.deployed', jsonb_build_object(
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'previous_version', (select p.version from releases p where p.id = sqlc.narg(previous_release_id)::uuid)))
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+where r.id = @release_id;

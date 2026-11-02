@@ -70,6 +70,55 @@ func (q *Queries) EnqueueCallbacks(ctx context.Context, arg EnqueueCallbacksPara
 	return result.RowsAffected(), nil
 }
 
+const enqueueTaskWebhooks = `-- name: EnqueueTaskWebhooks :exec
+select lc_webhook_event(t.workspace_id, a.name, $1::text, jsonb_build_object(
+    'task_id', t.id, 'root_task_id', coalesce(t.root_task_id, t.id), 'status', t.status,
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'attempt_number', t.attempt_count, 'max_attempts', t.max_attempts,
+    'error', t.failure, 'finished_at', t.finished_at))
+from tasks t
+join releases r on r.id = t.release_id
+join workloads w on w.id = t.workload_id
+join apps a on a.id = w.app_id
+where t.id = any($2::uuid[])
+  and exists (select 1 from webhooks h where h.workspace_id = t.workspace_id and h.enabled)
+`
+
+type EnqueueTaskWebhooksParams struct {
+	Event   string
+	TaskIds []uuid.UUID
+}
+
+// One event per task for the workspace's webhooks that take it, after the
+// task reached its terminal status. The exists test skips building data for
+// a workspace without webhooks.
+func (q *Queries) EnqueueTaskWebhooks(ctx context.Context, arg EnqueueTaskWebhooksParams) error {
+	_, err := q.db.Exec(ctx, enqueueTaskWebhooks, arg.Event, arg.TaskIds)
+	return err
+}
+
+const enqueueWorkloadFailedWebhook = `-- name: EnqueueWorkloadFailedWebhook :exec
+select lc_webhook_event(a.workspace_id, a.name, 'workload.failed', jsonb_build_object(
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'reason', $1::text, 'message', $2::text))
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+where r.id = $3
+`
+
+type EnqueueWorkloadFailedWebhookParams struct {
+	Reason    string
+	Message   string
+	ReleaseID uuid.UUID
+}
+
+// The workload.failed event of a release that stopped starting.
+func (q *Queries) EnqueueWorkloadFailedWebhook(ctx context.Context, arg EnqueueWorkloadFailedWebhookParams) error {
+	_, err := q.db.Exec(ctx, enqueueWorkloadFailedWebhook, arg.Reason, arg.Message, arg.ReleaseID)
+	return err
+}
+
 const lockStartingContainer = `-- name: LockStartingContainer :one
 select state from containers where id = $1 and host_id = $2 for update
 `

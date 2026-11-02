@@ -37,6 +37,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
@@ -429,7 +430,7 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
+		Secrets: vault, Webhooks: callbacks.NewWebhooks(pool), Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
 		Observability: obs, Changes: changes, Edge: edges, SSH: sshKeys,
 	}
 	document, err := api.GetSpec()

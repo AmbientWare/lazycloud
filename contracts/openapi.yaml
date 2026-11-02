@@ -1337,6 +1337,121 @@ paths:
               schema: { $ref: "#/components/schemas/SecretValue" }
         default: { $ref: "#/components/responses/Error" }
 
+  # Webhooks: URLs that receive the workspace's events, signed with the
+  # workspace signing key.
+
+  /v1/workspaces/{workspace}/webhooks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listWebhooks
+      tags: [webhooks]
+      summary: The workspace's webhooks, oldest first
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of webhooks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createWebhook
+      tags: [webhooks]
+      summary: Register a URL for the workspace's events
+      description: >-
+        A workspace holds at most 20 webhooks. Each delivery is signed with
+        the workspace secret LAZYCLOUD_CALLBACK_SIGNING_KEY, created on the
+        first delivery when it does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookCreate" }
+      responses:
+        "201":
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/webhooks/{webhook}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/WebhookPath"
+    get:
+      operationId: getWebhook
+      tags: [webhooks]
+      responses:
+        "200":
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateWebhook
+      tags: [webhooks]
+      summary: Change the fields the body names
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookUpdate" }
+      responses:
+        "200":
+          description: The webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteWebhook
+      tags: [webhooks]
+      summary: Delete the webhook and its pending deliveries
+      responses:
+        "204":
+          description: Deleted
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/webhooks/{webhook}/test:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/WebhookPath"
+    post:
+      operationId: testWebhook
+      tags: [webhooks]
+      summary: Send a webhook.test event to the webhook, enabled or not
+      responses:
+        "202":
+          description: The delivery, sent shortly
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDelivery" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/webhooks/{webhook}/deliveries:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/WebhookPath"
+    get:
+      operationId: listWebhookDeliveries
+      tags: [webhooks]
+      summary: The webhook's deliveries of the last 7 days, newest first
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of deliveries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDeliveryPage" }
+        default: { $ref: "#/components/responses/Error" }
+
   # Storage: volumes, disks, artifacts, queues and maps.
 
   /v1/workspaces/{workspace}/volumes:
@@ -3918,6 +4033,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/SecretName" }
+    WebhookPath:
+      name: webhook
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     Cursor:
       name: cursor
       in: query
@@ -5163,6 +5283,128 @@ components:
           items: { $ref: "#/components/schemas/Secret" }
         next_cursor:
           description: Present when more secrets follow.
+          type: string
+
+    WebhookEvent:
+      description: >-
+        task.succeeded, task.failed and task.cancelled report a task's end;
+        workload.deployed a version becoming active, by deploy or by start;
+        workload.failed a version that stopped starting on a load error or
+        repeated start failures.
+      type: string
+      enum: [task.succeeded, task.failed, task.cancelled, workload.deployed, workload.failed]
+      x-enum-varnames: [WebhookTaskSucceeded, WebhookTaskFailed, WebhookTaskCancelled, WebhookWorkloadDeployed, WebhookWorkloadFailed]
+
+    WebhookUrl:
+      description: An http or https URL whose host resolves to public addresses.
+      type: string
+      minLength: 1
+      maxLength: 2048
+
+    WebhookDescription:
+      type: string
+      maxLength: 200
+
+    Webhook:
+      type: object
+      required: [id, url, events, description, enabled, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        url: { $ref: "#/components/schemas/WebhookUrl" }
+        app:
+          description: The app whose events the webhook receives; absent for every app.
+          allOf: [{ $ref: "#/components/schemas/AppName" }]
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookEvent" }
+        description: { $ref: "#/components/schemas/WebhookDescription" }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    WebhookCreate:
+      type: object
+      required: [url, events]
+      additionalProperties: false
+      properties:
+        url: { $ref: "#/components/schemas/WebhookUrl" }
+        app:
+          description: Limits the webhook to the app of this name; omit for every app.
+          allOf: [{ $ref: "#/components/schemas/AppName" }]
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/WebhookEvent" }
+        description: { $ref: "#/components/schemas/WebhookDescription" }
+        enabled: { type: boolean, default: true }
+
+    WebhookUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        url: { $ref: "#/components/schemas/WebhookUrl" }
+        app:
+          description: The app to limit the webhook to; an empty string clears it.
+          type: string
+          pattern: "^([a-z][a-z0-9_]{0,62})?$"
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/WebhookEvent" }
+        description: { $ref: "#/components/schemas/WebhookDescription" }
+        enabled: { type: boolean }
+
+    WebhookPage:
+      type: object
+      required: [webhooks]
+      properties:
+        webhooks:
+          type: array
+          items: { $ref: "#/components/schemas/Webhook" }
+        next_cursor:
+          description: Present when more webhooks follow.
+          type: string
+
+    WebhookDeliveryState:
+      type: string
+      enum: [pending, delivered, failed]
+      x-enum-varnames: [WebhookDeliveryPending, WebhookDeliveryDelivered, WebhookDeliveryFailed]
+
+    WebhookDelivery:
+      type: object
+      required: [id, event_id, event, state, attempts, created_at]
+      properties:
+        id: { type: string }
+        event_id:
+          description: The X-Webhook-ID header; every webhook an event reaches shares it.
+          type: string
+          format: uuid
+        event:
+          description: A WebhookEvent, or webhook.test.
+          type: string
+        state: { $ref: "#/components/schemas/WebhookDeliveryState" }
+        attempts:
+          description: How many times it was sent, at most 3.
+          type: integer
+        response_status:
+          description: The status the last attempt was answered with.
+          type: integer
+        last_error:
+          description: Why the last attempt failed.
+          type: string
+        created_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+
+    WebhookDeliveryPage:
+      type: object
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookDelivery" }
+        next_cursor:
+          description: Present when older deliveries follow.
           type: string
 
     Schedule:

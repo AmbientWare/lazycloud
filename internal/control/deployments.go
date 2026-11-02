@@ -177,6 +177,9 @@ func (c *Control) StartWorkload(ctx context.Context, workspace identity.Workspac
 				if err := q.SetActiveRelease(ctx, SetActiveReleaseParams{ID: row.ID, ReleaseID: release}); err != nil {
 					return fmt.Errorf("activate version %d: %w", *version, err)
 				}
+				if err := q.EnqueueDeployedWebhook(ctx, EnqueueDeployedWebhookParams{ReleaseID: release, PreviousReleaseID: row.ActiveReleaseID}); err != nil {
+					return fmt.Errorf("enqueue workload.deployed webhooks: %w", err)
+				}
 			}
 			row.ActiveReleaseID = &release
 		} else if row.ActiveReleaseID == nil {

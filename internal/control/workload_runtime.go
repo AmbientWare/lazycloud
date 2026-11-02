@@ -1,11 +1,10 @@
 package control
 
 import (
-	"errors"
-	"net/url"
 	"strings"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 )
 
@@ -47,11 +46,15 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 	out.KeepWarmSeconds = &keepWarm
 
 	if spec.CallbackUrl != nil {
-		normalized, err := callbackURL(*spec.CallbackUrl)
-		if err != nil {
-			return &InvalidSpecError{Function: spec.Name, Reason: err.Error()}
+		// A blank callback_url configures no callback.
+		out.CallbackUrl = nil
+		if strings.TrimSpace(*spec.CallbackUrl) != "" {
+			target, err := callbacks.TargetURL(*spec.CallbackUrl)
+			if err != nil {
+				return &InvalidSpecError{Function: spec.Name, Reason: "callback_url " + err.Error()}
+			}
+			out.CallbackUrl = &target
 		}
-		out.CallbackUrl = normalized
 	}
 	out.InProcess = orDefault(spec.InProcess, false)
 	secrets := []string{}
@@ -70,28 +73,4 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 	}
 	out.LifecycleHooks = &hooks
 	return nil
-}
-
-// callbackURL checks a callback target: http or https,
-// a host, no credentials and no fragment. A blank value means none.
-func callbackURL(value string) (*string, error) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil, nil //nolint:nilnil // A blank URL configures no callback.
-	}
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return nil, errors.New("callback_url is not a URL")
-	}
-	switch {
-	case parsed.Scheme != "http" && parsed.Scheme != "https":
-		return nil, errors.New("callback_url must use http or https")
-	case parsed.Hostname() == "":
-		return nil, errors.New("callback_url must include a hostname")
-	case parsed.User != nil:
-		return nil, errors.New("callback_url must not contain credentials")
-	case parsed.Fragment != "" || strings.Contains(trimmed, "#"):
-		return nil, errors.New("callback_url must not contain a fragment")
-	}
-	return &trimmed, nil
 }

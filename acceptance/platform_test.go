@@ -43,6 +43,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -405,7 +406,7 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: p.images, Compute: p.compute,
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
+		Secrets: vault, Webhooks: callbacks.NewWebhooks(pool), Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge, SSH: sshKeys,
 	}
 	document, err := api.GetSpec()
 	if err != nil {
@@ -432,6 +433,15 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 	apiServer := &http.Server{Handler: tel.HTTPHandler(apiHandler), ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, p.execution, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
+	// Callbacks and webhooks reach receivers on this machine, as on the
+	// local stack.
+	deliveryConfig := callbacks.DefaultCallbackConfig()
+	deliveryConfig.AllowPrivateTargets = true
+	deliverer, err := callbacks.NewCallbacks(pool, vault, deliveryConfig, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryWake, cancelDeliveryWake := listener.Subscribe(database.ChannelCallback, "")
 
 	wg.Go(func() { _ = listener.Run(ctx) })
 	wg.Go(func() { _ = p.edge.Run(ctx) })
@@ -462,6 +472,22 @@ func startServer(t *testing.T, opts serverOptions) *platform {
 			case <-ctx.Done():
 				return
 			case <-planWake:
+			case <-ticker.C:
+			}
+		}
+	})
+	wg.Go(func() {
+		defer cancelDeliveryWake()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			if _, err := deliverer.Deliver(ctx); err != nil && ctx.Err() == nil {
+				t.Logf("deliver: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-deliveryWake:
 			case <-ticker.C:
 			}
 		}

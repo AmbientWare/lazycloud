@@ -93,11 +93,17 @@ const (
 )
 
 // recordCallbacks records in q's transaction a callback for each task whose
-// release has a callback_url. failures, nil or one per task, are the attempt
-// failures behind retries.
+// release has a callback_url and, for a terminal event, the task's webhook
+// events. failures, nil or one per task, are the attempt failures behind
+// retries.
 func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks []uuid.UUID, failures []Failure) error {
 	if len(tasks) == 0 {
 		return nil
+	}
+	if event != CallbackRetry {
+		if err := q.EnqueueTaskWebhooks(ctx, EnqueueTaskWebhooksParams{Event: "task." + string(event), TaskIds: tasks}); err != nil {
+			return fmt.Errorf("enqueue task.%s webhooks: %w", event, err)
+		}
 	}
 	encoded := make([][]byte, len(failures))
 	for n, failure := range failures {

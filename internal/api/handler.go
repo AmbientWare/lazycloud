@@ -15,6 +15,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -43,6 +44,7 @@ type Owners struct {
 	Images        *images.Images
 	Notifications *notifications.Notifications
 	Secrets       *secrets.Secrets
+	Webhooks      *callbacks.Webhooks
 	Schedules     *schedules.Schedules
 	Billing       *billing.Billing
 	Compute       *compute.Compute
@@ -328,6 +330,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		billingConflict *billing.ConflictError
 		billingInvalid  *billing.InvalidError
 		gpuUnavailable  *billing.GPUUnavailableError
+		webhookInvalid  *callbacks.InvalidError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -349,8 +352,12 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, identity.ErrExists):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
-		errors.Is(err, images.ErrNotFound), errors.Is(err, observability.ErrNotFound):
+		errors.Is(err, images.ErrNotFound), errors.Is(err, observability.ErrNotFound), errors.Is(err, callbacks.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.As(err, &webhookInvalid):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, webhookInvalid.Error())
+	case errors.Is(err, callbacks.ErrLimit):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, callbacks.ErrLimit.Error())
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
 	case errors.Is(err, control.ErrVersionNotFound):

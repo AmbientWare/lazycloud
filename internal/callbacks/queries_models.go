@@ -3,3 +3,36 @@
 //   sqlc v1.31.1
 
 package callbacks
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type Webhook struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	AppName     *string
+	Url         string
+	Events      []string
+	Description string
+	Enabled     bool
+	CreatedAt   time.Time
+}
+
+type WebhookDelivery struct {
+	ID             int64
+	WebhookID      uuid.UUID
+	WorkspaceID    uuid.UUID
+	EventID        uuid.UUID
+	Event          string
+	Data           []byte
+	State          string
+	Deliveries     int32
+	NextAttemptAt  time.Time
+	ResponseStatus *int32
+	LastError      *string
+	CreatedAt      time.Time
+	FinishedAt     *time.Time
+}

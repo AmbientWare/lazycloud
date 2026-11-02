@@ -96,8 +96,18 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if failQueued == nil {
 			failQueued = &Failure{Kind: FailureLoadError, Message: exit.Message}
 		}
-		if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message}); err != nil {
+		first, err := q.RecordFirstLoadError(ctx, RecordFirstLoadErrorParams{ID: release, LoadError: &failQueued.Message})
+		if err != nil {
 			return fmt.Errorf("record load error: %w", err)
+		}
+		if first == 0 {
+			if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message}); err != nil {
+				return fmt.Errorf("record load error: %w", err)
+			}
+		} else if err := q.EnqueueWorkloadFailedWebhook(ctx, EnqueueWorkloadFailedWebhookParams{
+			ReleaseID: release, Reason: string(StopLoadError), Message: failQueued.Message,
+		}); err != nil {
+			return fmt.Errorf("enqueue workload.failed webhooks: %w", err)
 		}
 	case StopStartFailed:
 		// A container that never got a host found no capacity in the queue
@@ -119,6 +129,13 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		}
 		if failures >= startFailureLimit {
 			failQueued = &Failure{Kind: FailureStartFailed, Message: exit.Message}
+		}
+		if failures == startFailureLimit {
+			if err := q.EnqueueWorkloadFailedWebhook(ctx, EnqueueWorkloadFailedWebhookParams{
+				ReleaseID: release, Reason: string(StopStartFailed), Message: exit.Message,
+			}); err != nil {
+				return fmt.Errorf("enqueue workload.failed webhooks: %w", err)
+			}
 		}
 	case StopRequested, StopCrashed, StopOutOfMemory, StopHostLost, StopExited:
 	}

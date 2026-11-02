@@ -25,6 +25,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -137,7 +138,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        im,
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges,
+		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool),
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

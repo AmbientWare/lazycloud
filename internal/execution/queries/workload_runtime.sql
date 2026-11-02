@@ -31,3 +31,29 @@ on conflict (task_id, event, attempt) do nothing;
 -- Delivered when the transaction commits; the deliverer runs at once
 -- instead of on its next tick. The channel is database.ChannelCallback.
 select pg_notify('lc_callback', '');
+
+-- name: EnqueueTaskWebhooks :exec
+-- One event per task for the workspace's webhooks that take it, after the
+-- task reached its terminal status. The exists test skips building data for
+-- a workspace without webhooks.
+select lc_webhook_event(t.workspace_id, a.name, @event::text, jsonb_build_object(
+    'task_id', t.id, 'root_task_id', coalesce(t.root_task_id, t.id), 'status', t.status,
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'attempt_number', t.attempt_count, 'max_attempts', t.max_attempts,
+    'error', t.failure, 'finished_at', t.finished_at))
+from tasks t
+join releases r on r.id = t.release_id
+join workloads w on w.id = t.workload_id
+join apps a on a.id = w.app_id
+where t.id = any(@task_ids::uuid[])
+  and exists (select 1 from webhooks h where h.workspace_id = t.workspace_id and h.enabled);
+
+-- name: EnqueueWorkloadFailedWebhook :exec
+-- The workload.failed event of a release that stopped starting.
+select lc_webhook_event(a.workspace_id, a.name, 'workload.failed', jsonb_build_object(
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'reason', @reason::text, 'message', @message::text))
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+where r.id = @release_id;

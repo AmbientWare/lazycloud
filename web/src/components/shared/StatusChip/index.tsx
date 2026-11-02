@@ -20,6 +20,7 @@ const TONES: Record<string, Tone> = {
   ok: "success",
   active: "success",
   deployed: "success",
+  delivered: "success",
   true: "success",
   complete: "success",
   completed: "success",

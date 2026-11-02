@@ -1,0 +1,35 @@
+---
+title: "webhook"
+description: "Send task and deploy events from a workspace to your own HTTP endpoints."
+---
+
+import WorkspaceFlag from '/snippets/workspace-flag.mdx';
+
+A webhook posts the events it subscribes to to a URL. It receives every app's
+events unless `--app` limits it to one. Webhooks are addressed by id; `list`
+prints the ids.
+
+## lazycloud webhook
+
+```bash
+uv run lazycloud webhook list
+uv run lazycloud webhook add URL --event EVENT [--event EVENT ...] [--app NAME] [--description TEXT] [--disabled]
+uv run lazycloud webhook update WEBHOOK [--url URL] [--event EVENT ...] [--app NAME | --all-apps] [--description TEXT] [--enable | --disable]
+uv run lazycloud webhook remove WEBHOOK
+uv run lazycloud webhook test WEBHOOK                   # queues a webhook.test delivery
+uv run lazycloud webhook deliveries WEBHOOK [--limit <n>]  # newest first, default 50
+```
+
+Events are `task.succeeded`, `task.failed`, `task.cancelled`,
+`workload.deployed` and `workload.failed`. `update --event` replaces the whole
+list.
+
+```bash
+uv run lazycloud webhook add https://hooks.example.com/lazycloud --event task.failed --app tools
+uv run lazycloud webhook test WEBHOOK
+uv run lazycloud webhook deliveries WEBHOOK
+```
+
+[Webhooks](/platform/webhooks) describes the requests a webhook receives.
+
+<WorkspaceFlag />

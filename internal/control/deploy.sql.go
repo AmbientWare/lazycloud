@@ -49,6 +49,28 @@ func (q *Queries) ActiveRelease(ctx context.Context, id uuid.UUID) (ActiveReleas
 	return i, err
 }
 
+const enqueueDeployedWebhook = `-- name: EnqueueDeployedWebhook :exec
+select lc_webhook_event(a.workspace_id, a.name, 'workload.deployed', jsonb_build_object(
+    'app', a.name, 'workload', jsonb_build_object('kind', w.kind, 'name', w.name, 'version', r.version),
+    'previous_version', (select p.version from releases p where p.id = $1::uuid)))
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+where r.id = $2
+`
+
+type EnqueueDeployedWebhookParams struct {
+	PreviousReleaseID *uuid.UUID
+	ReleaseID         uuid.UUID
+}
+
+// The workload.deployed event of a release that became active, replacing
+// the previous one when there was one.
+func (q *Queries) EnqueueDeployedWebhook(ctx context.Context, arg EnqueueDeployedWebhookParams) error {
+	_, err := q.db.Exec(ctx, enqueueDeployedWebhook, arg.PreviousReleaseID, arg.ReleaseID)
+	return err
+}
+
 const insertRelease = `-- name: InsertRelease :one
 insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
 values ($1, $2, $3, $4, $5, $6::text)

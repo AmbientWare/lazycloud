@@ -336,6 +336,9 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 	if err := q.ActivateRelease(ctx, ActivateReleaseParams{ReleaseID: inserted.ID, ID: workload.ID}); err != nil {
 		return apitypes.Release{}, fmt.Errorf("activate release of %s: %w", f.spec.Name, err)
 	}
+	if err := q.EnqueueDeployedWebhook(ctx, EnqueueDeployedWebhookParams{ReleaseID: inserted.ID, PreviousReleaseID: workload.ActiveReleaseID}); err != nil {
+		return apitypes.Release{}, fmt.Errorf("enqueue workload.deployed webhooks of %s: %w", f.spec.Name, err)
+	}
 	if err := database.Notify(ctx, tx, database.ChannelExecution, inserted.ID.String()); err != nil {
 		return apitypes.Release{}, err
 	}

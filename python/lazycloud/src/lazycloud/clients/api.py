@@ -65,6 +65,13 @@ from lazycloud.contracts.api import (
     UploadTarget,
     WaitTasksRequest,
     WaitTasksResponse,
+    Webhook,
+    WebhookCreate,
+    WebhookDelivery,
+    WebhookDeliveryPage,
+    WebhookEvent,
+    WebhookPage,
+    WebhookUpdate,
     Workload,
     WorkloadDetail,
     WorkloadKind,
@@ -753,6 +760,113 @@ class ApiClient:
     def get_secret_value(self, workspace: str, name: str) -> SecretValue:
         return self._send(
             SecretValue, "GET", _path("v1", "workspaces", workspace, "secrets", name, "value")
+        )
+
+    def list_webhooks(
+        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> WebhookPage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            WebhookPage,
+            "GET",
+            _path("v1", "workspaces", workspace, "webhooks"),
+            params=params,
+        )
+
+    def create_webhook(
+        self,
+        workspace: str,
+        url: str,
+        events: Sequence[WebhookEvent],
+        *,
+        app: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> Webhook:
+        fields: dict[str, object] = {"url": url, "events": list(events)}
+        if app is not None:
+            fields["app"] = app
+        if description is not None:
+            fields["description"] = description
+        if enabled is not None:
+            fields["enabled"] = enabled
+        return self._send(
+            Webhook,
+            "POST",
+            _path("v1", "workspaces", workspace, "webhooks"),
+            body=WebhookCreate.model_validate(fields),
+        )
+
+    def get_webhook(self, workspace: str, webhook: UUID) -> Webhook:
+        return self._send(
+            Webhook, "GET", _path("v1", "workspaces", workspace, "webhooks", str(webhook))
+        )
+
+    def update_webhook(
+        self,
+        workspace: str,
+        webhook: UUID,
+        *,
+        url: str | None = None,
+        app: str | None = None,
+        events: Sequence[WebhookEvent] | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> Webhook:
+        """Change the given fields; `app=""` lets the webhook receive every app's events."""
+
+        fields: dict[str, object] = {}
+        if url is not None:
+            fields["url"] = url
+        if app is not None:
+            fields["app"] = app
+        if events is not None:
+            fields["events"] = list(events)
+        if description is not None:
+            fields["description"] = description
+        if enabled is not None:
+            fields["enabled"] = enabled
+        return self._send(
+            Webhook,
+            "PATCH",
+            _path("v1", "workspaces", workspace, "webhooks", str(webhook)),
+            body=WebhookUpdate.model_validate(fields),
+        )
+
+    def delete_webhook(self, workspace: str, webhook: UUID) -> None:
+        self._send(None, "DELETE", _path("v1", "workspaces", workspace, "webhooks", str(webhook)))
+
+    def test_webhook(self, workspace: str, webhook: UUID) -> WebhookDelivery:
+        """Queue a `webhook.test` delivery to the webhook's URL."""
+
+        return self._send(
+            WebhookDelivery,
+            "POST",
+            _path("v1", "workspaces", workspace, "webhooks", str(webhook), "test"),
+        )
+
+    def list_webhook_deliveries(
+        self,
+        workspace: str,
+        webhook: UUID,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> WebhookDeliveryPage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            WebhookDeliveryPage,
+            "GET",
+            _path("v1", "workspaces", workspace, "webhooks", str(webhook), "deliveries"),
+            params=params,
         )
 
     def _client(self) -> httpx.Client:

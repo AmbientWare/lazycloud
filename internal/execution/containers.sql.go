@@ -139,6 +139,25 @@ func (q *Queries) LockStoppedReleases(ctx context.Context, arg LockStoppedReleas
 	return items, nil
 }
 
+const recordFirstLoadError = `-- name: RecordFirstLoadError :execrows
+update releases set load_error = $1 where id = $2 and load_error is null
+`
+
+type RecordFirstLoadErrorParams struct {
+	LoadError *string
+	ID        uuid.UUID
+}
+
+// Records the load error of a release that had none, which is when it stops
+// starting; a concurrent first record waits on the row and then finds one.
+func (q *Queries) RecordFirstLoadError(ctx context.Context, arg RecordFirstLoadErrorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordFirstLoadError, arg.LoadError, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const recordLoadError = `-- name: RecordLoadError :exec
 update releases set load_error = $1 where id = $2
 `
