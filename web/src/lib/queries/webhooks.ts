@@ -1,8 +1,8 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { nextListCursor } from "./infinite-list";
+import { LIVE_LIST_MAX_PAGES, nextListCursor } from "./infinite-list";
 import { workspaceQueryKeys } from "./workspace-keys";
 
 /** How often an open delivery list rereads while a delivery is still being sent. */
@@ -29,19 +29,24 @@ export function webhooksQueryOptions(workspace: string) {
   });
 }
 
-/** The webhook's newest deliveries, reread while any of them is still pending. */
+/** The webhook's deliveries, newest first, a page at a time. The pages reread
+ * while the newest page still has a delivery being sent. */
 export function webhookDeliveriesQueryOptions(workspace: string, webhook: string) {
-  return queryOptions({
+  return infiniteQueryOptions({
     queryKey: workspaceQueryKeys.webhooks.deliveries(workspace, webhook),
-    queryFn: () =>
-      ok(
-        api.GET(
-          "/v1/workspaces/{workspace}/webhooks/{webhook}/deliveries",
-          webhookPath(workspace, webhook),
-        ),
-      ),
+    initialPageParam: "",
+    queryFn: async ({ pageParam }) => {
+      const page = await ok(
+        api.GET("/v1/workspaces/{workspace}/webhooks/{webhook}/deliveries", {
+          params: { path: { workspace, webhook }, query: { cursor: pageParam || undefined } },
+        }),
+      );
+      return { data: page.deliveries, next: page.next_cursor ?? "" };
+    },
+    getNextPageParam: nextListCursor,
+    maxPages: LIVE_LIST_MAX_PAGES,
     refetchInterval: (query) =>
-      query.state.data?.deliveries.some(({ state }) => state === "pending")
+      query.state.data?.pages[0]?.data.some(({ state }) => state === "pending")
         ? PENDING_DELIVERY_POLL_MS
         : false,
   });

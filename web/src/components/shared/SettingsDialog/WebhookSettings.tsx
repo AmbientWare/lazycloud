@@ -1,5 +1,11 @@
-import { useState, type ReactNode } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { ChevronRight, Loader2, Plus, Send, Trash2 } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
@@ -32,6 +38,49 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 type Webhook = Schemas["Webhook"];
 type WebhookEvent = Schemas["WebhookEvent"];
+type WebhookDelivery = Schemas["WebhookDelivery"];
+type Pages<T> = InfiniteData<{ data: T[]; next: string }, string>;
+
+/** What each event means to the person choosing it; the receiver sees the code. */
+const EVENTS: Record<WebhookEvent, { group: "Tasks" | "Deploys"; label: string }> = {
+  "task.succeeded": { group: "Tasks", label: "Task succeeded" },
+  "task.failed": { group: "Tasks", label: "Task failed after its retries" },
+  "task.cancelled": { group: "Tasks", label: "Task cancelled" },
+  "workload.deployed": { group: "Deploys", label: "New version live" },
+  "workload.failed": { group: "Deploys", label: "Version stopped starting" },
+};
+
+const EVENT_GROUPS = (["Tasks", "Deploys"] as const).map((group) => ({
+  group,
+  events: webhookEventValues.filter((event) => EVENTS[event].group === group),
+}));
+
+function eventLabel(event: string): string {
+  if (event === "webhook.test") return "Test";
+  return event in EVENTS ? EVENTS[event as WebhookEvent].label : event;
+}
+
+/** Replace or drop one webhook in the cached pages, so a change shows without a reload. */
+function patchWebhooks(
+  queryClient: QueryClient,
+  workspace: string,
+  id: string,
+  next: Webhook | null,
+) {
+  queryClient.setQueryData<Pages<Webhook>>(workspaceQueryKeys.webhooks.list(workspace), (data) =>
+    data
+      ? {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            data: next
+              ? page.data.map((webhook) => (webhook.id === id ? next : webhook))
+              : page.data.filter((webhook) => webhook.id !== id),
+          })),
+        }
+      : data,
+  );
+}
 
 export function WebhookSettings() {
   const { workspace } = useWorkspace();
@@ -53,25 +102,23 @@ export function WebhookSettings() {
         </Button>
       }
     >
-      <p className="shrink-0 border-b border-border/80 px-4 py-2 text-[11px] text-muted-foreground">
-        Deliveries are signed with the workspace secret{" "}
-        <code className="mono">LAZYCLOUD_CALLBACK_SIGNING_KEY</code> in{" "}
-        <code className="mono">X-Webhook-Signature</code> and{" "}
-        <code className="mono">X-Webhook-Timestamp</code>.{" "}
+      <p className="shrink-0 border-b border-border/80 px-4 py-2 text-xs text-muted-foreground">
+        Each request is signed with your workspace&apos;s signing key, so your server can check it
+        came from LazyCloud.{" "}
         <a
-          href={new URL("/platform/webhooks", DOCS_URL).href}
+          href={new URL("/platform/webhooks#verify-a-delivery", DOCS_URL).href}
           target="_blank"
           rel="noreferrer"
           className="text-foreground underline underline-offset-2 hover:text-brand"
         >
-          Verifying deliveries
+          How to verify a request
         </a>
       </p>
-      {creating ? (
-        <CreateWebhookForm workspace={workspace.name} onDone={() => setCreating(false)} />
-      ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {creating ? (
+          <CreateWebhookForm workspace={workspace.name} onDone={() => setCreating(false)} />
+        ) : null}
         {webhooks.isPending ? (
           <div className="space-y-2 p-4">
             <Skeleton className="h-8 w-full" />
@@ -80,11 +127,13 @@ export function WebhookSettings() {
         ) : webhooks.error && !webhooks.isFetchNextPageError ? (
           <PanelError message={webhooks.error.message} />
         ) : list.items.length === 0 ? (
-          <PanelEmpty
-            message="No webhooks yet"
-            detail="Add one to receive task and deployment events."
-            className="min-h-full p-4"
-          />
+          creating ? null : (
+            <PanelEmpty
+              message="No webhooks yet"
+              detail="Add a URL to get a request when a task fails or a new version goes live."
+              className="min-h-full p-4"
+            />
+          )
         ) : (
           <>
             <ul aria-label="Webhooks" className="divide-y divide-border/80">
@@ -147,46 +196,52 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
           className="h-8 bg-background"
         />
       </label>
-      <fieldset className="grid gap-1.5 sm:col-span-2">
-        <legend className="micro-label mb-1.5">Events</legend>
-        <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {webhookEventValues.map((event) => (
-            <label
-              key={event}
-              className="flex cursor-pointer items-center gap-2 text-xs has-[:disabled]:cursor-default"
-            >
-              <Checkbox
-                checked={events.has(event)}
-                disabled={create.isPending}
-                onCheckedChange={(value) => {
-                  const next = new Set(events);
-                  if (value === true) next.add(event);
-                  else next.delete(event);
-                  setEvents(next);
-                }}
-              />
-              <span className="mono">{event}</span>
-            </label>
+      <fieldset className="grid gap-2 sm:col-span-2">
+        <legend className="micro-label mb-1.5">Send a request when</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {EVENT_GROUPS.map(({ group, events: groupEvents }) => (
+            <div key={group} className="grid content-start gap-1.5">
+              <span className="text-xs font-medium text-foreground">{group}</span>
+              {groupEvents.map((event) => (
+                <label
+                  key={event}
+                  className="flex cursor-pointer items-center gap-2 text-xs has-[:disabled]:cursor-default"
+                >
+                  <Checkbox
+                    checked={events.has(event)}
+                    disabled={create.isPending}
+                    onCheckedChange={(value) => {
+                      const next = new Set(events);
+                      if (value === true) next.add(event);
+                      else next.delete(event);
+                      setEvents(next);
+                    }}
+                  />
+                  <span>{EVENTS[event].label}</span>
+                  <span className="mono text-[11px] text-muted-foreground">{event}</span>
+                </label>
+              ))}
+            </div>
           ))}
         </div>
       </fieldset>
       <label className="grid gap-1.5">
-        <span className="micro-label">App</span>
+        <span className="micro-label">Only for app</span>
         <Input
           value={app}
           disabled={create.isPending}
           onChange={(event) => setApp(event.target.value)}
-          placeholder="All apps"
+          placeholder="Every app"
           className="h-8 bg-background"
         />
       </label>
       <label className="grid gap-1.5">
-        <span className="micro-label">Description</span>
+        <span className="micro-label">Note</span>
         <Input
           value={description}
           disabled={create.isPending}
           onChange={(event) => setDescription(event.target.value)}
-          placeholder="Optional"
+          placeholder="Optional, such as on-call alerts"
           className="h-8 bg-background"
         />
       </label>
@@ -221,25 +276,37 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
 function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhook }) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
-  const refreshList = () =>
-    queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.webhooks.list(workspace) });
+  const deliveriesKey = workspaceQueryKeys.webhooks.deliveries(workspace, webhook.id);
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => updateWebhook(workspace, webhook.id, { enabled }),
-    onSuccess: () => void refreshList(),
+    onSuccess: (updated) => patchWebhooks(queryClient, workspace, webhook.id, updated),
   });
   const test = useMutation({
     mutationFn: () => testWebhook(workspace, webhook.id),
-    onSuccess: () => {
+    onSuccess: (delivery) => {
+      // The queued delivery shows at once; its pending state keeps the list polling.
+      queryClient.setQueryData<Pages<WebhookDelivery>>(deliveriesKey, (data) =>
+        data?.pages[0]
+          ? {
+              ...data,
+              pages: [
+                { ...data.pages[0], data: [delivery, ...data.pages[0].data] },
+                ...data.pages.slice(1),
+              ],
+            }
+          : data,
+      );
       setExpanded(true);
-      void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.webhooks.deliveries(workspace, webhook.id),
-      });
+      void queryClient.invalidateQueries({ queryKey: deliveriesKey });
     },
   });
   const remove = useMutation({
     mutationFn: () => deleteWebhook(workspace, webhook.id),
-    onSuccess: () => void refreshList(),
+    onSuccess: () => {
+      patchWebhooks(queryClient, workspace, webhook.id, null);
+      queryClient.removeQueries({ queryKey: deliveriesKey });
+    },
   });
 
   const busy = toggle.isPending || test.isPending || remove.isPending;
@@ -248,13 +315,13 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
 
   return (
     <li>
-      <div className="flex items-start justify-between gap-3 px-4 py-2.5">
+      <div className="flex flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
         <button
           type="button"
           aria-expanded={expanded}
           aria-label={`${expanded ? "Hide" : "Show"} deliveries to ${webhook.url}`}
           onClick={() => setExpanded((value) => !value)}
-          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          className="flex min-w-0 flex-1 items-start gap-2 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           <ChevronRight
             className={cn(
@@ -264,24 +331,34 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
             aria-hidden="true"
           />
           <span className="min-w-0">
-            <span className="mono block truncate text-sm text-foreground">{webhook.url}</span>
-            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-              {webhook.app ?? "All apps"} / {webhook.events.join(", ")}
+            <span
+              className={cn(
+                "mono block truncate text-sm",
+                enabled ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {webhook.url}
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {enabled ? null : <span className="font-medium text-foreground">Paused. </span>}
+              {webhook.app ? `Only ${webhook.app}` : "Every app"}:{" "}
+              {webhook.events.map(eventLabel).join(", ").toLowerCase()}
             </span>
             {webhook.description ? (
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                 {webhook.description}
               </span>
             ) : null}
           </span>
         </button>
-        <div className="flex shrink-0 flex-col items-end gap-1">
+        <div className="flex shrink-0 flex-col items-start gap-1 pl-6 sm:items-end sm:pl-0">
           <div className="flex items-center gap-2">
             <Switch
               checked={enabled}
               disabled={busy}
               onCheckedChange={(next) => toggle.mutate(next)}
-              aria-label={`Enable ${webhook.url}`}
+              aria-label={`Send requests to ${webhook.url}`}
+              title={enabled ? "Pause" : "Resume"}
             />
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => test.mutate()}>
               {test.isPending ? <Loader2 className="animate-spin" /> : <Send />}
@@ -296,7 +373,7 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
             />
           </div>
           {failure ? (
-            <p className="text-right text-xs text-destructive" role="alert">
+            <p className="text-xs text-destructive sm:text-right" role="alert">
               {failure.message}
             </p>
           ) : null}
@@ -308,87 +385,90 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
 }
 
 function WebhookDeliveries({ workspace, webhook }: { workspace: string; webhook: string }) {
-  const deliveries = useQuery(webhookDeliveriesQueryOptions(workspace, webhook));
+  const deliveries = useInfiniteQuery(webhookDeliveriesQueryOptions(workspace, webhook));
+  const list = selectInfiniteList(
+    deliveries.data,
+    deliveries.hasNextPage,
+    (delivery) => delivery.id,
+  );
 
   return (
     <div className="border-t border-border/80 bg-muted/20 pb-2">
       {deliveries.isPending ? (
-        <div className="space-y-2 px-4 py-3">
+        <div className="space-y-2 px-4 py-3" aria-busy="true">
           <Skeleton className="h-6 w-full" />
           <Skeleton className="h-6 w-full" />
         </div>
-      ) : deliveries.error ? (
+      ) : deliveries.error && !deliveries.isFetchNextPageError ? (
         <PanelError message={deliveries.error.message} />
-      ) : deliveries.data.deliveries.length === 0 ? (
-        <PanelEmpty message="No deliveries in the last 7 days" className="p-4" />
+      ) : list.items.length === 0 ? (
+        <PanelEmpty
+          message="Nothing sent in the last 7 days"
+          detail="Send a test to check the URL answers."
+          className="p-4"
+        />
       ) : (
         <div>
           <div
             className="micro-label hidden h-8 grid-cols-12 items-center gap-3 px-4 lg:grid"
             aria-hidden="true"
           >
-            <span className="col-span-2">Time</span>
-            <span className="col-span-2">Event</span>
-            <span className="col-span-2">State</span>
-            <span className="col-span-1">Attempts</span>
-            <span className="col-span-1">Response</span>
-            <span className="col-span-4">Last error</span>
+            <span className="col-span-2">Sent</span>
+            <span className="col-span-3">Event</span>
+            <span className="col-span-2">Result</span>
+            <span className="col-span-1">Tries</span>
+            <span className="col-span-1">Status</span>
+            <span className="col-span-3">Error</span>
           </div>
           <ul aria-label="Deliveries">
-            {deliveries.data.deliveries.map((delivery) => (
+            {list.items.map((delivery) => (
               <DeliveryRow key={delivery.id} delivery={delivery} />
             ))}
           </ul>
+          <InfiniteScrollBoundary
+            nextCursor={list.nextCursor}
+            loading={deliveries.isFetchingNextPage}
+            error={deliveries.isFetchNextPageError}
+            onLoadMore={() => void deliveries.fetchNextPage()}
+            resourceLabel="deliveries"
+          />
         </div>
       )}
     </div>
   );
 }
 
-function DeliveryRow({ delivery }: { delivery: Schemas["WebhookDelivery"] }) {
-  return (
-    <li className="grid grid-cols-2 gap-x-6 gap-y-2 px-4 py-2 text-xs lg:grid-cols-12 lg:items-center lg:gap-3 lg:py-1.5">
-      <DeliveryCell label="Time" className="text-muted-foreground lg:col-span-2">
-        <LiveRelativeTime value={delivery.created_at} />
-      </DeliveryCell>
-      <DeliveryCell label="Event" className="lg:col-span-2">
-        <span className="mono block truncate">{delivery.event}</span>
-      </DeliveryCell>
-      <DeliveryCell label="State" className="lg:col-span-2">
-        <StatusChip status={delivery.state} live={delivery.state === "pending"} />
-      </DeliveryCell>
-      <DeliveryCell label="Attempts" className="lg:col-span-1">
-        <span className="mono">{delivery.attempts}</span>
-      </DeliveryCell>
-      <DeliveryCell label="Response" className="lg:col-span-1">
-        <span className="mono">{delivery.response_status ?? "None"}</span>
-      </DeliveryCell>
-      <DeliveryCell
-        label="Last error"
-        className={cn(
-          "col-span-2 break-words lg:col-span-4",
-          delivery.last_error ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        {delivery.last_error ?? "None"}
-      </DeliveryCell>
-    </li>
+function DeliveryRow({ delivery }: { delivery: WebhookDelivery }) {
+  const status = delivery.response_status ? (
+    <span className="mono">{delivery.response_status}</span>
+  ) : (
+    <span className="text-muted-foreground">No answer</span>
   );
-}
-
-function DeliveryCell({
-  label,
-  className,
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: ReactNode;
-}) {
   return (
-    <div className={cn("min-w-0", className)}>
-      <div className="micro-label mb-1 lg:hidden">{label}</div>
-      {children}
-    </div>
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 text-xs lg:grid-cols-12 lg:gap-3 lg:py-1.5">
+      <span className="truncate lg:col-span-3 lg:order-2" title={delivery.event}>
+        {eventLabel(delivery.event)}
+      </span>
+      <span className="text-right text-muted-foreground lg:order-1 lg:col-span-2 lg:text-left">
+        <LiveRelativeTime value={delivery.created_at} />
+      </span>
+      <span className="flex items-center gap-3 lg:order-3 lg:col-span-4 lg:grid lg:grid-cols-4 lg:gap-3">
+        <span className="lg:col-span-2">
+          <StatusChip status={delivery.state} live={delivery.state === "pending"} />
+        </span>
+        <span className="mono lg:col-span-1">
+          {delivery.attempts}
+          <span className="font-sans text-muted-foreground lg:hidden">
+            {delivery.attempts === 1 ? " try" : " tries"}
+          </span>
+        </span>
+        <span className="lg:col-span-1">{status}</span>
+      </span>
+      {delivery.last_error ? (
+        <span className="col-span-2 break-words text-destructive lg:order-4 lg:col-span-3">
+          {delivery.last_error}
+        </span>
+      ) : null}
+    </li>
   );
 }

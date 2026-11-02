@@ -51,8 +51,8 @@ it("sends the chosen events for every app and shows the server's refusal", async
   fireEvent.change(screen.getByPlaceholderText("https://example.com/hooks/lazycloud"), {
     target: { value: "https://hooks.acme.dev/lazycloud" },
   });
-  fireEvent.click(screen.getByRole("checkbox", { name: "task.failed" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "workload.failed" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Task failed after its retries/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Version stopped starting/ }));
   fireEvent.click(
     within(screen.getByRole("form", { name: "New webhook" })).getByRole("button", {
       name: "Add webhook",
