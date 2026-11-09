@@ -10,14 +10,18 @@ import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { countLabel, formatKind } from "@/lib/format";
-import { appSummariesQueryOptions, type AppSummary } from "@/lib/queries/apps";
+import {
+  appSummariesQueryOptions,
+  deleteAppMutationOptions,
+  type AppSummary,
+} from "@/lib/queries/apps";
 import { deployedAt } from "@/lib/queries/deployments";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
-import { AppCardActionsTrigger } from "./-components/AppCardActionsTrigger";
 import { AppActivityChart } from "./-components/AppActivityChart";
 import { appRunActivity } from "./-components/app-activity-buckets";
+import { DeleteMenu } from "./-components/DeleteMenu";
 import { QuickstartEmptyState } from "./-components/QuickstartEmptyState";
 
 export const Route = createFileRoute("/w/$workspace/apps/")({
@@ -183,7 +187,18 @@ function AppCard({ item, workspace }: { item: AppSummary; workspace: string }) {
         </div>
       </Link>
       <div className="absolute right-3 top-3 z-10">
-        <AppCardActionsTrigger app={app} workspace={workspace} />
+        {app.state !== "deleted" ? (
+          <DeleteMenu
+            workspace={workspace}
+            name={app.name}
+            noun="app"
+            description="This permanently deletes the app and stops its deployments and containers."
+            cancelLabel="Keep app"
+            remove={deleteAppMutationOptions(workspace, app.name).mutationFn}
+            triggerClassName="size-7 bg-card/85"
+            menuClassName="w-44"
+          />
+        ) : null}
       </div>
     </article>
   );

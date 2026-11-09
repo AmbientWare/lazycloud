@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -49,20 +49,17 @@ func (e *storageRefusal) Unwrap() error { return e.err }
 // start is tried again.
 func refusal(what string, err error) error {
 	var (
-		invalid  *storage.InvalidError
-		conflict *storage.ConflictError
-		refused  *storage.StoreRefusedError
-		cause    string
+		refusedReq *apitypes.Error
+		refused    *storage.StoreRefusedError
+		cause      string
 	)
 	switch {
 	case errors.Is(err, storage.ErrBucketsUnconfigured):
 		cause = storage.ErrBucketsUnconfigured.Error()
 	case errors.Is(err, storage.ErrNoRegion):
 		cause = storage.ErrNoRegion.Error()
-	case errors.As(err, &invalid):
-		cause = invalid.Reason
-	case errors.As(err, &conflict):
-		cause = conflict.Reason
+	case errors.As(err, &refusedReq) && (refusedReq.Code == apitypes.InvalidRequest || refusedReq.Code == apitypes.Conflict):
+		cause = refusedReq.Message
 	case errors.As(err, &refused):
 		cause = "the object store refused it (" + refused.Code + ")"
 	default:
@@ -109,20 +106,13 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand,
 				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
+				Bucket: loc.Bucket, Prefix: database.Value(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
 				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[b.AccessKeySecret], SecretAccessKey: secrets[b.SecretKeySecret],
 			}}
 		}
 		out[n] = mount
 	}
 	return out, nil
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // usesWorkspaceBucket reports whether a start mounts platform volumes or
@@ -249,23 +239,18 @@ func parseDiskCall(containerID, diskID string) (uuid.UUID, uuid.UUID, error) {
 // diskError maps disk refusals to status codes. Plan and payment refusals
 // keep their message, which the host reports as the container's start failure.
 func (s *Server) diskError(ctx context.Context, err error) error {
-	var (
-		held    *storage.ConflictError
-		invalid *storage.InvalidError
-		limit   *billing.LimitError
-		unpaid  *billing.PaymentRequiredError
-	)
-	switch {
-	case errors.Is(err, storage.ErrStaleLease):
+	if errors.Is(err, storage.ErrStaleLease) {
 		return status.Error(codes.FailedPrecondition, "the container does not hold the disk")
-	case errors.As(err, &held):
-		return status.Error(codes.Aborted, held.Error())
-	case errors.As(err, &invalid):
-		return status.Error(codes.InvalidArgument, invalid.Error())
-	case errors.As(err, &limit):
-		return status.Error(codes.FailedPrecondition, limit.Error())
-	case errors.As(err, &unpaid):
-		return status.Error(codes.FailedPrecondition, unpaid.Error())
+	}
+	var refused *apitypes.Error
+	switch {
+	case !errors.As(err, &refused):
+	case refused.Code == apitypes.Conflict:
+		return status.Error(codes.Aborted, refused.Message)
+	case refused.Code == apitypes.InvalidRequest:
+		return status.Error(codes.InvalidArgument, refused.Message)
+	case refused.Code == apitypes.LimitReached, refused.Code == apitypes.PaymentRequired:
+		return status.Error(codes.FailedPrecondition, refused.Message)
 	}
 	return s.grpcError(ctx, err)
 }

@@ -46,7 +46,7 @@ func invokeWait(wait *int) time.Duration {
 }
 
 // invoke runs the function's release, or its active one without a release.
-func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, function string, release *uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
+func (s *server) invoke(ctx context.Context, ws identity.Workspace, app, function string, release *uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
 	var raw []byte
 	if body != nil {
 		raw = *body
@@ -60,11 +60,8 @@ func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, functio
 }
 
 // InvokeFunction runs the function's active release with JSON arguments.
-func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestObject) (InvokeFunctionResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestObject) (InvokeFunctionResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	out, err := s.invoke(ctx, ws, req.App, req.Name, nil, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err
@@ -72,45 +69,13 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 	return InvokeFunction200JSONResponse(out), nil
 }
 
-// InvokeFunctionVersion runs one version of the function.
-func (s *Server) InvokeFunctionVersion(ctx context.Context, req InvokeFunctionVersionRequestObject) (InvokeFunctionVersionResponseObject, error) {
-	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, apitypes.WorkloadKindFunction, req.Name)
-	if err != nil {
-		return nil, err
-	}
-	release, err := s.owners.Control.Release(ctx, ws.ID, id, &req.Version)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.invoke(ctx, ws, req.App, req.Name, &release.Id, req.Body, req.Params.WaitSeconds)
-	if err != nil {
-		return nil, err
-	}
-	return InvokeFunctionVersion200JSONResponse(out), nil
-}
-
-func (s *Server) user(ctx context.Context) (identity.UserID, error) {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return identity.UserID{}, identity.ErrUnauthenticated
-	}
-	return p.User, nil
-}
-
 // ListDomains lists the caller's custom domains.
-func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) (ListDomainsResponseObject, error) {
-	user, err := s.user(ctx)
+func (s *server) ListDomains(ctx context.Context, req ListDomainsRequestObject) (ListDomainsResponseObject, error) {
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	after, limit := "", 100
-	if req.Params.After != nil {
-		after = *req.Params.After
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	domains, next, err := s.owners.Edge.ListDomains(ctx, user, after, limit)
+	domains, next, err := s.owners.Edge.ListDomains(ctx, p.User, valueOr(req.Params.After, ""), valueOr(req.Params.Limit, 100))
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +87,12 @@ func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) 
 }
 
 // RegisterDomain registers a custom domain for the caller.
-func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestObject) (RegisterDomainResponseObject, error) {
-	user, err := s.user(ctx)
+func (s *server) RegisterDomain(ctx context.Context, req RegisterDomainRequestObject) (RegisterDomainResponseObject, error) {
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	domain, err := s.owners.Edge.RegisterDomain(ctx, user, req.Body.Hostname)
+	domain, err := s.owners.Edge.RegisterDomain(ctx, p.User, req.Body.Hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +100,12 @@ func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestOb
 }
 
 // GetDomain reads one custom domain.
-func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (GetDomainResponseObject, error) {
-	user, err := s.user(ctx)
+func (s *server) GetDomain(ctx context.Context, req GetDomainRequestObject) (GetDomainResponseObject, error) {
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	domain, err := s.owners.Edge.GetDomain(ctx, user, req.Hostname)
+	domain, err := s.owners.Edge.GetDomain(ctx, p.User, req.Hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -148,46 +113,13 @@ func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (Get
 }
 
 // RemoveDomain retires a custom domain.
-func (s *Server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject) (RemoveDomainResponseObject, error) {
-	user, err := s.user(ctx)
+func (s *server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject) (RemoveDomainResponseObject, error) {
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.owners.Edge.RemoveDomain(ctx, user, req.Hostname); err != nil {
+	if err := s.owners.Edge.RemoveDomain(ctx, p.User, req.Hostname); err != nil {
 		return nil, err
 	}
 	return RemoveDomain204Response{}, nil
-}
-
-// endpointError maps the edge's errors; ok is false for errors it does not
-// know.
-func endpointError(w http.ResponseWriter, err error) bool {
-	var (
-		invalid  *edge.InvalidDomainError
-		conflict *edge.DomainConflictError
-		provider *edge.ProviderError
-	)
-	switch {
-	case errors.Is(err, edge.ErrWorkloadNotFound), errors.Is(err, edge.ErrDomainNotFound), errors.Is(err, edge.ErrRequestNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, err.Error())
-	case errors.As(err, &invalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
-	case errors.As(err, &conflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
-	case errors.Is(err, edge.ErrDomainsUnavailable):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
-	case errors.As(err, &provider) && provider.Rejected:
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, provider.Error())
-	case errors.As(err, &provider):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, provider.Error())
-	case errors.Is(err, errPreviewNotRunning):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
-	case errors.Is(err, edge.ErrSyncRefused):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.Is(err, edge.ErrInvalidArguments):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	default:
-		return false
-	}
-	return true
 }

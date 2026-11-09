@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import IO, Any
 
@@ -19,9 +18,8 @@ import typer
 from pydantic import JsonValue
 from rich.console import RenderableType
 
-from lazycloud._shared.events import Event
 from lazycloud._shared.serialization import to_json_value
-from lazycloud._terminal.cards import empty_state, result_card
+from lazycloud._terminal.cards import result_card
 from lazycloud._terminal.streams import console, error_console
 from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
@@ -42,13 +40,6 @@ def parse_json_argument(raw: str) -> object:
         return parse_json_value(raw)
     except ValueError:
         return raw
-
-
-def command_from_args(args: Sequence[str]) -> list[str]:
-    if not args:
-        msg = "command is required"
-        raise typer.BadParameter(msg)
-    return list(args)
 
 
 def json_output_enabled(ctx: typer.Context) -> bool:
@@ -103,40 +94,11 @@ def table(
     )
 
 
-def event_table(events: Sequence[Event]) -> RenderableType:
-    rows = [
-        [
-            item.created_at.isoformat(),
-            item.level.value,
-            item.action,
-            item.resource_type,
-            item.resource_id,
-            item.message,
-        ]
-        for item in events
-    ]
-    return table(
-        "events",
-        ["time", "level", "action", "type", "resource", "message"],
-        rows,
-    )
-
-
-def print_events_table(events: Sequence[Event]) -> None:
-    if not events:
-        console.print(empty_state("No events found."))
-        return
-    console.print(event_table(events))
-
-
 __all__ = [
-    "command_from_args",
     "emit",
-    "event_table",
     "json_default",
     "json_output_enabled",
     "parse_json_argument",
-    "print_events_table",
     "print_json_line",
     "print_payload",
     "table",

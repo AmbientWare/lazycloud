@@ -10,9 +10,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -35,12 +36,6 @@ type PlanResult struct {
 	Skipped bool
 	// Created counts new pending containers; placement should run.
 	Created int
-	// Stopped counts pending containers stopped before placement.
-	Stopped int
-	// Drained counts containers moved to draining.
-	Drained int
-	// Cancelled counts queued tasks of stopped workloads.
-	Cancelled int
 	// RetryAt is the earliest time a release held back after failed starts
 	// may start a container; zero when none is held.
 	RetryAt time.Time
@@ -48,7 +43,7 @@ type PlanResult struct {
 
 // releasePlan is what one release's decision changed.
 type releasePlan struct {
-	release   PlanningReleasesRow
+	release   uuid.UUID
 	created   []uuid.UUID
 	stopped   []uuid.UUID
 	drained   []drainedContainer
@@ -63,22 +58,19 @@ type drainedContainer struct {
 
 func (r *PlanResult) add(p releasePlan) {
 	r.Created += len(p.created)
-	r.Stopped += len(p.stopped)
-	r.Drained += len(p.drained)
-	r.Cancelled += p.cancelled
 	if !p.retryAt.IsZero() && (r.RetryAt.IsZero() || p.retryAt.Before(r.RetryAt)) {
 		r.RetryAt = p.retryAt
 	}
 }
 
 // holdStart reports whether the release must wait before another container
-// because its last `failures` starts failed, the newest container stopping at
-// stopped, and records when it may start one.
-func (p *releasePlan) holdStart(failures int32, stopped *time.Time) bool {
-	if failures <= 0 || stopped == nil {
+// because its last starts failed, the newest container stopping at
+// shape.LastStoppedAt, and records when it may start one.
+func (p *releasePlan) holdStart(shape ReleaseShape) bool {
+	if shape.StartFailures <= 0 || shape.LastStoppedAt == nil {
 		return false
 	}
-	at := stopped.Add(startRetryDelay(failures))
+	at := shape.LastStoppedAt.Add(startRetryDelay(shape.StartFailures))
 	if !time.Now().Before(at) {
 		return false
 	}
@@ -95,107 +87,95 @@ func startRetryDelay(failures int32) time.Duration {
 	return min(startRetryBase<<(failures-1), startRetryMax)
 }
 
-// Plan decides how many containers each release with demand or live
-// containers needs, creates pending containers for placement and drains the
-// ones no longer needed. Releases are decided in batches, each in one
-// transaction holding the planning lock; a release that fails is logged and
-// the rest proceed.
-func (e *Execution) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
+// create inserts the release's pending containers with slots each.
+func (s ReleaseShape) create(workspace uuid.UUID, slots int32) CreatePendingContainersParams {
+	return CreatePendingContainersParams{
+		WorkspaceID: workspace, ReleaseID: s.ID, Slots: slots, CpuMillis: s.CpuMillis,
+		MemoryBytes: s.MemoryBytes + mountReserve(s.Mounters), GpuCount: s.GpuCount,
+		RateClass: string(billing.RateClassFor(s.Pinned, s.Preemptible)), AllowList: []string{},
+	}
+}
+
+// planReleases decides each release list returns after a cursor, in
+// batches of planningBatch. Each batch is one transaction holding the
+// planning lock, so counts hold across scheduler replicas, and each release
+// is decided in a savepoint: a release that fails is logged and rolls back
+// alone while the rest proceed.
+func planReleases[R any](ctx context.Context, e *Execution, logger *slog.Logger,
+	list func(context.Context, *Queries, uuid.UUID) ([]R, error), shape func(R) ReleaseShape,
+	decide func(context.Context, pgx.Tx, R, *releasePlan) error,
+) (PlanResult, error) {
 	var result PlanResult
 	after := uuid.Nil
 	for {
-		batch, err := e.planBatch(ctx, logger, after)
+		var plans []releasePlan
+		var rows []R
+		skipped := false
+		err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+			plans, skipped = nil, false
+			q := e.queries.WithTx(tx)
+			locked, err := q.TryPlanningLock(ctx)
+			if err != nil {
+				return fmt.Errorf("try planning lock: %w", err)
+			}
+			if !locked {
+				skipped = true
+				return nil
+			}
+			if rows, err = list(ctx, q, after); err != nil {
+				return fmt.Errorf("list releases: %w", err)
+			}
+			for _, row := range rows {
+				plan := releasePlan{release: shape(row).ID}
+				err := pgx.BeginFunc(ctx, tx, func(savepoint pgx.Tx) error { return decide(ctx, savepoint, row, &plan) })
+				if err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					logger.ErrorContext(ctx, "plan release", "release_id", plan.release, "error", err)
+					continue
+				}
+				plans = append(plans, plan)
+			}
+			return nil
+		})
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("planning batch: %w", err)
 		}
-		if batch.skipped {
+		if skipped {
 			result.Skipped = true
 			return result, nil
 		}
-		for _, plan := range batch.plans {
+		for _, plan := range plans {
 			result.add(plan)
 			logPlan(ctx, logger, plan)
 		}
-		if batch.releases < planningBatch {
+		if len(rows) < planningBatch {
 			return result, nil
 		}
-		after = batch.last
+		after = shape(rows[len(rows)-1]).ID
 	}
 }
 
-type planBatchResult struct {
-	skipped  bool
-	plans    []releasePlan
-	releases int
-	last     uuid.UUID
+// Plan decides how many containers each function release with demand or
+// live containers needs, creates pending containers for placement and
+// drains the ones no longer needed.
+func (e *Execution) Plan(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
+	return planReleases(ctx, e, logger,
+		func(ctx context.Context, q *Queries, after uuid.UUID) ([]PlanningReleasesRow, error) {
+			return q.PlanningReleases(ctx, PlanningReleasesParams{AfterID: after, BatchSize: planningBatch})
+		},
+		func(r PlanningReleasesRow) ReleaseShape { return r.ReleaseShape }, e.planRelease)
 }
 
-func (e *Execution) planBatch(ctx context.Context, logger *slog.Logger, after uuid.UUID) (planBatchResult, error) {
-	var out planBatchResult
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		out = planBatchResult{}
-		q := e.queries.WithTx(tx)
-		locked, err := q.TryPlanningLock(ctx)
-		if err != nil {
-			return fmt.Errorf("try planning lock: %w", err)
-		}
-		if !locked {
-			out.skipped = true
-			return nil
-		}
-		releases, err := q.PlanningReleases(ctx, PlanningReleasesParams{AfterID: after, BatchSize: planningBatch})
-		if err != nil {
-			return fmt.Errorf("list planning releases: %w", err)
-		}
-		out.releases = len(releases)
-		for _, release := range releases {
-			out.last = release.ReleaseID
-			plan, err := e.planReleaseIsolated(ctx, tx, release)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				logger.ErrorContext(ctx, "plan release", "release_id", release.ReleaseID, "error", err)
-				continue
-			}
-			out.plans = append(out.plans, plan)
-		}
-		return nil
-	})
-	if err != nil {
-		return planBatchResult{}, fmt.Errorf("planning batch: %w", err)
-	}
-	return out, nil
-}
-
-// planReleaseIsolated runs one release's decision in a savepoint, so its
-// failure rolls back only its own changes.
-func (e *Execution) planReleaseIsolated(ctx context.Context, tx pgx.Tx, release PlanningReleasesRow) (releasePlan, error) {
-	savepoint, err := tx.Begin(ctx)
-	if err != nil {
-		return releasePlan{}, fmt.Errorf("begin savepoint: %w", err)
-	}
-	plan := releasePlan{release: release}
+func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, release PlanningReleasesRow, plan *releasePlan) error {
 	if release.Stopping {
-		err = e.stopRelease(ctx, savepoint, &plan)
-	} else {
-		err = e.planRelease(ctx, savepoint, &plan)
+		return e.stopRelease(ctx, tx, release.Retiring, plan)
 	}
-	if err != nil {
-		return releasePlan{}, errors.Join(err, savepoint.Rollback(ctx))
-	}
-	if err := savepoint.Commit(ctx); err != nil {
-		return releasePlan{}, fmt.Errorf("release savepoint: %w", err)
-	}
-	return plan, nil
-}
-
-func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePlan) error {
-	release := plan.release
-	if release.CpuMillis <= 0 || release.MemoryBytes <= 0 {
+	shape := release.ReleaseShape
+	if shape.CpuMillis <= 0 || shape.MemoryBytes <= 0 {
 		return errors.New("release spec has no resources")
 	}
-	q := e.queries.WithTx(tx)
 	leave, err := e.leaving(ctx, tx, plan, release.Leaving)
 	if err != nil {
 		return err
@@ -203,7 +183,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	minimum := 0
 	// A release that cannot start keeps no warm minimum; admitting a task
 	// retries it or fails the task at once.
-	if release.Active && !release.LoadFailed && release.StartFailures < startFailureLimit {
+	if release.Active && !release.LoadFailed && shape.StartFailures < startFailureLimit {
 		minimum = int(release.MinContainers)
 	}
 	desired := desiredContainers(
@@ -214,37 +194,49 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 
 	pairs, grow := leave.starts(active, desired, int(release.MaxContainers)-live)
 	if pairs+grow > 0 {
-		if plan.holdStart(release.StartFailures, release.LastStoppedAt) {
+		return e.start(ctx, tx, plan, shape, shape.create(release.WorkspaceID, release.Slots),
+			leave.unpaired[:pairs], pairs+grow, live == 0 && release.QueuedAvailable+release.Running == 0)
+	}
+	return e.trim(ctx, tx, plan, active-desired, release.Pending, func(count int) error {
+		if release.Ready == 0 {
 			return nil
 		}
-		return e.start(ctx, tx, plan, leave.unpaired[:pairs], pairs+grow, live == 0 && release.QueuedAvailable+release.Running == 0,
-			billing.Request{
-				Workspace: release.WorkspaceID, GPUs: int(release.GpuCount),
-				GPUModels: billingModels(release.GpuModels), Pinned: release.Pinned, Machine: release.Machine,
-			},
-			CreatePendingContainersParams{
-				WorkspaceID: release.WorkspaceID, ReleaseID: release.ReleaseID, Slots: release.Slots,
-				CpuMillis: cpu.Millis(release.CpuMillis), MemoryBytes: release.MemoryBytes + mountReserve(release.Mounters),
-				GpuCount: release.GpuCount, RateClass: string(billing.RateClassFor(release.Pinned, release.Preemptible)),
-			})
-	}
-	if active > desired {
-		excess := active - desired
-		if pending := min(excess, int(release.Pending)); pending > 0 {
-			stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
-				ReleaseID: release.ReleaseID, Count: int32(pending), //nolint:gosec // Bounded by live containers.
-			})
-			if err != nil {
-				return fmt.Errorf("stop pending containers: %w", err)
-			}
-			plan.stopped = stopped
-			excess -= len(stopped)
+		return e.drainIdle(ctx, tx, plan, release.KeepWarmSeconds, count)
+	})
+}
+
+// trim stops up to excess of the release's pending containers, newest
+// first because the oldest are closest to placement, and has drain take the
+// rest of the excess.
+func (e *Execution) trim(ctx context.Context, tx pgx.Tx, plan *releasePlan, excess int, pending int32, drain func(count int) error) error {
+	if n := min(excess, int(pending)); n > 0 {
+		stopped, err := e.queries.WithTx(tx).StopPendingContainers(ctx, StopPendingContainersParams{
+			ReleaseID: plan.release, Count: int32(n), //nolint:gosec // Bounded by live containers.
+		})
+		if err != nil {
+			return fmt.Errorf("stop pending containers: %w", err)
 		}
-		if excess > 0 && release.Ready > 0 {
-			return e.drainIdle(ctx, tx, plan, excess)
-		}
+		plan.stopped = stopped
+		excess -= len(stopped)
 	}
-	return nil
+	if excess <= 0 {
+		return nil
+	}
+	return drain(excess)
+}
+
+// drainExcess drains count of the release's starting and ready containers,
+// idle ones first and then the newest.
+func (e *Execution) drainExcess(ctx context.Context, tx pgx.Tx, plan *releasePlan) func(count int) error {
+	return func(count int) error {
+		rows, err := e.queries.WithTx(tx).DrainExcessContainers(ctx, DrainExcessContainersParams{
+			ReleaseID: plan.release, Count: int32(count), //nolint:gosec // Bounded by live containers.
+		})
+		if err != nil {
+			return fmt.Errorf("drain containers: %w", err)
+		}
+		return plan.record(ctx, tx, len(rows), func(n int) drainedContainer { return drainedContainer{rows[n].ID, rows[n].HostID} })
+	}
 }
 
 // leaving is a release's containers that leave their host
@@ -265,7 +257,7 @@ func (e *Execution) leaving(ctx context.Context, tx pgx.Tx, plan *releasePlan, m
 	if !may {
 		return l, nil
 	}
-	rows, err := e.queries.WithTx(tx).LeavingContainers(ctx, plan.release.ReleaseID)
+	rows, err := e.queries.WithTx(tx).LeavingContainers(ctx, plan.release)
 	if err != nil {
 		return l, fmt.Errorf("read leaving containers: %w", err)
 	}
@@ -304,15 +296,23 @@ func (l leaving) starts(active, desired, room int) (pairs, grow int) {
 }
 
 // start admits and creates count containers of the release, the first of
-// them replacing replaces. The leaving containers the account admits no
-// replacement for drain, so their replacements start once they stop.
-func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, replaces []uuid.UUID, count int, rollout bool,
-	admit billing.Request, create CreatePendingContainersParams,
+// them replacing replaces, unless failed starts hold the release back. The
+// leaving containers the account admits no replacement for drain, so their
+// replacements start once they stop. rollout says only a warm minimum asks
+// for the containers.
+func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, shape ReleaseShape,
+	create CreatePendingContainersParams, replaces []uuid.UUID, count int, rollout bool,
 ) error {
-	admit.Start = count
-	grant, err := billing.Admit(ctx, tx, admit)
+	if plan.holdStart(shape) {
+		return nil
+	}
+	grant, err := billing.Admit(ctx, tx, billing.Request{
+		Workspace: create.WorkspaceID, Start: count, GPUs: int(shape.GpuCount),
+		GPUModels: billingModels(shape.GpuModels), Pinned: shape.Pinned, Machine: shape.Machine,
+	})
 	if refusedToWait(err) {
-		// Its work waits; submission refuses new work.
+		// Its tasks wait and submission refuses new ones; connections wait
+		// and time out.
 		return nil
 	}
 	if err != nil {
@@ -328,12 +328,12 @@ func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, rep
 		return nil
 	}
 	q := e.queries.WithTx(tx)
-	ctx, span, err := e.scaleUp(ctx, q, create.ReleaseID, grant.Start, rollout)
+	ctx, span, err := e.scaleUp(ctx, q, shape.ID, grant.Start, rollout)
 	if err != nil {
 		return err
 	}
 	defer span.End()
-	create.Count, create.Replaces, create.Traceparent = int32(grant.Start), replaces, traceparent(ctx) //nolint:gosec // Bounded by max_containers.
+	create.Count, create.Replaces, create.Traceparent = int32(grant.Start), replaces, telemetry.StoredTraceParent(ctx) //nolint:gosec // Bounded by max_containers.
 	created, err := q.CreatePendingContainers(ctx, create)
 	if err != nil {
 		return fmt.Errorf("create containers: %w", err)
@@ -368,9 +368,8 @@ func (p *releasePlan) record(ctx context.Context, tx pgx.Tx, n int, row func(int
 // than fails on: the account cannot pay, or the fleet offers no GPU model
 // the work accepts.
 func refusedToWait(err error) bool {
-	var payment *billing.PaymentRequiredError
-	var gpu *billing.GPUUnavailableError
-	return errors.As(err, &payment) || errors.As(err, &gpu)
+	code := apitypes.CodeOf(err)
+	return code == apitypes.PaymentRequired || code == apitypes.Unsupported
 }
 
 // desiredContainers is clamp(ceil(demand / tasksPerContainer), minimum,
@@ -385,11 +384,11 @@ func desiredContainers(demand, tasksPerContainer, minimum, maximum int) int {
 // draining are separate statements: the drain's snapshot is taken after the
 // locks, so it sees any attempt a claim committed before them, and SKIP
 // LOCKED passes over containers a claim holds FOR SHARE.
-func (e *Execution) drainIdle(ctx context.Context, tx pgx.Tx, plan *releasePlan, count int) error {
+func (e *Execution) drainIdle(ctx context.Context, tx pgx.Tx, plan *releasePlan, keepWarmSeconds int32, count int) error {
 	q := e.queries.WithTx(tx)
-	keepWarm := float64(plan.release.KeepWarmSeconds)
+	keepWarm := float64(keepWarmSeconds)
 	locked, err := q.LockIdleContainers(ctx, LockIdleContainersParams{
-		ReleaseID: plan.release.ReleaseID, KeepWarmSeconds: keepWarm, Count: int32(count), //nolint:gosec // Bounded by live containers.
+		ReleaseID: plan.release, KeepWarmSeconds: keepWarm, Count: int32(count), //nolint:gosec // Bounded by live containers.
 	})
 	if err != nil {
 		return fmt.Errorf("lock idle containers: %w", err)
@@ -406,12 +405,12 @@ func (e *Execution) drainIdle(ctx context.Context, tx pgx.Tx, plan *releasePlan,
 
 // stopRelease winds down a release whose workload is stopped or whose app is
 // paused: pending containers stop, the rest drain, and queued tasks are
-// cancelled. Running tasks finish on their draining containers, unless the
-// app or workload is deleted, which cancels them too. Tasks waiting on a
-// cancelled task fail.
-func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePlan) error {
+// cancelled. Running tasks finish on their draining containers, unless
+// retiring says the app or workload is deleted, which cancels them too.
+// Tasks waiting on a cancelled task fail.
+func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, retiring bool, plan *releasePlan) error {
 	q := e.queries.WithTx(tx)
-	release := plan.release.ReleaseID
+	release := plan.release
 	stopped, err := q.StopAllPendingContainers(ctx, release)
 	if err != nil {
 		return fmt.Errorf("stop pending containers: %w", err)
@@ -421,10 +420,7 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	if err != nil {
 		return fmt.Errorf("drain containers: %w", err)
 	}
-	for _, row := range drained {
-		plan.drained = append(plan.drained, drainedContainer{id: row.ID, host: row.HostID})
-	}
-	if err := notifyHosts(ctx, tx, plan.drained); err != nil {
+	if err := plan.record(ctx, tx, len(drained), func(n int) drainedContainer { return drainedContainer{drained[n].ID, drained[n].HostID} }); err != nil {
 		return err
 	}
 	queued, err := e.lockQueuedWithDependents(ctx, q, release, cancelBatch)
@@ -436,34 +432,47 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		return fmt.Errorf("cancel queued tasks: %w", err)
 	}
 	plan.cancelled = len(cancelled)
-	if err := recordCallbacks(ctx, q, CallbackCancelled, cancelled, nil); err != nil {
+	if err := e.finishTasks(ctx, tx, CallbackCancelled, cancelled, true); err != nil {
 		return err
 	}
-	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
-		return err
-	}
-	if err := notifyFinished(ctx, tx, cancelled); err != nil {
-		return err
-	}
-	if err := e.resolveDependents(ctx, tx, cancelled, upstreamUnsuccessful); err != nil {
-		return err
-	}
-	if !plan.release.Retiring {
+	if !retiring {
 		return nil
 	}
 	// A deleted app or workload also cancels its running tasks, which kills
 	// their slots so the draining containers stop.
-	running, err := q.RunningTasksOfRelease(ctx, RunningTasksOfReleaseParams{ReleaseID: release, BatchSize: cancelBatch})
+	running, err := q.CancelRunningTasksOfRelease(ctx, CancelRunningTasksOfReleaseParams{ReleaseID: release, BatchSize: cancelBatch})
 	if err != nil {
-		return fmt.Errorf("list running tasks: %w", err)
+		return fmt.Errorf("cancel running tasks: %w", err)
 	}
-	for _, task := range running {
-		if _, err := e.cancelTask(ctx, tx, nil, TaskID(task)); err != nil {
-			return fmt.Errorf("cancel running task %s: %w", task, err)
-		}
+	if len(running) == 0 {
+		return nil
 	}
 	plan.cancelled += len(running)
-	return nil
+	ids := make([]uuid.UUID, len(running))
+	outcomes := make([]AttemptOutcome, 0, len(running))
+	hosts := make([]string, 0, len(running))
+	for n, task := range running {
+		ids[n] = task.ID
+		if task.CurrentAttemptID != nil {
+			outcomes = append(outcomes, AttemptOutcome{Attempt: AttemptID(*task.CurrentAttemptID), State: AttemptCancelled})
+		}
+		if task.HostID != nil {
+			hosts = append(hosts, task.HostID.String())
+		}
+	}
+	// The tasks are already cancelled, so this only records the attempts'
+	// outcomes.
+	if _, err := e.finishAttempts(ctx, tx, nil, nil, outcomes); err != nil {
+		return err
+	}
+	if err := database.NotifyAll(ctx, tx, database.ChannelHost, hosts); err != nil {
+		return err
+	}
+	// Dependents lock after the attempts, keeping task then attempt order.
+	if err := e.finishTasks(ctx, tx, CallbackCancelled, ids, true); err != nil {
+		return err
+	}
+	return database.Notify(ctx, tx, database.ChannelExecution, release.String())
 }
 
 func notifyHosts(ctx context.Context, tx pgx.Tx, drained []drainedContainer) error {
@@ -477,7 +486,7 @@ func notifyHosts(ctx context.Context, tx pgx.Tx, drained []drainedContainer) err
 }
 
 func logPlan(ctx context.Context, logger *slog.Logger, plan releasePlan) {
-	release := plan.release.ReleaseID
+	release := plan.release
 	for _, id := range plan.created {
 		logger.InfoContext(ctx, "container requested", "release_id", release, "container_id", id)
 	}

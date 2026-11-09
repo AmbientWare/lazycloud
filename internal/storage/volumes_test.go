@@ -74,9 +74,8 @@ func TestVolumeFiles(t *testing.T) {
 	if _, err := s.StatVolumeFile(ctx, f.ws, "data", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stat missing: %v", err)
 	}
-	var bad *InvalidError
 	for _, p := range []string{"../x", "/etc/passwd", "dir/../../x"} {
-		if _, err := s.StatVolumeFile(ctx, f.ws, "data", p); !errors.As(err, &bad) {
+		if _, err := s.StatVolumeFile(ctx, f.ws, "data", p); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("stat %q: %v, want invalid", p, err)
 		}
 	}
@@ -85,11 +84,10 @@ func TestVolumeFiles(t *testing.T) {
 	if err != nil || !moved.IsDir || moved.Path != "renamed" {
 		t.Fatalf("move dir: %+v err=%v", moved, err)
 	}
-	var exists *ConflictError
-	if _, err := s.MoveVolumeFile(ctx, f.ws, "data", "a.txt", "renamed/b.txt"); !errors.As(err, &exists) {
+	if _, err := s.MoveVolumeFile(ctx, f.ws, "data", "a.txt", "renamed/b.txt"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("move onto an existing file: %v", err)
 	}
-	if _, err := s.MoveVolumeFile(ctx, f.ws, "data", "renamed", "renamed/inner"); !errors.As(err, &bad) {
+	if _, err := s.MoveVolumeFile(ctx, f.ws, "data", "renamed", "renamed/inner"); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("move into itself: %v", err)
 	}
 	url, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{Path: "renamed/sub/c.txt", Method: apitypes.PresignVolumeFileRequestMethodGet})
@@ -105,7 +103,7 @@ func TestVolumeFiles(t *testing.T) {
 	if err != nil || !slices.Equal(removed, []string{"renamed/b.txt", "renamed/sub/c.txt"}) {
 		t.Fatalf("remove dir: %v err=%v", removed, err)
 	}
-	if _, err := s.RemoveVolumeFiles(ctx, f.ws, "data", "."); !errors.As(err, &bad) {
+	if _, err := s.RemoveVolumeFiles(ctx, f.ws, "data", "."); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("remove of the root: %v", err)
 	}
 }
@@ -268,9 +266,7 @@ func TestVolumeDeletionChecksLiveMounts(t *testing.T) {
 		t.Fatalf("used by: %+v err=%v", volume, err)
 	}
 	putFile(t, s, f, "keep.txt", []byte("x"))
-
-	var inUse *ConflictError
-	if err := s.DeleteVolume(ctx, f.ws, "data"); !errors.As(err, &inUse) {
+	if err := s.DeleteVolume(ctx, f.ws, "data"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("delete while mounted: %v", err)
 	}
 	f.stop(container, "stopped")

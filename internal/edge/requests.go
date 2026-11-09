@@ -63,7 +63,7 @@ type requestRecord struct {
 }
 
 // ErrRequestNotFound means no such request in the workspace.
-var ErrRequestNotFound = errors.New("request not found")
+var ErrRequestNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "request not found"}
 
 // recordingWriter observes the status and bytes the caller receives.
 type recordingWriter struct {

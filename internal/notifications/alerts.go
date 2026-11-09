@@ -68,10 +68,7 @@ func enqueueAlert(ctx context.Context, tx pgx.Tx, to string, a Alert) error {
 	h := html.EscapeString
 	var text, body strings.Builder
 	text.WriteString(a.Subject + "\n\n")
-	body.WriteString(`<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;` +
-		`max-width:480px;margin:0 auto;padding:32px 24px;color:#1a1a1a;line-height:1.5">` +
-		`<h1 style="font-size:18px;font-weight:600;margin:0 0 20px">` + h(a.Subject) + `</h1>` +
-		`<table style="border-collapse:collapse;width:100%;font-size:14px">`)
+	body.WriteString(`<table style="border-collapse:collapse;width:100%;font-size:14px">`)
 	for _, f := range a.Facts {
 		text.WriteString(f.Label + ": " + f.Value + "\n")
 		value := h(f.Value)
@@ -86,8 +83,7 @@ func enqueueAlert(ctx context.Context, tx pgx.Tx, to string, a Alert) error {
 		text.WriteString("\n" + a.Note + "\n")
 		body.WriteString(`<p style="margin:20px 0 0;font-size:13px;color:#888">` + h(a.Note) + `</p>`)
 	}
-	body.WriteString(`</div>`)
-	_, err := Enqueue(ctx, tx, Email{To: to, Subject: a.Subject, HTML: body.String(), Text: text.String()})
+	_, err := Enqueue(ctx, tx, Email{To: to, Subject: a.Subject, HTML: Page(a.Subject, body.String()), Text: text.String()})
 	return err
 }
 

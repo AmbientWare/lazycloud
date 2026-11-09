@@ -1,11 +1,9 @@
 package storage_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 // An account with no credit takes on no new stored bytes, but its data can
@@ -31,8 +29,7 @@ func TestUnfundedWorkspacesStoreNothingNewButReadWhatTheyHave(t *testing.T) {
 
 	refused := func(what string, err error) {
 		t.Helper()
-		var payment *billing.PaymentRequiredError
-		if !errors.As(err, &payment) {
+		if apitypes.CodeOf(err) != apitypes.PaymentRequired {
 			t.Fatalf("%s without credit: %v", what, err)
 		}
 	}

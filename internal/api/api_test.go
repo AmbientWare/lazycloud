@@ -62,6 +62,8 @@ type env struct {
 	outsider  string
 	// distDir holds agent release archives for /install/agent.
 	distDir string
+	// containerAPI serves the operations to container principals.
+	containerAPI http.Handler
 }
 
 // document is the OpenAPI document the handlers validate against, parsed
@@ -122,25 +124,27 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		t.Fatal(err)
 	}
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
-	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
+	edges, err := edge.NewEdge(pool, id, e, listener, edge.Config{URL: "https://lazycloud.test", SessionPool: pool, FailureCheckInterval: edge.FailureCheckInterval, RequestFlush: edge.RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := storage.NewStorage(pool, storagetest.Config(t), comp)
-	im, err := images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{
+	secretStore := secrets.NewSecrets(pool, masterKey)
+	im, err := images.NewImages(pool, e, secretStore, store, images.Config{
 		Registry: "registry.example.com", Repository: "lazycloud", PlatformTransferBackoff: images.PlatformTransferBackoff,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := api.NewHandler(document, api.Owners{
+	owners := api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        im,
-		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool),
-	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
-	server := httptest.NewServer(handler)
+		Observability: observability.NewObservability(pool, nil, logger), Changes: changes,
+		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool), Secrets: secretStore,
+	}
+	cfg := api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}
+	server := httptest.NewServer(api.NewHandler(document, owners, cfg, logger))
 	t.Cleanup(server.Close)
 
 	for _, email := range []string{"owner@example.com", "outsider@example.com"} {
@@ -167,7 +171,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	}
 	return &env{
 		t: t, pool: pool, url: server.URL, execution: e, compute: comp, identity: id, github: gh, owner: owner, outsider: outsider,
-		distDir: dist,
+		distDir: dist, containerAPI: api.NewContainerHandler(document, owners, cfg, logger),
 	}
 }
 
@@ -310,6 +314,90 @@ func TestAuthenticationAuthorizationAndValidation(t *testing.T) {
 	}
 }
 
+// Every workspace operation authorizes its caller: members and
+// administrators reach the workspace, a token only its own workspace, and a
+// container only its workspace and never the operations it may not call.
+func TestWorkspaceOperationsAuthorizeEveryCaller(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := newEnv(t)
+	e.deploy()
+	admin := e.token("admin@example.com", true, "")
+	if _, err := e.identity.CreateWorkspace(ctx, "other", "owner@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := e.identity.CreateToken(ctx, "owner@example.com", "acme", "ci")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One operation of each kind: a workspace resource, a workload by path,
+	// one a container may not call, a call forwarded to a container, and a
+	// workspace operation identity authorizes.
+	ops := []string{
+		"/secrets", "/apps/reports/workloads/function/summarize_sales", "/sandboxes",
+		"/containers/" + uuid.NewString() + "/files?path=/", "",
+	}
+	for _, c := range []struct {
+		name, token, workspace string
+		refused                bool
+	}{
+		{"outsider", e.outsider, "acme", true},
+		{"scoped token elsewhere", scoped, "other", true},
+		{"scoped token", scoped, "acme", false},
+		{"member", e.owner, "other", false},
+		{"administrator", admin, "acme", false},
+	} {
+		for _, op := range ops {
+			var apiErr apitypes.Error
+			status := e.do("GET", "/v1/workspaces/"+c.workspace+op, c.token, nil, &apiErr)
+			if refused := status == http.StatusForbidden; refused != c.refused || status == 0 || status >= 500 {
+				t.Errorf("%s GET %s%s: %d %+v", c.name, c.workspace, op, status, apiErr)
+			}
+		}
+	}
+
+	var workspace, container uuid.UUID
+	if err := e.pool.QueryRow(ctx, `
+with host as (insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
+              values ('h', sha256('h'), 'online', 4000, 1 << 32) returning id)
+insert into containers (workspace_id, release_id, workload_id, state, host_id, slots, cpu_millis, memory_bytes)
+select w.id, r.id, r.workload_id, 'ready', host.id, 1, 1000, 1 << 28 from workspaces w, releases r, host where w.name = 'acme'
+returning workspace_id, id`).Scan(&workspace, &container); err != nil {
+		t.Fatal(err)
+	}
+	principal := identity.ContainerPrincipal{
+		Container: container, Workspace: identity.Workspace{ID: identity.WorkspaceID(workspace), Name: "acme", State: identity.WorkspaceActive},
+	}
+	fromContainer := func(path string) (int, string) {
+		req := httptest.NewRequestWithContext(api.WithContainer(ctx, principal), "GET", path, nil)
+		rec := httptest.NewRecorder()
+		e.containerAPI.ServeHTTP(rec, req)
+		var apiErr apitypes.Error
+		_ = json.Unmarshal(rec.Body.Bytes(), &apiErr)
+		return rec.Code, apiErr.Message
+	}
+	for path, want := range map[string]int{
+		"/v1/workspaces/acme/secrets":                                          http.StatusOK,
+		"/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales":  http.StatusOK,
+		"/v1/workspaces/acme/containers/" + uuid.NewString() + "/files?path=/": http.StatusNotFound,
+		"/v1/workspaces/other/secrets":                                         http.StatusForbidden,
+		"/v1/workspaces/acme":                                                  http.StatusForbidden,
+		"/v1/me":                                                               http.StatusForbidden,
+		"/v1/workspaces/other/apps/reports/workloads/function/summarize_sales/logs": http.StatusForbidden,
+	} {
+		if status, message := fromContainer(path); status != want {
+			t.Errorf("container GET %s: %d %s, want %d", path, status, message, want)
+		}
+	}
+	// Refused operations are refused as such, before the workspace is
+	// checked.
+	for _, path := range []string{"/v1/workspaces/acme/sandboxes", "/v1/workspaces/other/sandboxes"} {
+		if status, message := fromContainer(path); status != http.StatusForbidden || !strings.Contains(message, "inside a container") {
+			t.Errorf("container GET %s: %d %s", path, status, message)
+		}
+	}
+}
+
 // runOnHost claims the task as a host would and completes it with result
 // after writing a log line. It runs off the test goroutine, so it reports
 // failures without stopping the test.
@@ -340,10 +428,10 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 		e.t.Error(err)
 		return
 	}
-	if err := e.execution.CompleteAttempt(ctx, host, container, execution.AttemptOutcome{
+	if err := e.execution.CompleteAttempts(ctx, host, []execution.Completion{{Container: container, Outcome: execution.AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: execution.AttemptSucceeded,
 		Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(result)},
-	}); err != nil {
+	}}})[0]; err != nil {
 		e.t.Error(err)
 		return
 	}

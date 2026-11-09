@@ -190,20 +190,20 @@ function DeviceCodeDecision({
 
       <div className="flex gap-2">
         <Button
+          pending={approve.isPending}
           className="flex-1"
-          disabled={approve.isPending || deny.isPending}
+          disabled={deny.isPending}
           onClick={() => decide("approve")}
         >
-          {approve.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
           Approve
         </Button>
         <Button
+          pending={deny.isPending}
           variant="outline"
           className="flex-1"
           disabled={approve.isPending || deny.isPending}
           onClick={() => decide("deny")}
         >
-          {deny.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
           Deny
         </Button>
       </div>

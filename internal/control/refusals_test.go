@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -228,7 +229,7 @@ func TestPlanReportsRefusalsByWorkload(t *testing.T) {
 	}
 	gates := map[string][]apitypes.DeploymentGate{}
 	for _, item := range plan.Items {
-		for _, r := range deref(item.Refusals) {
+		for _, r := range database.Value(item.Refusals) {
 			gates[item.Name] = append(gates[item.Name], r.Gate)
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -275,8 +274,7 @@ func TestConnectedWorkspaceKeepsItsStorageInItsAccount(t *testing.T) {
 		t.Fatalf("download link: status %d body %q", status, body)
 	}
 
-	var refused *compute.ConflictError
-	if _, err := c.compute.Disconnect(ctx, c.user); !errors.As(err, &refused) {
+	if _, err := c.compute.Disconnect(ctx, c.user); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("disconnect with a workspace's bucket in the account: %v, want a conflict", err)
 	}
 	c.deleteWorkspace(ws)
@@ -400,8 +398,7 @@ func TestARevokedConnectionRefusesStorageAndKeepsItsBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, ws := range map[string]identity.WorkspaceID{"new": fresh, "existing": used} {
-		var refused *ConflictError
-		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); !errors.As(err, &refused) {
+		if _, err := c.storage.HostGrant(ctx, compute.HostID(uuid.New()), ws); apitypes.CodeOf(err) != apitypes.Conflict {
 			t.Errorf("grant on the %s bucket with the role deleted: %v, want a conflict", name, err)
 		}
 	}

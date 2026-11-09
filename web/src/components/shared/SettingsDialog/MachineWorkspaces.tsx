@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -121,8 +120,11 @@ function EditMachineWorkspacesForm({
           <Button type="button" variant="outline" onClick={onDone} disabled={update.isPending}>
             Cancel
           </Button>
-          <Button type="submit" disabled={selected.size === 0 || update.isPending}>
-            {update.isPending ? <Loader2 className="animate-spin" /> : null}
+          <Button
+            pending={update.isPending}
+            type="submit"
+            disabled={selected.size === 0 || update.isPending}
+          >
             Save
           </Button>
         </div>

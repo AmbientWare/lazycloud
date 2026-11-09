@@ -208,11 +208,7 @@ func TestVolumePeersStayInTheirRegionAndWorkspace(t *testing.T) {
 		t.Fatalf("the host's grant for %s carries peer key %x, the sibling's %x", mineGrant.GetWorkspaceId(), mineGrant.GetPeerKey(), siblingGrant.GetPeerKey())
 	}
 	s := next(t, in, 5*time.Second, func(m *hostproto.ServerMessage) bool { return m.GetStart() != nil }).GetStart()
-	var peers []string
-	for _, p := range s.GetVolumePeers() {
-		peers = append(peers, p.GetHostId()+" "+p.GetAddress())
-	}
-	if want := []string{sibling.String() + " 10.0.0.2:12122"}; !slices.Equal(peers, want) {
-		t.Fatalf("the start names peers %v, want %v", peers, want)
+	if want := []string{"10.0.0.2:12122"}; !slices.Equal(s.GetVolumePeers(), want) {
+		t.Fatalf("the start names peers %v, want %v", s.GetVolumePeers(), want)
 	}
 }

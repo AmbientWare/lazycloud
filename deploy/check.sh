@@ -73,9 +73,11 @@ docker run --rm -v "$out/otelcol.yaml:/etc/otelcol/config.yaml:ro" "$collector" 
 
 # Every LAZYCLOUD_* variable the chart gives a container is one its binary
 # reads: the server's and jobs' in cmd/server, the scheduler's in
-# cmd/scheduler, or the shared fleet and telemetry settings.
+# cmd/scheduler, or the shared fleet, object store, Stripe and telemetry
+# settings.
 reads() {
-  grep -rqsF "\"$2\"" "cmd/$1" internal/compute/fleet_config.go internal/telemetry/env.go
+  grep -rqsF "\"$2\"" "cmd/$1" internal/compute/fleet_config.go internal/storage/credentials.go \
+    internal/billing/billing.go internal/telemetry/env.go
 }
 for binary in server scheduler; do
   case $binary in

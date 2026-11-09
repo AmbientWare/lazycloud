@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -61,11 +61,10 @@ type StopCommand struct {
 }
 
 // CancelCommand asks a host to kill the slot running an attempt that
-// already ended as Reason (cancelled or timed out).
+// already ended.
 type CancelCommand struct {
 	Container ContainerID
 	Attempt   AttemptID
-	Reason    AttemptState
 }
 
 // HostCommands are the commands durable state implies for a host. They are
@@ -91,10 +90,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		return out, fmt.Errorf("list starting containers: %w", err)
 	}
 	for _, row := range starting {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return out, fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		var source storage.Digest
 		copy(source[:], row.SourceSha256)
 		out.Start = append(out.Start, StartCommand{
@@ -105,7 +101,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
 			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
 			Command: row.Command, Network: NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList},
-			Traceparent: deref(row.Traceparent), AssignedAt: row.AssignedAt,
+			Traceparent: database.Value(row.Traceparent), AssignedAt: row.AssignedAt,
 		})
 	}
 	idle, err := e.queries.IdleDrainingContainersOnHost(ctx, hostUUID(host))
@@ -122,9 +118,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		return out, fmt.Errorf("list ended attempts: %w", err)
 	}
 	for _, row := range ended {
-		out.Cancel = append(out.Cancel, CancelCommand{
-			Container: ContainerID(row.ContainerID), Attempt: AttemptID(row.ID), Reason: AttemptState(row.State),
-		})
+		out.Cancel = append(out.Cancel, CancelCommand{Container: ContainerID(row.ContainerID), Attempt: AttemptID(row.ID)})
 	}
 	if err := e.workloadCommands(ctx, host, &out); err != nil {
 		return out, err
@@ -202,24 +196,13 @@ func (e *Execution) ContainerWorkload(ctx context.Context, host compute.HostID, 
 // the host a miss round per peer before the store.
 const maxVolumePeers = 8
 
-// VolumePeer is a host whose volume cache serves a workspace's frames at
-// Address.
-type VolumePeer struct {
-	Host    compute.HostID
-	Address string
-}
-
-// VolumePeers lists the other online hosts of host's region that run a live
+// VolumePeers lists the peer addresses of the other online hosts of host's region that run a live
 // container of workspace and serve a volume cache, at most maxVolumePeers,
 // those with the newest container of the workspace first.
-func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]VolumePeer, error) {
-	rows, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
+func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]string, error) {
+	peers, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
 	if err != nil {
 		return nil, fmt.Errorf("list volume peers: %w", err)
-	}
-	peers := make([]VolumePeer, len(rows))
-	for n, r := range rows {
-		peers[n] = VolumePeer{Host: compute.HostID(r.ID), Address: r.PeerAddress}
 	}
 	return peers, nil
 }

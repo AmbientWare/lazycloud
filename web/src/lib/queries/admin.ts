@@ -32,12 +32,8 @@ export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT)
   });
 }
 
-export function setUserRole(user: string, role: Schemas["PlatformRole"]) {
-  return ok(api.PUT("/v1/users/{user}/role", { params: { path: { user } }, body: { role } }));
-}
-
-export function setUserStatus(user: string, status: Schemas["UserStatus"]) {
-  return ok(api.PUT("/v1/users/{user}/status", { params: { path: { user } }, body: { status } }));
+export function updateUser(user: string, change: Schemas["UserUpdate"]) {
+  return ok(api.PATCH("/v1/users/{user}", { params: { path: { user } }, body: change }));
 }
 
 export function setComplimentary(user: string, complimentary: boolean) {

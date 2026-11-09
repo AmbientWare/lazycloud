@@ -17,7 +17,7 @@ const maxWebhookBytes = 1 << 20
 // Resend, which holds no token: the Svix signature stands in for one. Event
 // types delivery records do not follow are acknowledged so Resend does not
 // retry them.
-func (s *Server) receiveResendWebhook(w http.ResponseWriter, r *http.Request) {
+func (s *server) receiveResendWebhook(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.ResendWebhookSecret == "" {
 		s.logger.ErrorContext(r.Context(), "a resend delivery arrived but LAZYCLOUD_RESEND_WEBHOOK_SECRET is not set")
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "email webhooks are not configured")

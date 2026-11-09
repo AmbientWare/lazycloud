@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
@@ -212,7 +211,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.SucceedTasks(ctx, results.TaskIds); err != nil {
 			return fmt.Errorf("succeed tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackSucceeded, results.TaskIds, nil); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackSucceeded, results.TaskIds, nil); err != nil {
 			return err
 		}
 	}
@@ -220,7 +219,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.RequeueTasks(ctx, requeue); err != nil {
 			return fmt.Errorf("requeue tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackRetry, requeue.Ids, retryFailures); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackRetry, requeue.Ids, retryFailures); err != nil {
 			return err
 		}
 		if err := database.NotifyAll(ctx, tx, database.ChannelClaim, retryReleases); err != nil {
@@ -231,7 +230,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.FailRunningTasks(ctx, failed); err != nil {
 			return fmt.Errorf("fail tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackFailed, failed.Ids, nil); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackFailed, failed.Ids, nil); err != nil {
 			return err
 		}
 	}
@@ -265,11 +264,7 @@ func (e *Execution) retryPolicies(ctx context.Context, q *Queries, live []liveOu
 	}
 	policies := make(map[uuid.UUID]RetryPolicy, len(rows))
 	for _, row := range rows {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return nil, fmt.Errorf("decode release spec: %w", err)
-		}
-		policies[row.ID] = RetryPolicyOf(spec)
+		policies[row.ID] = RetryPolicyOf(row.Spec)
 	}
 	return policies, nil
 }

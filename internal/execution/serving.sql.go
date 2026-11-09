@@ -7,7 +7,6 @@ package execution
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -21,86 +20,39 @@ func (q *Queries) DeleteExpiredEndpointLoads(ctx context.Context) error {
 	return err
 }
 
-const drainNewestContainers = `-- name: DrainNewestContainers :many
-update containers
-set state = 'draining', drain_started_at = now()
-where id in (
-    select d.id from containers d
-    where d.release_id = $1::uuid and d.state in ('starting', 'ready') and d.purpose = 'serve'
-    order by d.created_at desc, d.id desc
-    limit $2
-    for update skip locked
-)
-  and state in ('starting', 'ready')
-returning id, host_id
+const readyContainers = `-- name: ReadyContainers :many
+select c.id, c.host_id, c.release_id::uuid as release_id, r.version, c.traceparent
+from containers c
+join releases r on r.id = c.release_id
+where c.workload_id = $1::uuid and c.state = 'ready' and c.purpose = 'serve' and c.host_id is not null
+order by r.version desc nulls last, c.ready_at, c.id
 `
 
-type DrainNewestContainersParams struct {
-	ReleaseID uuid.UUID
-	Count     int32
-}
-
-type DrainNewestContainersRow struct {
-	ID     uuid.UUID
-	HostID *uuid.UUID
-}
-
-// Ready and starting containers of the release, newest first: the oldest
-// are the warmest. Their supervisors finish requests in flight before they
-// exit, and the edge stops routing to them when it sees the drain.
-func (q *Queries) DrainNewestContainers(ctx context.Context, arg DrainNewestContainersParams) ([]DrainNewestContainersRow, error) {
-	rows, err := q.db.Query(ctx, drainNewestContainers, arg.ReleaseID, arg.Count)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DrainNewestContainersRow
-	for rows.Next() {
-		var i DrainNewestContainersRow
-		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const endpointContainers = `-- name: EndpointContainers :many
-select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state, c.traceparent
-from releases r
-join containers c on c.release_id = r.id
-where r.workload_id = $1 and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
-order by r.version desc, c.ready_at, c.id
-`
-
-type EndpointContainersRow struct {
+type ReadyContainersRow struct {
+	ID          uuid.UUID
+	HostID      *uuid.UUID
 	ReleaseID   uuid.UUID
 	Version     *int32
-	ContainerID uuid.UUID
-	HostID      *uuid.UUID
-	State       string
 	Traceparent *string
 }
 
-// Ready containers of every release of the workload, newest version first.
-func (q *Queries) EndpointContainers(ctx context.Context, workloadID uuid.UUID) ([]EndpointContainersRow, error) {
-	rows, err := q.db.Query(ctx, endpointContainers, workloadID)
+// Ready serve containers of the workload's releases with their hosts,
+// newest version first and then the oldest container. Reads the
+// containers_workload_live partial index.
+func (q *Queries) ReadyContainers(ctx context.Context, workloadID uuid.UUID) ([]ReadyContainersRow, error) {
+	rows, err := q.db.Query(ctx, readyContainers, workloadID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []EndpointContainersRow
+	var items []ReadyContainersRow
 	for rows.Next() {
-		var i EndpointContainersRow
+		var i ReadyContainersRow
 		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
 			&i.ReleaseID,
 			&i.Version,
-			&i.ContainerID,
-			&i.HostID,
-			&i.State,
 			&i.Traceparent,
 		); err != nil {
 			return nil, err
@@ -134,14 +86,12 @@ with candidates as (
       and w.desired_state = 'active'
       and a.state = 'active'
       and w.active_release_id > $2
-      and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
+      and (r.spec -> 'autoscaler' ->> 'min_containers')::int > 0
 ),
 batch as (
     select release_id from candidates order by release_id limit $3
 )
-select r.id as release_id,
-       a.workspace_id,
-       w.id as workload_id,
+select a.workspace_id,
        (r.version < 0)::bool as preview,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
        (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')::bool as stopping,
@@ -149,21 +99,10 @@ select r.id as release_id,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
        coalesce((r.spec -> 'http' ->> 'workers')::int, (r.spec ->> 'concurrency')::int, 1)::int as slots,
-       (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       release_mounters(r.spec) as mounters,
-       -- What billing prices and admits, as planning reads it for functions.
-       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
-                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
-           as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
-        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
-       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
+       shape.id, shape.cpu_millis, shape.memory_bytes, shape.mounters, shape.gpu_count, shape.gpu_models, shape.preemptible, shape.pinned, shape.machine, shape.start_failures, shape.last_stopped_at,
        demand.current::int as demand,
        demand.peak::int as peak,
-       coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
+       coalesce(preview_live(p), false)::bool as preview_live,
        exists (
            select 1 from containers ac
            where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'
@@ -173,20 +112,14 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       coalesce(c.leaving, false)::bool as leaving,
-       r.start_failures,
-       last_stop.stopped_at as last_stopped_at
+       coalesce(c.leaving, false)::bool as leaving
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join previews p on p.release_id = r.id
-left join lateral (
-    select lc.stopped_at from containers lc
-    where lc.release_id = r.id and lc.purpose = 'serve'
-    order by lc.id desc limit 1
-) last_stop on r.start_failures > 0
+join release_shapes shape on shape.id = r.id
 cross join lateral (
     select coalesce(sum(l.in_flight + l.waiting), 0) as current, coalesce(sum(l.window_peak), 0) as peak
     from endpoint_loads l where l.release_id = r.id and l.expires_at > now()
@@ -209,9 +142,7 @@ type ServingReleasesParams struct {
 }
 
 type ServingReleasesRow struct {
-	ReleaseID         uuid.UUID
 	WorkspaceID       uuid.UUID
-	WorkloadID        uuid.UUID
 	Preview           bool
 	Active            bool
 	Stopping          bool
@@ -219,14 +150,7 @@ type ServingReleasesRow struct {
 	MaxContainers     int32
 	TasksPerContainer int32
 	Slots             int32
-	CpuMillis         int64
-	MemoryBytes       int64
-	Mounters          int32
-	GpuCount          int32
-	GpuModels         []string
-	Preemptible       bool
-	Pinned            bool
-	Machine           bool
+	ReleaseShape      ReleaseShape
 	Demand            int32
 	Peak              int32
 	PreviewLive       bool
@@ -237,15 +161,12 @@ type ServingReleasesRow struct {
 	Ready             int32
 	Draining          int32
 	Leaving           bool
-	StartFailures     int32
-	LastStoppedAt     *time.Time
 }
 
 // Releases after @after_id whose containers follow traffic or a preview
 // instead of queued tasks: HTTP workloads and previews with live containers,
 // unexpired edge demand, a live preview or a warm minimum. Each source reads
 // live rows only.
-// The newest serve container's stop paces the next start after failed ones.
 func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams) ([]ServingReleasesRow, error) {
 	rows, err := q.db.Query(ctx, servingReleases, arg.StartFailureLimit, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -256,9 +177,7 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 	for rows.Next() {
 		var i ServingReleasesRow
 		if err := rows.Scan(
-			&i.ReleaseID,
 			&i.WorkspaceID,
-			&i.WorkloadID,
 			&i.Preview,
 			&i.Active,
 			&i.Stopping,
@@ -266,14 +185,17 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 			&i.MaxContainers,
 			&i.TasksPerContainer,
 			&i.Slots,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.Mounters,
-			&i.GpuCount,
-			&i.GpuModels,
-			&i.Preemptible,
-			&i.Pinned,
-			&i.Machine,
+			&i.ReleaseShape.ID,
+			&i.ReleaseShape.CpuMillis,
+			&i.ReleaseShape.MemoryBytes,
+			&i.ReleaseShape.Mounters,
+			&i.ReleaseShape.GpuCount,
+			&i.ReleaseShape.GpuModels,
+			&i.ReleaseShape.Preemptible,
+			&i.ReleaseShape.Pinned,
+			&i.ReleaseShape.Machine,
+			&i.ReleaseShape.StartFailures,
+			&i.ReleaseShape.LastStoppedAt,
 			&i.Demand,
 			&i.Peak,
 			&i.PreviewLive,
@@ -284,8 +206,6 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 			&i.Ready,
 			&i.Draining,
 			&i.Leaving,
-			&i.StartFailures,
-			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -298,12 +218,12 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 }
 
 const upsertEndpointLoads = `-- name: UpsertEndpointLoads :exec
-insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, updated_at, expires_at)
+insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, expires_at)
 select unnest($1::uuid[]), $2, unnest($3::int[]), unnest($4::int[]), unnest($5::int[]),
-       now(), now() + make_interval(secs => $6::float8)
+       now() + make_interval(secs => $6::float8)
 on conflict (release_id, edge_id) do update
 set in_flight = excluded.in_flight, waiting = excluded.waiting, window_peak = excluded.window_peak,
-    updated_at = excluded.updated_at, expires_at = excluded.expires_at
+    expires_at = excluded.expires_at
 `
 
 type UpsertEndpointLoadsParams struct {

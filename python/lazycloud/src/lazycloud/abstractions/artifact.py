@@ -170,13 +170,13 @@ class Artifact:
         if not self.id:
             raise ArtifactNotSavedError("artifact has not been saved remotely")
         try:
-            self._artifact_client().delete_artifact(self._remote_id())
+            deleted = self._artifact_client().delete_artifacts([self._remote_id()])
         except ApiError as exc:
-            if exc.code is ErrorCode.not_found:
-                raise ArtifactNotFoundError(exc.message or "artifact not found") from exc
             raise ArtifactDeleteError(exc.message or "failed to delete artifact") from exc
         except ApiConnectionError as exc:
             raise ArtifactDeleteError(str(exc)) from exc
+        if not deleted:
+            raise ArtifactNotFoundError("artifact not found")
 
     def exists(self) -> bool:
         if not self.id:
@@ -216,21 +216,6 @@ class Artifact:
                 chunk_size=chunk_size,
             )
         return self._save_local(target_dir=target_dir)
-
-    def save_remote(
-        self,
-        client: StorageClient,
-        *,
-        task_id: str,
-        target_dir: str | Path | None = None,
-        chunk_size: int = DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES,
-    ) -> SavedArtifact:
-        return self._save_remote(
-            client,
-            task_id=task_id,
-            target_dir=target_dir,
-            chunk_size=chunk_size,
-        )
 
     def public_url(
         self,
@@ -407,10 +392,6 @@ class ArtifactNotFoundError(RuntimeError):
     pass
 
 
-class ArtifactCannotRunLocallyError(RuntimeError):
-    pass
-
-
 class ArtifactTaskIdError(RuntimeError):
     pass
 
@@ -429,7 +410,6 @@ def guess_content_type(path: Path) -> str:
 __all__ = [
     "DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES",
     "Artifact",
-    "ArtifactCannotRunLocallyError",
     "ArtifactDeleteError",
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",

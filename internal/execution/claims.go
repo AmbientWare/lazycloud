@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -139,10 +137,7 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		if limit <= 0 {
 			return nil
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(c.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := c.Spec
 		timeout := 3600
 		if spec.TimeoutSeconds != nil {
 			timeout = *spec.TimeoutSeconds
@@ -176,8 +171,8 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
-			claimed[n].TraceParent = deref(row.Traceparent)
-			traceClaim(ctx, claimed[n], row.AvailableAt, container, deref(c.Traceparent))
+			claimed[n].TraceParent = database.Value(row.Traceparent)
+			traceClaim(ctx, claimed[n], row.AvailableAt, container, database.Value(c.Traceparent))
 			ids[n] = row.TaskID
 			index[row.TaskID] = n
 		}

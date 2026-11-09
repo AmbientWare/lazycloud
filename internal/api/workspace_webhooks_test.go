@@ -26,11 +26,11 @@ func TestWebhooksStayInTheirWorkspace(t *testing.T) {
 		t.Fatalf("update: %d %+v", status, updated)
 	}
 	var apiErr apitypes.Error
-	if status := e.do("GET", "/v1/workspaces/acme/webhooks/"+hook.Id.String(), e.outsider, nil, &apiErr); status != 403 {
+	if status := e.do("GET", "/v1/workspaces/acme/webhooks/"+hook.Id.String()+"/deliveries", e.outsider, nil, &apiErr); status != 403 {
 		t.Fatalf("outsider through acme: %d %+v", status, apiErr)
 	}
-	for _, method := range []string{"GET", "DELETE"} {
-		if status := e.do(method, "/v1/workspaces/other/webhooks/"+hook.Id.String(), e.outsider, nil, &apiErr); status != 404 {
+	for method, suffix := range map[string]string{"GET": "/deliveries", "DELETE": ""} {
+		if status := e.do(method, "/v1/workspaces/other/webhooks/"+hook.Id.String()+suffix, e.outsider, nil, &apiErr); status != 404 {
 			t.Fatalf("%s through another workspace: %d %+v", method, status, apiErr)
 		}
 	}

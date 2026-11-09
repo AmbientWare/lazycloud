@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stripe/stripe-go/v87"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -47,7 +47,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 	}
 	target, err := planOfTerms(TermsVersion(req.TermsVersion))
 	if err != nil || target.ID != PlanID(req.Plan) {
-		return apitypes.BillingAccount{}, &InvalidError{Message: "these terms are not the published terms of that plan"}
+		return apitypes.BillingAccount{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "these terms are not the published terms of that plan"}
 	}
 	var change *planChange
 	err = pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
@@ -60,7 +60,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 			return fmt.Errorf("lock account: %w", err)
 		}
 		if account.ComplimentarySince != nil {
-			return &ConflictError{Message: "this account's usage is complimentary; it holds no plan to change"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "this account's usage is complimentary; it holds no plan to change"}
 		}
 		current, err := planOfTerms(TermsVersion(account.TermsVersion))
 		if err != nil {
@@ -71,15 +71,15 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 		}
 		if current.Terms != target.Terms {
 			if target.MonthlyNanos > current.MonthlyNanos && account.PaymentMethodAttachedAt == nil {
-				return &PaymentRequiredError{Message: "add a payment method before upgrading your subscription"}
+				return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add a payment method before upgrading your subscription"}
 			}
 			if err := planFits(ctx, q, user, target, account.PaymentMethodAttachedAt != nil); err != nil {
 				return err
 			}
 		}
 		row, err := q.InsertPlanChange(ctx, InsertPlanChangeParams{UserID: user, FromTerms: account.TermsVersion, ToTerms: string(target.Terms)})
-		if isUniqueViolation(err) {
-			return &ConflictError{Message: "a plan change for this account is already being settled"}
+		if database.IsUniqueViolation(err) {
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "a plan change for this account is already being settled"}
 		}
 		if err != nil {
 			return fmt.Errorf("insert plan change: %w", err)
@@ -130,7 +130,7 @@ func planFits(ctx context.Context, q *Queries, user uuid.UUID, target Plan, hasC
 		}
 	}
 	if len(violations) > 0 {
-		return &ConflictError{Message: "this account cannot move to the requested plan while it has " + strings.Join(violations, ", ")}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "this account cannot move to the requested plan while it has " + strings.Join(violations, ", ")}
 	}
 	return nil
 }
@@ -145,17 +145,17 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 		if message == "" {
 			message = "Stripe refused the change"
 		}
-		if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: truncate(message)}); ferr != nil {
+		if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: database.Truncate(message, maxError)}); ferr != nil {
 			return fmt.Errorf("record refused plan change: %w", ferr)
 		}
 		if se.Type == stripe.ErrorTypeCard {
-			return &PaymentRequiredError{Message: "your payment method was declined: " + message}
+			return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "your payment method was declined: " + message}
 		}
-		return &ConflictError{Message: "the plan change was refused: " + message}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "the plan change was refused: " + message}
 	}
 	if err != nil {
 		if time.Since(change.createdAt) > planChangeWindow {
-			if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: truncate(err.Error())}); ferr != nil {
+			if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: database.Truncate(err.Error(), maxError)}); ferr != nil {
 				return fmt.Errorf("abandon plan change: %w", ferr)
 			}
 			b.logger.ErrorContext(ctx, "plan change abandoned", "plan_change_id", change.id, "user_id", change.user, "error", err)
@@ -163,7 +163,7 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 		}
 		b.logger.WarnContext(ctx, "plan change undecided", "plan_change_id", change.id, "attempt", change.attempts, "error", err)
 		next := time.Now().Add(min(30*time.Second<<min(change.attempts, 6), 30*time.Minute))
-		if rerr := b.queries.RetryPlanChange(ctx, RetryPlanChangeParams{ID: change.id, NextAttemptAt: next, Error: truncate(err.Error())}); rerr != nil {
+		if rerr := b.queries.RetryPlanChange(ctx, RetryPlanChangeParams{ID: change.id, NextAttemptAt: next, Error: database.Truncate(err.Error(), maxError)}); rerr != nil {
 			return fmt.Errorf("defer plan change: %w", rerr)
 		}
 		return nil
@@ -209,7 +209,7 @@ func (b *Billing) applyPlanChange(ctx context.Context, change planChange) (*subs
 			return nil, nil
 		}
 		if ids.StripeCustomerID == nil {
-			return nil, &ConflictError{Message: "the account has no payment method"}
+			return nil, &apitypes.Error{Code: apitypes.Conflict, Message: "the account has no payment method"}
 		}
 		sub, err := s.subscribe(ctx, *ids.StripeCustomerID, change.to, key)
 		return &sub, err
@@ -247,9 +247,7 @@ func (b *Billing) SettlePlanChanges(ctx context.Context) (int, error) {
 	for _, row := range rows {
 		change := planChange{id: row.ID, user: row.UserID, to: TermsVersion(row.ToTerms), attempts: row.Attempts, createdAt: row.CreatedAt}
 		if err := b.settlePlanChange(ctx, change); err != nil {
-			var refused *PaymentRequiredError
-			var conflict *ConflictError
-			if !errors.As(err, &refused) && !errors.As(err, &conflict) {
+			if code := apitypes.CodeOf(err); code != apitypes.PaymentRequired && code != apitypes.Conflict {
 				return 0, err
 			}
 		}
@@ -414,9 +412,4 @@ func includedCredit(inv invoice, start, end time.Time) (int64, time.Time, bool) 
 		return 0, time.Time{}, false
 	}
 	return amount.Int64(), effective, true
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

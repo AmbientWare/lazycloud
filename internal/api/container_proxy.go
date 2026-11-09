@@ -28,7 +28,7 @@ import (
 // over the host's data connection; status and body pass through.
 
 // errContainerNotRunning refuses a call on a container that is not ready.
-var errContainerNotRunning = errors.New("the container is not running")
+var errContainerNotRunning error = &apitypes.Error{Code: apitypes.Unavailable, Message: "the container is not running"}
 
 const (
 	// shellReadyWait bounds how long a shell waits for a new container.
@@ -55,16 +55,12 @@ func requestFrom(ctx context.Context) *http.Request {
 }
 
 // liveContainer authorizes a call on a ready container of the workspace.
-func (s *Server) liveContainer(ctx context.Context, workspace string, container uuid.UUID) (execution.ContainerRoute, error) {
-	ws, err := s.workspace(ctx, workspace)
-	if err != nil {
-		return execution.ContainerRoute{}, err
-	}
+func (s *server) liveContainer(ctx context.Context, container uuid.UUID) (execution.ContainerRoute, error) {
 	route, err := s.owners.Execution.Route(ctx, execution.ContainerID(container))
 	if err != nil {
 		return execution.ContainerRoute{}, err
 	}
-	if route.Workspace != ws.ID {
+	if route.Workspace != workspaceFrom(ctx).ID {
 		return execution.ContainerRoute{}, execution.ErrNotFound
 	}
 	if err := ownsInstance(ctx, route.CreatedBy); err != nil {
@@ -76,28 +72,21 @@ func (s *Server) liveContainer(ctx context.Context, workspace string, container 
 	return route, s.owners.Execution.Touch(ctx, route.ID)
 }
 
-// controlCall is a forwarded control API call; it writes the supervisor's
-// answer as every operation's response.
-type controlCall struct {
-	ctx   context.Context //nolint:containedctx // Lives for one response.
-	resp  *http.Response
-	owner *Server
-}
-
-// forward sends the operation's request to the container's control API.
-// body replaces a request body the strict handler already decoded.
-func (s *Server) forward(ctx context.Context, workspace string, container uuid.UUID, body any) (controlCall, error) {
-	route, err := s.liveContainer(ctx, workspace, container)
+// forward sends the operation's request to the container's control API and
+// answers with the supervisor's status and body. body replaces a request
+// body the strict handler already decoded.
+func (s *server) forward(ctx context.Context, container uuid.UUID, body any) (written, error) {
+	route, err := s.liveContainer(ctx, container)
 	if err != nil {
-		return controlCall{}, err
+		return nil, err
 	}
 	r := requestFrom(ctx)
 	if r == nil {
-		return controlCall{}, errors.New("the operation has no request to forward")
+		return nil, errors.New("the operation has no request to forward")
 	}
 	_, suffix, ok := strings.Cut(r.URL.Path, "/containers/"+container.String())
 	if !ok {
-		return controlCall{}, fmt.Errorf("%w: unexpected path %s", errInvalidRequest, r.URL.Path)
+		return nil, fmt.Errorf("%w: unexpected path %s", errInvalidRequest, r.URL.Path)
 	}
 	target := "http://container" + suffix
 	if r.URL.RawQuery != "" {
@@ -112,13 +101,13 @@ func (s *Server) forward(ctx context.Context, workspace string, container uuid.U
 	default:
 		encoded, err := json.Marshal(b)
 		if err != nil {
-			return controlCall{}, fmt.Errorf("encode request: %w", err)
+			return nil, fmt.Errorf("encode request: %w", err)
 		}
 		reader, length = bytes.NewReader(encoded), int64(len(encoded))
 	}
 	out, err := http.NewRequestWithContext(ctx, r.Method, target, reader)
 	if err != nil {
-		return controlCall{}, fmt.Errorf("build control request: %w", err)
+		return nil, fmt.Errorf("build control request: %w", err)
 	}
 	out.ContentLength = length
 	if ct := r.Header.Get("Content-Type"); ct != "" {
@@ -129,184 +118,118 @@ func (s *Server) forward(ctx context.Context, workspace string, container uuid.U
 			out.Header.Set("Content-Type", "application/json")
 		}
 	}
-	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out) //nolint:bodyclose // controlCall.write closes it.
+	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out) //nolint:bodyclose // The response closes it.
 	if err != nil {
-		return controlCall{}, err
+		return nil, err
 	}
-	return controlCall{ctx: ctx, resp: resp, owner: s}, nil
-}
-
-func (c controlCall) write(w http.ResponseWriter) error {
-	defer func() { _ = c.resp.Body.Close() }()
-	for _, name := range []string{"Content-Type", "Content-Length", "Lazycloud-Truncated", "Content-Disposition"} {
-		if v := c.resp.Header.Get(name); v != "" {
-			w.Header().Set(name, v)
+	return func(w http.ResponseWriter) error {
+		defer func() { _ = resp.Body.Close() }()
+		for _, name := range []string{"Content-Type", "Content-Length", "Lazycloud-Truncated", "Content-Disposition"} {
+			if v := resp.Header.Get(name); v != "" {
+				w.Header().Set(name, v)
+			}
 		}
-	}
-	w.WriteHeader(c.resp.StatusCode)
-	if _, err := io.Copy(w, c.resp.Body); err != nil && c.ctx.Err() == nil {
-		// The status is sent; dropping the connection tells the client the
-		// body is incomplete.
-		panic(http.ErrAbortHandler)
-	}
-	return nil
-}
-
-func (c controlCall) VisitListProcessesResponse(w http.ResponseWriter) error       { return c.write(w) }
-func (c controlCall) VisitStartProcessResponse(w http.ResponseWriter) error        { return c.write(w) }
-func (c controlCall) VisitGetProcessResponse(w http.ResponseWriter) error          { return c.write(w) }
-func (c controlCall) VisitKillProcessResponse(w http.ResponseWriter) error         { return c.write(w) }
-func (c controlCall) VisitListContainerFilesResponse(w http.ResponseWriter) error  { return c.write(w) }
-func (c controlCall) VisitDeleteContainerFileResponse(w http.ResponseWriter) error { return c.write(w) }
-func (c controlCall) VisitStatContainerFileResponse(w http.ResponseWriter) error   { return c.write(w) }
-func (c controlCall) VisitDownloadContainerFileResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitUploadContainerFileResponse(w http.ResponseWriter) error { return c.write(w) }
-func (c controlCall) VisitFindInContainerFilesResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitReplaceInContainerFilesResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitCreateContainerDirectoryResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter) error {
-	return c.write(w)
+		w.WriteHeader(resp.StatusCode)
+		if _, err := io.Copy(w, resp.Body); err != nil && ctx.Err() == nil {
+			// The status is sent; dropping the connection tells the client
+			// the body is incomplete.
+			panic(http.ErrAbortHandler)
+		}
+		return nil
+	}, nil
 }
 
 // ListProcesses lists the container's API processes.
-func (s *Server) ListProcesses(ctx context.Context, req ListProcessesRequestObject) (ListProcessesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) ListProcesses(ctx context.Context, req ListProcessesRequestObject) (ListProcessesResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StartProcess starts a process in the container.
-func (s *Server) StartProcess(ctx context.Context, req StartProcessRequestObject) (StartProcessResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+func (s *server) StartProcess(ctx context.Context, req StartProcessRequestObject) (StartProcessResponseObject, error) {
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // GetProcess reads a process's result.
-func (s *Server) GetProcess(ctx context.Context, req GetProcessRequestObject) (GetProcessResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) GetProcess(ctx context.Context, req GetProcessRequestObject) (GetProcessResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // KillProcess signals a process's group.
-func (s *Server) KillProcess(ctx context.Context, req KillProcessRequestObject) (KillProcessResponseObject, error) {
+func (s *server) KillProcess(ctx context.Context, req KillProcessRequestObject) (KillProcessResponseObject, error) {
 	body := req.Body
 	if body == nil {
 		body = &apitypes.KillRequest{}
 	}
-	return s.forward(ctx, req.Workspace, req.Container, body)
+	return s.forward(ctx, req.Container, body)
 }
 
 // ListContainerFiles lists a directory.
-func (s *Server) ListContainerFiles(ctx context.Context, req ListContainerFilesRequestObject) (ListContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) ListContainerFiles(ctx context.Context, req ListContainerFilesRequestObject) (ListContainerFilesResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerFile deletes a file.
-func (s *Server) DeleteContainerFile(ctx context.Context, req DeleteContainerFileRequestObject) (DeleteContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) DeleteContainerFile(ctx context.Context, req DeleteContainerFileRequestObject) (DeleteContainerFileResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StatContainerFile reads a file's metadata.
-func (s *Server) StatContainerFile(ctx context.Context, req StatContainerFileRequestObject) (StatContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) StatContainerFile(ctx context.Context, req StatContainerFileRequestObject) (StatContainerFileResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DownloadContainerFile streams a file's bytes.
-func (s *Server) DownloadContainerFile(ctx context.Context, req DownloadContainerFileRequestObject) (DownloadContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) DownloadContainerFile(ctx context.Context, req DownloadContainerFileRequestObject) (DownloadContainerFileResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // UploadContainerFile streams a file into the container.
-func (s *Server) UploadContainerFile(ctx context.Context, req UploadContainerFileRequestObject) (UploadContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+func (s *server) UploadContainerFile(ctx context.Context, req UploadContainerFileRequestObject) (UploadContainerFileResponseObject, error) {
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // FindInContainerFiles searches files.
-func (s *Server) FindInContainerFiles(ctx context.Context, req FindInContainerFilesRequestObject) (FindInContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+func (s *server) FindInContainerFiles(ctx context.Context, req FindInContainerFilesRequestObject) (FindInContainerFilesResponseObject, error) {
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // ReplaceInContainerFiles replaces text in files.
-func (s *Server) ReplaceInContainerFiles(ctx context.Context, req ReplaceInContainerFilesRequestObject) (ReplaceInContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+func (s *server) ReplaceInContainerFiles(ctx context.Context, req ReplaceInContainerFilesRequestObject) (ReplaceInContainerFilesResponseObject, error) {
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // CreateContainerDirectory creates a directory.
-func (s *Server) CreateContainerDirectory(ctx context.Context, req CreateContainerDirectoryRequestObject) (CreateContainerDirectoryResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) CreateContainerDirectory(ctx context.Context, req CreateContainerDirectoryRequestObject) (CreateContainerDirectoryResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerDirectory deletes a directory.
-func (s *Server) DeleteContainerDirectory(ctx context.Context, req DeleteContainerDirectoryRequestObject) (DeleteContainerDirectoryResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+func (s *server) DeleteContainerDirectory(ctx context.Context, req DeleteContainerDirectoryRequestObject) (DeleteContainerDirectoryResponseObject, error) {
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StreamContainerOutput writes the container's output as NDJSON.
-func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerOutputRequestObject) (StreamContainerOutputResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) StreamContainerOutput(ctx context.Context, req StreamContainerOutputRequestObject) (StreamContainerOutputResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
 	if err := s.ownsContainer(ctx, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
-	out := containerOutput{ctx: ctx, server: s, workspace: ws.ID, container: execution.ContainerID(req.Container)}
-	if req.Params.After != nil {
-		out.after = *req.Params.After
-	}
-	out.follow = req.Params.Follow != nil && *req.Params.Follow
-	return out, nil
+	after, follow := valueOr(req.Params.After, 0), valueOr(req.Params.Follow, false)
+	return ndjson(s, ctx, containerLogOut, func(emit func([]execution.ContainerLogEntry) error) error {
+		return s.owners.Execution.StreamContainerOutput(ctx, s.owners.Listener, ws.ID, execution.ContainerID(req.Container), after, follow, logHeartbeat, emit)
+	}, "container output stream", "container", req.Container.String()), nil
 }
 
-type containerOutput struct {
-	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
-	workspace identity.WorkspaceID
-	container execution.ContainerID
-	after     int64
-	follow    bool
-}
-
-func (o containerOutput) VisitStreamContainerOutputResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w)
-	if err := flush.Flush(); err != nil {
-		return nil //nolint:nilerr // The client is gone.
-	}
-	enc := json.NewEncoder(w)
-	err := o.server.owners.Execution.StreamContainerOutput(o.ctx, o.server.owners.Listener, o.workspace, o.container, o.after, o.follow, logHeartbeat,
-		func(batch []execution.ContainerLogEntry) error {
-			if len(batch) == 0 {
-				if _, err := w.Write([]byte("\n")); err != nil {
-					return fmt.Errorf("write heartbeat: %w", err)
-				}
-			}
-			for _, entry := range batch {
-				if err := enc.Encode(apitypes.ContainerLogEntry{
-					Id: entry.ID, Stream: apitypes.ContainerLogEntryStream(entry.Stream), Data: entry.Data, Time: entry.Time,
-				}); err != nil {
-					return fmt.Errorf("write output entry: %w", err)
-				}
-			}
-			return flush.Flush()
-		})
-	if err != nil && o.ctx.Err() == nil {
-		o.server.logger.WarnContext(o.ctx, "container output stream ended early", "container", o.container.String(), "error", err)
-	}
-	return nil
+func containerLogOut(e execution.ContainerLogEntry) apitypes.ContainerLogEntry {
+	return apitypes.ContainerLogEntry{Id: e.ID, Stream: apitypes.ContainerLogEntryStream(e.Stream), Data: e.Data, Time: e.Time}
 }
 
 // acceptSocket accepts a WebSocket after checking a browser session's
 // Origin, since WebSocket upgrades are GETs that the cookie check skips.
-func (s *Server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+func (s *server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 	if p, ok := principalFrom(ctx); ok && p.Session != nil && (s.cfg.PublicURL == "" || r.Header.Get("Origin") != s.cfg.PublicURL) {
 		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "a browser request must come from the dashboard")
 		return nil, errors.New("cross-origin socket refused")
@@ -320,7 +243,7 @@ func (s *Server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 // holdWhile keeps a lease on container until ctx ends.
-func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID) func() {
+func (s *server) holdWhile(ctx context.Context, container execution.ContainerID) func() {
 	holder := uuid.New()
 	ids := []execution.ContainerID{container}
 	_ = s.owners.Execution.HoldContainers(ctx, holder, ids)
@@ -348,14 +271,8 @@ func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID)
 
 // OpenContainerShell opens a login shell in the container over a
 // WebSocket.
-func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
@@ -364,7 +281,7 @@ func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellR
 
 type shellSocket struct {
 	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
+	server    *server
 	workspace identity.WorkspaceID
 	container execution.ContainerID
 	params    apitypes.OpenContainerShellParams
@@ -410,7 +327,7 @@ const containerWaitBackstop = 2 * time.Second
 
 // waitReady waits for a container to become ready, as a shell to a new
 // container does.
-func (s *Server) waitReady(ctx context.Context, container execution.ContainerID) (execution.ContainerRoute, error) {
+func (s *server) waitReady(ctx context.Context, container execution.ContainerID) (execution.ContainerRoute, error) {
 	deadline := time.Now().Add(shellReadyWait)
 	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, container.String())
 	defer cancel()
@@ -488,20 +405,14 @@ func (t containerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // OpenSshTunnel carries an SSH connection to a pod over a WebSocket.
-func (s *Server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	return sshTunnel{ctx: ctx, server: s, workspace: ws.ID, app: req.App, pod: req.Name}, nil
 }
 
 type sshTunnel struct {
 	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
+	server    *server
 	workspace identity.WorkspaceID
 	app, pod  string
 }
@@ -521,12 +432,12 @@ func (t sshTunnel) VisitOpenSshTunnelResponse(w http.ResponseWriter) error {
 		if errors.Is(err, execution.ErrNotFound) {
 			reason = fmt.Sprintf("pod %s/%s not found", t.app, t.pod)
 		}
-		_ = client.Close(websocket.StatusPolicyViolation, truncate(reason))
+		_ = client.Close(websocket.StatusPolicyViolation, database.Truncate(reason, 120))
 		return nil
 	}
 	container, host, release, err := s.owners.Edge.ConnectPod(ctx, t.workspace, pod.Workload)
 	if err != nil {
-		_ = client.Close(websocket.StatusTryAgainLater, truncate(err.Error()))
+		_ = client.Close(websocket.StatusTryAgainLater, database.Truncate(err.Error(), 120))
 		return nil
 	}
 	defer release()
@@ -538,7 +449,7 @@ func (t sshTunnel) VisitOpenSshTunnelResponse(w http.ResponseWriter) error {
 	out.Header.Set("Upgrade", edge.TunnelProtocol)
 	resp, err := s.owners.Edge.RoundTrip(ctx, host, uuid.UUID(container), edge.ControlAPI, out)
 	if err != nil {
-		_ = client.Close(websocket.StatusTryAgainLater, truncate(err.Error()))
+		_ = client.Close(websocket.StatusTryAgainLater, database.Truncate(err.Error(), 120))
 		return nil
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -588,11 +499,4 @@ func bridgeTunnel(ctx context.Context, client *websocket.Conn, tunnel io.ReadWri
 	}
 	cancel()
 	<-done
-}
-
-func truncate(reason string) string {
-	if len(reason) > 120 {
-		return reason[:120]
-	}
-	return reason
 }

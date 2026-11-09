@@ -15,13 +15,15 @@ import (
 
 const allocations = `-- name: Allocations :many
 with alive as (
-    select c.workspace_id, c.release_id, c.assigned_at, c.stopped_at,
-           (c.cpu_millis * $3::float8 + c.memory_bytes * $4::float8)::float8 as amount
+    select c.workspace_id, c.workload_id, c.assigned_at, c.stopped_at,
+           (c.cpu_millis * $2::float8 + c.memory_bytes * $3::float8
+            + c.gpu_count * $4::float8)::float8 as amount
     from containers c
     where c.workspace_id = any($5::uuid[]) and c.state <> 'stopped' and c.assigned_at < $6::timestamptz
     union all
-    select c.workspace_id, c.release_id, c.assigned_at, c.stopped_at,
-           (c.cpu_millis * $3::float8 + c.memory_bytes * $4::float8)::float8 as amount
+    select c.workspace_id, c.workload_id, c.assigned_at, c.stopped_at,
+           (c.cpu_millis * $2::float8 + c.memory_bytes * $3::float8
+            + c.gpu_count * $4::float8)::float8 as amount
     from containers c
     where c.workspace_id = any($5::uuid[]) and c.state = 'stopped'
       and c.stopped_at > $7::timestamptz and c.assigned_at < $6::timestamptz
@@ -34,21 +36,20 @@ select alive.workspace_id, a.id as app_id, a.name as app_name, buckets.bucket::t
        sum(extract(epoch from
                least(coalesce(alive.stopped_at, now()), buckets.bucket + $1::interval)
                - greatest(alive.assigned_at, buckets.bucket))
-           * (alive.amount + coalesce(release_gpus(r.spec), 0) * $2::float8))::float8 as value
+           * alive.amount)::float8 as value
 from alive
 join buckets on alive.assigned_at < buckets.bucket + $1::interval
             and coalesce(alive.stopped_at, now()) > buckets.bucket
-left join releases r on r.id = alive.release_id
-left join workloads w on w.id = r.workload_id
+left join workloads w on w.id = alive.workload_id
 left join apps a on a.id = w.app_id
 group by 1, 2, 3, 4
 `
 
 type AllocationsParams struct {
 	BucketWidth   pgtype.Interval
-	PerGpu        float64
 	PerCpuMilli   float64
 	PerMemoryByte float64
+	PerGpu        float64
 	WorkspaceIds  []uuid.UUID
 	EndAt         time.Time
 	StartAt       time.Time
@@ -63,17 +64,16 @@ type AllocationsRow struct {
 }
 
 // Reserved amount-seconds per workspace, app and bucket, where the amount
-// weighs CPU, memory and GPU reservations; a container reserves the GPUs
-// its release names. A container reserves capacity on its
-// host from assignment until it stops. The live partial index and the
+// weighs CPU, memory and GPU reservations. A container reserves capacity
+// on its host from assignment until it stops. The live partial index and the
 // stopped index together find every container alive in the range without
 // reading older history.
 func (q *Queries) Allocations(ctx context.Context, arg AllocationsParams) ([]AllocationsRow, error) {
 	rows, err := q.db.Query(ctx, allocations,
 		arg.BucketWidth,
-		arg.PerGpu,
 		arg.PerCpuMilli,
 		arg.PerMemoryByte,
+		arg.PerGpu,
 		arg.WorkspaceIds,
 		arg.EndAt,
 		arg.StartAt,

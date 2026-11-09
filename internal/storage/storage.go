@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -32,7 +33,7 @@ const (
 )
 
 // ErrInvalidDigest means a digest is not 64 lowercase hex characters.
-var ErrInvalidDigest = errors.New("invalid sha256 digest")
+var ErrInvalidDigest error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "invalid sha256 digest"}
 
 // Digest is the SHA-256 of an object's bytes.
 type Digest [32]byte
@@ -220,17 +221,17 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace identity.Workspa
 }
 
 // SourceURL is a presigned GET for a workspace's source archive.
-func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, time.Time, error) {
+func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, error) {
 	lifetime, err := s.signedLifetime(ctx, s.platform.client, downloadURLLifetime)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	req, err := s.platform.presign.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.platform.name),
 		Key:    aws.String(sourceKey(workspace, digest)),
 	}, s3.WithPresignExpires(lifetime))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("presign source download: %w", err)
+		return "", fmt.Errorf("presign source download: %w", err)
 	}
-	return req.URL, time.Now().Add(lifetime), nil
+	return req.URL, nil
 }

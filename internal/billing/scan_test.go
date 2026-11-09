@@ -103,8 +103,8 @@ insert into attempts (task_id, number, container_id, state, started_at, deadline
 select t.id, 1, $4, 'succeeded', $6, $5, $5 from t`, ws, rel.workload, rel.id, c, base.Add(10*time.Minute), base)
 	f.meter()
 
-	plan := f.explain(costRows, false, false, int64(0), uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, "", uuid.Nil, int32(51),
-		owner, base, base.Add(time.Hour), nil, &rel.app, &rel.workload, "", true)
+	plan := f.explain(costRows, owner, base, base.Add(time.Hour), nil, &rel.app, &rel.workload, "", true,
+		false, false, int64(0), uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, "", uuid.Nil, int32(51))
 	if strings.Contains(plan, "Seq Scan on attempts") || !strings.Contains(plan, "Index Cond: ((container_id = ") {
 		t.Errorf("costs by task scan attempt history:\n%s", plan)
 	}

@@ -13,18 +13,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 var (
 	// ErrTaskNotFinished means the task is still queued or running.
-	ErrTaskNotFinished = errors.New("task has not finished")
+	ErrTaskNotFinished error = &apitypes.Error{Code: apitypes.TaskNotFinished, Message: "the task has not finished"}
 	// ErrNoResult means the task finished without a result: it failed or
 	// was cancelled.
-	ErrNoResult = errors.New("task has no result")
+	ErrNoResult error = &apitypes.Error{Code: apitypes.NotFound, Message: "the task finished without a result"}
 	// ErrInvalidCursor means a page cursor did not come from this listing.
-	ErrInvalidCursor = errors.New("invalid page cursor")
+	ErrInvalidCursor error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 	// ErrInvalidFilter means a listing filter combination is unsupported.
 	ErrInvalidFilter = errors.New("invalid filter")
 )

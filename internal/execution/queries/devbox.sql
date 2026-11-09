@@ -1,7 +1,7 @@
 -- name: DevboxWorkload :one
 -- A pod deployment with its active release and app, in the workspace.
 select w.id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state, a.id as app_id,
-       w.active_release_id, r.spec, coalesce(r.start_failures, 0)::int as start_failures,
+       w.active_release_id, coalesce(r.spec, 'null')::jsonb as spec, coalesce(r.start_failures, 0)::int as start_failures,
        (r.load_error is not null)::bool as load_failed,
        (select count(*) from workloads o join apps oa on oa.id = o.app_id
         where oa.workspace_id = a.workspace_id and o.kind = 'pod' and o.name = w.name
@@ -20,8 +20,7 @@ select c.id, c.state, c.host_id, c.keep_warm_seconds, c.active_until,
        coalesce((select max(l.expires_at) from container_leases l where l.container_id = c.id), c.created_at)::timestamptz
            as last_connection
 from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = @workload_id and c.purpose = 'serve' and c.state <> 'stopped'
+where c.workload_id = @workload_id::uuid and c.purpose = 'serve' and c.state <> 'stopped'
 order by c.created_at desc, c.id desc
 limit 1;
 
@@ -30,8 +29,7 @@ limit 1;
 -- why: of those stopped after @since, or of all without one.
 select c.id, coalesce(c.exit_message, c.stop_reason)::text as reason
 from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = @workload_id and c.purpose = 'serve' and c.state = 'stopped'
+where c.workload_id = @workload_id::uuid and c.purpose = 'serve' and c.state = 'stopped'
   and c.stop_reason in ('start_failed', 'crashed', 'out_of_memory', 'load_error')
   and (sqlc.narg(since)::timestamptz is null or c.stopped_at > sqlc.narg(since))
 order by c.stopped_at desc

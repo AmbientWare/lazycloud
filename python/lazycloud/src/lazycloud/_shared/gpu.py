@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from functools import lru_cache
 
 from lazycloud._shared.enums import StringEnum
 
@@ -14,52 +13,20 @@ GpuInput = str | Sequence[str] | None
 
 
 class GpuType(StringEnum):
-    NoGPU = NO_GPU
+    """GPU models with scheduling and billing contracts, on the platform fleet or
+    customer hardware, and `Any` for whichever has capacity."""
+
     Any = GPU_ANY
-    A10 = "A10"
-    A10G = "A10G"
-    A100 = "A100"
-    A100_40 = "A100-40"
-    A100_80 = "A100-80"
-    A16 = "A16"
-    A30 = "A30"
-    A40 = "A40"
-    A4000 = "A4000"
-    A5000 = "A5000"
-    A6000 = "A6000"
-    B200 = "B200"
-    B300 = "B300"
-    GAUDI2 = "GAUDI2"
-    GH200 = "GH200"
-    H100 = "H100"
-    H200 = "H200"
-    L4 = "L4"
-    L40 = "L40"
-    L40S = "L40S"
-    RTX3090 = "RTX3090"
-    RTX4000Ada = "RTX4000Ada"
-    RTX4090 = "RTX4090"
-    RTX5090 = "RTX5090"
-    RTX6000 = "RTX6000"
-    RTX6000Ada = "RTX6000Ada"
-    RTXPro6000 = "RTXPro6000"
     T4 = "T4"
-    V100 = "V100"
-    V100_32 = "V100-32"
+    A10G = "A10G"
+    L4 = "L4"
+    L40S = "L40S"
+    A100_40 = "A100-40"
+    RTXPro6000 = "RTXPro6000"
+    H100 = "H100"
 
 
-SUPPORTED_GPU_TYPES: tuple[GpuType, ...] = (
-    GpuType.T4,
-    GpuType.A10G,
-    GpuType.L4,
-    GpuType.L40S,
-    GpuType.A100_40,
-    GpuType.RTXPro6000,
-    GpuType.H100,
-)
-"""Models with scheduling and billing contracts, on the platform fleet or customer hardware."""
-
-SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in SUPPORTED_GPU_TYPES)
+SUPPORTED_GPU_NAMES: frozenset[str] = frozenset(gpu.value for gpu in GpuType) - {GPU_ANY}
 
 
 _GPU_ALIASES: tuple[tuple[str, str], ...] = (
@@ -99,19 +66,14 @@ _GPU_ALIASES: tuple[tuple[str, str], ...] = (
 )
 
 
-@lru_cache(maxsize=256)
 def normalize_gpu_type(value: str) -> str:
-    """Resolve a provider or worker GPU label to a canonical model name.
-
-    Cached: billing normalises one label per streamed usage record, and the input
-    vocabulary is a handful of names.
-    """
+    """Resolve a GPU label to a canonical model name, or return it unchanged."""
 
     raw = value.strip()
     if raw == "" or raw == "0":
         return NO_GPU
 
-    key = compact_gpu_name(raw)
+    key = re.sub(r"[^A-Z0-9]+", "", raw.upper())
     for word in ("NVIDIA", "GEFORCE", "TESLA", "QUADRO"):
         key = key.replace(word, "")
 
@@ -128,10 +90,6 @@ def normalize_gpu_type(value: str) -> str:
         if alias in key:
             return gpu_type
     return raw
-
-
-def compact_gpu_name(value: str) -> str:
-    return re.sub(r"[^A-Z0-9]+", "", value.upper())
 
 
 def gpu_preference(value: GpuInput) -> tuple[str, ...]:
@@ -180,10 +138,8 @@ __all__ = [
     "GPU_ANY",
     "NO_GPU",
     "SUPPORTED_GPU_NAMES",
-    "SUPPORTED_GPU_TYPES",
     "GpuInput",
     "GpuType",
-    "compact_gpu_name",
     "gpu_preference",
     "normalize_gpu_type",
 ]

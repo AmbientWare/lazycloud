@@ -32,6 +32,15 @@ func TraceParentOf(ctx context.Context) string {
 	return carrier.Get("traceparent")
 }
 
+// StoredTraceParent is TraceParentOf for a nullable column: nil outside a
+// sampled span.
+func StoredTraceParent(ctx context.Context) *string {
+	if tp := TraceParentOf(ctx); tp != "" {
+		return &tp
+	}
+	return nil
+}
+
 // WithTraceParent returns ctx whose remote parent is traceparent, so a span
 // started from it joins that trace. An empty or malformed value returns ctx.
 func WithTraceParent(ctx context.Context, traceparent string) context.Context {

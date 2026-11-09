@@ -27,7 +27,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -59,24 +58,16 @@ const (
 
 var (
 	// ErrNotFound means the workspace has not resolved the image or build.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrNotReady means the image has not been published yet.
 	ErrNotReady = errors.New("image is not ready")
-	// ErrUnsupported means the definition asks for something the platform
-	// cannot do yet.
-	ErrUnsupported = errors.New("unsupported")
 	// ErrStaleBuild means the build already finished; its late outcome is
 	// discarded.
 	ErrStaleBuild = errors.New("the build already finished")
 )
 
-// InvalidError rejects a definition.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
-
 func invalid(format string, args ...any) error {
-	return &InvalidError{Reason: fmt.Sprintf(format, args...)}
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf(format, args...)}
 }
 
 var manifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -115,10 +106,13 @@ type Config struct {
 // PlatformTransferBackoff is Config.PlatformTransferBackoff in production.
 const PlatformTransferBackoff = time.Second
 
-// Validate refuses settings the owner cannot run with.
-func (c Config) Validate() error {
+// validate refuses settings the owner cannot run with.
+func (c Config) validate() error {
 	if c.PlatformTransferBackoff <= 0 {
 		return fmt.Errorf("images: the platform transfer backoff must be positive, not %s", c.PlatformTransferBackoff)
+	}
+	if c.ECR != nil && c.HostRole == "" {
+		return errors.New("images: an ECR image registry needs LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN, the role host logins are scoped from")
 	}
 	return nil
 }
@@ -202,7 +196,7 @@ type Images struct {
 // NewImages returns the images owner, or the error of a config it cannot
 // run with.
 func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) (*Images, error) {
-	if err := config.Validate(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 	return &Images{
@@ -500,7 +494,7 @@ func (i *Images) activeBuild(ctx context.Context, q *Queries, image Image, works
 		return nil, fmt.Errorf("read active build: %w", err)
 	}
 	b, err := i.buildOut(ctx, q, row.ID, image.ID, row.State, row.Failure, row.CreatedAt, row.FinishedAt)
-	b.traceparent = deref(row.Traceparent)
+	b.traceparent = database.Value(row.Traceparent)
 	return &b, err
 }
 
@@ -545,7 +539,7 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		// build can start between the check and the insert.
 		row, err := q.InsertBuild(ctx, InsertBuildParams{
 			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: alone, Mirror: kind == buildSharedMirror, ContextSha256: p.spec.context,
-			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(), Traceparent: traceparent(ctx),
+			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(), Traceparent: telemetry.StoredTraceParent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
@@ -683,7 +677,7 @@ func (i *Images) pull(ctx context.Context, reference, architecture string, windo
 }
 
 func (i *Images) buildOut(ctx context.Context, q *Queries, id uuid.UUID, imageID, state string, failure *string, created time.Time, finished *time.Time) (Build, error) {
-	b := Build{ID: id, ImageID: imageID, Status: BuildStatus(state), Failure: deref(failure), CreatedAt: created, FinishedAt: finished}
+	b := Build{ID: id, ImageID: imageID, Status: BuildStatus(state), Failure: database.Value(failure), CreatedAt: created, FinishedAt: finished}
 	phase, err := q.BuildPhase(ctx, &id)
 	if err != nil {
 		return Build{}, fmt.Errorf("read build phase: %w", err)
@@ -969,9 +963,9 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		pushed.scope = &started.WorkspaceID
 	}
 	pushed.layers, err = i.layersOf(ctx, pushed.reference, started.Architecture)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return nil, fail(rejected.Reason, false)
+	var rejected *apitypes.Error
+	if errors.As(err, &rejected) && rejected.Code == apitypes.InvalidRequest {
+		return nil, fail(rejected.Message, false)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("check pushed image: %w", err)
@@ -1062,7 +1056,7 @@ func (i *Images) endBuild(ctx context.Context, build uuid.UUID, digest []byte, f
 		if end.failure == "" {
 			err = q.SucceedBuild(ctx, build)
 		} else {
-			err = q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(end.failure), Transient: end.transient})
+			err = q.FailBuild(ctx, FailBuildParams{ID: build, Failure: database.TruncateTail(end.failure, maxFailureBytes), Transient: end.transient})
 		}
 		if err != nil {
 			return fmt.Errorf("end build: %w", err)
@@ -1210,7 +1204,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return nil, fmt.Errorf("reset build log count: %w", err)
 		}
 		// The next attempt's container joins the build's trace.
-		ctx := telemetry.WithTraceParent(ctx, deref(build.Traceparent))
+		ctx := telemetry.WithTraceParent(ctx, database.Value(build.Traceparent))
 		if build.Mirror {
 			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes)
 			return nil, err
@@ -1220,19 +1214,9 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return nil, fmt.Errorf("read build GPU: %w", err)
 		}
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes, gpu)
-		var unpaid *billing.PaymentRequiredError
-		var limit *billing.LimitError
-		var unoffered *billing.GPUUnavailableError
-		if errors.As(err, &unpaid) || errors.As(err, &limit) || errors.As(err, &unoffered) {
+		if code := apitypes.CodeOf(err); code == apitypes.PaymentRequired || code == apitypes.LimitReached || code == apitypes.Unsupported {
 			return fail(reason+"; "+err.Error(), false)
 		}
 		return nil, err
 	})
-}
-
-func truncate(s string) string {
-	if len(s) <= maxFailureBytes {
-		return s
-	}
-	return "…" + s[len(s)-maxFailureBytes:]
 }

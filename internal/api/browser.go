@@ -14,7 +14,7 @@ import (
 // Browsers treat http://localhost as secure, so local development works.
 const (
 	SessionCookie = "__Host-lazycloud_session"
-	SignInCookie  = "__Host-lazycloud_sign_in"
+	signInCookie  = "__Host-lazycloud_sign_in"
 )
 
 // Browser sign-in routes. They answer with redirects because the caller is
@@ -29,7 +29,7 @@ const (
 // startSignIn sets the sign-in cookie and sends the browser to GitHub. A
 // browser whose session cookie is still live goes straight to its return
 // path, so a sign-in link never makes a signed-in person sign in again.
-func (s *Server) startSignIn(w http.ResponseWriter, r *http.Request) {
+func (s *server) startSignIn(w http.ResponseWriter, r *http.Request) {
 	returnTo := r.URL.Query().Get("return_to")
 	if cookie, err := r.Cookie(SessionCookie); err == nil && cookie.Value != "" {
 		if _, err := s.owners.Identity.AuthenticateSession(r.Context(), cookie.Value); err == nil {
@@ -59,7 +59,7 @@ func (s *Server) startSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: SignInCookie, Value: start.Cookie, Path: "/", MaxAge: int(identity.SignInTTL / time.Second),
+		Name: signInCookie, Value: start.Cookie, Path: "/", MaxAge: int(identity.SignInTTL / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, start.AuthorizeURL, http.StatusFound)
@@ -67,14 +67,14 @@ func (s *Server) startSignIn(w http.ResponseWriter, r *http.Request) {
 
 // completeSignIn redeems GitHub's code, sets the session cookie and lands
 // the browser on its return path. GitHub's own error text is never shown.
-func (s *Server) completeSignIn(w http.ResponseWriter, r *http.Request) {
+func (s *server) completeSignIn(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	http.SetCookie(w, expiredCookie(SignInCookie))
+	http.SetCookie(w, expiredCookie(signInCookie))
 	if query.Get("error") != "" {
 		signInFailed(w, r, "access_denied")
 		return
 	}
-	cookie, err := r.Cookie(SignInCookie)
+	cookie, err := r.Cookie(signInCookie)
 	if err != nil {
 		signInFailed(w, r, "invalid_state")
 		return

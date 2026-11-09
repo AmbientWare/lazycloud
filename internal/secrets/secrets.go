@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -32,11 +33,6 @@ type NotFoundError struct{ Name string }
 
 func (e *NotFoundError) Error() string { return "secret not found: " + e.Name }
 
-// ExistsError rejects creating a secret that already exists.
-type ExistsError struct{ Name string }
-
-func (e *ExistsError) Error() string { return "secret already exists: " + e.Name }
-
 // UnreadableError means a stored secret cannot be opened: its master key is
 // not held here, or the row does not authenticate.
 type UnreadableError struct {
@@ -50,15 +46,8 @@ func (e *UnreadableError) Error() string {
 
 func (e *UnreadableError) Unwrap() error { return e.Err }
 
-// ReservedNameError rejects a name in the platform's namespace.
-type ReservedNameError struct{ Name string }
-
-func (e *ReservedNameError) Error() string {
-	return fmt.Sprintf("secret name %s is reserved: names starting with %s belong to the platform", e.Name, reservedPrefix)
-}
-
 // ErrInvalidCursor means a list cursor was not produced by List.
-var ErrInvalidCursor = errors.New("invalid cursor")
+var ErrInvalidCursor error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from a previous page"}
 
 // Secret is a secret's metadata; values leave the owner only through Reveal
 // and Resolve.
@@ -112,19 +101,12 @@ func (s *Secrets) oneWithUsers(ctx context.Context, workspace identity.Workspace
 type Secrets struct {
 	pool    *pgxpool.Pool
 	queries *Queries
-	keys    KeyWrapper
+	keys    *FileKey
 }
 
 // NewSecrets returns the secrets owner; keys wraps every data key.
-func NewSecrets(pool *pgxpool.Pool, keys KeyWrapper) *Secrets {
+func NewSecrets(pool *pgxpool.Pool, keys *FileKey) *Secrets {
 	return &Secrets{pool: pool, queries: New(pool), keys: keys}
-}
-
-type sealed struct {
-	keyID      string
-	wrappedKey []byte
-	nonce      []byte
-	ciphertext []byte
 }
 
 // additionalData binds a ciphertext to its workspace and name, so a row
@@ -133,39 +115,21 @@ func additionalData(workspace identity.WorkspaceID, name string) []byte {
 	return []byte("lazycloud-secret:v1\x00" + workspace.String() + "\x00" + name)
 }
 
-func (s *Secrets) seal(ctx context.Context, workspace identity.WorkspaceID, name, value string) (sealed, error) {
-	dataKey := make([]byte, masterKeyBytes)
-	if _, err := rand.Read(dataKey); err != nil {
-		return sealed{}, fmt.Errorf("generate data key: %w", err)
-	}
-	aead, err := newAEAD(dataKey)
+// seal returns the row that stores value under name.
+func (s *Secrets) seal(workspace identity.WorkspaceID, name, value string) (InsertSecretParams, error) {
+	e, err := s.keys.seal([]byte(value), additionalData(workspace, name))
 	if err != nil {
-		return sealed{}, err
+		return InsertSecretParams{}, err
 	}
-	box, err := seal(aead, []byte(value), additionalData(workspace, name))
-	if err != nil {
-		return sealed{}, err
-	}
-	wrapped, err := s.keys.Wrap(ctx, dataKey)
-	if err != nil {
-		return sealed{}, fmt.Errorf("wrap data key: %w", err)
-	}
-	return sealed{
-		keyID: s.keys.KeyID(), wrappedKey: wrapped,
-		nonce: box[:aead.NonceSize()], ciphertext: box[aead.NonceSize():],
+	return InsertSecretParams{
+		WorkspaceID: uuid.UUID(workspace), Name: name, KeyID: e.KeyID, WrappedKey: e.WrappedKey,
+		Nonce: e.Box[:gcmNonceSize], Ciphertext: e.Box[gcmNonceSize:],
 	}, nil
 }
 
-func (s *Secrets) open(ctx context.Context, workspace identity.WorkspaceID, row SealedSecretsRow) (string, error) {
-	dataKey, err := s.keys.Unwrap(ctx, row.KeyID, row.WrappedKey)
-	if err != nil {
-		return "", &UnreadableError{Name: row.Name, Err: fmt.Errorf("unwrap data key: %w", err)}
-	}
-	aead, err := newAEAD(dataKey)
-	if err != nil {
-		return "", &UnreadableError{Name: row.Name, Err: err}
-	}
-	value, err := open(aead, append(append([]byte(nil), row.Nonce...), row.Ciphertext...), additionalData(workspace, row.Name))
+func (s *Secrets) open(workspace identity.WorkspaceID, row SealedSecretsRow) (string, error) {
+	box := append(append([]byte(nil), row.Nonce...), row.Ciphertext...)
+	value, err := s.keys.open(envelope{KeyID: row.KeyID, WrappedKey: row.WrappedKey, Box: box}, additionalData(workspace, row.Name))
 	if err != nil {
 		return "", &UnreadableError{Name: row.Name, Err: err}
 	}
@@ -174,7 +138,7 @@ func (s *Secrets) open(ctx context.Context, workspace identity.WorkspaceID, row 
 
 func checkName(name string) error {
 	if strings.HasPrefix(name, reservedPrefix) && name != CallbackSigningKey {
-		return &ReservedNameError{Name: name}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("secret name %s is reserved: names starting with %s belong to the platform", name, reservedPrefix)}
 	}
 	return nil
 }
@@ -183,21 +147,18 @@ func secretOf(name string, created, updated time.Time) Secret {
 	return Secret{Name: name, CreatedAt: created, UpdatedAt: updated}
 }
 
-// Create stores a new secret. An existing name returns *ExistsError.
+// Create stores a new secret. An existing name is a Conflict.
 func (s *Secrets) Create(ctx context.Context, workspace identity.WorkspaceID, name, value string) (Secret, error) {
 	if err := checkName(name); err != nil {
 		return Secret{}, err
 	}
-	box, err := s.seal(ctx, workspace, name, value)
+	box, err := s.seal(workspace, name, value)
 	if err != nil {
 		return Secret{}, err
 	}
-	row, err := s.queries.InsertSecret(ctx, InsertSecretParams{
-		WorkspaceID: uuid.UUID(workspace), Name: name,
-		KeyID: box.keyID, WrappedKey: box.wrappedKey, Nonce: box.nonce, Ciphertext: box.ciphertext,
-	})
+	row, err := s.queries.InsertSecret(ctx, box)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Secret{}, &ExistsError{Name: name}
+		return Secret{}, &apitypes.Error{Code: apitypes.Conflict, Message: "secret already exists: " + name}
 	}
 	if err != nil {
 		return Secret{}, fmt.Errorf("insert secret: %w", err)
@@ -210,14 +171,11 @@ func (s *Secrets) Set(ctx context.Context, workspace identity.WorkspaceID, name,
 	if err := checkName(name); err != nil {
 		return Secret{}, err
 	}
-	box, err := s.seal(ctx, workspace, name, value)
+	box, err := s.seal(workspace, name, value)
 	if err != nil {
 		return Secret{}, err
 	}
-	row, err := s.queries.UpsertSecret(ctx, UpsertSecretParams{
-		WorkspaceID: uuid.UUID(workspace), Name: name,
-		KeyID: box.keyID, WrappedKey: box.wrappedKey, Nonce: box.nonce, Ciphertext: box.ciphertext,
-	})
+	row, err := s.queries.UpsertSecret(ctx, UpsertSecretParams(box))
 	if err != nil {
 		return Secret{}, fmt.Errorf("upsert secret: %w", err)
 	}
@@ -227,13 +185,13 @@ func (s *Secrets) Set(ctx context.Context, workspace identity.WorkspaceID, name,
 // Update replaces an existing secret's value. A missing name returns
 // *NotFoundError.
 func (s *Secrets) Update(ctx context.Context, workspace identity.WorkspaceID, name, value string) (Secret, error) {
-	box, err := s.seal(ctx, workspace, name, value)
+	box, err := s.seal(workspace, name, value)
 	if err != nil {
 		return Secret{}, err
 	}
 	row, err := s.queries.UpdateSecret(ctx, UpdateSecretParams{
-		WorkspaceID: uuid.UUID(workspace), Name: name,
-		KeyID: box.keyID, WrappedKey: box.wrappedKey, Nonce: box.nonce, Ciphertext: box.ciphertext,
+		KeyID: box.KeyID, WrappedKey: box.WrappedKey, Nonce: box.Nonce, Ciphertext: box.Ciphertext,
+		WorkspaceID: box.WorkspaceID, Name: name,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, &NotFoundError{Name: name}
@@ -266,7 +224,7 @@ func (s *Secrets) Reveal(ctx context.Context, workspace identity.WorkspaceID, na
 	if len(rows) == 0 {
 		return Secret{}, "", &NotFoundError{Name: name}
 	}
-	value, err := s.open(ctx, workspace, rows[0])
+	value, err := s.open(workspace, rows[0])
 	if err != nil {
 		return Secret{}, "", err
 	}
@@ -343,7 +301,7 @@ func (s *Secrets) Resolve(ctx context.Context, workspace identity.WorkspaceID, n
 	}
 	values := make(map[string]string, len(rows))
 	for _, row := range rows {
-		value, err := s.open(ctx, workspace, row)
+		value, err := s.open(workspace, row)
 		if err != nil {
 			return nil, err
 		}
@@ -374,8 +332,7 @@ func (s *Secrets) SigningKey(ctx context.Context, workspace identity.WorkspaceID
 	}
 	key := "whsec_" + base64.RawURLEncoding.EncodeToString(random)
 	if _, err := s.Create(ctx, workspace, CallbackSigningKey, key); err != nil {
-		var exists *ExistsError
-		if !errors.As(err, &exists) {
+		if apitypes.CodeOf(err) != apitypes.Conflict {
 			return "", err
 		}
 		// A concurrent delivery created it first.

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -80,34 +81,23 @@ func NewSchedules(pool *pgxpool.Pool, e *execution.Execution) *Schedules {
 	return &Schedules{pool: pool, queries: New(pool), execution: e}
 }
 
-// FireResult counts one Fire pass.
-type FireResult struct {
-	Admitted int
-	Skipped  int
-}
-
 // Fire admits every due occurrence, in batches of fireBatch. Each schedule
 // commits with its occurrence: the task, when admission accepts it, and the
 // next due time, computed from now so missed occurrences collapse into one.
 // A rejected or failed admission records why and still advances, so one
 // broken schedule never holds back the rest.
-func (s *Schedules) Fire(ctx context.Context, logger *slog.Logger) (FireResult, error) {
-	var total FireResult
+func (s *Schedules) Fire(ctx context.Context, logger *slog.Logger) error {
 	for {
-		result, claimed, err := s.fireBatch(ctx, logger)
-		total.Admitted += result.Admitted
-		total.Skipped += result.Skipped
+		claimed, err := s.fireBatch(ctx, logger)
 		if err != nil || claimed < fireBatch {
-			return total, err
+			return err
 		}
 	}
 }
 
-func (s *Schedules) fireBatch(ctx context.Context, logger *slog.Logger) (FireResult, int, error) {
-	var result FireResult
+func (s *Schedules) fireBatch(ctx context.Context, logger *slog.Logger) (int, error) {
 	var claimed int
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		result = FireResult{}
 		q := s.queries.WithTx(tx)
 		due, err := q.LockDueSchedules(ctx, fireBatch)
 		if err != nil {
@@ -124,11 +114,9 @@ func (s *Schedules) fireBatch(ctx context.Context, logger *slog.Logger) (FireRes
 			if task != nil {
 				id := uuid.UUID(*task)
 				params.TaskID = &id
-				result.Admitted++
 				logger.InfoContext(ctx, "schedule admitted task", "workload_id", row.WorkloadID, "scheduled_for", row.NextFireAt, "task_id", id)
 			} else {
 				params.Error = &reason
-				result.Skipped++
 				logger.InfoContext(ctx, "schedule admitted no task", "workload_id", row.WorkloadID, "scheduled_for", row.NextFireAt, "reason", reason)
 			}
 			if err := q.RecordOccurrence(ctx, params); err != nil {
@@ -138,9 +126,9 @@ func (s *Schedules) fireBatch(ctx context.Context, logger *slog.Logger) (FireRes
 		return nil
 	})
 	if err != nil {
-		return FireResult{}, 0, fmt.Errorf("fire schedules: %w", err)
+		return 0, fmt.Errorf("fire schedules: %w", err)
 	}
-	return result, claimed, nil
+	return claimed, nil
 }
 
 // admit submits one occurrence under a savepoint. It returns the task, or
@@ -162,14 +150,14 @@ func (s *Schedules) admit(ctx context.Context, tx pgx.Tx, row LockDueSchedulesRo
 		task = &tasks[0].ID
 		return nil
 	})
-	var tooMany *execution.TooManyPendingError
+	var tooMany *apitypes.Error
 	switch {
 	case err == nil:
 		return task, ""
 	case errors.Is(err, execution.ErrNotAccepting):
 		return nil, "the function is stopped or its app is paused"
-	case errors.As(err, &tooMany):
-		return nil, tooMany.Error()
+	case errors.As(err, &tooMany) && tooMany.Code == apitypes.TooManyPendingTasks:
+		return nil, tooMany.Message
 	case errors.Is(err, execution.ErrNotFound):
 		return nil, "the function has no active release"
 	}

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 func TestGitHubSignIn(t *testing.T) {
@@ -188,8 +190,7 @@ func TestSignOutEndsOnlyThatSession(t *testing.T) {
 		t.Fatalf("other session: %v", err)
 	}
 	token := f.tokenPrincipal("nine@example.com", "")
-	var conflict *ConflictError
-	if err := f.id.SignOut(ctx, token); !errors.As(err, &conflict) {
+	if err := f.id.SignOut(ctx, token); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("token sign-out: %v", err)
 	}
 	// An expired session stops working and housekeeping removes it.
@@ -241,21 +242,19 @@ func TestDeviceLogin(t *testing.T) {
 	// A token restricted to one workspace cannot grant account access.
 	ws, _ := f.id.Workspaces(ctx, person)
 	restricted := f.tokenPrincipal("dev@example.com", ws[0].Name)
-	var accountErr *AccountError
-	if _, err := f.id.ApproveDeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
+	if _, err := f.id.ApproveDeviceLogin(ctx, restricted, start.UserCode); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("restricted approve: %v", err)
 	}
-	if _, err := f.id.DenyDeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
+	if _, err := f.id.DenyDeviceLogin(ctx, restricted, start.UserCode); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("restricted deny: %v", err)
 	}
-	if _, err := f.id.DeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
+	if _, err := f.id.DeviceLogin(ctx, restricted, start.UserCode); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("restricted read: %v", err)
 	}
 	if _, err := f.id.ApproveDeviceLogin(ctx, person, start.UserCode); err != nil {
 		t.Fatal(err)
 	}
-	var conflict *ConflictError
-	if _, err := f.id.DenyDeviceLogin(ctx, person, start.UserCode); !errors.As(err, &conflict) {
+	if _, err := f.id.DenyDeviceLogin(ctx, person, start.UserCode); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("deny after approve: %v", err)
 	}
 	f.exec("update device_codes set last_polled_at = now() - interval '1 minute'")
@@ -278,7 +277,7 @@ func TestDeviceLogin(t *testing.T) {
 		t.Fatalf("device tokens %+v", page)
 	}
 	// The code is spent.
-	if _, err := f.id.PollDeviceLogin(ctx, start.DeviceCode); !errors.As(err, &conflict) {
+	if _, err := f.id.PollDeviceLogin(ctx, start.DeviceCode); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("second claim: %v", err)
 	}
 
@@ -295,14 +294,13 @@ func TestDeviceLogin(t *testing.T) {
 	if p, err := f.id.PollDeviceLogin(ctx, expired.DeviceCode); err != nil || p.Status != DeviceExpired {
 		t.Fatalf("expired poll %+v %v", p, err)
 	}
-	if _, err := f.id.ApproveDeviceLogin(ctx, person, expired.UserCode); !errors.As(err, &conflict) {
+	if _, err := f.id.ApproveDeviceLogin(ctx, person, expired.UserCode); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("approve expired: %v", err)
 	}
 	if _, err := f.id.PollDeviceLogin(ctx, "dc_unknown"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown device code: %v", err)
 	}
-	var invalid *InvalidError
-	if _, err := f.id.DeviceLogin(ctx, person, "BCD"); !errors.As(err, &invalid) {
+	if _, err := f.id.DeviceLogin(ctx, person, "BCD"); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("short code: %v", err)
 	}
 }
@@ -325,8 +323,7 @@ func TestAccountTokens(t *testing.T) {
 
 	day := 24 * time.Hour
 	for _, bad := range []time.Duration{time.Hour, 91 * day} {
-		var invalid *InvalidError
-		if _, _, err := f.id.CreateAccountToken(ctx, owner, "x", &bad); !errors.As(err, &invalid) {
+		if _, _, err := f.id.CreateAccountToken(ctx, owner, "x", &bad); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("lifetime %s: %v", bad, err)
 		}
 	}
@@ -366,8 +363,7 @@ func TestAccountTokens(t *testing.T) {
 	}
 
 	// A token cannot revoke itself; another account's token is not found.
-	var conflict *ConflictError
-	if err := f.id.RevokeToken(ctx, owner, *owner.Token); !errors.As(err, &conflict) {
+	if err := f.id.RevokeToken(ctx, owner, *owner.Token); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("self revoke: %v", err)
 	}
 	outsider := f.account("outsider@example.com", false)
@@ -418,8 +414,7 @@ func TestAccountTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	restricted := f.tokenPrincipal("owner@example.com", ws.Name)
-	var accountErr *AccountError
-	if _, _, err := f.id.CreateAccountToken(ctx, restricted, "x", nil); !errors.As(err, &accountErr) {
+	if _, _, err := f.id.CreateAccountToken(ctx, restricted, "x", nil); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("restricted create: %v", err)
 	}
 }

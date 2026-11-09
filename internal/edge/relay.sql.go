@@ -66,21 +66,6 @@ func (q *Queries) HostEdge(ctx context.Context, hostID uuid.UUID) (HostEdgeRow, 
 	return i, err
 }
 
-const linkHost = `-- name: LinkHost :exec
-insert into host_data_links (host_id, edge_id) values ($1, $2)
-on conflict (host_id) do update set edge_id = excluded.edge_id, updated_at = now()
-`
-
-type LinkHostParams struct {
-	HostID uuid.UUID
-	EdgeID uuid.UUID
-}
-
-func (q *Queries) LinkHost(ctx context.Context, arg LinkHostParams) error {
-	_, err := q.db.Exec(ctx, linkHost, arg.HostID, arg.EdgeID)
-	return err
-}
-
 const linkHosts = `-- name: LinkHosts :exec
 insert into host_data_links (host_id, edge_id)
 select h.id, $1 from hosts h where h.id = any($2::uuid[])
@@ -92,8 +77,8 @@ type LinkHostsParams struct {
 	HostIds []uuid.UUID
 }
 
-// Restates every host whose Listen call this edge holds, so links lost
-// with an expired registration come back.
+// Records that this edge holds the hosts' Listen calls; restating them
+// brings back links lost with an expired registration.
 func (q *Queries) LinkHosts(ctx context.Context, arg LinkHostsParams) error {
 	_, err := q.db.Exec(ctx, linkHosts, arg.EdgeID, arg.HostIds)
 	return err

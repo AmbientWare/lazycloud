@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // account is an AWS account the fleet runs hosts in: the platform's own,
@@ -69,7 +71,7 @@ func (c *Compute) connectionAccount(row ConnectionAccountsRow) account {
 	return account{
 		connection: &row.ID, authorization: &row.AuthorizationID, awsAccount: accountOfRole(row.RoleArn),
 		scope:    c.aws().assume(row.RoleArn, row.ExternalID, "lazycloud-fleet-"+row.ID.String()[:8], row.ID.String()),
-		nodeRole: deref(row.NodeRoleArn), instanceProfile: deref(row.NodeInstanceProfile),
+		nodeRole: database.Value(row.NodeRoleArn), instanceProfile: database.Value(row.NodeInstanceProfile),
 		pays: true, hosting: row.Hosting, managed: row.Managed, inUse: row.InUse,
 	}
 }
@@ -106,7 +108,7 @@ func (c *Compute) accountOf(ctx context.Context, q *Queries, connection *uuid.UU
 		}
 		a = c.connectionAccount(rows[0])
 	}
-	accounts, err := c.withNetworks(ctx, q, []account{a}, ptr(a.key()))
+	accounts, err := c.withNetworks(ctx, q, []account{a}, new(a.key()))
 	if err != nil {
 		return account{}, err
 	}
@@ -156,29 +158,27 @@ const (
 // account that takes new hosts, unless it was found within networkRecheck
 // or failed within networkRetry, and records the network or why it failed.
 // It holds the networks lock, so no removal deletes an account's network
-// while it runs, and rereads each account under it. It reports how many
-// networks it ensured.
-func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int, error) {
+// while it runs, and rereads each account under it.
+func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) error {
 	release, locked, err := c.networksLock(ctx)
 	if err != nil || !locked {
-		return 0, err
+		return err
 	}
 	defer release()
 	accounts, err := c.accounts(ctx, c.queries)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	checked, err := c.queries.CheckedNetworks(ctx, CheckedNetworksParams{
 		EnsuredSeconds: networkRecheck.Seconds(), FailedSeconds: networkRetry.Seconds(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("read checked networks: %w", err)
+		return fmt.Errorf("read checked networks: %w", err)
 	}
 	done := map[CheckedNetworksRow]bool{}
 	for _, row := range checked {
 		done[row] = true
 	}
-	ensured := 0
 	var failed error
 	for _, a := range accounts {
 		for _, region := range c.fleet.Regions {
@@ -187,16 +187,15 @@ func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int,
 			}
 			if err := c.ensureAccountNetwork(ctx, a, region); err != nil {
 				if ctx.Err() != nil {
-					return ensured, err
+					return err
 				}
 				logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
 				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
 				continue
 			}
-			ensured++
 		}
 	}
-	return ensured, failed
+	return failed
 }
 
 // ensureAccountNetwork finds or makes a's network in region, if a still
@@ -211,7 +210,7 @@ func (c *Compute) ensureAccountNetwork(ctx context.Context, a account, region st
 	network, err := c.ensureNetwork(ctx, now.scope, region)
 	if err != nil {
 		if rerr := c.queries.FailFleetNetwork(context.WithoutCancel(ctx), FailFleetNetworkParams{
-			Owner: a.key(), Region: region, Error: ptr(truncate(err.Error())),
+			Owner: a.key(), Region: region, Error: new(database.Truncate(err.Error(), maxMessage)),
 		}); rerr != nil {
 			return errors.Join(err, fmt.Errorf("record the failure: %w", rerr))
 		}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { CircleCheck, Loader2 } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 
 import { FeedbackKindIcon } from "@/components/shared/FeedbackKindIcon";
 import { Button } from "@/components/ui/button";
@@ -134,8 +134,7 @@ export function FeedbackDialog({ onClose }: { onClose: () => void }) {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" size="sm" disabled={send.isPending || empty}>
-                  {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                <Button pending={send.isPending} type="submit" size="sm" disabled={empty}>
                   Send feedback
                 </Button>
               </div>

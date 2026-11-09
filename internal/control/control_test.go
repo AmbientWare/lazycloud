@@ -156,9 +156,8 @@ func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
 	_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{
 		Workloads: []apitypes.WorkloadSpec{function("summarize"), missing},
 	})
-	var sourceErr *SourceMissingError
-	if !errors.As(err, &sourceErr) || sourceErr.Function != "export" {
-		t.Fatalf("got %v, want SourceMissingError for export", err)
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), "function export:") {
+		t.Fatalf("got %v, want a missing source refusal for export", err)
 	}
 	var apps int
 	if err := pool.QueryRow(t.Context(), "select count(*) from apps").Scan(&apps); err != nil {

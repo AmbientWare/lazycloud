@@ -1,5 +1,6 @@
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import { Loader2 } from "lucide-react";
 import type * as React from "react";
 
 import { cn } from "@/lib/utils";
@@ -37,11 +38,40 @@ const buttonVariants = cva(
 export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    /** Leading icon, replaced by a spinner while `pending`. */
+    icon?: React.ReactNode;
+    /** Disables the button and shows a spinner while its action runs. */
+    pending?: boolean;
   };
 
-export function Button({ className, variant, size, asChild = false, ...props }: ButtonProps) {
+export function Button({
+  className,
+  variant,
+  size,
+  asChild = false,
+  icon,
+  pending = false,
+  disabled,
+  children,
+  ...props
+}: ButtonProps) {
   const Component = asChild ? Slot : "button";
-  return <Component className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+  return (
+    <Component
+      className={cn(buttonVariants({ variant, size }), className)}
+      disabled={disabled || pending}
+      {...props}
+    >
+      {asChild ? (
+        children
+      ) : (
+        <>
+          {pending ? <Loader2 className="animate-spin" /> : icon}
+          {children}
+        </>
+      )}
+    </Component>
+  );
 }
 
 export { buttonVariants };

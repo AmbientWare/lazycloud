@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -54,22 +53,7 @@ type dataLink struct {
 // while it is open.
 func (d *dataLink) run(ctx context.Context) {
 	defer d.streams.Wait()
-	delay := minSessionBackoff
-	for ctx.Err() == nil {
-		began := time.Now()
-		err := d.listen(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if time.Since(began) > time.Minute {
-			delay = minSessionBackoff
-		}
-		d.a.log.Warn("data connection ended", "error", err, "retry_in", delay)
-		if !sleep(ctx, delay/2+rand.N(delay/2+1)) { //nolint:gosec // jitter needs no cryptographic randomness
-			return
-		}
-		delay = min(2*delay, maxSessionBackoff)
-	}
+	_ = d.a.reconnect(ctx, "data connection", nil, d.listen)
 }
 
 func (d *dataLink) listen(ctx context.Context) error {
@@ -234,9 +218,7 @@ func forwardHTTP(ctx context.Context, stream forwardStream, in *inbound, transpo
 		return
 	}
 	req.Host = head.GetHost()
-	for _, h := range head.GetHeaders() {
-		req.Header.Add(h.GetName(), h.GetValue())
-	}
+	hostproto.HeadersIn(req.Header, head.GetHeaders())
 	req.ContentLength = -1
 	if length := req.Header.Get("Content-Length"); length != "" {
 		if n, err := strconv.ParseInt(length, 10, 64); err == nil && n >= 0 {
@@ -263,14 +245,8 @@ func forwardHTTP(ctx context.Context, stream forwardStream, in *inbound, transpo
 		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_BUSY, reason))
 		return
 	}
-	headers := make([]*hostproto.Header, 0, len(resp.Header))
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, &hostproto.Header{Name: name, Value: value})
-		}
-	}
 	if err := stream.Send(&hostproto.ForwardUp{Body: &hostproto.ForwardUp_Head{Head: &hostproto.ResponseHead{
-		Status: int32(resp.StatusCode), Headers: headers, //nolint:gosec // HTTP status codes fit
+		Status: int32(resp.StatusCode), Headers: hostproto.HeadersOut(resp.Header), //nolint:gosec // HTTP status codes fit
 	}}}); err != nil {
 		return
 	}

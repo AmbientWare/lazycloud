@@ -148,7 +148,7 @@ func (b *Billing) SetPreferences(ctx context.Context, user uuid.UUID, p apitypes
 			return fmt.Errorf("lock account: %w", err)
 		}
 		if p.ReloadEnabled && account.PaymentMethodAttachedAt == nil {
-			return &PaymentRequiredError{Message: "add a payment method before turning on automatic reload"}
+			return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add a payment method before turning on automatic reload"}
 		}
 		if err := q.SetPreferences(ctx, SetPreferencesParams{
 			UserID: user, MonthlyUsageLimitNanos: p.MonthlyUsageLimitNanos, ReloadEnabled: p.ReloadEnabled,
@@ -179,7 +179,7 @@ func (b *Billing) ResumeReload(ctx context.Context, user uuid.UUID) (apitypes.Bi
 			return fmt.Errorf("lock account: %w", err)
 		}
 		if account.PaymentMethodAttachedAt == nil {
-			return &PaymentRequiredError{Message: "add a payment method before resuming automatic reload"}
+			return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add a payment method before resuming automatic reload"}
 		}
 		if err := q.ResumeReload(ctx, user); err != nil {
 			return fmt.Errorf("resume reload: %w", err)

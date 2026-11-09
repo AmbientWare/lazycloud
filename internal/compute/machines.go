@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -94,7 +95,7 @@ type MachineJoin struct {
 func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinCommand, error) {
 	release, err := c.queries.TargetRelease(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return JoinCommand{}, &UnavailableError{Message: "no agent release is published"}
+		return JoinCommand{}, &apitypes.Error{Code: apitypes.Unavailable, Message: "no agent release is published"}
 	}
 	if err != nil {
 		return JoinCommand{}, fmt.Errorf("read agent release: %w", err)
@@ -119,7 +120,7 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 		if ws, err := q.MachineNameConflict(ctx, MachineNameConflictParams{
 			Name: req.Name, AccountID: account, WorkspaceIds: req.Workspaces,
 		}); err == nil {
-			return &ConflictError{Message: fmt.Sprintf("machine %q already serves workspace %q under another owner", req.Name, ws)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("machine %q already serves workspace %q under another owner", req.Name, ws)}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check machine name: %w", err)
 		}
@@ -127,8 +128,8 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			host, err = q.InsertMachine(ctx, InsertMachineParams{Name: req.Name, AccountID: &account, GpuType: gpu})
-			if isUniqueViolation(err) {
-				return &ConflictError{Message: fmt.Sprintf("machine %q is already joined", req.Name)}
+			if database.IsUniqueViolation(err) {
+				return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("machine %q is already joined", req.Name)}
 			}
 			if err != nil {
 				return fmt.Errorf("insert machine: %w", err)
@@ -136,7 +137,7 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 		case err != nil:
 			return fmt.Errorf("lock machine: %w", err)
 		case Phase(existing.Phase) != PhaseRequested && Phase(existing.Phase) != PhaseFailed:
-			return &ConflictError{Message: fmt.Sprintf(
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf(
 				"machine %q is already joined; remove it with `lazycloud machine remove` before joining another host under that name", req.Name)}
 		default:
 			host = existing.ID
@@ -294,14 +295,14 @@ func (c *Compute) UpdateMachineWorkspaces(ctx context.Context, account identity.
 		q := c.queries.WithTx(tx)
 		row, err := q.LockAccountMachine(ctx, LockAccountMachineParams{AccountID: &acct, Machine: machine})
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && Phase(row.Phase) == PhaseDeleted) {
-			return &NotFoundError{Message: fmt.Sprintf("machine not found: %s", machine)}
+			return &apitypes.Error{Code: apitypes.NotFound, Message: fmt.Sprintf("machine not found: %s", machine)}
 		}
 		if err != nil {
 			return fmt.Errorf("lock machine: %w", err)
 		}
 		host = row.ID
 		if ws, err := q.MachineNameConflict(ctx, MachineNameConflictParams{Name: row.Name, AccountID: acct, WorkspaceIds: workspaces}); err == nil {
-			return &ConflictError{Message: fmt.Sprintf("machine %q already serves workspace %q under another owner", row.Name, ws)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("machine %q already serves workspace %q under another owner", row.Name, ws)}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check machine name: %w", err)
 		}
@@ -321,7 +322,7 @@ func (c *Compute) UpdateMachineWorkspaces(ctx context.Context, account identity.
 				return fmt.Errorf("check pinned deployments: %w", err)
 			}
 			if len(pinned) > 0 {
-				return &ConflictError{Message: fmt.Sprintf(
+				return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf(
 					"deployments in %s still name machine %q; remove them before dropping those workspaces", strings.Join(pinned, ", "), row.Name)}
 			}
 		}
@@ -349,7 +350,7 @@ func (c *Compute) RemoveMachine(ctx context.Context, account identity.UserID, ma
 		q := c.queries.WithTx(tx)
 		row, err := q.LockAccountMachine(ctx, LockAccountMachineParams{AccountID: &acct, Machine: machine})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &NotFoundError{Message: fmt.Sprintf("machine not found: %s", machine)}
+			return &apitypes.Error{Code: apitypes.NotFound, Message: fmt.Sprintf("machine not found: %s", machine)}
 		}
 		if err != nil {
 			return fmt.Errorf("lock machine: %w", err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,7 +49,7 @@ func (s *Supervisor) runShared(ctx context.Context, cfg *hostproto.Configure, sl
 			return err
 		}
 		s.log.Info("restarting shared runner", "exit", describeExit(p.waitErr))
-		if !sleepCtx(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return fmt.Errorf("restart shared runner: %w", ctx.Err())
 		}
 	}
@@ -174,22 +173,7 @@ func (sp *sharedProcess) call(run *hostproto.RunAttempt) (*hostproto.AttemptFini
 // to the outbox under its attempt, outcomes to the waiting slot.
 func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 	defer close(sp.dead)
-	// held is output per attempt and stream that may begin a secret value
-	// continued in the next frame. Only this goroutine touches it.
-	type heldKey struct {
-		attempt string
-		stream  hostproto.LogStream
-	}
-	held := map[heldKey]string{}
-	flushHeld := func(attempt string) {
-		for _, stream := range []hostproto.LogStream{hostproto.LogStream_LOG_STREAM_STDOUT, hostproto.LogStream_LOG_STREAM_STDERR} {
-			key := heldKey{attempt, stream}
-			if text := held[key]; text != "" {
-				s.pushOutputLines(attempt, "", stream, text)
-			}
-			delete(held, key)
-		}
-	}
+	held := heldOutput{}
 	for {
 		frame, err := sp.p.read()
 		if err != nil {
@@ -203,17 +187,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 				sp.readErr = err
 				return
 			}
-			stream := hostproto.LogStream_LOG_STREAM_STDOUT
-			if out.Stream == runnerproto.Stderr {
-				stream = hostproto.LogStream_LOG_STREAM_STDERR
-			}
-			key := heldKey{out.AttemptId, stream}
-			pending := held[key]
-			text := s.redact.stream(&pending, strings.ToValidUTF8(string(frame.Payload), "\uFFFD"), false)
-			held[key] = pending
-			if text != "" {
-				s.pushOutputLines(out.AttemptId, "", stream, text)
-			}
+			s.pushOutputFrame(held, heldKey{attempt: out.AttemptId}, out.Stream, frame.Payload)
 			if s.out.waitOutputSpace(ctx) != nil {
 				return
 			}
@@ -232,7 +206,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 				sp.readErr = fmt.Errorf("outcome for attempt %q that is not running", header.AttemptID)
 				return
 			}
-			flushHeld(header.AttemptID)
+			s.flushHeld(held, func(k heldKey) bool { return k.attempt == header.AttemptID })
 			reply <- frame
 		case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameDependency, runnerproto.FrameInvoke:
 			sp.readErr = fmt.Errorf("unexpected %q frame from a shared runner", frame.Type)

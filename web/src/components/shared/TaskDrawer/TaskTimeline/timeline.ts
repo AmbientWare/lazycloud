@@ -9,7 +9,7 @@ export type TimelineRow = {
   isLastSibling: boolean;
 };
 
-export type TimeDomain = {
+type TimeDomain = {
   startMs: number;
   endMs: number;
 };

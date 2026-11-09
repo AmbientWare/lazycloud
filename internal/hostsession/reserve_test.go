@@ -127,9 +127,6 @@ func TestReserveStopsOnlyOnTheAgentsProof(t *testing.T) {
 
 	h.exec("update hosts set phase = 'preparing', phase_at = now(), reserve_mode = 'hibernate' where id = $1", uuid.UUID(host))
 	refused := prepareReserve(t, stream)
-	if refused.GetMode() != hostproto.ReserveMode_RESERVE_MODE_HIBERNATE {
-		t.Fatalf("prepare %v", refused)
-	}
 	ready := readyFor(refused)
 	ready.Refused = "a volume is mounted"
 	answer(t, stream, ready)
@@ -367,7 +364,7 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 		want string
 	}{
 		{"serving", nil, "ready"},
-		{"bought for the reserve", ptr("hibernate"), "preparing"},
+		{"bought for the reserve", new("hibernate"), "preparing"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			host, ctx := h.enroll()
@@ -488,5 +485,3 @@ func TestReserveWaitsOutAnAgentUpdate(t *testing.T) {
 	answer(t, updated, ready)
 	h.waitPhase(host, "stopping")
 }
-
-func ptr[T any](v T) *T { return &v }

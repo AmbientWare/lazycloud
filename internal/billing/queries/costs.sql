@@ -48,7 +48,7 @@ with entries as (
     select e.id, null::uuid, 1 - coalesce(r.share, 0)
     from entries e
     left join (select id, sum(share) as share from runs group by id) r on r.id = e.id
-)
+), page as (
 select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workload_key, g.task_key::uuid as task_key,
        g.category::text as category, g.disk_key::uuid as disk_key,
        round(sum(g.cost_nanos))::bigint as cost_nanos,
@@ -101,7 +101,17 @@ having not @has_cursor::bool
         and (g.workspace_id, g.app_key, g.workload_key, g.task_key, g.category, g.disk_key)
             > (@after_workspace::uuid, @after_app::uuid, @after_workload::uuid, @after_task::uuid, @after_category::text, @after_disk::uuid))
 order by 7 desc, 1, 2, 3, 4, 5, 6
-limit @row_limit;
+limit @row_limit
+)
+-- A deleted app, workspace or disk shows no name.
+select pg.*, w.name as workspace_name, a.name as app_name, wl.name as workload_name, wl.kind as workload_kind,
+       d.name as disk_name
+from page pg
+left join workspaces w on w.id = pg.workspace_id
+left join apps a on a.id = pg.app_key and a.state <> 'deleted'
+left join workloads wl on wl.id = pg.workload_key
+left join disks d on d.id = pg.disk_key and d.state = 'active'
+order by pg.cost_nanos desc, pg.workspace_id, pg.app_key, pg.workload_key, pg.task_key, pg.category, pg.disk_key;
 
 -- name: WindowCost :one
 select coalesce(sum(e.cost_nanos), 0)::bigint
@@ -131,18 +141,6 @@ order by 1, 2;
 select coalesce(sum(subscription_nanos), 0)::bigint
 from billing_hours
 where user_id = @user_id and hour >= @start_at::timestamptz and hour < @end_at::timestamptz;
-
--- name: WorkspaceNames :many
-select id, name from workspaces where id = any(@ids::uuid[]);
-
--- name: AppNames :many
-select id, name, state from apps where id = any(@ids::uuid[]);
-
--- name: WorkloadNames :many
-select id, name, kind from workloads where id = any(@ids::uuid[]);
-
--- name: DiskNames :many
-select id, name from disks where id = any(@ids::uuid[]) and state = 'active';
 
 -- name: WorkspaceArtifactCost :one
 -- What the workspace's stored artifacts cost from @since, read through the

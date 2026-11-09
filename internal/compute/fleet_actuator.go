@@ -12,6 +12,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -120,7 +121,7 @@ func (c *Compute) actuateRegion(ctx context.Context, logger *slog.Logger, region
 	client := c.aws().ec2(acct.scope, region)
 	ids := make([]string, len(hosts))
 	for n, h := range hosts {
-		ids[n] = deref(h.InstanceID)
+		ids[n] = database.Value(h.InstanceID)
 	}
 	instances, err := describeInstances(ctx, client, ids)
 	if err != nil {
@@ -131,16 +132,16 @@ func (c *Compute) actuateRegion(ctx context.Context, logger *slog.Logger, region
 		return err
 	}
 	for _, h := range hosts {
-		instance, seen := instances[deref(h.InstanceID)]
+		instance, seen := instances[database.Value(h.InstanceID)]
 		var err error
 		switch Phase(h.Phase) {
 		case PhaseStopping:
 			if seen {
-				err = c.stopReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], result)
+				err = c.stopReserve(ctx, logger, client, h, instance, active[database.Value(h.SpotRequestID)], result)
 			}
 		case PhaseResuming:
 			if seen {
-				err = c.startReserve(ctx, logger, client, h, instance, active[deref(h.SpotRequestID)], result)
+				err = c.startReserve(ctx, logger, client, h, instance, active[database.Value(h.SpotRequestID)], result)
 			}
 		case PhaseTerminating:
 			err = c.terminateHost(ctx, logger, acct.scope, h, instance, seen, result)
@@ -166,11 +167,11 @@ func (c *Compute) actuateRegion(ctx context.Context, logger *slog.Logger, region
 func (c *Compute) terminateHost(ctx context.Context, logger *slog.Logger, scope awsScope, h ClaimHostActionsRow, instance ec2types.Instance,
 	seen bool, result *ActuateResult) error {
 	if seen && instance.State.Name != ec2types.InstanceStateNameTerminated && instance.State.Name != ec2types.InstanceStateNameShuttingDown {
-		if err := c.terminate(ctx, scope, h.Region, deref(h.InstanceID)); err != nil {
+		if err := c.terminate(ctx, scope, h.Region, database.Value(h.InstanceID)); err != nil {
 			return err
 		}
 		result.Terminated++
-		logger.InfoContext(ctx, "host terminating", "host_id", h.ID, "instance_id", deref(h.InstanceID))
+		logger.InfoContext(ctx, "host terminating", "host_id", h.ID, "instance_id", database.Value(h.InstanceID))
 	}
 	if _, err := c.queries.RecordTerminateRequested(ctx, RecordTerminateRequestedParams{ID: h.ID, Token: h.ActionToken}); err != nil {
 		return fmt.Errorf("record terminate: %w", err)
@@ -217,8 +218,8 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		if now.Sub(requested) <= providerDeadline {
 			return nil
 		}
-		logger.WarnContext(ctx, "reserve still stopping; forcing the stop", "host_id", h.ID, "instance_id", deref(h.InstanceID))
-		if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{deref(h.InstanceID)}, Force: aws.Bool(true)}); err != nil {
+		logger.WarnContext(ctx, "reserve still stopping; forcing the stop", "host_id", h.ID, "instance_id", database.Value(h.InstanceID))
+		if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{database.Value(h.InstanceID)}, Force: aws.Bool(true)}); err != nil {
 			return c.stopRefused(ctx, logger, h, fmt.Errorf("force stop: %w", err))
 		}
 		result.Stopped++
@@ -235,9 +236,9 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		if instance.LaunchTime != nil && now.Sub(*instance.LaunchTime) < hibernateAfterStart {
 			return nil
 		}
-		_, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{deref(h.InstanceID)}, Hibernate: aws.Bool(true)})
+		_, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{database.Value(h.InstanceID)}, Hibernate: aws.Bool(true)})
 		if err == nil {
-			logger.InfoContext(ctx, "reserve hibernating", "host_id", h.ID, "instance_id", deref(h.InstanceID))
+			logger.InfoContext(ctx, "reserve hibernating", "host_id", h.ID, "instance_id", database.Value(h.InstanceID))
 			result.Stopped++
 			return c.recordStop(ctx, h, EvidenceUnknown, false)
 		}
@@ -255,10 +256,10 @@ func (c *Compute) stopReserve(ctx context.Context, logger *slog.Logger, client *
 		}
 		logger.WarnContext(ctx, "EC2 did not hibernate; stopping plainly", "host_id", h.ID, "error", describeAWSError(err))
 	}
-	if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{deref(h.InstanceID)}}); err != nil {
+	if _, err := client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{database.Value(h.InstanceID)}}); err != nil {
 		return c.stopRefused(ctx, logger, h, fmt.Errorf("stop instance: %w", err))
 	}
-	logger.InfoContext(ctx, "reserve stopping", "host_id", h.ID, "instance_id", deref(h.InstanceID))
+	logger.InfoContext(ctx, "reserve stopping", "host_id", h.ID, "instance_id", database.Value(h.InstanceID))
 	result.Stopped++
 	return c.recordStop(ctx, h, EvidenceUnavailable, false)
 }
@@ -271,7 +272,7 @@ func (c *Compute) stopRefused(ctx context.Context, logger *slog.Logger, h ClaimH
 	if transientAWS(err) {
 		return err
 	}
-	return c.retireReserve(ctx, logger, h, truncate("Stop refused: "+describeAWSError(err)), err)
+	return c.retireReserve(ctx, logger, h, database.Truncate("Stop refused: "+describeAWSError(err), maxMessage), err)
 }
 
 // retireReserve sends a stopping host to terminating. A provider
@@ -309,7 +310,7 @@ func (c *Compute) refuseStart(ctx context.Context, logger *slog.Logger, h ClaimH
 	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		n, err := q.ReturnStartToReserve(ctx, ReturnStartToReserveParams{
-			ID: h.ID, Token: h.ActionToken, Message: truncate("Start refused: " + describeAWSError(refusal)),
+			ID: h.ID, Token: h.ActionToken, Message: database.Truncate("Start refused: "+describeAWSError(refusal), maxMessage),
 		})
 		if err != nil {
 			return fmt.Errorf("return the reserve to stopped: %w", err)
@@ -339,7 +340,7 @@ func (c *Compute) coolRefusal(ctx context.Context, q *Queries, h ClaimHostAction
 	if err := q.InsertCooldown(ctx, InsertCooldownParams{
 		ConnectionKey: hostOwner(h.ConnectionID), Region: h.Region, AvailabilityZoneID: zone, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-		Reason: truncate(describeAWSError(refusal)),
+		Reason: database.Truncate(describeAWSError(refusal), maxMessage),
 	}); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)
 	}
@@ -423,10 +424,10 @@ func (c *Compute) startReserve(ctx context.Context, logger *slog.Logger, client 
 		return nil
 	}
 	spanCtx, span := c.hostSpan(ctx, h.ID, "compute.resume")
-	_, err := client.StartInstances(spanCtx, &ec2.StartInstancesInput{InstanceIds: []string{deref(h.InstanceID)}})
+	_, err := client.StartInstances(spanCtx, &ec2.StartInstancesInput{InstanceIds: []string{database.Value(h.InstanceID)}})
 	telemetry.Fail(span, err)
 	if err == nil {
-		logger.InfoContext(ctx, "reserve starting", "host_id", h.ID, "instance_id", deref(h.InstanceID))
+		logger.InfoContext(ctx, "reserve starting", "host_id", h.ID, "instance_id", database.Value(h.InstanceID))
 		result.Started++
 		return c.recordStart(ctx, h)
 	}
@@ -472,7 +473,7 @@ func activeSpotRequests(ctx context.Context, client *ec2.Client, hosts []ClaimHo
 	instances map[string]ec2types.Instance) (map[string]bool, error) {
 	var requests []string
 	for _, h := range hosts {
-		if i, seen := instances[deref(h.InstanceID)]; seen && h.SpotRequestID != nil && Phase(h.Phase) != PhaseTerminating &&
+		if i, seen := instances[database.Value(h.InstanceID)]; seen && h.SpotRequestID != nil && Phase(h.Phase) != PhaseTerminating &&
 			i.State.Name == ec2types.InstanceStateNameStopped {
 			requests = append(requests, *h.SpotRequestID)
 		}

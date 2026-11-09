@@ -29,19 +29,24 @@ func TestAccountAdministrationOverHTTP(t *testing.T) {
 	outsider := outsiderMe.User.Id
 	var apiErr apitypes.Error
 	for name, token := range map[string]string{"member": e.owner, "restricted admin token": restricted} {
-		if status := e.do("PUT", "/v1/users/"+outsider.String()+"/role", token, map[string]string{"role": "administrator"}, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
+		if status := e.do("PATCH", "/v1/users/"+outsider.String(), token, map[string]string{"role": "administrator"}, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
 			t.Fatalf("%s promotes: %d %+v", name, status, apiErr)
 		}
 	}
-	if status := e.do("PUT", "/v1/users/"+outsider.String()+"/role", admin, map[string]string{"role": "owner"}, &apiErr); status != 400 {
+	if status := e.do("PATCH", "/v1/users/"+outsider.String(), admin, map[string]string{"role": "owner"}, &apiErr); status != 400 {
 		t.Fatalf("unknown role: %d %+v", status, apiErr)
+	}
+	for name, token := range map[string]string{"member": e.owner, "admin": admin} {
+		if status := e.do("PATCH", "/v1/users/"+outsider.String(), token, map[string]int{"x": 1}, &apiErr); status != 400 {
+			t.Fatalf("%s sends an unknown field: %d %+v", name, status, apiErr)
+		}
 	}
 
 	var user apitypes.User
-	if status := e.do("PUT", "/v1/users/"+outsider.String()+"/role", admin, map[string]string{"role": "administrator"}, &user); status != 200 || !user.IsAdmin {
+	if status := e.do("PATCH", "/v1/users/"+outsider.String(), admin, map[string]string{"role": "administrator"}, &user); status != 200 || !user.IsAdmin {
 		t.Fatalf("promote: %d %+v", status, user)
 	}
-	if status := e.do("PUT", "/v1/users/"+outsider.String()+"/status", admin, map[string]string{"status": "disabled"}, &user); status != 200 || user.Status != apitypes.UserStatusDisabled {
+	if status := e.do("PATCH", "/v1/users/"+outsider.String(), admin, map[string]string{"status": "disabled"}, &user); status != 200 || user.Status != apitypes.UserStatusDisabled {
 		t.Fatalf("disable: %d %+v", status, user)
 	}
 	if status := e.do("GET", "/v1/me", e.outsider, nil, &apiErr); status != 401 {
@@ -52,7 +57,7 @@ func TestAccountAdministrationOverHTTP(t *testing.T) {
 	if status := e.do("GET", "/v1/me", admin, nil, &me); status != 200 || me.User.Status != apitypes.UserStatusActive {
 		t.Fatalf("me: %d %+v", status, me)
 	}
-	if status := e.do("PUT", "/v1/users/"+me.User.Id.String()+"/status", admin, map[string]string{"status": "disabled"}, &apiErr); status != 409 || apiErr.Code != apitypes.Conflict {
+	if status := e.do("PATCH", "/v1/users/"+me.User.Id.String(), admin, map[string]string{"status": "disabled"}, &apiErr); status != 409 || apiErr.Code != apitypes.Conflict {
 		t.Fatalf("self disable: %d %+v", status, apiErr)
 	}
 }

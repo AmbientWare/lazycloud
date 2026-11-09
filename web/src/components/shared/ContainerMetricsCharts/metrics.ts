@@ -1,7 +1,7 @@
 import { format, parseISO } from "date-fns";
 
 import type { Schemas } from "@/lib/api/client";
-import { formatCpu } from "@/lib/format";
+import { formatBytes, formatCpu } from "@/lib/format";
 
 export type MetricDatum = {
   timestamp: string;
@@ -48,7 +48,7 @@ export function buildMetricData(metrics: Schemas["ContainerMetrics"]): MetricDat
     });
 }
 
-export type ComputeReadout = {
+type ComputeReadout = {
   cpu: string;
   memory: string;
   /** `null` until an interval-bearing sample provides real rates (no fake zeros). */
@@ -72,15 +72,6 @@ export function latestComputeReadout(data: MetricDatum[]): ComputeReadout | null
     memory: formatBytes(latest.memoryUsed),
     network,
   };
-}
-
-export function formatBytes(value: number): string {
-  if (value < 1024) return `${Math.round(value)} B`;
-  const kib = value / 1024;
-  if (kib < 1024) return `${kib.toFixed(1)} KiB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${mib.toFixed(1)} MiB`;
-  return `${(mib / 1024).toFixed(1)} GiB`;
 }
 
 export function formatBytesPerSecond(value: number): string {

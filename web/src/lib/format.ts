@@ -1,6 +1,6 @@
 import { formatDistanceStrict, parseISO } from "date-fns";
 
-export type RowValue = string | number | boolean | null | undefined;
+type RowValue = string | number | boolean | null | undefined;
 
 export function displayValue(value: RowValue): string {
   if (value === null || value === undefined || value === "") return "None";
@@ -123,42 +123,13 @@ export function formatCpu(millicores: number): string {
   return `${Number((millicores / 1000).toFixed(3))} CPU`;
 }
 
-/**
- * A resource a workload stated, with its ceiling when the author named one.
- *
- * The pair form is what a container may grow into, so hiding the second figure
- * would show a workload as smaller than it is allowed to become.
- */
+/** A reservation with its ceiling when one is set, such as `0.25 CPU (limit 1 CPU)`. */
 export function resourceAllocation(
-  value: CpuRequest | MemoryRequest | null | undefined,
+  request: number,
+  limit: number | null | undefined,
   unit = "",
 ): string {
-  const request = resourceRequest(value);
-  if (request == null) return "Default";
   const suffix = unit ? ` ${unit}` : "";
-  const limit = resourceLimit(value);
-  if (limit == null) return `${request}${suffix}`;
+  if (!limit) return `${request}${suffix}`;
   return `${request}${suffix} (limit ${limit}${suffix})`;
-}
-
-/**
- * A resource a workload states as a reservation, or as a `[reserve, limit]` pair.
- *
- */
-export type CpuRequest = number | [number, number];
-export type MemoryRequest = string | number | [string | number, string | number];
-
-/** The reservation half, which is what capacity is sized against. */
-export function resourceRequest(
-  value: CpuRequest | MemoryRequest | null | undefined,
-): string | number | null {
-  if (value == null) return null;
-  return Array.isArray(value) ? value[0] : value;
-}
-
-/** The ceiling half, present only when its author named one. */
-export function resourceLimit(
-  value: CpuRequest | MemoryRequest | null | undefined,
-): string | number | null {
-  return Array.isArray(value) ? value[1] : null;
 }

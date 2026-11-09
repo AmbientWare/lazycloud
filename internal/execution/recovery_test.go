@@ -23,12 +23,8 @@ func TestOverdueAttemptsRetryThenFailAsTimeouts(t *testing.T) {
 	exec(t, pool, "update attempts set deadline_at = now() - interval '1 second' where id = any($1)",
 		[]uuid.UUID{uuid.UUID(retried.attempt), uuid.UUID(exhausted.attempt)})
 
-	ended, err := e.TimeOutAttempts(t.Context(), discardLogger())
-	if err != nil {
+	if err := e.TimeOutAttempts(t.Context(), discardLogger()); err != nil {
 		t.Fatal(err)
-	}
-	if ended != 2 {
-		t.Fatalf("ended %d attempts, want the 2 overdue ones", ended)
 	}
 	if status, _ := taskState(t, pool, retried.task); status != string(TaskQueued) {
 		t.Fatalf("task with attempts left is %s, want queued for a retry", status)
@@ -57,15 +53,11 @@ func TestLostHostStopsItsContainersAndRetriesAttempts(t *testing.T) {
 	exec(t, pool, "update hosts set last_seen_at = now() - interval '1 minute' where id = $1", uuid.UUID(lost.host))
 	exec(t, pool, "update hosts set last_seen_at = now() where id = $1", uuid.UUID(alive.host))
 
-	n, err := e.ReleaseLostHosts(t.Context(), discardLogger())
-	if err != nil {
+	if err := e.ReleaseLostHosts(t.Context(), discardLogger()); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("marked %d hosts lost, want 1", n)
-	}
 	var hostState, ctrState, stopReason, attemptState string
-	err = pool.QueryRow(t.Context(), `
+	err := pool.QueryRow(t.Context(), `
 select h.state, c.state, coalesce(c.stop_reason, ''), a.state
 from attempts a join containers c on c.id = a.container_id join hosts h on h.id = c.host_id
 where a.id = $1`, uuid.UUID(lost.attempt)).Scan(&hostState, &ctrState, &stopReason, &attemptState)
@@ -111,13 +103,12 @@ values ($1, $2, $3, (select workload_id from releases where id = $3), 'ready', $
 	if _, err := report.Exec(t.Context(), "select id from containers where id = $1 for update", last); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan int, 1)
+	done := make(chan struct{})
 	go func() {
-		n, err := e.ReleaseLostHosts(t.Context(), discardLogger())
-		if err != nil {
+		defer close(done)
+		if err := e.ReleaseLostHosts(t.Context(), discardLogger()); err != nil {
 			t.Error(err)
 		}
-		done <- n
 	}()
 	for deadline := time.Now().Add(5 * time.Second); ; {
 		var waiting int
@@ -142,9 +133,7 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 	if err := report.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if n := <-done; n != 1 {
-		t.Fatalf("marked %d hosts lost, want 1", n)
-	}
+	<-done
 	if containerState(t, pool, uuid.UUID(first)) != ContainerStopped || containerState(t, pool, last) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskQueued {
 		t.Fatal("both containers must stop and the task must wait for a retry")
 	}
@@ -161,16 +150,15 @@ func TestStuckStartsFailAfterTheStartTimeout(t *testing.T) {
 	exec(t, pool, "update containers set state = 'starting', ready_at = null, assigned_at = now() - interval '11 minutes' where id = $1", stuck)
 	exec(t, pool, "update containers set state = 'starting', ready_at = null, assigned_at = now() - interval '1 minute' where id = $1", starting)
 
-	n, err := e.TimeOutStarts(t.Context(), discardLogger())
-	if err != nil {
+	if err := e.TimeOutStarts(t.Context(), discardLogger()); err != nil {
 		t.Fatal(err)
 	}
 	var reason string
 	if err := pool.QueryRow(t.Context(), "select coalesce(stop_reason, '') from containers where id = $1", stuck).Scan(&reason); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || reason != string(StopStartFailed) {
-		t.Fatalf("stopped %d, reason %q; want the stuck container stopped as start_failed", n, reason)
+	if reason != string(StopStartFailed) {
+		t.Fatalf("reason %q; want the stuck container stopped as start_failed", reason)
 	}
 	if state := containerState(t, pool, starting); state != ContainerStarting {
 		t.Fatalf("container within the start timeout is %s, want starting", state)
@@ -239,8 +227,7 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 		t.Fatal(err)
 	}
 
-	n, err := e.TimeOutStarts(t.Context(), discardLogger())
-	if err != nil {
+	if err := e.TimeOutStarts(t.Context(), discardLogger()); err != nil {
 		t.Fatal(err)
 	}
 	var reason, message string
@@ -248,8 +235,8 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 		Scan(&reason, &message); err != nil {
 		t.Fatal(err)
 	}
-	if n != 3 || reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
-		t.Fatalf("stopped %d, reason %q message %q; want the three stale containers stopped as start_failed naming their wait", n, reason, message)
+	if reason != string(StopStartFailed) || !strings.Contains(message, compute.WaitCooldown.Message()) {
+		t.Fatalf("reason %q message %q; want the stale container stopped as start_failed naming its wait", reason, message)
 	}
 	if state := containerState(t, pool, theirs); state != ContainerStopped {
 		t.Errorf("the connected account's stale container is %s, want stopped", state)

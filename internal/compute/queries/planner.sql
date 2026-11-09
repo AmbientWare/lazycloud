@@ -36,13 +36,13 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(m.gpus) as gpus,
+           sum(c.gpu_count) as gpus,
            sum(c.cpu_millis) filter (where p.packed) as packed_cpu, sum(c.memory_bytes) filter (where p.packed) as packed_memory,
            array_agg(c.id order by c.id) filter (where p.packed) as packed_ids,
            bool_or(not m.moves) as stays,
            array_agg(c.cpu_millis) filter (where m.moves) as move_cpu,
            array_agg(c.memory_bytes) filter (where m.moves) as move_memory,
-           array_agg(m.gpus) filter (where m.moves) as move_gpu_count,
+           array_agg(c.gpu_count) filter (where m.moves) as move_gpu_count,
            -- The GPU models each accepts, comma-separated.
            array_agg(array_to_string(array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb))), ','))
                filter (where m.moves) as move_gpus,
@@ -51,10 +51,7 @@ left join lateral (
            count(*) filter (where not p.packed) as containers
     from containers c
     left join releases r on r.id = c.release_id
-    cross join lateral (
-        select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
-               case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
-    ) m
+    cross join lateral (select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves) m
     cross join lateral (select packed(h.provider, h.gpu_count, c.gpu_count) as packed) p
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
@@ -360,10 +357,6 @@ select v.market, v.plan, v.generated_at, v.expires_at
 from jsonb_to_recordset(@markets::jsonb) as v(market text, plan jsonb, generated_at timestamptz, expires_at timestamptz)
 on conflict (market) do update
 set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at;
-
--- name: NotifyHosts :exec
--- Wakes the sessions of hosts the pass moved, once it commits.
-select pg_notify(@channel::text, v.id) from unnest(@ids::text[]) as v(id);
 
 -- name: HostWaitTrace :one
 -- The trace of the longest-waiting pending container the fleet bought or

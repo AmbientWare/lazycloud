@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
@@ -16,51 +17,6 @@ import (
 // ChannelWorkspace wakes workspace deletion; the payload is the workspace
 // id.
 const ChannelWorkspace database.Channel = "lc_workspace"
-
-// WorkspacePage asks for workspaces by name after After.
-type WorkspacePage struct {
-	// MembersOnly lists memberships even for administrators, who otherwise
-	// see every workspace.
-	MembersOnly bool
-	After       string
-	Limit       int
-}
-
-// WorkspaceList is one page of workspaces; Next is the name to pass as
-// After for the following page, empty after the last.
-type WorkspaceList struct {
-	Workspaces []Workspace
-	Next       string
-}
-
-// ListWorkspaces pages through the workspaces p may act on: every workspace
-// for an administrator, otherwise its memberships, and only the token's
-// workspace for a restricted token. Deleting workspaces are included.
-func (i *Identity) ListWorkspaces(ctx context.Context, p Principal, page WorkspacePage) (WorkspaceList, error) {
-	var after *string
-	if page.After != "" {
-		after = &page.After
-	}
-	rows, err := i.queries.ListWorkspaces(ctx, ListWorkspacesParams{
-		UserID: uuid.UUID(p.User), MembersOnly: page.MembersOnly || !p.IsAdmin, AfterName: after,
-		RestrictTo: (*uuid.UUID)(p.TokenWorkspace), RowLimit: int32(page.Limit + 1), //nolint:gosec // The API bounds limit.
-	})
-	if err != nil {
-		return WorkspaceList{}, fmt.Errorf("list workspaces: %w", err)
-	}
-	var out WorkspaceList
-	for n, row := range rows {
-		if n == page.Limit {
-			out.Next = out.Workspaces[n-1].Name
-			break
-		}
-		out.Workspaces = append(out.Workspaces, Workspace{
-			ID: WorkspaceID(row.ID), Name: row.Name, State: WorkspaceState(row.State),
-			Role: Role(row.Role), CreatedAt: row.CreatedAt,
-		})
-	}
-	return out, nil
-}
 
 // PlaceWorkspace returns, in the transaction creating a workspace, the
 // AWS account connection it is created in, holding that connection's
@@ -75,7 +31,7 @@ func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name s
 	if !p.IsAdmin {
 		return Workspace{}, ErrAdminRequired
 	}
-	if err := p.requireAccount("create workspaces"); err != nil {
+	if err := p.RequireAccount("create workspaces"); err != nil {
 		return Workspace{}, err
 	}
 	var ws Workspace
@@ -114,11 +70,11 @@ func (i *Identity) RenameWorkspace(ctx context.Context, p Principal, name, newNa
 		return ws, nil
 	}
 	row, err := i.queries.RenameWorkspace(ctx, RenameWorkspaceParams{Name: newName, ID: uuid.UUID(ws.ID)})
-	if isUniqueViolation(err) {
-		return Workspace{}, &ConflictError{Message: fmt.Sprintf("workspace name %s is already in use", newName)}
+	if database.IsUniqueViolation(err) {
+		return Workspace{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("workspace name %s is already in use", newName)}
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Workspace{}, &ConflictError{Message: fmt.Sprintf("workspace %s is being deleted", ws.Name)}
+		return Workspace{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("workspace %s is being deleted", ws.Name)}
 	}
 	if err != nil {
 		return Workspace{}, fmt.Errorf("rename workspace: %w", err)
@@ -137,7 +93,7 @@ func (i *Identity) DeleteWorkspace(ctx context.Context, p Principal, name string
 	if !p.IsAdmin {
 		return Workspace{}, ErrAdminRequired
 	}
-	if err := p.requireAccount("delete workspaces"); err != nil {
+	if err := p.RequireAccount("delete workspaces"); err != nil {
 		return Workspace{}, err
 	}
 	var ws Workspace
@@ -163,7 +119,7 @@ func (i *Identity) DeleteWorkspace(ctx context.Context, p Principal, name string
 			return fmt.Errorf("count active workspaces: %w", err)
 		}
 		if others == 0 {
-			return &ConflictError{Message: "the last workspace cannot be deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the last workspace cannot be deleted"}
 		}
 		if _, err := q.MarkWorkspaceDeleting(ctx, row.ID); err != nil {
 			return fmt.Errorf("mark workspace deleting: %w", err)

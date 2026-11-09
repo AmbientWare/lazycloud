@@ -172,7 +172,7 @@ func (c *container) applyNetwork(ctx context.Context, policy *hostproto.NetworkP
 		return fmt.Errorf("create container directory: %w", err)
 	}
 	pending := filepath.Join(c.dir, networkPendingFile)
-	if err := writeFileAtomic(pending, encoded, 0o600); err != nil {
+	if err := hostproto.WriteFile(pending, encoded, 0o600); err != nil {
 		return fmt.Errorf("record network policy: %w", err)
 	}
 	if err := c.a.runNetfilter(ctx, c, policy); err != nil {

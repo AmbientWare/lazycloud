@@ -243,7 +243,7 @@ func (f *fixture) stubStripe(answer func(request string) any) *stripeStub {
 		_ = json.NewEncoder(w).Encode(object)
 	}))
 	f.t.Cleanup(server.Close)
-	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test",
+	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", SessionPool: f.pool,
 		Stripe: StripeConfig{SecretKey: "sk_test_stub", WebhookSecret: "whsec_test", APIBase: server.URL}}, slog.New(slog.DiscardHandler))
 	return stub
 }

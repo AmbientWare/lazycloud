@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -49,7 +48,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	}
 	message := exit.Message
 	if err := q.StopContainer(ctx, StopContainerParams{
-		ID: row.ID, StopReason: ptr(string(exit.Reason)), ExitMessage: &message, ExitCode: int32Of(exit.ExitCode),
+		ID: row.ID, StopReason: new(string(exit.Reason)), ExitMessage: &message, ExitCode: int32Of(exit.ExitCode),
 	}); err != nil {
 		return fmt.Errorf("stop container: %w", err)
 	}
@@ -96,18 +95,16 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if failQueued == nil {
 			failQueued = &Failure{Kind: FailureLoadError, Message: exit.Message}
 		}
-		first, err := q.RecordFirstLoadError(ctx, RecordFirstLoadErrorParams{ID: release, LoadError: &failQueued.Message})
+		first, err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message})
 		if err != nil {
 			return fmt.Errorf("record load error: %w", err)
 		}
-		if first == 0 {
-			if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message}); err != nil {
-				return fmt.Errorf("record load error: %w", err)
+		if first {
+			if err := q.EnqueueWorkloadFailedWebhook(ctx, EnqueueWorkloadFailedWebhookParams{
+				ReleaseID: release, Reason: string(StopLoadError), Message: failQueued.Message,
+			}); err != nil {
+				return fmt.Errorf("enqueue workload.failed webhooks: %w", err)
 			}
-		} else if err := q.EnqueueWorkloadFailedWebhook(ctx, EnqueueWorkloadFailedWebhookParams{
-			ReleaseID: release, Reason: string(StopLoadError), Message: failQueued.Message,
-		}); err != nil {
-			return fmt.Errorf("enqueue workload.failed webhooks: %w", err)
 		}
 	case StopStartFailed:
 		// A container that never got a host found no capacity in the queue
@@ -140,28 +137,11 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	case StopRequested, StopCrashed, StopOutOfMemory, StopHostLost, StopExited:
 	}
 	if failQueued != nil {
-		encoded, err := json.Marshal(failQueued)
-		if err != nil {
-			return fmt.Errorf("encode failure: %w", err)
-		}
 		queued, err := e.lockQueuedWithDependents(ctx, q, release, math.MaxInt32)
 		if err != nil {
 			return err
 		}
-		failed, err := q.FailQueuedTasksOfRelease(ctx, FailQueuedTasksOfReleaseParams{Ids: queued, Failure: encoded})
-		if err != nil {
-			return fmt.Errorf("fail queued tasks: %w", err)
-		}
-		if err := recordCallbacks(ctx, q, CallbackFailed, failed, nil); err != nil {
-			return err
-		}
-		if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
-			return err
-		}
-		if err := notifyFinished(ctx, tx, failed); err != nil {
-			return err
-		}
-		if err := e.resolveDependents(ctx, tx, failed, upstreamUnsuccessful); err != nil {
+		if err := e.failQueued(ctx, tx, queued, nil, *failQueued, true); err != nil {
 			return err
 		}
 	}
@@ -177,16 +157,6 @@ func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUI
 		}
 	}
 	return database.Notify(ctx, tx, owner, id)
-}
-
-func ptr[T any](v T) *T { return &v }
-
-// deref is *s, or "" for nil.
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 func int32Of(v *int) *int32 {

@@ -13,6 +13,8 @@ sql:
         output_db_file_name: queries_db.go
         output_models_file_name: queries_models.go
         overrides:
+          - column: "releases.spec"
+            go_type: github.com/AmbientWare/lazycloud/internal/apitypes.WorkloadSpec
           - db_type: uuid
             go_type: github.com/google/uuid.UUID
           - db_type: uuid

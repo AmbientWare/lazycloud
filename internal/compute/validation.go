@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -40,18 +42,11 @@ func setupFailure(step SetupStep, code AuthorizationError, format string, args .
 func (f *validationFailure) Error() string { return f.message }
 
 func fail(code AuthorizationError, format string, args ...any) *validationFailure {
-	return &validationFailure{code: code, message: truncate(fmt.Sprintf(format, args...))}
+	return &validationFailure{code: code, message: database.Truncate(fmt.Sprintf(format, args...), maxMessage)}
 }
 
 // maxMessage bounds the error and phase messages stored for users.
 const maxMessage = 512
-
-func truncate(s string) string {
-	if len(s) <= maxMessage {
-		return s
-	}
-	return s[:maxMessage]
-}
 
 // validated is what a passing check learned.
 type validated struct {
@@ -66,7 +61,7 @@ type validated struct {
 func (c *Compute) Validate(ctx context.Context, account identity.UserID) (Connection, error) {
 	row, err := c.queries.ConnectionOfAccount(ctx, uuid.UUID(account))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Connection{}, &NotFoundError{Message: "AWS account connection not found"}
+		return Connection{}, &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 	}
 	if err != nil {
 		return Connection{}, fmt.Errorf("read connection: %w", err)
@@ -88,7 +83,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		q := c.queries.WithTx(tx)
 		row, err := q.LockConnection(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &NotFoundError{Message: "AWS account connection not found"}
+			return &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 		}
 		if err != nil {
 			return fmt.Errorf("lock connection: %w", err)
@@ -100,10 +95,10 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		conn = connectionOf(row, auths)
 		switch conn.Phase {
 		case ConnDraining, ConnRevoking, ConnVerifying, ConnActionRequire, ConnRetiring:
-			return &ConflictError{Message: "AWS account connection is being removed"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection is being removed"}
 		case ConnValidating:
 			if manual {
-				return &ConflictError{Message: "AWS account connection validation is already running"}
+				return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection validation is already running"}
 			}
 		case ConnAwaiting, ConnReady, ConnDegraded, ConnReconnecting:
 		}
@@ -113,7 +108,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		case conn.Active != nil:
 			target = *conn.Active
 		default:
-			return &ConflictError{Message: "AWS account connection has no authorization to validate"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection has no authorization to validate"}
 		}
 		if err := q.StartValidation(ctx, target.ID); err != nil {
 			return fmt.Errorf("start validation: %w", err)
@@ -124,7 +119,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		}
 		updated, err := q.SetConnectionPhase(ctx, SetConnectionPhaseParams{
 			ID: id, Phase: string(phase), StepAttempts: row.StepAttempts,
-			NextStepAt: ptr(time.Now().Add(5 * time.Minute)),
+			NextStepAt: new(time.Now().Add(5 * time.Minute)),
 		})
 		if err != nil {
 			return fmt.Errorf("set connection phase: %w", err)
@@ -152,12 +147,12 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return fmt.Errorf("lock connection: %w", err)
 		}
 		if row.Revision != revision {
-			return &ConflictError{Message: "AWS account connection validation was superseded"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection validation was superseded"}
 		}
 		attempts := int(row.StepAttempts) + 1
 		if failure != nil {
 			if err := q.AuthorizationFailed(ctx, AuthorizationFailedParams{
-				ID: target.ID, ErrorCode: ptr(string(failure.code)), ErrorMessage: &failure.message, SetupStep: (*string)(failure.step),
+				ID: target.ID, ErrorCode: new(string(failure.code)), ErrorMessage: &failure.message, SetupStep: (*string)(failure.step),
 			}); err != nil {
 				return fmt.Errorf("record failure: %w", err)
 			}
@@ -168,7 +163,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			case conn.Active == nil && (failure.step != nil || failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
 				phase = ConnAwaiting
 			}
-			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
+			return setPhase(ctx, q, id, phase, new(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
 		}
 		if err := q.AuthorizationValidated(ctx, AuthorizationValidatedParams{
 			ID: target.ID, StackID: nilIfEmpty(result.stackID),
@@ -180,11 +175,11 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return setPhase(ctx, q, id, ConnReady, nil, 0, nil)
 		}
 		if conn.Active != nil {
-			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr(string(slotRetiring))}); err != nil {
+			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: new(string(slotRetiring))}); err != nil {
 				return fmt.Errorf("retire active authorization: %w", err)
 			}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr(string(slotActive))}); err != nil {
+		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: new(string(slotActive))}); err != nil {
 			return fmt.Errorf("activate authorization: %w", err)
 		}
 		if conn.Active != nil {
@@ -322,8 +317,7 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 // advanceConnection runs a connection's due background step.
 func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 	conn, err := c.connectionByID(ctx, id)
-	var missing *NotFoundError
-	if errors.As(err, &missing) {
+	if apitypes.CodeOf(err) == apitypes.NotFound {
 		return nil
 	}
 	if err != nil {
@@ -335,8 +329,7 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 			return c.settle(ctx, conn, c.expirePending(conn))
 		}
 		err := c.validateConnection(ctx, id, false)
-		var superseded *ConflictError
-		if errors.As(err, &superseded) {
+		if apitypes.CodeOf(err) == apitypes.Conflict {
 			return nil
 		}
 		return err

@@ -66,7 +66,7 @@ func (q *Queries) AtLossSpentToday(ctx context.Context) (int64, error) {
 
 const cancelConnectionLaunches = `-- name: CancelConnectionLaunches :exec
 update hosts h
-set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', updated_at = now()
+set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'retired', token_hash = null, updated_at = now()
 from cloud_connections cc
 where cc.id = h.connection_id and cc.phase = 'disconnect_draining' and h.phase = 'requested'
   and (h.launch_lease_until is null or h.launch_lease_until < now())

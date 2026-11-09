@@ -148,23 +148,6 @@ def reset_settings_cache() -> None:
     settings.cache_clear()
 
 
-def empty_config() -> dict[str, JsonValue]:
-    return _config_data(ClientConfig())
-
-
-def load_config(*, replace_legacy: bool = False) -> dict[str, JsonValue]:
-    return _config_data(_load_client_config(replace_legacy=replace_legacy))
-
-
-def save_config(config: ClientConfig | Mapping[str, JsonValue]) -> None:
-    """Replace the whole stored profile config."""
-    normalized = _normalize_config(config)
-    _write_config_document(
-        _config_data(normalized),
-        expected=_config_identity(settings().config_path),
-    )
-
-
 def list_profiles() -> list[ClientProfile]:
     return list(_load_client_config().profiles.values())
 
@@ -195,9 +178,8 @@ def set_profile(
     profile: ClientProfile,
     *,
     activate: bool = True,
-    replace_legacy: bool = False,
 ) -> ClientProfile:
-    config, observed = _read_client_config(replace_legacy=replace_legacy)
+    config, observed = _read_client_config()
     config.profiles[profile.name] = profile
     if activate:
         config.active_profile = profile.name
@@ -227,27 +209,16 @@ def delete_profile(name: str) -> None:
     _write_config_document(_config_data(config), expected=observed)
 
 
-def _load_client_config(*, replace_legacy: bool = False) -> ClientConfig:
-    return _read_client_config(replace_legacy=replace_legacy)[0]
+def _load_client_config() -> ClientConfig:
+    return _read_client_config()[0]
 
 
-def _read_client_config(
-    *,
-    replace_legacy: bool = False,
-) -> tuple[ClientConfig, _ConfigFileIdentity | None]:
+def _read_client_config() -> tuple[ClientConfig, _ConfigFileIdentity | None]:
     path = settings().config_path
     loaded, identity = _read_config_document(path)
-    if _is_legacy_context_config(loaded):
-        if replace_legacy:
-            return ClientConfig(), identity
-        msg = "legacy context config found; run `lazycloud login` to write a profile config"
-        raise ConfigError(msg)
     raw_profiles = loaded.get("profiles")
     if raw_profiles is None:
-        profiles_value = empty_config()["profiles"]
-        if not isinstance(profiles_value, dict):
-            raise ConfigError("default profiles must be an object")
-        raw_profiles = profiles_value
+        raw_profiles = {}
     elif not isinstance(raw_profiles, dict):
         msg = "config profiles must be an object"
         raise ConfigError(msg)
@@ -408,26 +379,6 @@ def _prepared_config_directory(directory: Path) -> Path:
     return directory
 
 
-def _normalize_config(config: ClientConfig | Mapping[str, JsonValue]) -> ClientConfig:
-    if isinstance(config, ClientConfig):
-        normalized = config
-    else:
-        raw_profiles = config.get("profiles", {})
-        if not isinstance(raw_profiles, dict):
-            msg = "config profiles must be an object"
-            raise ConfigError(msg)
-        profiles: dict[str, ClientProfile] = {}
-        for name, raw in raw_profiles.items():
-            if not isinstance(raw, dict):
-                msg = f"profile config must be an object: {name}"
-                raise ConfigError(msg)
-            profiles[str(name)] = _validated_profile(str(name), raw)
-        profiles.setdefault(DEFAULT_PROFILE, ClientProfile())
-        normalized = _validated_config(config, profiles)
-    normalized.profiles.setdefault(DEFAULT_PROFILE, ClientProfile())
-    return normalized
-
-
 def _validated_profile(name: str, raw: Mapping[str, JsonValue]) -> ClientProfile:
     try:
         return ClientProfile.model_validate({**raw, "name": name})
@@ -470,10 +421,6 @@ def _config_data(config: ClientConfig) -> dict[str, JsonValue]:
     )
 
 
-def _is_legacy_context_config(config: Mapping[str, JsonValue]) -> bool:
-    return "contexts" in config or "current_context" in config
-
-
 def _apply_environment_overrides(profile: ClientProfile) -> ClientProfile:
     current_settings = settings()
     updates: dict[str, object] = {}
@@ -502,12 +449,9 @@ __all__ = [
     "activate_profile",
     "active_profile_name",
     "delete_profile",
-    "empty_config",
     "get_profile",
     "list_profiles",
-    "load_config",
     "reset_settings_cache",
-    "save_config",
     "set_profile",
     "settings",
 ]

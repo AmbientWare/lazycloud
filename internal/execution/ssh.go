@@ -147,7 +147,7 @@ type Certificate struct {
 func (k *SSHKeys) Sign(ctx context.Context, workspace identity.WorkspaceID, holder, publicKey string) (Certificate, error) {
 	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
 	if err != nil || key.Type() != ssh.KeyAlgoED25519 {
-		return Certificate{}, &InvalidError{Reason: "public_key must be an ssh-ed25519 public key line"}
+		return Certificate{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "public_key must be an ssh-ed25519 public key line"}
 	}
 	authority, _, err := k.Authority(ctx, workspace)
 	if err != nil {
@@ -255,8 +255,8 @@ type SSHPod struct {
 // ErrPodStopped and ErrPodWithoutSSH refuse a tunnel to a pod that cannot
 // take one.
 var (
-	ErrPodStopped    = errors.New("the pod is stopped; deploy it again to connect")
-	ErrPodWithoutSSH = errors.New("the pod does not serve SSH; deploy it with ssh=True")
+	ErrPodStopped    error = &apitypes.Error{Code: apitypes.Conflict, Message: "the pod is stopped; deploy it again to connect"}
+	ErrPodWithoutSSH error = &apitypes.Error{Code: apitypes.Conflict, Message: "the pod does not serve SSH; deploy it with ssh=True"}
 )
 
 // PodForSSH resolves the pod a tunnel connects to.
@@ -268,7 +268,7 @@ func (e *Execution) PodForSSH(ctx context.Context, workspace identity.WorkspaceI
 	if err != nil {
 		return SSHPod{}, fmt.Errorf("read pod: %w", err)
 	}
-	if row.DesiredState != "active" || row.AppState != "active" || row.Spec == nil {
+	if row.DesiredState != "active" || row.AppState != "active" || !row.Released {
 		return SSHPod{}, ErrPodStopped
 	}
 	out := SSHPod{Workload: row.ID}

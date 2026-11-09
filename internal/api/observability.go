@@ -28,11 +28,8 @@ const (
 
 // StreamChanges opens the workspace's change stream. Authorization and the
 // resume point are settled before the response starts.
-func (s *Server) StreamChanges(ctx context.Context, req StreamChangesRequestObject) (StreamChangesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) StreamChanges(ctx context.Context, req StreamChangesRequestObject) (StreamChangesResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	var after *int64
 	if id := req.Params.LastEventID; id != nil {
 		seq, err := strconv.ParseInt(*id, 10, 64)
@@ -50,7 +47,7 @@ func (s *Server) StreamChanges(ctx context.Context, req StreamChangesRequestObje
 
 // streamOwner names who holds a stream, for the per-caller limit: the
 // user, or the container.
-func (s *Server) streamOwner(ctx context.Context) string {
+func (s *server) streamOwner(ctx context.Context) string {
 	if c, ok := containerFrom(ctx); ok {
 		return "container:" + c.Container.String()
 	}
@@ -156,11 +153,8 @@ func resetFrame(reason observability.ResetReason, latest int64, known bool) []by
 }
 
 // GetContainerMetrics returns a container's use over time.
-func (s *Server) GetContainerMetrics(ctx context.Context, req GetContainerMetricsRequestObject) (GetContainerMetricsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetContainerMetrics(ctx context.Context, req GetContainerMetricsRequestObject) (GetContainerMetricsResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	q := observability.MetricsQuery{Start: req.Params.Start, End: req.Params.End}
 	if req.Params.StepSeconds != nil {
 		step := time.Duration(*req.Params.StepSeconds) * time.Second
@@ -173,25 +167,9 @@ func (s *Server) GetContainerMetrics(ctx context.Context, req GetContainerMetric
 	return GetContainerMetrics200JSONResponse(metrics), nil
 }
 
-// GetContainerLifecycle returns how a container started and stopped.
-func (s *Server) GetContainerLifecycle(ctx context.Context, req GetContainerLifecycleRequestObject) (GetContainerLifecycleResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	lifecycle, err := s.owners.Observability.ContainerLifecycle(ctx, ws.ID, execution.ContainerID(req.Container))
-	if err != nil {
-		return nil, err
-	}
-	return GetContainerLifecycle200JSONResponse(lifecycle), nil
-}
-
 // ListContainerLifecycles returns the lifecycles of several containers.
-func (s *Server) ListContainerLifecycles(ctx context.Context, req ListContainerLifecyclesRequestObject) (ListContainerLifecyclesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) ListContainerLifecycles(ctx context.Context, req ListContainerLifecyclesRequestObject) (ListContainerLifecyclesResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	ids := make([]execution.ContainerID, len(req.Body.ContainerIds))
 	for i, id := range req.Body.ContainerIds {
 		ids[i] = execution.ContainerID(id)
@@ -204,11 +182,8 @@ func (s *Server) ListContainerLifecycles(ctx context.Context, req ListContainerL
 }
 
 // GetTaskCallGraph returns the tasks of a task's call graph.
-func (s *Server) GetTaskCallGraph(ctx context.Context, req GetTaskCallGraphRequestObject) (GetTaskCallGraphResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetTaskCallGraph(ctx context.Context, req GetTaskCallGraphRequestObject) (GetTaskCallGraphResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	graph, err := s.owners.Observability.TaskCallGraph(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
@@ -226,8 +201,8 @@ func rangeQuery(start, end *time.Time, windowSeconds *int) observability.RangeQu
 
 // GetWorkloadPerformance returns a workload's latency, outcomes and cold
 // starts over time.
-func (s *Server) GetWorkloadPerformance(ctx context.Context, req GetWorkloadPerformanceRequestObject) (GetWorkloadPerformanceResponseObject, error) {
-	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
+func (s *server) GetWorkloadPerformance(ctx context.Context, req GetWorkloadPerformanceRequestObject) (GetWorkloadPerformanceResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -240,11 +215,8 @@ func (s *Server) GetWorkloadPerformance(ctx context.Context, req GetWorkloadPerf
 }
 
 // GetTaskMetrics summarizes the workspace's tasks over a range.
-func (s *Server) GetTaskMetrics(ctx context.Context, req GetTaskMetricsRequestObject) (GetTaskMetricsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetTaskMetrics(ctx context.Context, req GetTaskMetricsRequestObject) (GetTaskMetricsResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if req.Params.Function != nil && req.Params.App == nil {
 		return nil, fmt.Errorf("%w: function needs app", errInvalidRequest)
 	}
@@ -257,11 +229,8 @@ func (s *Server) GetTaskMetrics(ctx context.Context, req GetTaskMetricsRequestOb
 }
 
 // GetTaskActivity counts the workspace's tasks per bucket.
-func (s *Server) GetTaskActivity(ctx context.Context, req GetTaskActivityRequestObject) (GetTaskActivityResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetTaskActivity(ctx context.Context, req GetTaskActivityRequestObject) (GetTaskActivityResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	activity, err := s.owners.Observability.TaskActivity(ctx, ws.ID,
 		rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds), req.Params.App)
 	if err != nil {
@@ -272,7 +241,7 @@ func (s *Server) GetTaskActivity(ctx context.Context, req GetTaskActivityRequest
 
 // memberWorkspaces are the workspaces account metrics cover: the caller's
 // memberships, or only its token's workspace.
-func (s *Server) memberWorkspaces(ctx context.Context) ([]identity.Workspace, error) {
+func (s *server) memberWorkspaces(ctx context.Context) ([]identity.Workspace, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -281,7 +250,7 @@ func (s *Server) memberWorkspaces(ctx context.Context) ([]identity.Workspace, er
 }
 
 // GetAccountMetrics returns the caller's live containers.
-func (s *Server) GetAccountMetrics(ctx context.Context, _ GetAccountMetricsRequestObject) (GetAccountMetricsResponseObject, error) {
+func (s *server) GetAccountMetrics(ctx context.Context, _ GetAccountMetricsRequestObject) (GetAccountMetricsResponseObject, error) {
 	workspaces, err := s.memberWorkspaces(ctx)
 	if err != nil {
 		return nil, err
@@ -294,19 +263,14 @@ func (s *Server) GetAccountMetrics(ctx context.Context, _ GetAccountMetricsReque
 }
 
 // GetAccountActivity measures the caller's workspaces per app over time.
-func (s *Server) GetAccountActivity(ctx context.Context, req GetAccountActivityRequestObject) (GetAccountActivityResponseObject, error) {
+func (s *server) GetAccountActivity(ctx context.Context, req GetAccountActivityRequestObject) (GetAccountActivityResponseObject, error) {
 	workspaces, err := s.memberWorkspaces(ctx)
 	if err != nil {
 		return nil, err
 	}
 	q := observability.ActivityQuery{
-		RangeQuery: rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds), Limit: 5,
-	}
-	if req.Params.Measure != nil {
-		q.Measure = *req.Params.Measure
-	}
-	if req.Params.Limit != nil {
-		q.Limit = *req.Params.Limit
+		RangeQuery: rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds),
+		Measure:    valueOr(req.Params.Measure, ""), Limit: valueOr(req.Params.Limit, 5),
 	}
 	activity, err := s.owners.Observability.AccountActivity(ctx, workspaces, q)
 	if err != nil {

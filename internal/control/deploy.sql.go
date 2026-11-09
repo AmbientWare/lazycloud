@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
 
@@ -73,14 +74,16 @@ func (q *Queries) EnqueueDeployedWebhook(ctx context.Context, arg EnqueueDeploye
 
 const insertRelease = `-- name: InsertRelease :one
 insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
-values ($1, $2, $3, $4, $5, $6::text)
+values ($1, case when $2::bool then -nextval('preview_versions') else $3::int end,
+        $4, $5, $6, $7::text)
 returning id, version, created_at
 `
 
 type InsertReleaseParams struct {
 	WorkloadID   uuid.UUID
+	Preview      bool
 	Version      *int32
-	Spec         []byte
+	Spec         apitypes.WorkloadSpec
 	SpecDigest   []byte
 	SourceSha256 []byte
 	Traceparent  *string
@@ -92,9 +95,11 @@ type InsertReleaseRow struct {
 	CreatedAt time.Time
 }
 
+// A preview's release takes the next negative version.
 func (q *Queries) InsertRelease(ctx context.Context, arg InsertReleaseParams) (InsertReleaseRow, error) {
 	row := q.db.QueryRow(ctx, insertRelease,
 		arg.WorkloadID,
+		arg.Preview,
 		arg.Version,
 		arg.Spec,
 		arg.SpecDigest,
@@ -211,27 +216,44 @@ func (q *Queries) UpsertApp(ctx context.Context, arg UpsertAppParams) (UpsertApp
 
 const upsertWorkload = `-- name: UpsertWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
-values ($1, $2, $3, 'active')
-on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set desired_state = 'active'
-returning id, active_release_id, next_version
+values ($1, $2, $3, $4)
+on conflict (app_id, kind, name) where desired_state <> 'deleted'
+do update set desired_state = case when $5::bool then 'active' else workloads.desired_state end
+returning id, active_release_id, desired_state, next_version
 `
 
 type UpsertWorkloadParams struct {
-	AppID uuid.UUID
-	Kind  string
-	Name  string
+	AppID    uuid.UUID
+	Kind     string
+	Name     string
+	State    string
+	Activate bool
 }
 
 type UpsertWorkloadRow struct {
 	ID              uuid.UUID
 	ActiveReleaseID *uuid.UUID
+	DesiredState    string
 	NextVersion     int32
 }
 
-// Locks the live workload row for the release switch.
+// The live workload, created in @state when missing; @activate makes an
+// existing one active. The update locks the row, so deploys and prepares of
+// one workload insert one release at a time.
 func (q *Queries) UpsertWorkload(ctx context.Context, arg UpsertWorkloadParams) (UpsertWorkloadRow, error) {
-	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Kind, arg.Name)
+	row := q.db.QueryRow(ctx, upsertWorkload,
+		arg.AppID,
+		arg.Kind,
+		arg.Name,
+		arg.State,
+		arg.Activate,
+	)
 	var i UpsertWorkloadRow
-	err := row.Scan(&i.ID, &i.ActiveReleaseID, &i.NextVersion)
+	err := row.Scan(
+		&i.ID,
+		&i.ActiveReleaseID,
+		&i.DesiredState,
+		&i.NextVersion,
+	)
 	return i, err
 }

@@ -1,7 +1,6 @@
 package secrets
 
 import (
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -15,17 +14,6 @@ import (
 	"syscall"
 )
 
-// KeyWrapper wraps per-secret data keys with a master key held outside
-// PostgreSQL. A key file serves local development; production supplies a
-// KMS implementation at the provider boundary.
-type KeyWrapper interface {
-	// KeyID names the master key Wrap uses. Stored with each secret, it
-	// lets Unwrap find the key that wrapped an older value.
-	KeyID() string
-	Wrap(ctx context.Context, dataKey []byte) ([]byte, error)
-	Unwrap(ctx context.Context, keyID string, wrapped []byte) ([]byte, error)
-}
-
 // ErrUnknownKey means a secret was wrapped by a master key this server does
 // not hold.
 var ErrUnknownKey = errors.New("secret was wrapped by an unknown master key")
@@ -33,7 +21,8 @@ var ErrUnknownKey = errors.New("secret was wrapped by an unknown master key")
 // masterKeyBytes is the length of a key file: an AES-256 key.
 const masterKeyBytes = 32
 
-// FileKey is a master key read from a local file of 32 random bytes.
+// FileKey is the master key, read from a local file of 32 random bytes,
+// that wraps every per-secret data key outside PostgreSQL.
 type FileKey struct {
 	id   string
 	aead cipher.AEAD
@@ -106,21 +95,54 @@ func (k *FileKey) Derive(purpose string) []byte {
 	return mac.Sum(nil)
 }
 
-// KeyID names the key by a digest prefix, so a replaced key file is
-// recognized rather than producing authentication failures.
-func (k *FileKey) KeyID() string { return k.id }
-
-// Wrap seals dataKey under the master key.
-func (k *FileKey) Wrap(_ context.Context, dataKey []byte) ([]byte, error) {
-	return seal(k.aead, dataKey, []byte(k.id))
+// envelope is a value sealed under a fresh data key and the data key wrapped
+// by the master key. KeyID names that master key by a digest prefix, so a
+// replaced key file is recognized rather than producing authentication
+// failures. Box and WrappedKey are nonce || ciphertext.
+type envelope struct {
+	KeyID      string `json:"key_id"`
+	WrappedKey []byte `json:"wrapped_key"`
+	Box        []byte `json:"box"`
 }
 
-// Unwrap opens a data key that Wrap sealed.
-func (k *FileKey) Unwrap(_ context.Context, keyID string, wrapped []byte) ([]byte, error) {
-	if keyID != k.id {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, keyID)
+// gcmNonceSize is the nonce length at the front of every box.
+const gcmNonceSize = 12
+
+// seal encrypts plaintext, bound to additional, under a fresh data key.
+func (k *FileKey) seal(plaintext, additional []byte) (envelope, error) {
+	dataKey := make([]byte, masterKeyBytes)
+	if _, err := rand.Read(dataKey); err != nil {
+		return envelope{}, fmt.Errorf("generate data key: %w", err)
 	}
-	return open(k.aead, wrapped, []byte(k.id))
+	aead, err := newAEAD(dataKey)
+	if err != nil {
+		return envelope{}, err
+	}
+	box, err := sealBox(aead, plaintext, additional)
+	if err != nil {
+		return envelope{}, err
+	}
+	wrapped, err := sealBox(k.aead, dataKey, []byte(k.id))
+	if err != nil {
+		return envelope{}, fmt.Errorf("wrap data key: %w", err)
+	}
+	return envelope{KeyID: k.id, WrappedKey: wrapped, Box: box}, nil
+}
+
+// open decrypts an envelope seal made with the same additional data.
+func (k *FileKey) open(e envelope, additional []byte) ([]byte, error) {
+	if e.KeyID != k.id {
+		return nil, fmt.Errorf("unwrap data key: %w: %s", ErrUnknownKey, e.KeyID)
+	}
+	dataKey, err := openBox(k.aead, e.WrappedKey, []byte(k.id))
+	if err != nil {
+		return nil, fmt.Errorf("unwrap data key: %w", err)
+	}
+	aead, err := newAEAD(dataKey)
+	if err != nil {
+		return nil, err
+	}
+	return openBox(aead, e.Box, additional)
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {
@@ -135,8 +157,8 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// seal returns nonce || ciphertext.
-func seal(aead cipher.AEAD, plaintext, additional []byte) ([]byte, error) {
+// sealBox returns nonce || ciphertext.
+func sealBox(aead cipher.AEAD, plaintext, additional []byte) ([]byte, error) {
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generate nonce: %w", err)
@@ -144,7 +166,7 @@ func seal(aead cipher.AEAD, plaintext, additional []byte) ([]byte, error) {
 	return aead.Seal(nonce, nonce, plaintext, additional), nil
 }
 
-func open(aead cipher.AEAD, sealed, additional []byte) ([]byte, error) {
+func openBox(aead cipher.AEAD, sealed, additional []byte) ([]byte, error) {
 	if len(sealed) < aead.NonceSize() {
 		return nil, errors.New("sealed data is too short")
 	}

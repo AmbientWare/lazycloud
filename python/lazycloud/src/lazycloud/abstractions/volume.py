@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
-from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
 from lazycloud.control import ResourceControlBinding, storage_client
 
@@ -20,7 +19,6 @@ if TYPE_CHECKING:
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
 DEFAULT_MULTIPART_CHUNK_SIZE_BYTES = 5 * 1024 * 1024
-DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 # put() sends files above this size as a multipart upload.
 MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024
 _PUT_PART_SIZE_BYTES = 16 * 1024 * 1024
@@ -72,12 +70,6 @@ class VolumePathInfo:
 
 
 @dataclass(frozen=True)
-class VolumeFileServiceInfo:
-    enabled: bool = True
-    command_version: int = 1
-
-
-@dataclass(frozen=True)
 class PresignedUrl:
     method: PresignedUrlMethod
     url: str
@@ -123,6 +115,16 @@ class MultipartAbort:
     upload_id: str
     volume_name: str
     volume_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeMount:
+    """A volume, or a cloud bucket described by `config`, as a workload mounts it."""
+
+    name: str
+    mount_path: str
+    read_only: bool = False
+    config: dict[str, JsonValue] | None = None
 
 
 @runtime_checkable
@@ -230,14 +232,15 @@ class Volume(ResourceControlBinding["StorageClient"]):
     def list_path(self, relative_path: str | Path = ".") -> list[VolumePathInfo]:
         """The entries of one directory; a missing directory is empty."""
         path = _relative_path(relative_path).as_posix()
-        entries: list[VolumePathInfo] = []
-        cursor: str | None = None
-        while True:
-            page = self.control_client.list_volume_files(self.name, path, cursor=cursor)
-            entries.extend(_path_info(item) for item in page.files)
-            if not page.next_cursor:
-                return entries
-            cursor = page.next_cursor
+        from lazycloud.clients.api import pages
+
+        return [
+            _path_info(item)
+            for page in pages(
+                lambda cursor: self.control_client.list_volume_files(self.name, path, cursor=cursor)
+            )
+            for item in page.files
+        ]
 
     def stat(self, relative_path: str | Path) -> VolumePathInfo:
         path = _relative_path(relative_path).as_posix()
@@ -283,9 +286,6 @@ class Volume(ResourceControlBinding["StorageClient"]):
         self.ready = False
         self.volume_id = None
         return True
-
-    def file_service_info(self) -> VolumeFileServiceInfo:
-        return VolumeFileServiceInfo()
 
     def presigned_url(
         self,
@@ -459,7 +459,6 @@ def _path_info(info: api.VolumeFile) -> VolumePathInfo:
 
 __all__ = [
     "DEFAULT_MULTIPART_CHUNK_SIZE_BYTES",
-    "DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS",
     "DEFAULT_VOLUME_MOUNT_ROOT",
     "MULTIPART_THRESHOLD_BYTES",
     "CloudBucket",
@@ -473,7 +472,7 @@ __all__ = [
     "PresignedUrlMethod",
     "Volume",
     "VolumeExport",
-    "VolumeFileServiceInfo",
+    "VolumeMount",
     "VolumeOperationError",
     "VolumePathInfo",
 ]

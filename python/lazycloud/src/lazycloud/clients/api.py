@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypeVar, overload
+from typing import Literal, Protocol, TypeVar, overload
 from urllib.parse import quote
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from lazycloud._shared.task_context import current_task_id
 from lazycloud.contracts.api import (
     App,
     AppPage,
+    AppUpdate,
     Container,
     ContainerPage,
     Deployment,
@@ -47,7 +48,6 @@ from lazycloud.contracts.api import (
     RunTaskRequest,
     ScaleRequest,
     Secret,
-    SecretCreate,
     SecretPage,
     SecretValue,
     SecretValueUpdate,
@@ -78,7 +78,6 @@ from lazycloud.contracts.api import (
     WorkloadPage,
     WorkloadSpec,
     Workspace,
-    WorkspaceList,
     WorkspaceRequest,
 )
 from lazycloud.exceptions import SdkError
@@ -134,6 +133,28 @@ class ApiConnectionError(SdkError):
         super().__init__(f"{method} {path}: {reason}")
 
 
+class CursorPage(Protocol):
+    @property
+    def next_cursor(self) -> str | None: ...
+
+
+PageT = TypeVar("PageT", bound=CursorPage)
+
+
+def pages(fetch: Callable[[str | None], PageT]) -> Iterator[PageT]:
+    """Every page of a cursor collection; `fetch` reads the page at a cursor.
+
+    Each page is read when the previous one has been consumed.
+    """
+    cursor: str | None = None
+    while True:
+        page = fetch(cursor)
+        yield page
+        if not page.next_cursor:
+            return
+        cursor = page.next_cursor
+
+
 @dataclass
 class ApiClient:
     """One connection pool to the API, authenticated when `token` is set.
@@ -181,21 +202,6 @@ class ApiClient:
             "/v1/device-codes/token",
             body=DeviceTokenRequest(device_code=device_code),
         )
-
-    def list_workspaces(self) -> list[Workspace]:
-        """Every workspace the caller may act on, following pages."""
-
-        workspaces: list[Workspace] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, str | int] = {"limit": 1000}
-            if cursor:
-                params["cursor"] = cursor
-            page = self._send(WorkspaceList, "GET", "/v1/workspaces", params=params)
-            workspaces.extend(page.workspaces)
-            if not page.next_cursor:
-                return workspaces
-            cursor = page.next_cursor
 
     def get_workspace(self, name: str) -> Workspace:
         return self._send(Workspace, "GET", _path("v1", "workspaces", name))
@@ -421,11 +427,13 @@ class ApiClient:
         """Read an app by name or id."""
         return self._send(App, "GET", _path("v1", "workspaces", workspace, "apps", app))
 
-    def pause_app(self, workspace: str, app: str) -> App:
-        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "pause"))
-
-    def resume_app(self, workspace: str, app: str) -> App:
-        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "resume"))
+    def update_app(self, workspace: str, app: str, *, paused: bool) -> App:
+        return self._send(
+            App,
+            "PATCH",
+            _path("v1", "workspaces", workspace, "apps", app),
+            body=AppUpdate(paused=paused),
+        )
 
     def delete_app(self, workspace: str, app: str) -> App:
         return self._send(App, "DELETE", _path("v1", "workspaces", workspace, "apps", app))
@@ -727,31 +735,20 @@ class ApiClient:
             SecretPage, "GET", _path("v1", "workspaces", workspace, "secrets"), params=params
         )
 
-    def create_secret(self, workspace: str, name: str, value: str) -> Secret:
-        return self._send(
-            Secret,
-            "POST",
-            _path("v1", "workspaces", workspace, "secrets"),
-            body=SecretCreate(name=name, value=value),
-        )
-
     def get_secret(self, workspace: str, name: str) -> Secret:
         return self._send(Secret, "GET", _path("v1", "workspaces", workspace, "secrets", name))
 
-    def set_secret(self, workspace: str, name: str, value: str) -> Secret:
+    def set_secret(
+        self, workspace: str, name: str, value: str, *, exists: bool | None = None
+    ) -> Secret:
+        """Store a secret's value; `exists` False only creates it, True only replaces it."""
+        headers = {} if exists is None else {"If-Match" if exists else "If-None-Match": "*"}
         return self._send(
             Secret,
             "PUT",
             _path("v1", "workspaces", workspace, "secrets", name),
             body=SecretValueUpdate(value=value),
-        )
-
-    def update_secret(self, workspace: str, name: str, value: str) -> Secret:
-        return self._send(
-            Secret,
-            "PATCH",
-            _path("v1", "workspaces", workspace, "secrets", name),
-            body=SecretValueUpdate(value=value),
+            headers=headers,
         )
 
     def delete_secret(self, workspace: str, name: str) -> None:
@@ -799,11 +796,6 @@ class ApiClient:
             "POST",
             _path("v1", "workspaces", workspace, "webhooks"),
             body=WebhookCreate.model_validate(fields),
-        )
-
-    def get_webhook(self, workspace: str, webhook: UUID) -> Webhook:
-        return self._send(
-            Webhook, "GET", _path("v1", "workspaces", workspace, "webhooks", str(webhook))
         )
 
     def update_webhook(
@@ -899,6 +891,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT: ...
 
@@ -911,6 +904,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> None: ...
 
@@ -922,6 +916,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT | None:
         content = (
@@ -940,7 +935,10 @@ class ApiClient:
                 path,
                 content=content,
                 params=params,
-                headers={"Content-Type": "application/json"} if content is not None else None,
+                headers={
+                    **(headers or {}),
+                    **({"Content-Type": "application/json"} if content is not None else {}),
+                },
                 timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
             )
         except httpx.HTTPError as exc:
@@ -1010,4 +1008,10 @@ def workload_path(workspace: str, app: str, kind: WorkloadKind, name: str, *segm
     )
 
 
-__all__ = ["ApiClient", "ApiConnectionError", "ApiError", "is_transient"]
+__all__ = [
+    "ApiClient",
+    "ApiConnectionError",
+    "ApiError",
+    "is_transient",
+    "pages",
+]

@@ -91,9 +91,9 @@ func TestWaitTasksWakesOnAFinishDuringTheWait(t *testing.T) {
 		found, err := e.WaitTasks(t.Context(), l, f.workspace, taskIDs(tasks), 10*time.Second)
 		return got{found, err}
 	})
-	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 		Attempt: last.Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("7")},
-	}); err != nil {
+	}}})[0]; err != nil {
 		t.Fatal(err)
 	}
 	r := <-wait
@@ -219,14 +219,14 @@ func TestOnlyTerminalTransitionsNotifyFinishedTasks(t *testing.T) {
 		if got := finished(); len(got) != 0 {
 			t.Fatalf("a claim and a log line notified %v", got)
 		}
-		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+		if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 			Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-		}); err != nil {
+		}}})[0]; err != nil {
 			t.Fatal(err)
 		}
-		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+		if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 			Attempt: claimed[1].Attempt, State: AttemptFailed, Failure: &Failure{Kind: FailureUserError, Message: "no"},
-		}); err != nil {
+		}}})[0]; err != nil {
 			t.Fatal(err)
 		}
 		if got := finished(); len(got) != 2 || !got[uuid.UUID(tasks[0].ID)] || !got[uuid.UUID(tasks[1].ID)] {

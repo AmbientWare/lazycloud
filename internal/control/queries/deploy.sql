@@ -10,18 +10,23 @@ select sha256 from source_objects
 where workspace_id = @workspace_id and sha256 = any(@digests::bytea[]);
 
 -- name: UpsertWorkload :one
--- Locks the live workload row for the release switch.
+-- The live workload, created in @state when missing; @activate makes an
+-- existing one active. The update locks the row, so deploys and prepares of
+-- one workload insert one release at a time.
 insert into workloads (app_id, kind, name, desired_state)
-values (@app_id, @kind, @name, 'active')
-on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set desired_state = 'active'
-returning id, active_release_id, next_version;
+values (@app_id, @kind, @name, @state)
+on conflict (app_id, kind, name) where desired_state <> 'deleted'
+do update set desired_state = case when @activate::bool then 'active' else workloads.desired_state end
+returning id, active_release_id, desired_state, next_version;
 
 -- name: ActiveRelease :one
 select id, version, spec_digest, created_at from releases where id = @id;
 
 -- name: InsertRelease :one
+-- A preview's release takes the next negative version.
 insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
-values (@workload_id, sqlc.narg(version), @spec, @spec_digest, @source_sha256, sqlc.narg(traceparent)::text)
+values (@workload_id, case when @preview::bool then -nextval('preview_versions') else sqlc.narg(version)::int end,
+        @spec, @spec_digest, @source_sha256, sqlc.narg(traceparent)::text)
 returning id, version, created_at;
 
 -- name: ActivateRelease :exec

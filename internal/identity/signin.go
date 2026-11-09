@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -357,13 +359,13 @@ func (i *Identity) AuthenticateSession(ctx context.Context, token string) (Princ
 		return Principal{}, fmt.Errorf("authenticate session: %w", err)
 	}
 	id := SessionID(row.ID)
-	return Principal{User: UserID(row.UserID), Email: deref(row.Email), IsAdmin: row.IsAdmin, Session: &id}, nil
+	return Principal{User: UserID(row.UserID), Email: database.Value(row.Email), IsAdmin: row.IsAdmin, Session: &id}, nil
 }
 
 // SignOut ends the browser session that made the request and no other.
 func (i *Identity) SignOut(ctx context.Context, p Principal) error {
 	if p.Session == nil {
-		return &ConflictError{Message: "only a browser session signs out; revoke a token instead"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "only a browser session signs out; revoke a token instead"}
 	}
 	if err := i.queries.DeleteSession(ctx, uuid.UUID(*p.Session)); err != nil {
 		return fmt.Errorf("delete session: %w", err)

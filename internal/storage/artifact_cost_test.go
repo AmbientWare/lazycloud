@@ -23,7 +23,7 @@ func TestArtifactSummaryShowsTheMeteredCost(t *testing.T) {
 	if err != nil || before.AccruedNanos != 0 || !before.AccruedSince.Equal(since) || before.EstimatedMonthlyNanos <= 0 {
 		t.Fatalf("summary before metering: %+v %v", before, err)
 	}
-	if _, err := billing.NewBilling(f.pool, billing.Config{}, slog.New(slog.DiscardHandler)).Meter(ctx); err != nil {
+	if _, err := billing.NewBilling(f.pool, billing.Config{SessionPool: f.pool}, slog.New(slog.DiscardHandler)).Meter(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var metered int64

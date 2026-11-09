@@ -1,12 +1,10 @@
 package callbacks
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -18,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -26,15 +25,10 @@ import (
 const maxWebhooks = 20
 
 // ErrNotFound means the workspace has no such webhook.
-var ErrNotFound = errors.New("webhook not found")
+var ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 
 // ErrLimit means the workspace already holds maxWebhooks webhooks.
-var ErrLimit = fmt.Errorf("a workspace holds at most %d webhooks", maxWebhooks)
-
-// InvalidError rejects a webhook field or a page cursor.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
+var ErrLimit error = &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("a workspace holds at most %d webhooks", maxWebhooks)}
 
 // TargetURL checks a callback or webhook target: http or https, a host, no
 // credentials and no fragment. Whether the host is public is checked when
@@ -77,7 +71,7 @@ func (h *Webhooks) List(ctx context.Context, workspace identity.WorkspaceID, cur
 	if cursor != "" {
 		parsed, err := uuid.Parse(cursor)
 		if err != nil {
-			return apitypes.WebhookPage{}, &InvalidError{Reason: "the cursor is not from this listing"}
+			return apitypes.WebhookPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 		}
 		after = parsed
 	}
@@ -197,10 +191,8 @@ func (h *Webhooks) Test(ctx context.Context, workspace identity.WorkspaceID, id 
 		if err != nil {
 			return fmt.Errorf("queue test delivery: %w", err)
 		}
-		if err := q.WakeDelivery(ctx); err != nil {
-			return fmt.Errorf("wake delivery: %w", err)
-		}
-		return nil
+		// The deliverer runs at once rather than on its next tick.
+		return database.Notify(ctx, tx, database.ChannelCallback, "")
 	})
 	if err != nil {
 		return apitypes.WebhookDelivery{}, fmt.Errorf("test webhook: %w", err)
@@ -217,7 +209,7 @@ func (h *Webhooks) Deliveries(ctx context.Context, workspace identity.WorkspaceI
 	if cursor != "" {
 		parsed, err := strconv.ParseInt(cursor, 10, 64)
 		if err != nil {
-			return apitypes.WebhookDeliveryPage{}, &InvalidError{Reason: "the cursor is not from this listing"}
+			return apitypes.WebhookDeliveryPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 		}
 		before = parsed
 	}
@@ -242,7 +234,7 @@ func (h *Webhooks) Deliveries(ctx context.Context, workspace identity.WorkspaceI
 func webhookURL(value string) (string, error) {
 	target, err := TargetURL(value)
 	if err != nil {
-		return "", &InvalidError{Reason: "url " + err.Error()}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "url " + err.Error()}
 	}
 	return target, nil
 }
@@ -308,39 +300,21 @@ func (c *Callbacks) claimWebhooks(ctx context.Context, n int) ([]ClaimDueWebhook
 func (c *Callbacks) deliverWebhook(ctx context.Context, row ClaimDueWebhookDeliveriesRow) {
 	log := c.logger.With("delivery_id", row.ID, "event_id", row.EventID, "event", row.Event, "delivery", row.Deliveries)
 	status, retry, err := c.sendWebhook(ctx, row)
-	if ctx.Err() != nil {
-		// The lease expires and another pass sends it again.
-		return
-	}
 	var answered *int32
 	if status != 0 {
-		code := int32(status) //nolint:gosec // An HTTP status code.
-		answered = &code
+		answered = new(int32(status)) //nolint:gosec // An HTTP status code.
 	}
-	var record error
-	switch {
-	case err == nil:
-		log.InfoContext(ctx, "webhook delivered")
-		record = c.queries.FinishWebhookDelivery(ctx, FinishWebhookDeliveryParams{
-			ID: row.ID, Deliveries: row.Deliveries, State: "delivered", ResponseStatus: answered,
+	c.settle(ctx, log, "webhook delivery", row.Deliveries, retry, err,
+		func(state string, lastError *string) error {
+			return c.queries.FinishWebhookDelivery(ctx, FinishWebhookDeliveryParams{
+				ID: row.ID, Deliveries: row.Deliveries, State: state, ResponseStatus: answered, LastError: lastError,
+			})
+		},
+		func(lastError *string, delaySeconds float64) error {
+			return c.queries.RetryWebhookDelivery(ctx, RetryWebhookDeliveryParams{
+				ID: row.ID, Deliveries: row.Deliveries, ResponseStatus: answered, LastError: lastError, DelaySeconds: delaySeconds,
+			})
 		})
-	case retry && row.Deliveries < callbackAttempts:
-		message := err.Error()
-		log.InfoContext(ctx, "webhook delivery failed; retrying", "error", message)
-		record = c.queries.RetryWebhookDelivery(ctx, RetryWebhookDeliveryParams{
-			ID: row.ID, Deliveries: row.Deliveries, ResponseStatus: answered, LastError: &message,
-			DelaySeconds: c.retryDelays[row.Deliveries-1].Seconds(),
-		})
-	default:
-		message := err.Error()
-		log.WarnContext(ctx, "webhook delivery failed", "error", message)
-		record = c.queries.FinishWebhookDelivery(ctx, FinishWebhookDeliveryParams{
-			ID: row.ID, Deliveries: row.Deliveries, State: "failed", ResponseStatus: answered, LastError: &message,
-		})
-	}
-	if record != nil {
-		log.ErrorContext(ctx, "recording webhook delivery outcome failed", "error", record)
-	}
 }
 
 // sendWebhook posts one event: {id, type, created_at, workspace, data},
@@ -356,19 +330,11 @@ func (c *Callbacks) sendWebhook(ctx context.Context, row ClaimDueWebhookDeliveri
 	if err != nil {
 		return 0, false, fmt.Errorf("encode webhook event: %w", err)
 	}
-	key, err := c.secrets.SigningKey(ctx, identity.WorkspaceID(row.WorkspaceID))
+	req, retry, err := c.signed(ctx, row.WorkspaceID, row.Url, body, "X-Webhook-")
 	if err != nil {
-		return 0, true, fmt.Errorf("read signing key: %w", err)
+		return 0, retry, fmt.Errorf("webhook %w", err)
 	}
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, row.Url, bytes.NewReader(body))
-	if err != nil {
-		return 0, false, fmt.Errorf("build webhook request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Webhook-ID", row.EventID.String())
 	req.Header.Set("X-Webhook-Event", row.Event)
-	req.Header.Set("X-Webhook-Signature", Sign(key, body, timestamp))
-	req.Header.Set("X-Webhook-Timestamp", timestamp)
 	return c.post(req)
 }

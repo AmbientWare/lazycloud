@@ -11,6 +11,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -163,7 +165,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, acct
 		case phase == PhaseTerminating && gone:
 			// The termination the fleet asked for, with the failure that
 			// asked for it when one did.
-			err = c.hostGone(ctx, h.ID, phase, Failure(deref(h.Failure)), h.PhaseMessage)
+			err = c.hostGone(ctx, h.ID, phase, Failure(database.Value(h.Failure)), h.PhaseMessage)
 		case phase == PhaseTerminating:
 			// The actuator terminates it.
 		case gone && h.InterruptionAt != nil:
@@ -263,7 +265,7 @@ func (c *Compute) endHost(ctx context.Context, host uuid.UUID, from Phase, failu
 		return err
 	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).EndHost(ctx, EndHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+		n, err := c.queries.WithTx(tx).EndHost(ctx, EndHostParams{ID: host, FromPhase: string(from), Failure: new(string(failure)), Message: message})
 		if err != nil {
 			return fmt.Errorf("end host: %w", err)
 		}
@@ -296,7 +298,7 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 		if failure == "" {
 			n, err = q.MarkHostDeleted(ctx, MarkHostDeletedParams{ID: host, FromPhase: string(from)})
 		} else {
-			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: new(string(failure)), Message: message})
 		}
 		if err != nil {
 			return fmt.Errorf("mark host gone: %w", err)

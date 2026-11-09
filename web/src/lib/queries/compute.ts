@@ -2,7 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { accountQueryKeys, criticalLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /**
  * The change stream carries no compute topics, so these reads poll. The
@@ -42,7 +42,7 @@ export function machinesQueryOptions(following?: string) {
         ? FOLLOWED_MACHINE_POLL_INTERVAL_MS
         : ACCOUNT_CAPACITY_POLL_INTERVAL_MS;
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -54,7 +54,7 @@ export function connectionMachinesQueryOptions(enabled = true) {
     queryFn: () =>
       ok(api.GET("/v1/compute/instances", { params: { query: { limit: INSTANCE_PAGE_LIMIT } } })),
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -65,7 +65,7 @@ export function computeSummaryQueryOptions(workspace: string) {
     queryFn: () =>
       ok(api.GET("/v1/workspaces/{workspace}/compute", { params: { path: { workspace } } })),
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -89,7 +89,7 @@ export function awsConnectionQueryOptions(enabled = true) {
         ? CONNECTION_TRANSITION_POLL_INTERVAL_MS
         : ACCOUNT_CAPACITY_POLL_INTERVAL_MS;
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

@@ -11,6 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stripe/stripe-go/v87"
 	"github.com/stripe/stripe-go/v87/webhook"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -39,7 +42,7 @@ func (b *Billing) ReceiveWebhook(ctx context.Context, payload []byte, signature 
 		return fmt.Errorf("%w: %w", ErrBadSignature, err)
 	}
 	if event.Data == nil {
-		return &InvalidError{Message: "the delivery names no object"}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the delivery names no object"}
 	}
 	object := event.GetObjectValue("id")
 	customer := event.GetObjectValue("customer")
@@ -82,11 +85,11 @@ func (b *Billing) ProcessEvents(ctx context.Context) (int, error) {
 			err = b.queries.FinishEvent(ctx, FinishEventParams{ID: e.ID})
 		case e.Attempts >= eventAttempts:
 			b.logger.ErrorContext(ctx, "stripe event dropped", "event", e.ID, "type", e.Type, "error", err)
-			err = b.queries.FinishEvent(ctx, FinishEventParams{ID: e.ID, LastError: truncate(err.Error())})
+			err = b.queries.FinishEvent(ctx, FinishEventParams{ID: e.ID, LastError: database.Truncate(err.Error(), maxError)})
 		default:
 			b.logger.WarnContext(ctx, "stripe event deferred", "event", e.ID, "type", e.Type, "attempt", e.Attempts, "error", err)
 			next := time.Now().Add(min(10*time.Second<<min(e.Attempts, 13), 2*time.Hour))
-			err = b.queries.RetryEvent(ctx, RetryEventParams{ID: e.ID, NextAttemptAt: next, LastError: truncate(err.Error())})
+			err = b.queries.RetryEvent(ctx, RetryEventParams{ID: e.ID, NextAttemptAt: next, LastError: database.Truncate(err.Error(), maxError)})
 		}
 		if err != nil {
 			return 0, fmt.Errorf("settle stripe event %s: %w", e.ID, err)

@@ -163,10 +163,11 @@ func TestLifecycleCombinesTransitionsAndHostStages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lifecycle, err := f.obs.ContainerLifecycle(t.Context(), f.workspace, container)
-	if err != nil {
-		t.Fatal(err)
+	lifecycles, err := f.obs.ContainerLifecycles(t.Context(), f.workspace, []execution.ContainerID{container})
+	if err != nil || len(lifecycles) != 1 {
+		t.Fatalf("lifecycles %+v %v", lifecycles, err)
 	}
+	lifecycle := lifecycles[0]
 	var got []apitypes.LifecycleStageKind
 	for _, s := range lifecycle.Stages {
 		got = append(got, s.Stage)
@@ -191,7 +192,7 @@ func TestLifecycleCombinesTransitionsAndHostStages(t *testing.T) {
 		t.Fatalf("draining lifecycle %+v", lifecycle)
 	}
 	otherWS, _, _, _ := f.addFunction("other", "reports", "summarize", `{}`)
-	if _, err := f.obs.ContainerLifecycle(t.Context(), otherWS, container); !errors.Is(err, observability.ErrNotFound) {
-		t.Fatalf("another workspace read the lifecycle: %v", err)
+	if other, err := f.obs.ContainerLifecycles(t.Context(), otherWS, []execution.ContainerID{container}); err != nil || len(other) != 0 {
+		t.Fatalf("another workspace read the lifecycle: %+v %v", other, err)
 	}
 }

@@ -6,9 +6,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
-from lazycloud._shared.autoscaling import Autoscaler
-from lazycloud._shared.lifecycle import LifecycleHooks
-from lazycloud._shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
+from lazycloud._shared.callbacks import normalize_callback_url
+from lazycloud._shared.gpu import gpu_preference
+from lazycloud._shared.lifecycle import LifecycleHookName
+from lazycloud._shared.tasks import RetryPolicy
 from lazycloud.references import dotted_reference
 
 
@@ -59,25 +60,31 @@ def lifecycle_hook_references(value: LifecycleHookInput = None) -> tuple[str, ..
     return tuple(ref for ref in refs if ref)
 
 
-def lifecycle_hooks(
-    *,
-    on_start: LifecycleHookInput = None,
-    on_running: LifecycleHookInput = None,
-    on_success: LifecycleHookInput = None,
-    on_error: LifecycleHookInput = None,
-    on_retry: LifecycleHookInput = None,
-    on_failure: LifecycleHookInput = None,
-    on_finish: LifecycleHookInput = None,
-) -> LifecycleHooks:
-    return LifecycleHooks(
-        on_start=lifecycle_hook_references(on_start),
-        on_running=lifecycle_hook_references(on_running),
-        on_success=lifecycle_hook_references(on_success),
-        on_error=lifecycle_hook_references(on_error),
-        on_retry=lifecycle_hook_references(on_retry),
-        on_failure=lifecycle_hook_references(on_failure),
-        on_finish=lifecycle_hook_references(on_finish),
-    )
+def lifecycle_hooks(owner: Any) -> dict[str, list[str]]:
+    """The API lifecycle hooks of a workload: each hook it sets, as import references."""
+    hooks: dict[str, list[str]] = {}
+    for hook in LifecycleHookName:
+        refs = lifecycle_hook_references(getattr(owner, hook.value, None))
+        if refs:
+            hooks[hook.value] = list(refs)
+    return hooks
+
+
+REGIONS = ("us-east", "us-west", "eu-central", "eu-north", "ap-southeast")
+
+
+def check_workload_options(owner: Any) -> None:
+    """Refuse GPU, placement and callback options no deploy could honor, where they are declared."""
+    gpu_preference(owner.gpu)
+    normalize_callback_url(getattr(owner, "callback_url", None))
+    if owner.gpu_count < 0:
+        raise ValueError("gpu_count cannot be negative")
+    if owner.region is not None and owner.region not in REGIONS:
+        raise ValueError(f"region {owner.region!r} is not one of {', '.join(REGIONS)}")
+    if (owner.region is not None or owner.availability_zone) and owner.machine:
+        raise ValueError(
+            "region or availability zone and a named machine cannot be selected together"
+        )
 
 
 def schema_metadata(value: SchemaInput) -> dict[str, JsonValue]:
@@ -90,15 +97,6 @@ def schema_metadata(value: SchemaInput) -> dict[str, JsonValue]:
     else:
         raw = value
     return _json_object(raw, field="schema")
-
-
-def task_policy_metadata(
-    value: TaskPolicy | Mapping[str, JsonValue] | None,
-) -> dict[str, JsonValue]:
-    if value is None:
-        return {}
-    raw = value.model_dump(mode="json") if isinstance(value, ModelDumpable) else value
-    return _json_object(raw, field="task_policy")
 
 
 def retry_policy_config(
@@ -120,73 +118,12 @@ def retry_policy_config(
         and (retry_delay_seconds is None or retry_delay_seconds <= 0)
     ):
         return None
-    return normalize_retry_policy(
-        value,
-        retries=retries,
-        delay_seconds=retry_delay_seconds,
-    )
-
-
-def autoscaler_metadata(
-    value: Autoscaler | Mapping[str, JsonValue] | None,
-) -> dict[str, JsonValue]:
-    if value is None:
-        return {}
-    raw = value.model_dump(mode="json") if isinstance(value, ModelDumpable) else value
-    return Autoscaler.model_validate(raw).model_dump(mode="json")
-
-
-def build_resource_metadata(
-    *,
-    app: str | None = None,
-    workers: int | None = None,
-    max_pending_tasks: int | None = None,
-    callback_url: str | None = None,
-    authorized: bool | None = None,
-    autoscaler: Autoscaler | Mapping[str, JsonValue] | None = None,
-    task_policy: TaskPolicy | Mapping[str, JsonValue] | None = None,
-    checkpoint_enabled: bool | None = None,
-    in_process: bool | None = None,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    tcp: bool | None = None,
-    ssh: bool | None = None,
-    block_network: bool | None = None,
-    allow_list: list[str] | None = None,
-    docker_enabled: bool | None = None,
-    machine: MachineInput = None,
-    extra: Mapping[str, JsonValue] | None = None,
-) -> dict[str, JsonValue]:
-    metadata: dict[str, JsonValue] = dict(extra or {})
-    _set_if_value(metadata, "app", app)
-    _set_if_value(metadata, "workers", workers)
-    _set_if_value(metadata, "max_pending_tasks", max_pending_tasks)
-    _set_if_value(metadata, "callback_url", callback_url)
-    _set_if_value(metadata, "authorized", authorized)
-    _set_if_value(metadata, "checkpoint_enabled", checkpoint_enabled)
-    _set_if_value(metadata, "in_process", in_process)
-    _set_if_value(metadata, "tcp", tcp)
-    _set_if_value(metadata, "ssh", ssh)
-    _set_if_value(metadata, "block_network", block_network)
-    _set_if_value(metadata, "docker_enabled", docker_enabled)
-    if allow_list is not None:
-        metadata["allow_list"] = list(allow_list)
-    if autoscaler is not None:
-        metadata["autoscaler"] = autoscaler_metadata(autoscaler)
-    if task_policy is not None:
-        metadata["task_policy"] = task_policy_metadata(task_policy)
-    if inputs is not None:
-        metadata["inputs"] = schema_metadata(inputs)
-    if outputs is not None:
-        metadata["outputs"] = schema_metadata(outputs)
-    if machine is not None:
-        metadata["machine"] = machine
-    return metadata
-
-
-def _set_if_value(metadata: dict[str, JsonValue], key: str, value: JsonValue) -> None:
-    if value is not None and value != "":
-        metadata[key] = value
+    fields = RetryPolicy.model_validate(value or {}).model_dump()
+    if retries is not None:
+        fields["max_attempts"] = max(int(retries), 0) + 1
+    if retry_delay_seconds is not None:
+        fields["delay_seconds"] = max(float(retry_delay_seconds), 0.0)
+    return RetryPolicy.model_validate(fields)
 
 
 def _json_object(value: Mapping[str, JsonValue], *, field: str) -> dict[str, JsonValue]:
@@ -213,18 +150,17 @@ def _json_value(value: JsonValue, *, field: str) -> JsonValue:
 
 
 __all__ = [
+    "REGIONS",
     "CallableWrapper",
     "LifecycleHookInput",
     "LifecycleHookReference",
     "MachineInput",
     "RetryPolicyInput",
     "SchemaInput",
-    "autoscaler_metadata",
-    "build_resource_metadata",
     "callback_reference",
+    "check_workload_options",
     "lifecycle_hook_references",
     "lifecycle_hooks",
     "retry_policy_config",
     "schema_metadata",
-    "task_policy_metadata",
 ]

@@ -13,6 +13,4 @@ output-options:
   # workloadRoutes.
   exclude-operation-ids:
     - requestEndpointPath
-    - requestEndpointPathVersion
     - requestAsgiPath
-    - requestAsgiPathVersion

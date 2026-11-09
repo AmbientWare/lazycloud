@@ -23,41 +23,6 @@ func (q *Queries) CountStartFailure(ctx context.Context, id uuid.UUID) (int32, e
 	return start_failures, err
 }
 
-const failQueuedTasksOfRelease = `-- name: FailQueuedTasksOfRelease :many
-update tasks
-set status = 'failed', failure = $1, finished_at = now()
-where id = any($2::uuid[])
-returning id
-`
-
-type FailQueuedTasksOfReleaseParams struct {
-	Failure []byte
-	Ids     []uuid.UUID
-}
-
-// The ids are queued tasks the caller locked with LockQueuedWithDependents.
-// They are read by key alone: a status test would let a generic plan scan
-// the whole queue through a queued partial index.
-func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTasksOfReleaseParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.Ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockContainer = `-- name: LockContainer :one
 select id, release_id, image_build_id, state, host_id from containers where id = $1 for update
 `
@@ -139,27 +104,8 @@ func (q *Queries) LockStoppedReleases(ctx context.Context, arg LockStoppedReleas
 	return items, nil
 }
 
-const recordFirstLoadError = `-- name: RecordFirstLoadError :execrows
-update releases set load_error = $1 where id = $2 and load_error is null
-`
-
-type RecordFirstLoadErrorParams struct {
-	LoadError *string
-	ID        uuid.UUID
-}
-
-// Records the load error of a release that had none, which is when it stops
-// starting; a concurrent first record waits on the row and then finds one.
-func (q *Queries) RecordFirstLoadError(ctx context.Context, arg RecordFirstLoadErrorParams) (int64, error) {
-	result, err := q.db.Exec(ctx, recordFirstLoadError, arg.LoadError, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const recordLoadError = `-- name: RecordLoadError :exec
-update releases set load_error = $1 where id = $2
+const recordLoadError = `-- name: RecordLoadError :one
+update releases set load_error = $1 where id = $2 returning (old.load_error is null)::bool as first
 `
 
 type RecordLoadErrorParams struct {
@@ -167,9 +113,14 @@ type RecordLoadErrorParams struct {
 	ID        uuid.UUID
 }
 
-func (q *Queries) RecordLoadError(ctx context.Context, arg RecordLoadErrorParams) error {
-	_, err := q.db.Exec(ctx, recordLoadError, arg.LoadError, arg.ID)
-	return err
+// Records the release's load error and whether it had none, which is when
+// it stops starting; a concurrent first record waits on the row and then
+// finds one.
+func (q *Queries) RecordLoadError(ctx context.Context, arg RecordLoadErrorParams) (bool, error) {
+	row := q.db.QueryRow(ctx, recordLoadError, arg.LoadError, arg.ID)
+	var first bool
+	err := row.Scan(&first)
+	return first, err
 }
 
 const releaseHasPlacedContainer = `-- name: ReleaseHasPlacedContainer :one

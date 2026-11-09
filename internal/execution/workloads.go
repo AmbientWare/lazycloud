@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Pods, devboxes and sandboxes are workloads whose release runs a command.
@@ -39,22 +39,6 @@ const (
 	// last one closes.
 	PurposeShell ContainerPurpose = "shell"
 )
-
-// InvalidError is a request the workload cannot satisfy as asked.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
-
-// ConflictError is a request the container or workload's state refuses.
-type ConflictError struct{ Reason string }
-
-// UnavailableError says an operation could not complete now, though it may
-// later.
-type UnavailableError struct{ Reason string }
-
-func (e *UnavailableError) Error() string { return e.Reason }
-
-func (e *ConflictError) Error() string { return e.Reason }
 
 const (
 	// shellKeepWarm is how long a shell container outlives its last shell.
@@ -123,15 +107,15 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 				return fmt.Errorf("read snapshot: %w", err)
 			}
 			if snap.State != string(apitypes.MemorySnapshotStateAvailable) {
-				return &ConflictError{Reason: "the memory snapshot is not available"}
+				return &apitypes.Error{Code: apitypes.Conflict, Message: "the memory snapshot is not available"}
 			}
 			if release != nil && *release != snap.ReleaseID {
-				return &InvalidError{Reason: "the snapshot belongs to another release"}
+				return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the snapshot belongs to another release"}
 			}
 			release = &snap.ReleaseID
 		}
 		if release == nil {
-			return &InvalidError{Reason: "an instance needs a release_id or a snapshot_id"}
+			return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "an instance needs a release_id or a snapshot_id"}
 		}
 		row, err := q.InstanceRelease(ctx, InstanceReleaseParams{ReleaseID: *release, WorkspaceID: uuid.UUID(workspace)})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -141,12 +125,9 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 			return fmt.Errorf("read release: %w", err)
 		}
 		if !row.Live {
-			return &ConflictError{Reason: "the workload is deleted or its app is paused"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workload is deleted or its app is paused"}
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		params, err := instanceParams(workspace, row, spec, req)
 		if err != nil {
 			return err
@@ -163,9 +144,9 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 			return fmt.Errorf("admit instance: %w", err)
 		}
 		if grant.Start == 0 {
-			return &ConflictError{Reason: "the account's plan allows no more containers now"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the account's plan allows no more containers now"}
 		}
-		params.Traceparent = traceparent(ctx)
+		params.Traceparent = telemetry.StoredTraceParent(ctx)
 		inserted, err := q.InsertInstance(ctx, params)
 		if err != nil {
 			return fmt.Errorf("insert instance: %w", err)
@@ -184,16 +165,16 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	kind := apitypes.WorkloadKind(row.Kind)
 	pod := kind == apitypes.WorkloadKindPod || kind == apitypes.WorkloadKindSandbox
 	if !req.Shell && !pod {
-		return InsertInstanceParams{}, &InvalidError{Reason: fmt.Sprintf("a %s runs no instances; start a shell instead", kind)}
+		return InsertInstanceParams{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("a %s runs no instances; start a shell instead", kind)}
 	}
 	if len(req.Command) > 0 && (req.Shell || !pod) {
-		return InsertInstanceParams{}, &InvalidError{Reason: "only a pod or sandbox instance takes a command"}
+		return InsertInstanceParams{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "only a pod or sandbox instance takes a command"}
 	}
 	if req.Shell && req.Snapshot != nil {
-		return InsertInstanceParams{}, &InvalidError{Reason: "a shell container does not restore a snapshot"}
+		return InsertInstanceParams{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a shell container does not restore a snapshot"}
 	}
 	if spec.Pod != nil && spec.Pod.Kind == apitypes.PodKindDevbox {
-		return InsertInstanceParams{}, &InvalidError{Reason: "a devbox runs one container; connect to it instead"}
+		return InsertInstanceParams{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a devbox runs one container; connect to it instead"}
 	}
 	declared := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler)
 	params := InsertInstanceParams{
@@ -206,7 +187,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	}
 	if req.Shell {
 		params.Purpose = string(PurposeShell)
-		params.KeepWarmSeconds = ptr(int32(shellKeepWarm.Seconds()))
+		params.KeepWarmSeconds = new(int32(shellKeepWarm.Seconds()))
 		return params, nil
 	}
 	keepWarm := 600
@@ -217,7 +198,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 		keepWarm = *req.Timeout
 	}
 	if keepWarm > 0 {
-		params.KeepWarmSeconds = ptr(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
+		params.KeepWarmSeconds = new(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
 	}
 	if p := spec.Pod; p != nil {
 		params.BlockNetwork = p.BlockNetwork != nil && *p.BlockNetwork
@@ -247,9 +228,7 @@ func (e *Execution) Instance(ctx context.Context, workspace identity.WorkspaceID
 		reason := StopReason(*row.StopReason)
 		out.StopReason = &reason
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return Instance{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -359,7 +338,7 @@ type TTL struct {
 func (e *Execution) SetTTL(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, ttl int) (TTL, error) {
 	var keepWarm *int32
 	if ttl > 0 {
-		keepWarm = ptr(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
+		keepWarm = new(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
 	}
 	row, err := e.queries.SetContainerTTL(ctx, SetContainerTTLParams{
 		KeepWarmSeconds: keepWarm, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),
@@ -368,7 +347,7 @@ func (e *Execution) SetTTL(ctx context.Context, workspace identity.WorkspaceID, 
 		if _, getErr := e.Instance(ctx, workspace, container); getErr != nil {
 			return TTL{}, getErr
 		}
-		return TTL{}, &ConflictError{Reason: "the container has stopped"}
+		return TTL{}, &apitypes.Error{Code: apitypes.Conflict, Message: "the container has stopped"}
 	}
 	if err != nil {
 		return TTL{}, fmt.Errorf("set ttl: %w", err)
@@ -392,7 +371,7 @@ const MaxAllowList = 10
 // ParseNetworkPolicy validates and normalizes an allow list.
 func ParseNetworkPolicy(block bool, allow []string) (NetworkPolicy, error) {
 	if len(allow) > MaxAllowList {
-		return NetworkPolicy{}, &InvalidError{Reason: fmt.Sprintf("allow_list takes at most %d CIDR ranges", MaxAllowList)}
+		return NetworkPolicy{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("allow_list takes at most %d CIDR ranges", MaxAllowList)}
 	}
 	out := NetworkPolicy{Block: block, Allow: make([]string, 0, len(allow))}
 	for _, entry := range allow {
@@ -400,7 +379,7 @@ func ParseNetworkPolicy(block bool, allow []string) (NetworkPolicy, error) {
 		if err != nil {
 			addr, addrErr := netip.ParseAddr(entry)
 			if addrErr != nil {
-				return NetworkPolicy{}, &InvalidError{Reason: fmt.Sprintf("allow_list entry %q is not an IP address or CIDR range", entry)}
+				return NetworkPolicy{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("allow_list entry %q is not an IP address or CIDR range", entry)}
 			}
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}
@@ -418,7 +397,7 @@ func (e *Execution) SetNetwork(ctx context.Context, listener *database.Listener,
 		return NetworkPolicy{}, err
 	}
 	if (policy.Block || len(policy.Allow) > 0) && route.Spec.DockerEnabled != nil && *route.Spec.DockerEnabled {
-		return NetworkPolicy{}, &InvalidError{Reason: "a container with docker_enabled cannot limit its network: nested containers would bypass the policy"}
+		return NetworkPolicy{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a container with docker_enabled cannot limit its network: nested containers would bypass the policy"}
 	}
 	var placed bool
 	var version int32
@@ -427,7 +406,7 @@ func (e *Execution) SetNetwork(ctx context.Context, listener *database.Listener,
 			BlockNetwork: policy.Block, AllowList: policy.Allow, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Reason: "the container has stopped or does not exist"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the container has stopped or does not exist"}
 		}
 		if err != nil {
 			return fmt.Errorf("set network: %w", err)
@@ -470,15 +449,15 @@ func (e *Execution) waitNetwork(ctx context.Context, listener *database.Listener
 		case err != nil:
 			return fmt.Errorf("read applied network policy: %w", err)
 		case row.NetworkAppliedVersion == version && row.NetworkError != nil:
-			return &UnavailableError{Reason: "the host could not apply the network policy, and the container keeps its previous one: " + *row.NetworkError}
+			return &apitypes.Error{Code: apitypes.Unavailable, Message: "the host could not apply the network policy, and the container keeps its previous one: " + *row.NetworkError}
 		case row.NetworkAppliedVersion >= version:
 			return nil
 		case ContainerState(row.State) == ContainerStopped:
-			return &ConflictError{Reason: "the container stopped"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the container stopped"}
 		}
 		select {
 		case <-ctx.Done():
-			return &UnavailableError{Reason: fmt.Sprintf("the host did not confirm the network policy within %s; it still applies it", NetworkApplyTimeout)}
+			return &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("the host did not confirm the network policy within %s; it still applies it", NetworkApplyTimeout)}
 		case <-wake:
 		case <-poll.C:
 		}
@@ -522,7 +501,7 @@ func (e *Execution) Network(ctx context.Context, workspace identity.WorkspaceID,
 func (e *Execution) ExposePort(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, port int) error {
 	_, err := e.queries.ExposePort(ctx, ExposePortParams{Port: int32(port), ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace)}) //nolint:gosec // The schema bounds ports.
 	if errors.Is(err, pgx.ErrNoRows) {
-		return &ConflictError{Reason: "the container has stopped or does not exist"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "the container has stopped or does not exist"}
 	}
 	if err != nil {
 		return fmt.Errorf("expose port: %w", err)
@@ -568,9 +547,7 @@ func (e *Execution) Route(ctx context.Context, container ContainerID) (Container
 		by := ContainerID(*row.CreatedByContainer)
 		out.CreatedBy = &by
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return ContainerRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -600,15 +577,14 @@ func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute
 		Release: row.ID, Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.Kind),
 		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Accepting: row.Accepting,
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return PodRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	return out, nil
 }
 
 // StopIdle drains idle instances and shell containers, and forgets leases
-// no window needs any more. Hosts stop the drained containers.
-func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, error) {
+// no window needs any more and edge demand long expired. Hosts stop the
+// drained containers.
+func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) error {
 	var drained []drainedContainer
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
@@ -635,13 +611,16 @@ func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, err
 		return notifyHosts(ctx, tx, drained)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("stop idle instances: %w", err)
+		return fmt.Errorf("stop idle instances: %w", err)
 	}
 	for _, c := range drained {
 		logger.InfoContext(ctx, "idle instance draining", "container_id", c.id, "host_id", c.host)
 	}
 	if err := e.queries.DeleteOldContainerLeases(ctx); err != nil {
-		return len(drained), fmt.Errorf("delete old leases: %w", err)
+		return fmt.Errorf("delete old leases: %w", err)
 	}
-	return len(drained), nil
+	if err := e.queries.DeleteExpiredEndpointLoads(ctx); err != nil {
+		return fmt.Errorf("delete expired endpoint loads: %w", err)
+	}
+	return nil
 }

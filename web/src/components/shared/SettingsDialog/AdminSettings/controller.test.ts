@@ -20,10 +20,10 @@ describe("admin settings controller", () => {
     const listed = result.current.accounts.find((row) => row.user.id === "user-2")!;
     act(() => result.current.setRole(listed, "member"));
     expect(result.current.confirming?.action).toBe("demote");
-    expect(requests.puts()).toEqual([]);
+    expect(requests.writes()).toEqual([]);
     act(() => result.current.confirm());
     await waitFor(() => expect(result.current.confirming).toBeNull());
-    expect(requests.puts()).toEqual([{ path: "/v1/users/user-2/role", body: { role: "member" } }]);
+    expect(requests.writes()).toEqual([{ path: "/v1/users/user-2", body: { role: "member" } }]);
 
     const demoted = result.current.accounts.find((row) => row.user.id === "user-2")!;
     expect(demoted.user.is_admin).toBe(false);
@@ -31,8 +31,8 @@ describe("admin settings controller", () => {
     expect(result.current.confirming?.action).toBe("disable");
     act(() => result.current.confirm());
     await waitFor(() => expect(result.current.confirming).toBeNull());
-    expect(requests.puts().at(-1)).toEqual({
-      path: "/v1/users/user-2/status",
+    expect(requests.writes().at(-1)).toEqual({
+      path: "/v1/users/user-2",
       body: { status: "disabled" },
     });
 
@@ -42,11 +42,11 @@ describe("admin settings controller", () => {
     expect(result.current.confirming?.action).toBe("revoke");
     act(() => result.current.confirm());
     await waitFor(() => expect(result.current.confirming).toBeNull());
-    expect(requests.puts().at(-1)).toEqual({
+    expect(requests.writes().at(-1)).toEqual({
       path: "/v1/billing/accounts/user-2/complimentary",
       body: { complimentary: false },
     });
-    expect(requests.puts()).toHaveLength(3);
+    expect(requests.writes()).toHaveLength(3);
     expect(
       result.current.accounts.find((row) => row.user.id === "user-2")?.complimentary_since,
     ).toBeUndefined();
@@ -61,7 +61,7 @@ describe("admin settings controller", () => {
     act(() => result.current.toggleStatus(self));
 
     expect(result.current.confirming).toBeNull();
-    expect(requests.puts()).toEqual([]);
+    expect(requests.writes()).toEqual([]);
   });
 });
 
@@ -89,18 +89,15 @@ function recordRequests(accounts: ApiAccount[]) {
     const text = await request.text();
     const body: unknown = text ? JSON.parse(text) : undefined;
     sent.push({ path, method: request.method, body });
-    const role = path.match(/^\/v1\/users\/([^/]+)\/role$/);
-    if (role) {
-      const { user } = rowFor(accounts, role[1]!);
+    const target = path.match(/^\/v1\/users\/([^/]+)$/);
+    if (target) {
+      const { user } = rowFor(accounts, target[1]!);
+      const change = body as Schemas["UserUpdate"];
       return jsonResponse({
         ...user,
-        is_admin: (body as { role: string }).role === "administrator",
+        ...(change.role && { is_admin: change.role === "administrator" }),
+        ...(change.status && { status: change.status }),
       });
-    }
-    const status = path.match(/^\/v1\/users\/([^/]+)\/status$/);
-    if (status) {
-      const { user } = rowFor(accounts, status[1]!);
-      return jsonResponse({ ...user, status: (body as { status: ApiUser["status"] }).status });
     }
     const waiver = path.match(/^\/v1\/billing\/accounts\/([^/]+)\/complimentary$/);
     if (waiver) {
@@ -114,9 +111,9 @@ function recordRequests(accounts: ApiAccount[]) {
     return jsonResponse({ accounts });
   });
   return {
-    puts: () =>
+    writes: () =>
       sent
-        .filter((call) => call.method === "PUT")
+        .filter((call) => call.method === "PUT" || call.method === "PATCH")
         .map((call) => ({ path: call.path, body: call.body })),
   };
 }

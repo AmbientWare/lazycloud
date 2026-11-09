@@ -198,11 +198,11 @@ func writeCredentials(dir string, creds processCredentials, keep bool) error {
 	if err != nil {
 		return fmt.Errorf("encode credentials: %w", err)
 	}
-	write := writeFileAtomic
+	place := os.Rename
 	if keep {
-		write = writeFileExclusive
+		place = os.Link
 	}
-	if err := write(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
+	if err := hostproto.PlaceFile(filepath.Join(dir, "credentials.json"), bytes.NewReader(data), 0o600, place); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	config := filepath.Join(dir, "config")
@@ -210,7 +210,7 @@ func writeCredentials(dir string, creds processCredentials, keep bool) error {
 		return nil
 	}
 	text := "[default]\ncredential_process = cat /creds/credentials.json\n"
-	if err := writeFileAtomic(config, []byte(text), 0o644); err != nil { //nolint:gosec // Holds no secret.
+	if err := hostproto.WriteFile(config, []byte(text), 0o644); err != nil { //nolint:gosec // Holds no secret.
 		return fmt.Errorf("write credential config: %w", err)
 	}
 	return nil
@@ -239,7 +239,7 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err != nil {
 		return fmt.Errorf("encode grant: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
+	if err := hostproto.WriteFile(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
 	v.mu.Lock()
@@ -520,12 +520,8 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 // rememberPeers keeps the peers a start of workspace names, which every
 // grant of the workspace hands the snapshotter.
 func (v *volumes) rememberPeers(workspace string, spec *hostproto.StartContainer) {
-	peers := make([]string, 0, len(spec.GetVolumePeers()))
-	for _, p := range spec.GetVolumePeers() {
-		peers = append(peers, p.GetAddress())
-	}
 	v.mu.Lock()
-	v.peers[workspace] = peers
+	v.peers[workspace] = spec.GetVolumePeers()
 	v.mu.Unlock()
 }
 
@@ -769,21 +765,13 @@ func fuseConnection(path string) (string, *os.File) {
 	return connection, root
 }
 
-// mountPath undoes how mountinfo escapes a mount point's path.
-var mountPath = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`) //nolint:gochecknoglobals // A constant table.
-
-// mountDevice returns the major:minor of the device mounted at path, read
-// from /proc/self/mountinfo so that no filesystem answers the question: a
-// stat of a FUSE root waits for its server, for good once the server
-// stopped serving. Of mounts stacked at path it names the top one.
+// mountDevice returns the major:minor of the device mounted at path. Of
+// mounts stacked at path it names the top one.
 func mountDevice(path string) (device string, ok bool) {
-	data, err := os.ReadFile("/proc/self/mountinfo")
-	if err != nil {
-		return "", false
-	}
-	for line := range strings.Lines(string(data)) {
-		if fields := strings.Fields(line); len(fields) > 4 && mountPath.Replace(fields[4]) == path {
-			device, ok = fields[2], true
+	mounts, _ := hostproto.ReadMounts()
+	for _, m := range mounts {
+		if m.Path == path {
+			device, ok = m.Device, true
 		}
 	}
 	return device, ok
@@ -1011,7 +999,7 @@ func (v *volumes) watch(ctx context.Context, m *mounter) {
 			return
 		}
 		v.a.log.Warn("watching a volume mount failed", "mount", m.name, "error", err)
-		if !sleep(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return
 		}
 	}

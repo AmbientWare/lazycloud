@@ -36,19 +36,20 @@ group by 1, 2, 3, 4;
 
 -- name: Allocations :many
 -- Reserved amount-seconds per workspace, app and bucket, where the amount
--- weighs CPU, memory and GPU reservations; a container reserves the GPUs
--- its release names. A container reserves capacity on its
--- host from assignment until it stops. The live partial index and the
+-- weighs CPU, memory and GPU reservations. A container reserves capacity
+-- on its host from assignment until it stops. The live partial index and the
 -- stopped index together find every container alive in the range without
 -- reading older history.
 with alive as (
-    select c.workspace_id, c.release_id, c.assigned_at, c.stopped_at,
-           (c.cpu_millis * sqlc.arg(per_cpu_milli)::float8 + c.memory_bytes * sqlc.arg(per_memory_byte)::float8)::float8 as amount
+    select c.workspace_id, c.workload_id, c.assigned_at, c.stopped_at,
+           (c.cpu_millis * sqlc.arg(per_cpu_milli)::float8 + c.memory_bytes * sqlc.arg(per_memory_byte)::float8
+            + c.gpu_count * sqlc.arg(per_gpu)::float8)::float8 as amount
     from containers c
     where c.workspace_id = any(@workspace_ids::uuid[]) and c.state <> 'stopped' and c.assigned_at < @end_at::timestamptz
     union all
-    select c.workspace_id, c.release_id, c.assigned_at, c.stopped_at,
-           (c.cpu_millis * sqlc.arg(per_cpu_milli)::float8 + c.memory_bytes * sqlc.arg(per_memory_byte)::float8)::float8 as amount
+    select c.workspace_id, c.workload_id, c.assigned_at, c.stopped_at,
+           (c.cpu_millis * sqlc.arg(per_cpu_milli)::float8 + c.memory_bytes * sqlc.arg(per_memory_byte)::float8
+            + c.gpu_count * sqlc.arg(per_gpu)::float8)::float8 as amount
     from containers c
     where c.workspace_id = any(@workspace_ids::uuid[]) and c.state = 'stopped'
       and c.stopped_at > @start_at::timestamptz and c.assigned_at < @end_at::timestamptz
@@ -61,11 +62,10 @@ select alive.workspace_id, a.id as app_id, a.name as app_name, buckets.bucket::t
        sum(extract(epoch from
                least(coalesce(alive.stopped_at, now()), buckets.bucket + @bucket_width::interval)
                - greatest(alive.assigned_at, buckets.bucket))
-           * (alive.amount + coalesce(release_gpus(r.spec), 0) * sqlc.arg(per_gpu)::float8))::float8 as value
+           * alive.amount)::float8 as value
 from alive
 join buckets on alive.assigned_at < buckets.bucket + @bucket_width::interval
             and coalesce(alive.stopped_at, now()) > buckets.bucket
-left join releases r on r.id = alive.release_id
-left join workloads w on w.id = r.workload_id
+left join workloads w on w.id = alive.workload_id
 left join apps a on a.id = w.app_id
 group by 1, 2, 3, 4;

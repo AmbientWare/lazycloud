@@ -332,9 +332,9 @@ func TestIdleDrainRespectsKeepWarmAndRunningAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := plan(t, e)
-	if result.Drained != 1 || containerState(t, pool, idle) != ContainerDraining {
-		t.Fatalf("drained %d; want only the container idle past keep_warm_seconds", result.Drained)
+	plan(t, e)
+	if state := containerState(t, pool, idle); state != ContainerDraining {
+		t.Fatalf("idle container is %s; want the container idle past keep_warm_seconds draining", state)
 	}
 	for _, id := range []uuid.UUID{recent, justReady, busy} {
 		if state := containerState(t, pool, id); state != ContainerReady {
@@ -380,9 +380,9 @@ func TestDrainSkipsAContainerBeingClaimed(t *testing.T) {
 		planned <- result
 	}()
 	select {
-	case result := <-planned:
-		if result.Drained != 0 {
-			t.Fatalf("planner drained a container a claim holds")
+	case <-planned:
+		if state := containerState(t, pool, container); state != ContainerReady {
+			t.Fatalf("planner drained a container a claim holds: %s", state)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("planner blocked on a claimed container")
@@ -480,7 +480,7 @@ func TestStoppedWorkloadOrPausedAppWindsDown(t *testing.T) {
 			plan(t, e) // requests pending containers for the queued tasks
 
 			exec(t, pool, stop, f.workload)
-			result := plan(t, e)
+			plan(t, e)
 			states := containerStates(t, pool, f.release)
 			if states[ContainerPending] != 0 || states[ContainerDraining] != 1 || states[ContainerReady] != 0 {
 				t.Fatalf("%s: containers %v; want pending stopped and the busy one draining", stop, states)
@@ -491,7 +491,7 @@ select count(*) filter (where status = 'queued'), count(*) filter (where status 
 from tasks where release_id = $1`, f.release).Scan(&queued, &cancelled); err != nil {
 				t.Fatal(err)
 			}
-			if queued != 0 || cancelled != 3 || result.Cancelled != 3 {
+			if queued != 0 || cancelled != 3 {
 				t.Fatalf("%s: %d queued, %d cancelled; want every queued task cancelled", stop, queued, cancelled)
 			}
 			var attemptState string

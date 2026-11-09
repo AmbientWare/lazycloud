@@ -51,7 +51,7 @@ func (e *Execution) DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host com
 
 func (e *Execution) drainHost(ctx context.Context, tx pgx.Tx, host compute.HostID, workspaces []uuid.UUID) error {
 	drained, err := e.queries.WithTx(tx).DrainContainersOnHost(ctx, DrainContainersOnHostParams{
-		HostID: ptr(uuid.UUID(host)), WorkspaceIds: workspaces,
+		HostID: new(uuid.UUID(host)), WorkspaceIds: workspaces,
 	})
 	if err != nil {
 		return fmt.Errorf("drain containers: %w", err)

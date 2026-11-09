@@ -274,9 +274,9 @@ func resumeOutcome(h ResumeHostRow, open SessionOpen) *ResumeOutcome {
 	}
 	switch {
 	case open.BootID != *h.SleepBootID:
-		return ptr(ResumeColdBoot)
+		return new(ResumeColdBoot)
 	case open.SleptSeconds > 0:
-		return ptr(ResumeMemoryRestored)
+		return new(ResumeMemoryRestored)
 	}
 	return nil
 }

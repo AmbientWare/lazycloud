@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,6 +44,22 @@ const (
 	// has run out of grace.
 	stopKillSeconds = 5
 )
+
+// containerRuntime is how a container's supervisor runs its slots.
+type containerRuntime struct {
+	InProcess bool                      `json:"in_process,omitempty"`
+	Hooks     *hostproto.LifecycleHooks `json:"hooks,omitempty"`
+	// SecretEnv names the environment variables holding secret values.
+	SecretEnv []string `json:"secret_env,omitempty"`
+}
+
+func runtimeOf(spec *hostproto.StartContainer) containerRuntime {
+	return containerRuntime{
+		InProcess: spec.GetFunction().GetInProcess(),
+		Hooks:     spec.GetFunction().GetHooks(),
+		SecretEnv: slices.Sorted(maps.Keys(spec.GetSecrets())),
+	}
+}
 
 // container is one workload container on this host. Its state is what the
 // agent observed; the server's durable state decides what should happen.
@@ -509,7 +526,7 @@ func (c *container) watch(ctx context.Context) {
 			return
 		}
 		c.log.Warn("waiting for container exit failed", "error", err)
-		if !sleep(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return
 		}
 	}
@@ -832,7 +849,7 @@ func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 	}
 	c.signalSlotFree()
 	if changed {
-		c.log.Info("container ready", "slots", ready.GetSlots(), "running", len(running))
+		c.log.Info("container ready", "running", len(running))
 		c.report()
 	}
 	if startClaims {
@@ -884,7 +901,7 @@ func (c *container) claimLoop(ctx context.Context) {
 				level = slog.LevelDebug
 			}
 			c.log.Log(ctx, level, "claim failed", "error", err, "retry_in", delay)
-			if !sleep(ctx, delay) {
+			if !hostproto.Sleep(ctx, delay) {
 				return
 			}
 			delay = min(2*delay, 5*time.Second)
@@ -1030,7 +1047,7 @@ func deliverOutcome(ctx, until context.Context, log *slog.Logger, what string, t
 			return
 		}
 		log.Warn("delivering an outcome failed; retrying", "outcome", what, "error", err, "retry_in", delay)
-		sleep(ctx, delay)
+		hostproto.Sleep(ctx, delay)
 		delay = min(2*delay, maxCompleteBackoff)
 	}
 }

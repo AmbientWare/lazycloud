@@ -8,7 +8,7 @@ import {
 import { api, ok } from "@/lib/api/client";
 import { fileBase64 } from "@/lib/files";
 
-import { allPages } from "./storage";
+import { allPages } from "./infinite-list";
 import { workspaceQueryKeys } from "./workspace-keys";
 
 export type CollectionKind = "maps" | "queues";

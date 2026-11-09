@@ -16,16 +16,6 @@ import (
 // join the deploy's trace.
 const rolloutTrace = 10 * time.Minute
 
-// traceparent is the trace of ctx's span, stored with a task or container
-// so the steps other processes take for it join that trace; nil when the
-// span was not sampled.
-func traceparent(ctx context.Context) *string {
-	if tp := telemetry.TraceParentOf(ctx); tp != "" {
-		return &tp
-	}
-	return nil
-}
-
 // scaleUp starts the span of a planning decision to create count
 // containers of release, in the trace of the demand that asked for them:
 // the longest-waiting queued task, else the release's deploy when rollout

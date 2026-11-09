@@ -23,6 +23,7 @@ from pathlib import Path
 from secrets import token_hex
 
 from lazycloud._shared.ssh import SSH_LOGIN_USER, ssh_host_label
+from lazycloud.clients.api import pages
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.config import settings
 from lazycloud.contracts.api import PodRole
@@ -98,23 +99,20 @@ def list_ssh_hosts(
     role: PodRole | None = None,
 ) -> SshHostList:
     """The workspace's SSH hosts as the control plane lists them, every page."""
-    hosts: list[SshPodHost] = []
-    cursor: str | None = None
-    while True:
-        page = client.ssh_hosts(app=app, pod=pod, role=role, cursor=cursor)
-        hosts.extend(
-            SshPodHost(
-                alias=item.alias,
-                pod=item.pod,
-                app=item.app,
-                role=item.role,
-                host_public_key=item.host_public_key.strip(),
-            )
-            for item in page.hosts
+    hosts = [
+        SshPodHost(
+            alias=item.alias,
+            pod=item.pod,
+            app=item.app,
+            role=item.role,
+            host_public_key=item.host_public_key.strip(),
         )
-        if not page.next_cursor:
-            return SshHostList(workspace=client.workspace, hosts=hosts)
-        cursor = page.next_cursor
+        for page in pages(
+            lambda cursor: client.ssh_hosts(app=app, pod=pod, role=role, cursor=cursor)
+        )
+        for item in page.hosts
+    ]
+    return SshHostList(workspace=client.workspace, hosts=hosts)
 
 
 @dataclass(slots=True)

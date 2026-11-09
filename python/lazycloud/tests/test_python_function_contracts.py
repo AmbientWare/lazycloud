@@ -40,7 +40,7 @@ def test_python_function_contract_preserves_opaque_types_and_defaults() -> None:
     def echo(value: PythonValue = default) -> PythonValue:
         return value
 
-    contract = echo.spec().client_contract
+    contract = build_client_contract(echo.func, kind=DeploymentKind.Function)
     assert contract is not None
     parameter = contract.operation.parameters[0]
     assert parameter.json_schema is None
@@ -61,4 +61,4 @@ def test_constructor_annotation_is_rejected() -> None:
 
     invalid.__annotations__["return"] = len
     with pytest.raises(ClientContractError, match="use a type"):
-        App("invalid_annotation").function()(invalid).spec()
+        build_client_contract(invalid, kind=DeploymentKind.Function)

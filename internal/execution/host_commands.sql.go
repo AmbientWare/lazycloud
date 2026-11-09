@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
@@ -60,7 +61,7 @@ func (q *Queries) ContainerWorkload(ctx context.Context, arg ContainerWorkloadPa
 }
 
 const endedAttemptsOnHost = `-- name: EndedAttemptsOnHost :many
-select a.id, a.container_id, a.state
+select a.id, a.container_id
 from containers c
 join attempts a on a.container_id = c.id
 where c.host_id = $1 and c.state in ('ready', 'draining')
@@ -77,7 +78,6 @@ type EndedAttemptsOnHostParams struct {
 type EndedAttemptsOnHostRow struct {
 	ID          uuid.UUID
 	ContainerID uuid.UUID
-	State       string
 }
 
 // Attempts that ended without their slot knowing: the host kills them. A
@@ -92,7 +92,7 @@ func (q *Queries) EndedAttemptsOnHost(ctx context.Context, arg EndedAttemptsOnHo
 	var items []EndedAttemptsOnHostRow
 	for rows.Next() {
 		var i EndedAttemptsOnHostRow
-		if err := rows.Scan(&i.ID, &i.ContainerID, &i.State); err != nil {
+		if err := rows.Scan(&i.ID, &i.ContainerID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -206,7 +206,7 @@ type StartingContainersOnHostRow struct {
 	Slots         int32
 	CpuMillis     cpu.Millis
 	MemoryBytes   int64
-	Spec          []byte
+	Spec          apitypes.WorkloadSpec
 	Mounters      int32
 	SourceSha256  []byte
 	Purpose       string
@@ -258,7 +258,7 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 }
 
 const volumePeers = `-- name: VolumePeers :many
-select h.id, h.peer_address
+select h.peer_address
 from containers c
 join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
   and h.region = (select me.region from hosts me where me.id = $1)
@@ -274,27 +274,22 @@ type VolumePeersParams struct {
 	MaxPeers    int32
 }
 
-type VolumePeersRow struct {
-	ID          uuid.UUID
-	PeerAddress string
-}
-
 // The other online hosts of the host's region that run a live container of
 // the workspace and serve a volume cache, those with the newest container
 // first.
-func (q *Queries) VolumePeers(ctx context.Context, arg VolumePeersParams) ([]VolumePeersRow, error) {
+func (q *Queries) VolumePeers(ctx context.Context, arg VolumePeersParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, volumePeers, arg.HostID, arg.WorkspaceID, arg.MaxPeers)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []VolumePeersRow
+	var items []string
 	for rows.Next() {
-		var i VolumePeersRow
-		if err := rows.Scan(&i.ID, &i.PeerAddress); err != nil {
+		var peer_address string
+		if err := rows.Scan(&peer_address); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, peer_address)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

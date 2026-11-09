@@ -417,7 +417,6 @@ def _http_detail(
             "version_url": url + "-v1",
             "release_url": url + "-r",
             "invoke_path": f"/i/{name}",
-            "version_invoke_path": f"/i/{name}-v1",
         },
     }
 

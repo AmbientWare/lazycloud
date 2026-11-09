@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/imagefsproto"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -121,7 +122,7 @@ func (e *Engine) publish(ctx context.Context, p diskPaths, state *diskState, obj
 	if err := objects.Put(ctx, imagefs.DiskIndexKey(p.id, generation, digest), raw); err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(p.pendingIndex(), raw); err != nil {
+	if err := hostproto.WriteFile(p.pendingIndex(), raw, 0o600); err != nil {
 		return nil, err
 	}
 	held := map[[sha256.Size]byte]bool{}

@@ -98,21 +98,17 @@ func (s *Server) volumeTrace(ctx context.Context, cache *syncCache, start execut
 // platform volumes may read the workspace's cached frames from, once per
 // sync, and none for a start that mounts none. A start is sent without
 // peers when they cannot be read: peers only speed its reads up.
-func (sess *session) volumePeers(ctx context.Context, cache *syncCache, start execution.StartCommand, mounts []*hostproto.VolumeMount) []*hostproto.VolumePeer {
+func (sess *session) volumePeers(ctx context.Context, cache *syncCache, start execution.StartCommand, mounts []*hostproto.VolumeMount) []string {
 	if !mountsPlatformVolume(mounts) {
 		return nil
 	}
 	if peers, ok := cache.volumePeers[start.Workspace]; ok {
 		return peers
 	}
-	found, err := sess.server.execution.VolumePeers(ctx, sess.host, start.Workspace)
+	peers, err := sess.server.execution.VolumePeers(ctx, sess.host, start.Workspace)
 	if err != nil {
 		sess.server.logger.WarnContext(ctx, "reading the volume peers failed", "host", sess.host.String(), "workspace", start.Workspace.String(), "error", err)
 		return nil
-	}
-	peers := make([]*hostproto.VolumePeer, len(found))
-	for n, p := range found {
-		peers[n] = &hostproto.VolumePeer{HostId: p.Host.String(), Address: p.Address}
 	}
 	cache.volumePeers[start.Workspace] = peers
 	return peers

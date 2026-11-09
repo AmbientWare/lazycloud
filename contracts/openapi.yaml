@@ -174,27 +174,6 @@ paths:
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces:
-    get:
-      operationId: listWorkspaces
-      summary: The workspaces the caller may act on, by name
-      description: >-
-        Platform administrators see every workspace, members their
-        memberships, and a restricted token only its workspace.
-      parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
-        - name: cursor
-          in: query
-          description: The `next_cursor` of the previous page.
-          schema: { $ref: "#/components/schemas/Name" }
-      responses:
-        "200":
-          description: One page of workspaces
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/WorkspaceList" }
-        default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createWorkspace
       summary: Create a workspace owned by the caller; platform administrators only
@@ -400,33 +379,13 @@ paths:
   # Administration: platform accounts, for platform administrators using an
   # account credential.
 
-  /v1/users/{user}/role:
+  /v1/users/{user}:
     parameters:
       - $ref: "#/components/parameters/UserPath"
-    put:
-      operationId: setUserRole
+    patch:
+      operationId: updateUser
       tags: [admin]
-      summary: Grant or withdraw platform administration; never your own
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/UserRoleRequest" }
-      responses:
-        "200":
-          description: The account
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/User" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/users/{user}/status:
-    parameters:
-      - $ref: "#/components/parameters/UserPath"
-    put:
-      operationId: setUserStatus
-      tags: [admin]
-      summary: Enable or disable an account; never your own
+      summary: Change an account's platform role or status; never your own
       description: >-
         A disabled account cannot sign in, and its tokens, browser sessions
         and approved device logins end at once. Enabling it again restores
@@ -435,7 +394,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/UserStatusRequest" }
+            schema: { $ref: "#/components/schemas/UserUpdate" }
       responses:
         "200":
           description: The account
@@ -734,6 +693,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/App" }
         default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateApp
+      tags: [control]
+      summary: Pause or resume the app
+      description: >-
+        Pausing stops admission and drains every workload of the app: queued
+        tasks are cancelled and running tasks finish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppUpdate" }
+      responses:
+        "200":
+          description: The app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteApp
       tags: [control]
@@ -745,38 +723,6 @@ paths:
       responses:
         "200":
           description: The deleted app
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/App" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/pause:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppRefPath"
-    post:
-      operationId: pauseApp
-      tags: [control]
-      summary: Stop admission and drain every workload of the app
-      description: Queued tasks are cancelled; running tasks finish.
-      responses:
-        "200":
-          description: The paused app
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/App" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/resume:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppRefPath"
-    post:
-      operationId: resumeApp
-      tags: [control]
-      responses:
-        "200":
-          description: The resumed app
           content:
             application/json:
               schema: { $ref: "#/components/schemas/App" }
@@ -1015,31 +961,6 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/KindPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-    get:
-      operationId: listWorkloadContainers
-      tags: [control]
-      summary: Containers of the workload's releases, newest first
-      parameters:
-        - name: live
-          in: query
-          description: Only containers that have not stopped.
-          schema: { type: boolean, default: false }
-        - $ref: "#/components/parameters/PageLimit"
-        - $ref: "#/components/parameters/Cursor"
-      responses:
-        "200":
-          description: One page of containers
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ContainerPage" }
-        default: { $ref: "#/components/responses/Error" }
-
   /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -1158,6 +1079,10 @@ paths:
           in: query
           description: Only the containers of this app's workloads.
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: workload_id
+          in: query
+          description: Only the containers of this workload's releases.
+          schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -1246,22 +1171,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SecretPage" }
         default: { $ref: "#/components/responses/Error" }
-    post:
-      operationId: createSecret
-      tags: [secrets]
-      summary: Create a secret; an existing name is a conflict
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SecretCreate" }
-      responses:
-        "201":
-          description: The created secret
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Secret" }
-        default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/secrets/{secret}:
     parameters:
@@ -1282,22 +1191,16 @@ paths:
       operationId: setSecret
       tags: [secrets]
       summary: Create the secret or replace its value
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
-      responses:
-        "200":
-          description: The secret
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Secret" }
-        default: { $ref: "#/components/responses/Error" }
-    patch:
-      operationId: updateSecret
-      tags: [secrets]
-      summary: Replace an existing secret's value
+      description: >-
+        `If-None-Match: *` only creates it, so an existing name is a
+        conflict; `If-Match: *` only replaces an existing secret's value.
+      parameters:
+        - name: If-None-Match
+          in: header
+          schema: { type: string, enum: ["*"] }
+        - name: If-Match
+          in: header
+          schema: { type: string, enum: ["*"] }
       requestBody:
         required: true
         content:
@@ -1326,9 +1229,7 @@ paths:
       operationId: getSecretValue
       tags: [secrets]
       summary: Reveal a secret's value
-      description: >-
-        The only operation that returns a value. Tokens limited to reading
-        cannot call it.
+      description: The only operation that returns a value.
       responses:
         "200":
           description: The secret and its value
@@ -1382,16 +1283,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/WebhookPath"
-    get:
-      operationId: getWebhook
-      tags: [webhooks]
-      responses:
-        "200":
-          description: The webhook
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Webhook" }
-        default: { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateWebhook
       tags: [webhooks]
@@ -1492,16 +1383,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/VolumePath"
-    get:
-      operationId: getVolume
-      tags: [storage]
-      responses:
-        "200":
-          description: The volume
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Volume" }
-        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteVolume
       tags: [storage]
@@ -1695,16 +1576,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/DiskPath"
-    get:
-      operationId: getDisk
-      tags: [storage]
-      responses:
-        "200":
-          description: The disk
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Disk" }
-        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteDisk
       tags: [storage]
@@ -1818,12 +1689,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Artifact" }
-        default: { $ref: "#/components/responses/Error" }
-    delete:
-      operationId: deleteArtifact
-      tags: [storage]
-      responses:
-        "204": { description: Deleted }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/artifacts/{artifact}/complete:
@@ -2234,21 +2099,6 @@ paths:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: requestEndpointPathVersion
-      summary: Send a request to an endpoint version through the API host
-      description: As requestEndpointPath, pinned to one deployed version.
-      x-lazycloud-opaque: true
-      responses:
-        default:
-          description: The workload's own response, or an Error from the platform.
-
   /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -2258,21 +2108,6 @@ paths:
       operationId: requestAsgiPath
       summary: Send a request to an ASGI or realtime app through the API host
       description: As requestEndpointPath, for an ASGI or realtime app.
-      x-lazycloud-opaque: true
-      responses:
-        default:
-          description: The workload's own response, or an Error from the platform.
-
-  /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: requestAsgiPathVersion
-      summary: Send a request to an ASGI or realtime app version through the API host
-      description: As requestEndpointPath, for one deployed version of an ASGI or realtime app.
       x-lazycloud-opaque: true
       responses:
         default:
@@ -2289,29 +2124,6 @@ paths:
       description: >-
         The body's `args` and `kwargs`, or else the whole body, become the
         arguments, and query parameters are added as keyword arguments.
-      parameters:
-        - $ref: "#/components/parameters/InvokeWait"
-      requestBody:
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/InvocationBody" }
-      responses:
-        "200":
-          description: The task, with its result when it succeeded within the wait
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Invocation" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: invokeFunctionVersion
-      summary: Run one version of the function with JSON arguments
       parameters:
         - $ref: "#/components/parameters/InvokeWait"
       requestBody:
@@ -2614,22 +2426,6 @@ paths:
               schema: { $ref: "#/components/schemas/ContainerMetrics" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/containers/{container}/lifecycle:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/ContainerPath"
-    get:
-      operationId: getContainerLifecycle
-      tags: [observability]
-      summary: How long the container waited for placement and each start stage, and how it stopped
-      responses:
-        "200":
-          description: The container's lifecycle
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ContainerLifecycle" }
-        default: { $ref: "#/components/responses/Error" }
-
   /v1/workspaces/{workspace}/containers/lifecycles:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -2913,24 +2709,6 @@ paths:
       responses:
         "201":
           description: The purchase and its checkout page
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CreditPurchase" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/billing/credit-purchases/{purchase}:
-    parameters:
-      - name: purchase
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    get:
-      tags: [billing]
-      operationId: getCreditPurchase
-      summary: One credit purchase
-      responses:
-        "200":
-          description: The purchase
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreditPurchase" }
@@ -4067,11 +3845,6 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/WorkloadName" }
-    VersionPath:
-      name: version
-      in: path
-      required: true
-      schema: { type: integer, minimum: 1 }
     TaskPath:
       name: task
       in: path
@@ -4371,16 +4144,14 @@ components:
       type: string
       enum: [administrator, member]
 
-    UserRoleRequest:
+    UserUpdate:
+      description: One change; role grants or withdraws platform administration.
       type: object
-      required: [role]
+      minProperties: 1
+      maxProperties: 1
+      additionalProperties: false
       properties:
         role: { $ref: "#/components/schemas/PlatformRole" }
-
-    UserStatusRequest:
-      type: object
-      required: [status]
-      properties:
         status: { $ref: "#/components/schemas/UserStatus" }
 
     Workspace:
@@ -4402,17 +4173,6 @@ components:
     WorkspaceRole:
       type: string
       enum: [owner, administrator, member]
-
-    WorkspaceList:
-      type: object
-      required: [workspaces]
-      properties:
-        workspaces:
-          type: array
-          items: { $ref: "#/components/schemas/Workspace" }
-        next_cursor:
-          description: Pass as `cursor` for the next page; absent after the last.
-          allOf: [{ $ref: "#/components/schemas/Name" }]
 
     WorkspaceRequest:
       type: object
@@ -4728,6 +4488,12 @@ components:
           minimum: 0
         created_at: { type: string, format: date-time }
 
+    AppUpdate:
+      type: object
+      required: [paused]
+      properties:
+        paused: { type: boolean }
+
     WorkloadSpec:
       description: >-
         One workload's definition. `kind` names what it deploys as and which
@@ -5016,7 +4782,6 @@ components:
       required: [kind]
       properties:
         kind: { type: string, enum: [image, html] }
-        media_type: { type: string, enum: [image/png] }
         value_base64: { type: string, maxLength: 1398104 }
         html: { type: string, maxLength: 262144 }
 
@@ -5288,13 +5053,6 @@ components:
     SecretText:
       type: string
       maxLength: 65536
-
-    SecretCreate:
-      type: object
-      required: [name, value]
-      properties:
-        name: { $ref: "#/components/schemas/SecretName" }
-        value: { $ref: "#/components/schemas/SecretText" }
 
     SecretValueUpdate:
       type: object
@@ -6600,7 +6358,7 @@ components:
     HttpUrls:
       description: Where an endpoint or ASGI app answers, for the release a describe names.
       type: object
-      required: [url, version_url, release_url, invoke_path, version_invoke_path]
+      required: [url, version_url, release_url, invoke_path]
       properties:
         url:
           description: Follows the active release across deploys.
@@ -6613,9 +6371,6 @@ components:
           type: string
         invoke_path:
           description: The workload on the API host; append the request's path.
-          type: string
-        version_invoke_path:
-          description: The API-host path pinned to the release's version.
           type: string
         domain_url:
           description: The custom hostname, once its registration is ready.
@@ -7404,11 +7159,7 @@ components:
       properties:
         connection:
           description: The connected account the workspace lives in; absent on platform compute.
-          type: object
-          required: [account_id, phase]
-          properties:
-            account_id: { type: string }
-            phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
+          allOf: [{ $ref: "#/components/schemas/ComputeConnection" }]
         instances:
           type: object
           required: [total, ready, pending, degraded]
@@ -7426,6 +7177,13 @@ components:
             currency: { type: string, enum: [USD] }
             estimated: { type: boolean }
         workload_count: { type: integer }
+
+    ComputeConnection:
+      type: object
+      required: [account_id, phase]
+      properties:
+        account_id: { type: string }
+        phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
 
     ComputeWorkload:
       type: object
@@ -7477,22 +7235,24 @@ components:
       enum: [assume_role_denied, external_id_not_enforced, account_mismatch, permission_drift, stack_drift,
              upstream_unavailable]
 
+    AwsManagedAuthorization:
+      type: object
+      required: [stack_name, region, generation, template_version, template_sha256]
+      properties:
+        stack_name: { type: string }
+        region: { type: string }
+        generation: { type: integer }
+        stack_id: { type: string }
+        template_version: { type: string }
+        template_sha256: { type: string }
+
     AwsAuthorizationGeneration:
       type: object
       required: [generation, authorization_mode, phase, created_at, updated_at]
       properties:
         generation: { type: integer }
         authorization_mode: { type: string, enum: [managed_stack, existing_role] }
-        managed_authorization:
-          type: object
-          required: [stack_name, region, generation, template_version, template_sha256]
-          properties:
-            stack_name: { type: string }
-            region: { type: string }
-            generation: { type: integer }
-            stack_id: { type: string }
-            template_version: { type: string }
-            template_sha256: { type: string }
+        managed_authorization: { $ref: "#/components/schemas/AwsManagedAuthorization" }
         phase: { $ref: "#/components/schemas/AwsAuthorizationPhase" }
         last_validation_started_at: { type: string, format: date-time }
         last_validated_at: { type: string, format: date-time }
@@ -7704,28 +7464,32 @@ components:
         observed_at: { type: string, format: date-time }
         plan:
           description: The planner's last published plan; absent once it expires.
-          type: object
-          required: [generated_at, expires_at, markets]
-          properties:
-            generated_at: { type: string, format: date-time }
-            expires_at: { type: string, format: date-time }
-            markets:
-              type: array
-              items: { $ref: "#/components/schemas/FleetMarket" }
+          allOf: [{ $ref: "#/components/schemas/FleetPlan" }]
         release:
           description: The agent release platform hosts move to.
+          allOf: [{ $ref: "#/components/schemas/FleetRelease" }]
+
+    FleetPlan:
+      type: object
+      required: [generated_at, expires_at, markets]
+      properties:
+        generated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        markets:
+          type: array
+          items: { $ref: "#/components/schemas/FleetMarket" }
+
+    FleetRelease:
+      type: object
+      required: [version, complete, phases]
+      properties:
+        version: { type: string }
+        complete:
+          description: Every connected platform host runs the release.
+          type: boolean
+        phases:
           type: object
-          required: [version, generation, complete, phases, pending_capacity_owners]
-          properties:
-            version: { type: string }
-            generation: { type: integer }
-            complete:
-              description: Every connected platform host runs the release.
-              type: boolean
-            phases:
-              type: object
-              additionalProperties: { type: integer }
-            pending_capacity_owners: { type: integer }
+          additionalProperties: { type: integer }
 
     FleetNode:
       type: object

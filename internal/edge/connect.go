@@ -55,20 +55,16 @@ func (e *Edge) RoundTrip(ctx context.Context, host, container uuid.UUID, target 
 		return nil, err
 	}
 	upgrade := strings.EqualFold(req.Header.Get("Connection"), "upgrade") || req.Header.Get("Upgrade") != ""
-	head := &hostproto.HttpRequest{Method: req.Method, Uri: req.URL.RequestURI(), Host: req.Host}
-	for name, values := range req.Header {
-		if !upgrade || (name != "Connection" && name != "Upgrade") {
-			if isHop(name) {
-				continue
-			}
-		}
-		for _, value := range values {
-			head.Headers = append(head.Headers, &hostproto.Header{Name: name, Value: value})
+	header := req.Header.Clone()
+	for name := range header {
+		if isHop(name) && (!upgrade || (name != "Connection" && name != "Upgrade")) {
+			header.Del(name)
 		}
 	}
 	if req.ContentLength > 0 && !upgrade {
-		head.Headers = append(head.Headers, &hostproto.Header{Name: "Content-Length", Value: fmt.Sprint(req.ContentLength)})
+		header.Set("Content-Length", fmt.Sprint(req.ContentLength))
 	}
+	head := &hostproto.HttpRequest{Method: req.Method, Uri: req.URL.RequestURI(), Host: req.Host, Headers: hostproto.HeadersOut(header)}
 	rh := &hostproto.RequestHead{ContainerId: container.String()}
 	if target.Port == 0 {
 		rh.Kind = &hostproto.RequestHead_Control{Control: head}
@@ -117,9 +113,7 @@ func (e *Edge) RoundTrip(ctx context.Context, host, container uuid.UUID, target 
 		StatusCode: int(h.GetStatus()), Status: fmt.Sprintf("%d %s", h.GetStatus(), http.StatusText(int(h.GetStatus()))),
 		Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{}, Request: req, ContentLength: -1,
 	}
-	for _, hh := range h.GetHeaders() {
-		resp.Header.Add(hh.GetName(), hh.GetValue())
-	}
+	hostproto.HeadersIn(resp.Header, h.GetHeaders())
 	body := &containerBody{p: p, stop: stop, tunnel: resp.StatusCode == http.StatusSwitchingProtocols}
 	resp.Body = body
 	return resp, nil

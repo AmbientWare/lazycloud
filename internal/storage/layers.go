@@ -96,7 +96,7 @@ func (s *Storage) PresignLayerUpload(ctx context.Context, id uuid.UUID, uploadID
 
 // CompleteLayerUpload completes the data upload uploadID from the ETags of
 // its parts, in order. An upload already completed is ErrNotFound; parts
-// the store does not hold are an InvalidError.
+// the store does not hold are an InvalidRequest refusal.
 func (s *Storage) CompleteLayerUpload(ctx context.Context, id uuid.UUID, uploadID string, etags []string) error {
 	if uploadID == "" {
 		return nil

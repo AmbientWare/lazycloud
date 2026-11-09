@@ -70,8 +70,8 @@ const maxSocketPath = 107
 // 16 MiB inputs; the server limits how many it returns.
 const maxMessageBytes = 512 << 20
 
-// containerdSocket is the containerd Docker runs on.
-const containerdSocket = "/run/containerd/containerd.sock"
+// ContainerdSocket is the containerd Docker runs on.
+const ContainerdSocket = "/run/containerd/containerd.sock"
 
 // dockerWait bounds how long the preflight waits for Docker to answer.
 const dockerWait = 30 * time.Second
@@ -196,8 +196,7 @@ type Agent struct {
 	// diskEngine attaches durable disks; diskErr says why it cannot here.
 	diskEngine *diskengine.Engine
 	diskErr    error
-	// diskLocks holds a mutex per disk id that serializes publishing.
-	diskLocks sync.Map
+	diskLocks  diskLocks
 	// releaseNow wakes the disk release loop.
 	releaseNow chan struct{}
 	// netfilters, snapshots and publishes bound network policy helpers,
@@ -303,7 +302,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = docker.Close() }()
 	// Docker keeps its images in containerd's moby namespace.
-	ctrd, err := containerd.New(containerdSocket, containerd.WithDefaultNamespace("moby"))
+	ctrd, err := containerd.New(ContainerdSocket, containerd.WithDefaultNamespace("moby"))
 	if err != nil {
 		return fmt.Errorf("create containerd client: %w", err)
 	}
@@ -499,7 +498,7 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 		if err == nil {
 			return check("docker", true, "Docker is reachable", "")
 		}
-		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
+		if time.Now().After(deadline) || !hostproto.Sleep(ctx, time.Second) {
 			return check("docker", false, "Docker is not reachable: "+err.Error(),
 				"start Docker and check that docker info works")
 		}
@@ -666,18 +665,6 @@ func trimNewline(b []byte) []byte {
 		b = b[:len(b)-1]
 	}
 	return b
-}
-
-// sleep waits for d or ctx and reports whether ctx is still live.
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }
 
 // Errors that end Run for good: restarting the agent cannot fix them, so its

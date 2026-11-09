@@ -128,7 +128,7 @@ func (l *layerSources) refreshLoop(ctx context.Context, log *slog.Logger) {
 			}
 			log.Error("refreshing layer grants failed; retrying", "layers", len(grants), "retry_in", retry, "error", err)
 			l.queue(grants)
-			if !sleep(ctx, retry) {
+			if !hostproto.Sleep(ctx, retry) {
 				return
 			}
 			retry = min(2*retry, maxGrantRetry)

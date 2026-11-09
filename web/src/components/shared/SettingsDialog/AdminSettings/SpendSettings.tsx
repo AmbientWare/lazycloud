@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { Fact } from "@/components/shared/Fact";
@@ -167,8 +167,7 @@ function AlertsForm({ saved }: { saved: Schemas["AdminAlerts"] }) {
             Saved
           </span>
         ) : null}
-        <Button type="submit" size="sm" disabled={save.isPending || invalid || !changed}>
-          {save.isPending ? <Loader2 className="animate-spin" /> : null}
+        <Button pending={save.isPending} type="submit" size="sm" disabled={invalid || !changed}>
           Save
         </Button>
       </div>

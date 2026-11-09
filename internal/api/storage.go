@@ -5,34 +5,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-func orEmpty(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func limitOr(limit *int, def int) int {
-	if limit == nil {
-		return def
-	}
-	return *limit
-}
-
 // ListVolumes returns a page of volumes.
-func (s *Server) ListVolumes(ctx context.Context, req ListVolumesRequestObject) (ListVolumesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+func (s *server) ListVolumes(ctx context.Context, req ListVolumesRequestObject) (ListVolumesResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -40,11 +20,8 @@ func (s *Server) ListVolumes(ctx context.Context, req ListVolumesRequestObject) 
 }
 
 // CreateVolume creates a volume or returns the active one of the name.
-func (s *Server) CreateVolume(ctx context.Context, req CreateVolumeRequestObject) (CreateVolumeResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CreateVolume(ctx context.Context, req CreateVolumeRequestObject) (CreateVolumeResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	volume, err := s.owners.Storage.CreateVolume(ctx, ws.ID, req.Body.Name)
 	if err != nil {
 		return nil, err
@@ -52,25 +29,9 @@ func (s *Server) CreateVolume(ctx context.Context, req CreateVolumeRequestObject
 	return CreateVolume200JSONResponse(volume), nil
 }
 
-// GetVolume returns one volume.
-func (s *Server) GetVolume(ctx context.Context, req GetVolumeRequestObject) (GetVolumeResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	volume, err := s.owners.Storage.GetVolume(ctx, ws.ID, req.Volume)
-	if err != nil {
-		return nil, err
-	}
-	return GetVolume200JSONResponse(volume), nil
-}
-
 // DeleteVolume deletes a volume that no live container mounts.
-func (s *Server) DeleteVolume(ctx context.Context, req DeleteVolumeRequestObject) (DeleteVolumeResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteVolume(ctx context.Context, req DeleteVolumeRequestObject) (DeleteVolumeResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.DeleteVolume(ctx, ws.ID, req.Volume); err != nil {
 		return nil, err
 	}
@@ -78,12 +39,9 @@ func (s *Server) DeleteVolume(ctx context.Context, req DeleteVolumeRequestObject
 }
 
 // ListVolumeFiles lists one directory.
-func (s *Server) ListVolumeFiles(ctx context.Context, req ListVolumeFilesRequestObject) (ListVolumeFilesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListVolumeFiles(ctx, ws.ID, req.Volume, orEmpty(req.Params.Path), orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 1000))
+func (s *server) ListVolumeFiles(ctx context.Context, req ListVolumeFilesRequestObject) (ListVolumeFilesResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListVolumeFiles(ctx, ws.ID, req.Volume, valueOr(req.Params.Path, ""), valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
@@ -91,12 +49,9 @@ func (s *Server) ListVolumeFiles(ctx context.Context, req ListVolumeFilesRequest
 }
 
 // StatVolumeFile describes a file or directory.
-func (s *Server) StatVolumeFile(ctx context.Context, req StatVolumeFileRequestObject) (StatVolumeFileResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	file, err := s.owners.Storage.StatVolumeFile(ctx, ws.ID, req.Volume, orEmpty(req.Params.Path))
+func (s *server) StatVolumeFile(ctx context.Context, req StatVolumeFileRequestObject) (StatVolumeFileResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	file, err := s.owners.Storage.StatVolumeFile(ctx, ws.ID, req.Volume, valueOr(req.Params.Path, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +59,8 @@ func (s *Server) StatVolumeFile(ctx context.Context, req StatVolumeFileRequestOb
 }
 
 // RemoveVolumeFiles removes a file or a directory tree.
-func (s *Server) RemoveVolumeFiles(ctx context.Context, req RemoveVolumeFilesRequestObject) (RemoveVolumeFilesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) RemoveVolumeFiles(ctx context.Context, req RemoveVolumeFilesRequestObject) (RemoveVolumeFilesResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	removed, err := s.owners.Storage.RemoveVolumeFiles(ctx, ws.ID, req.Volume, req.Params.Path)
 	if err != nil {
 		return nil, err
@@ -117,11 +69,8 @@ func (s *Server) RemoveVolumeFiles(ctx context.Context, req RemoveVolumeFilesReq
 }
 
 // MoveVolumeFile moves a file or directory.
-func (s *Server) MoveVolumeFile(ctx context.Context, req MoveVolumeFileRequestObject) (MoveVolumeFileResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) MoveVolumeFile(ctx context.Context, req MoveVolumeFileRequestObject) (MoveVolumeFileResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	file, err := s.owners.Storage.MoveVolumeFile(ctx, ws.ID, req.Volume, req.Body.From, req.Body.To)
 	if err != nil {
 		return nil, err
@@ -130,11 +79,8 @@ func (s *Server) MoveVolumeFile(ctx context.Context, req MoveVolumeFileRequestOb
 }
 
 // PresignVolumeFile presigns one file request.
-func (s *Server) PresignVolumeFile(ctx context.Context, req PresignVolumeFileRequestObject) (PresignVolumeFileResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) PresignVolumeFile(ctx context.Context, req PresignVolumeFileRequestObject) (PresignVolumeFileResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	url, err := s.owners.Storage.PresignVolumeFile(ctx, ws.ID, req.Volume, *req.Body)
 	if err != nil {
 		return nil, err
@@ -143,11 +89,8 @@ func (s *Server) PresignVolumeFile(ctx context.Context, req PresignVolumeFileReq
 }
 
 // CreateVolumeUpload starts a multipart upload.
-func (s *Server) CreateVolumeUpload(ctx context.Context, req CreateVolumeUploadRequestObject) (CreateVolumeUploadResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CreateVolumeUpload(ctx context.Context, req CreateVolumeUploadRequestObject) (CreateVolumeUploadResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	upload, err := s.owners.Storage.CreateVolumeUpload(ctx, ws.ID, req.Volume, *req.Body)
 	if err != nil {
 		return nil, err
@@ -156,11 +99,8 @@ func (s *Server) CreateVolumeUpload(ctx context.Context, req CreateVolumeUploadR
 }
 
 // CompleteVolumeUpload completes a multipart upload.
-func (s *Server) CompleteVolumeUpload(ctx context.Context, req CompleteVolumeUploadRequestObject) (CompleteVolumeUploadResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CompleteVolumeUpload(ctx context.Context, req CompleteVolumeUploadRequestObject) (CompleteVolumeUploadResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	file, err := s.owners.Storage.CompleteVolumeUpload(ctx, ws.ID, req.Volume, *req.Body)
 	if err != nil {
 		return nil, err
@@ -169,11 +109,8 @@ func (s *Server) CompleteVolumeUpload(ctx context.Context, req CompleteVolumeUpl
 }
 
 // AbortVolumeUpload aborts a multipart upload.
-func (s *Server) AbortVolumeUpload(ctx context.Context, req AbortVolumeUploadRequestObject) (AbortVolumeUploadResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) AbortVolumeUpload(ctx context.Context, req AbortVolumeUploadRequestObject) (AbortVolumeUploadResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.AbortVolumeUpload(ctx, ws.ID, req.Volume, *req.Body); err != nil {
 		return nil, err
 	}
@@ -181,37 +118,18 @@ func (s *Server) AbortVolumeUpload(ctx context.Context, req AbortVolumeUploadReq
 }
 
 // ListDisks returns a page of disks.
-func (s *Server) ListDisks(ctx context.Context, req ListDisksRequestObject) (ListDisksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+func (s *server) ListDisks(ctx context.Context, req ListDisksRequestObject) (ListDisksResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
 	return ListDisks200JSONResponse(page), nil
 }
 
-// GetDisk returns one disk.
-func (s *Server) GetDisk(ctx context.Context, req GetDiskRequestObject) (GetDiskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	disk, err := s.owners.Storage.GetDisk(ctx, ws.ID, req.Disk)
-	if err != nil {
-		return nil, err
-	}
-	return GetDisk200JSONResponse(disk), nil
-}
-
 // DeleteDisk deletes a disk no container holds.
-func (s *Server) DeleteDisk(ctx context.Context, req DeleteDiskRequestObject) (DeleteDiskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteDisk(ctx context.Context, req DeleteDiskRequestObject) (DeleteDiskResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.DeleteDisk(ctx, ws.ID, req.Disk); err != nil {
 		return nil, err
 	}
@@ -219,16 +137,13 @@ func (s *Server) DeleteDisk(ctx context.Context, req DeleteDiskRequestObject) (D
 }
 
 // ListArtifacts returns a filtered page of artifacts.
-func (s *Server) ListArtifacts(ctx context.Context, req ListArtifactsRequestObject) (ListArtifactsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) ListArtifacts(ctx context.Context, req ListArtifactsRequestObject) (ListArtifactsResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	p := req.Params
 	page, err := s.owners.Storage.ListArtifacts(ctx, ws.ID, storage.ArtifactFilter{
 		Task: p.TaskId, App: p.App, Search: p.Search, ContentType: p.ContentType,
 		CreatedAfter: p.CreatedAfter, CreatedBefore: p.CreatedBefore,
-	}, orEmpty(p.Cursor), limitOr(p.Limit, 50))
+	}, valueOr(p.Cursor, ""), valueOr(p.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +151,8 @@ func (s *Server) ListArtifacts(ctx context.Context, req ListArtifactsRequestObje
 }
 
 // CreateArtifact starts saving an artifact.
-func (s *Server) CreateArtifact(ctx context.Context, req CreateArtifactRequestObject) (CreateArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CreateArtifact(ctx context.Context, req CreateArtifactRequestObject) (CreateArtifactResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	// Inside a container an artifact belongs to the task whose attempt is
 	// running there, which the container API established; the body cannot
 	// name another task.
@@ -255,16 +167,9 @@ func (s *Server) CreateArtifact(ctx context.Context, req CreateArtifactRequestOb
 }
 
 // CompleteArtifact records an uploaded artifact.
-func (s *Server) CompleteArtifact(ctx context.Context, req CompleteArtifactRequestObject) (CompleteArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	var parts []apitypes.CompletedPart
-	if req.Body.Parts != nil {
-		parts = *req.Body.Parts
-	}
-	artifact, err := s.owners.Storage.CompleteArtifact(ctx, ws.ID, req.Artifact, parts)
+func (s *server) CompleteArtifact(ctx context.Context, req CompleteArtifactRequestObject) (CompleteArtifactResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	artifact, err := s.owners.Storage.CompleteArtifact(ctx, ws.ID, req.Artifact, valueOr(req.Body.Parts, nil))
 	if err != nil {
 		return nil, err
 	}
@@ -272,11 +177,8 @@ func (s *Server) CompleteArtifact(ctx context.Context, req CompleteArtifactReque
 }
 
 // GetArtifactSummary counts stored artifacts.
-func (s *Server) GetArtifactSummary(ctx context.Context, req GetArtifactSummaryRequestObject) (GetArtifactSummaryResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetArtifactSummary(ctx context.Context, req GetArtifactSummaryRequestObject) (GetArtifactSummaryResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	summary, err := s.owners.Storage.ArtifactSummary(ctx, ws.ID)
 	if err != nil {
 		return nil, err
@@ -285,11 +187,8 @@ func (s *Server) GetArtifactSummary(ctx context.Context, req GetArtifactSummaryR
 }
 
 // GetArtifact returns one stored artifact.
-func (s *Server) GetArtifact(ctx context.Context, req GetArtifactRequestObject) (GetArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetArtifact(ctx context.Context, req GetArtifactRequestObject) (GetArtifactResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	artifact, err := s.owners.Storage.GetArtifact(ctx, ws.ID, req.Artifact)
 	if err != nil {
 		return nil, err
@@ -301,7 +200,7 @@ func (s *Server) GetArtifact(ctx context.Context, req GetArtifactRequestObject) 
 const LinksPath = "/v1/links/"
 
 // openLink redirects a download link to a presigned read of its object.
-func (s *Server) openLink(w http.ResponseWriter, r *http.Request) {
+func (s *server) openLink(w http.ResponseWriter, r *http.Request) {
 	url, err := s.owners.Storage.OpenLink(r.Context(), r.PathValue("token"), r.Method == http.MethodHead)
 	if err != nil {
 		s.writeError(w, r, err)
@@ -312,12 +211,9 @@ func (s *Server) openLink(w http.ResponseWriter, r *http.Request) {
 }
 
 // PresignArtifact returns a download link of an artifact.
-func (s *Server) PresignArtifact(ctx context.Context, req PresignArtifactRequestObject) (PresignArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	download := req.Body.Download != nil && *req.Body.Download
+func (s *server) PresignArtifact(ctx context.Context, req PresignArtifactRequestObject) (PresignArtifactResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	download := valueOr(req.Body.Download, false)
 	url, err := s.owners.Storage.PresignArtifact(ctx, ws.ID, req.Artifact, req.Body.ExpiresSeconds, download)
 	if err != nil {
 		return nil, err
@@ -325,28 +221,9 @@ func (s *Server) PresignArtifact(ctx context.Context, req PresignArtifactRequest
 	return PresignArtifact200JSONResponse(url), nil
 }
 
-// DeleteArtifact deletes one artifact.
-func (s *Server) DeleteArtifact(ctx context.Context, req DeleteArtifactRequestObject) (DeleteArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	deleted, err := s.owners.Storage.DeleteArtifacts(ctx, ws.ID, []uuid.UUID{req.Artifact})
-	if err != nil {
-		return nil, err
-	}
-	if len(deleted) == 0 {
-		return nil, storage.ErrNotFound
-	}
-	return DeleteArtifact204Response{}, nil
-}
-
 // DeleteArtifacts deletes up to 100 artifacts.
-func (s *Server) DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequestObject) (DeleteArtifactsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequestObject) (DeleteArtifactsResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	deleted, err := s.owners.Storage.DeleteArtifacts(ctx, ws.ID, req.Body.Ids)
 	if err != nil {
 		return nil, err
@@ -355,12 +232,9 @@ func (s *Server) DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest
 }
 
 // ListQueues returns a page of queues.
-func (s *Server) ListQueues(ctx context.Context, req ListQueuesRequestObject) (ListQueuesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+func (s *server) ListQueues(ctx context.Context, req ListQueuesRequestObject) (ListQueuesResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -368,11 +242,8 @@ func (s *Server) ListQueues(ctx context.Context, req ListQueuesRequestObject) (L
 }
 
 // GetQueue returns a queue's size.
-func (s *Server) GetQueue(ctx context.Context, req GetQueueRequestObject) (GetQueueResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetQueue(ctx context.Context, req GetQueueRequestObject) (GetQueueResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	info, err := s.owners.Storage.GetQueue(ctx, ws.ID, req.Queue)
 	if err != nil {
 		return nil, err
@@ -381,11 +252,8 @@ func (s *Server) GetQueue(ctx context.Context, req GetQueueRequestObject) (GetQu
 }
 
 // DeleteQueue deletes a queue.
-func (s *Server) DeleteQueue(ctx context.Context, req DeleteQueueRequestObject) (DeleteQueueResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteQueue(ctx context.Context, req DeleteQueueRequestObject) (DeleteQueueResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.DeleteQueue(ctx, ws.ID, req.Queue); err != nil {
 		return nil, err
 	}
@@ -393,11 +261,8 @@ func (s *Server) DeleteQueue(ctx context.Context, req DeleteQueueRequestObject) 
 }
 
 // PutQueueMessages appends messages.
-func (s *Server) PutQueueMessages(ctx context.Context, req PutQueueMessagesRequestObject) (PutQueueMessagesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) PutQueueMessages(ctx context.Context, req PutQueueMessagesRequestObject) (PutQueueMessagesResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.PutQueueMessages(ctx, ws.ID, req.Queue, req.Body.Messages); err != nil {
 		return nil, err
 	}
@@ -405,12 +270,9 @@ func (s *Server) PutQueueMessages(ctx context.Context, req PutQueueMessagesReque
 }
 
 // PopQueueMessage removes the oldest message, waiting when asked.
-func (s *Server) PopQueueMessage(ctx context.Context, req PopQueueMessageRequestObject) (PopQueueMessageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	wait := time.Duration(limitOr(req.Params.WaitSeconds, 0)) * time.Second
+func (s *server) PopQueueMessage(ctx context.Context, req PopQueueMessageRequestObject) (PopQueueMessageResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	message, found, err := s.owners.Storage.PopQueueMessage(ctx, s.owners.Listener, ws.ID, req.Queue, wait)
 	if err != nil {
 		return nil, err
@@ -423,11 +285,8 @@ func (s *Server) PopQueueMessage(ctx context.Context, req PopQueueMessageRequest
 }
 
 // PeekQueueMessage returns the oldest message.
-func (s *Server) PeekQueueMessage(ctx context.Context, req PeekQueueMessageRequestObject) (PeekQueueMessageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) PeekQueueMessage(ctx context.Context, req PeekQueueMessageRequestObject) (PeekQueueMessageResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	message, found, err := s.owners.Storage.PeekQueueMessage(ctx, ws.ID, req.Queue)
 	if err != nil {
 		return nil, err
@@ -440,12 +299,9 @@ func (s *Server) PeekQueueMessage(ctx context.Context, req PeekQueueMessageReque
 }
 
 // ListMaps returns a page of maps.
-func (s *Server) ListMaps(ctx context.Context, req ListMapsRequestObject) (ListMapsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+func (s *server) ListMaps(ctx context.Context, req ListMapsRequestObject) (ListMapsResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -453,11 +309,8 @@ func (s *Server) ListMaps(ctx context.Context, req ListMapsRequestObject) (ListM
 }
 
 // GetMap returns a map's statistics.
-func (s *Server) GetMap(ctx context.Context, req GetMapRequestObject) (GetMapResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetMap(ctx context.Context, req GetMapRequestObject) (GetMapResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	info, err := s.owners.Storage.GetMap(ctx, ws.ID, req.Map)
 	if err != nil {
 		return nil, err
@@ -466,11 +319,8 @@ func (s *Server) GetMap(ctx context.Context, req GetMapRequestObject) (GetMapRes
 }
 
 // DeleteMap deletes a map.
-func (s *Server) DeleteMap(ctx context.Context, req DeleteMapRequestObject) (DeleteMapResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteMap(ctx context.Context, req DeleteMapRequestObject) (DeleteMapResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.DeleteMap(ctx, ws.ID, req.Map); err != nil {
 		return nil, err
 	}
@@ -478,12 +328,9 @@ func (s *Server) DeleteMap(ctx context.Context, req DeleteMapRequestObject) (Del
 }
 
 // ListMapKeys returns a page of keys.
-func (s *Server) ListMapKeys(ctx context.Context, req ListMapKeysRequestObject) (ListMapKeysResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	page, err := s.owners.Storage.ListMapKeys(ctx, ws.ID, req.Map, orEmpty(req.Params.Prefix), orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 1000))
+func (s *server) ListMapKeys(ctx context.Context, req ListMapKeysRequestObject) (ListMapKeysResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, err := s.owners.Storage.ListMapKeys(ctx, ws.ID, req.Map, valueOr(req.Params.Prefix, ""), valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
@@ -491,11 +338,8 @@ func (s *Server) ListMapKeys(ctx context.Context, req ListMapKeysRequestObject) 
 }
 
 // GetMapEntry returns one key.
-func (s *Server) GetMapEntry(ctx context.Context, req GetMapEntryRequestObject) (GetMapEntryResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetMapEntry(ctx context.Context, req GetMapEntryRequestObject) (GetMapEntryResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	entry, err := s.owners.Storage.GetMapEntry(ctx, ws.ID, req.Map, req.Key)
 	if err != nil {
 		return nil, err
@@ -504,12 +348,9 @@ func (s *Server) GetMapEntry(ctx context.Context, req GetMapEntryRequestObject) 
 }
 
 // SetMapEntry writes one key.
-func (s *Server) SetMapEntry(ctx context.Context, req SetMapEntryRequestObject) (SetMapEntryResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	w := storage.SetMapEntry{Value: req.Body.Value, IfRevision: req.Body.IfRevision, IfAbsent: req.Body.IfAbsent != nil && *req.Body.IfAbsent}
+func (s *server) SetMapEntry(ctx context.Context, req SetMapEntryRequestObject) (SetMapEntryResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	w := storage.SetMapEntry{Value: req.Body.Value, IfRevision: req.Body.IfRevision, IfAbsent: valueOr(req.Body.IfAbsent, false)}
 	if req.Body.TtlSeconds != nil {
 		ttl := time.Duration(*req.Body.TtlSeconds) * time.Second
 		w.TTL = &ttl
@@ -522,11 +363,8 @@ func (s *Server) SetMapEntry(ctx context.Context, req SetMapEntryRequestObject) 
 }
 
 // DeleteMapEntry deletes one key.
-func (s *Server) DeleteMapEntry(ctx context.Context, req DeleteMapEntryRequestObject) (DeleteMapEntryResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteMapEntry(ctx context.Context, req DeleteMapEntryRequestObject) (DeleteMapEntryResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Storage.DeleteMapEntry(ctx, ws.ID, req.Map, req.Key, req.Params.IfRevision); err != nil {
 		return nil, err
 	}

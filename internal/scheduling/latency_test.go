@@ -42,13 +42,16 @@ select $1, (select workload_id from releases where id = $2), $2, 'queued', 1 fro
 			b.Fatal(err)
 		}
 		planned1 := time.Now()
-		placed, err := s.Place(b.Context())
-		if err != nil {
+		if _, err := s.Place(b.Context()); err != nil {
 			b.Fatal(err)
 		}
 		done := time.Now()
-		if planned.Created != 50 || placed.Assigned != 50 {
-			b.Fatalf("created %d, placed %d; want 50 each", planned.Created, placed.Assigned)
+		var placed int
+		if err := pool.QueryRow(b.Context(), "select count(*) from containers where state = 'starting'").Scan(&placed); err != nil {
+			b.Fatal(err)
+		}
+		if planned.Created != 50 || placed != 50 {
+			b.Fatalf("created %d, placed %d; want 50 each", planned.Created, placed)
 		}
 		planTimes = append(planTimes, planned1.Sub(start))
 		placeTimes = append(placeTimes, done.Sub(planned1))

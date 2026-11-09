@@ -1,12 +1,11 @@
 package compute_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -34,13 +33,11 @@ select workload_id, null, spec, sha256('run'), sha256('src') from releases where
 		})
 		return err
 	}
-	var invalid *compute.InvalidError
-	if err := submit(&runRelease); !errors.As(err, &invalid) {
-		t.Fatalf("run pinned to a machine that never joined: %v, want InvalidError", err)
+	if err := submit(&runRelease); apitypes.CodeOf(err) != apitypes.InvalidRequest {
+		t.Fatalf("run pinned to a machine that never joined: %v, want Invalid", err)
 	}
-	var invalidPin *compute.InvalidError
-	if err := o.compute.CheckMachineServes(ctx, identity.WorkspaceID(dev), "gpu-1"); !errors.As(err, &invalidPin) {
-		t.Fatalf("deploy pinned to a machine that never joined: %v, want InvalidError", err)
+	if err := o.compute.CheckMachineServes(ctx, identity.WorkspaceID(dev), "gpu-1"); apitypes.CodeOf(err) != apitypes.InvalidRequest {
+		t.Fatalf("deploy pinned to a machine that never joined: %v, want Invalid", err)
 	}
 
 	host, _ := joinMachine(t, o, alice, dev)
@@ -49,9 +46,8 @@ select workload_id, null, spec, sha256('run'), sha256('src') from releases where
 	}
 
 	run(t, o.pool, "update hosts set last_seen_at = now() - interval '1 minute' where id = $1", uuid.UUID(host))
-	var offline *compute.ConflictError
-	if err := submit(&runRelease); !errors.As(err, &offline) {
-		t.Fatalf("run pinned to an offline machine: %v, want ConflictError", err)
+	if err := submit(&runRelease); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("run pinned to an offline machine: %v, want Conflict", err)
 	}
 	if err := submit(nil); err != nil {
 		t.Fatalf("deployed call pinned to an offline machine: %v, want it admitted to wait", err)

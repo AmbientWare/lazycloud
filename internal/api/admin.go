@@ -10,47 +10,36 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
-// SetUserRole grants or withdraws platform administration.
-func (s *Server) SetUserRole(ctx context.Context, req SetUserRoleRequestObject) (SetUserRoleResponseObject, error) {
+// UpdateUser changes an account's platform role or status; the schema
+// admits exactly one.
+func (s *server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (UpdateUserResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	u, err := s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(req.Body.Role))
+	var u identity.User
+	switch b := req.Body; {
+	case b.Role != nil:
+		u, err = s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(*b.Role))
+	case b.Status != nil:
+		u, err = s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(*b.Status))
+	default:
+		return nil, errInvalidRequest
+	}
 	if err != nil {
 		return nil, err
 	}
-	return SetUserRole200JSONResponse(userOut(u)), nil
-}
-
-// SetUserStatus enables or disables an account.
-func (s *Server) SetUserStatus(ctx context.Context, req SetUserStatusRequestObject) (SetUserStatusResponseObject, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	u, err := s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(req.Body.Status))
-	if err != nil {
-		return nil, err
-	}
-	return SetUserStatus200JSONResponse(userOut(u)), nil
+	return UpdateUser200JSONResponse(userOut(u)), nil
 }
 
 // ListFeedback pages through every account's feedback for administrators.
-func (s *Server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject) (ListFeedbackResponseObject, error) {
+func (s *server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject) (ListFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	limit := 50
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	f := identity.FeedbackFilter{Kind: (*identity.FeedbackKind)(req.Params.Kind)}
-	if req.Params.Search != nil {
-		f.Search = *req.Params.Search
-	}
-	page, err := s.owners.Identity.ListFeedback(ctx, p, f, (*identity.FeedbackID)(req.Params.Cursor), limit)
+	f := identity.FeedbackFilter{Kind: (*identity.FeedbackKind)(req.Params.Kind), Search: valueOr(req.Params.Search, "")}
+	page, err := s.owners.Identity.ListFeedback(ctx, p, f, (*identity.FeedbackID)(req.Params.Cursor), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +53,7 @@ func (s *Server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject
 }
 
 // DeleteFeedback removes a piece of feedback for administrators.
-func (s *Server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestObject) (DeleteFeedbackResponseObject, error) {
+func (s *server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestObject) (DeleteFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -76,7 +65,7 @@ func (s *Server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestOb
 }
 
 // SubmitFeedback records the caller's feedback.
-func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestObject) (SubmitFeedbackResponseObject, error) {
+func (s *server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestObject) (SubmitFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -89,8 +78,8 @@ func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestOb
 
 // GetAdminAlerts returns where administrator alerts go and the spend
 // limits that raise them.
-func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+func (s *server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	a, err := s.owners.Notifications.AdminAlerts(ctx)
@@ -101,8 +90,8 @@ func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObje
 }
 
 // SetAdminAlerts replaces the alert settings.
-func (s *Server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+func (s *server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	a := notifications.AdminAlerts{

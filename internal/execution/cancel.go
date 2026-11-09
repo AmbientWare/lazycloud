@@ -51,9 +51,6 @@ func (e *Execution) cancelTask(ctx context.Context, tx pgx.Tx, workspace *identi
 	if err := q.CancelTask(ctx, task.ID); err != nil {
 		return false, fmt.Errorf("cancel task: %w", err)
 	}
-	if err := recordCallbacks(ctx, q, CallbackCancelled, []uuid.UUID{task.ID}, nil); err != nil {
-		return false, err
-	}
 	if status == TaskRunning && task.CurrentAttemptID != nil {
 		attempt := *task.CurrentAttemptID
 		// The task is already cancelled, so this only records the
@@ -72,13 +69,7 @@ func (e *Execution) cancelTask(ctx context.Context, tx pgx.Tx, workspace *identi
 		}
 	}
 	// Dependents lock after the attempt, keeping task then attempt order.
-	if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamUnsuccessful); err != nil {
-		return false, err
-	}
-	if err := database.Notify(ctx, tx, database.ChannelTask, task.ID.String()); err != nil {
-		return false, err
-	}
-	if err := notifyFinished(ctx, tx, []uuid.UUID{task.ID}); err != nil {
+	if err := e.finishTasks(ctx, tx, CallbackCancelled, []uuid.UUID{task.ID}, true); err != nil {
 		return false, err
 	}
 	return true, database.Notify(ctx, tx, database.ChannelExecution, task.ReleaseID.String())

@@ -108,3 +108,35 @@ func TestStorageRoutes(t *testing.T) {
 		t.Fatalf("delete a missing disk: %d", status)
 	}
 }
+
+// A secret write's precondition decides whether it may create the secret or
+// replace its value.
+func TestSecretWritesHonorTheirPrecondition(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	put := func(precondition string) int {
+		req, err := http.NewRequestWithContext(t.Context(), "PUT", e.url+"/v1/workspaces/acme/secrets/API_KEY", strings.NewReader(`{"value": "v"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+e.owner)
+		req.Header.Set("Content-Type", "application/json")
+		if precondition != "" {
+			req.Header.Set(precondition, "*")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, step := range []struct {
+		precondition string
+		want         int
+	}{{"If-Match", 404}, {"If-None-Match", 200}, {"If-None-Match", 409}, {"If-Match", 200}, {"", 200}} {
+		if got := put(step.precondition); got != step.want {
+			t.Fatalf("PUT with %q: %d, want %d", step.precondition, got, step.want)
+		}
+	}
+}

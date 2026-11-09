@@ -67,8 +67,7 @@ func TestArtifactLifecycle(t *testing.T) {
 	}
 	if status, _ := send(t, short.Upload.Parts[0].Url, []byte("abc")); status < 400 {
 		// The store may accept a body of another length; completion must not.
-		var bad *InvalidError
-		if _, err := s.CompleteArtifact(ctx, f.ws, short.Artifact.Id, nil); !errors.As(err, &bad) {
+		if _, err := s.CompleteArtifact(ctx, f.ws, short.Artifact.Id, nil); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("complete with the wrong size: %v", err)
 		}
 	}

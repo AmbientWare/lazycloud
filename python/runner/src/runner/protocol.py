@@ -8,6 +8,7 @@ protocol errors are reported on stderr only when the runner is about to exit.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -23,8 +24,7 @@ from typing import Annotated, Any
 
 from lazycloud._shared.errors import InvalidInputError
 from lazycloud._shared.function_display import build_function_result_display
-from lazycloud._shared.function_payloads import FunctionResultImageDisplay
-from lazycloud._shared.lifecycle import LifecycleHookName, LifecycleHooks, LifecycleTaskContext
+from lazycloud._shared.lifecycle import LifecycleHookName, LifecycleTaskContext
 from lazycloud._shared.serialization import to_json_value
 from lazycloud._shared.task_context import task_context
 from lazycloud._shared.tasks import TaskStatus
@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from runner import routed_output
 from runner.handler_loading import load_handler
-from runner.hooks import hooks_from_frame, run_startup_hooks, run_task_hooks, startup_context
+from runner.hooks import run_startup_hooks, run_task_hooks, startup_context
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
@@ -41,6 +41,7 @@ from runner.protocol_models import (
     Failed,
     Invoke,
     Kind,
+    LifecycleHooks,
     Load,
     Loaded,
     LoadFailed,
@@ -147,7 +148,7 @@ def serve(connection: Connection) -> int:
     load, _ = frame
     if not isinstance(load, Load):
         raise ProtocolError("expected load as the first frame")
-    hooks = hooks_from_frame(load.hooks)
+    hooks = load.hooks or LifecycleHooks()
     if load.concurrency > 1 or load.http is not None:
         # Before user code loads, so module-level loggers write through it.
         routed_output.install()
@@ -359,12 +360,13 @@ def _display(result: Any) -> ResultDisplay:
     """How a pickled result shows where it is never loaded, as the value renders itself."""
     shown = build_function_result_display(result)
     rich: RichDisplay | None = None
-    if isinstance(shown.rich, FunctionResultImageDisplay):
+    if shown.png is not None:
         rich = RichDisplay(
-            kind=Kind.image, media_type="image/png", value_base64=shown.rich.value_base64
+            kind=Kind.image,
+            value_base64=base64.b64encode(shown.png).decode("ascii"),
         )
-    elif shown.rich is not None:
-        rich = RichDisplay(kind=Kind.html, html=shown.rich.html)
+    elif shown.html is not None:
+        rich = RichDisplay(kind=Kind.html, html=shown.html)
     return ResultDisplay(text=shown.text, rich=rich)
 
 

@@ -635,9 +635,9 @@ func (ps *pass) buy(m ReserveMarket, o FleetOffer, kind FleetActionKind, reason 
 	reserve := kind == ActionBuyReserve
 	var mode *ReserveMode
 	if reserve {
-		mode = ptr(ReserveStop)
+		mode = new(ReserveStop)
 		if o.Hibernate {
-			mode = ptr(ReserveHibernate)
+			mode = new(ReserveHibernate)
 		}
 		ps.reserveRoom--
 	}
@@ -656,7 +656,7 @@ func (ps *pass) resume(m ReserveMarket, h *FleetHost, reason ActionReason, conta
 	}
 	h.State = FleetStarting
 	ps.reserveRoom++
-	ps.act(FleetAction{Kind: ActionResume, Reason: reason, Market: m, Host: ptr(h.ID), Containers: containers})
+	ps.act(FleetAction{Kind: ActionResume, Reason: reason, Market: m, Host: new(h.ID), Containers: containers})
 }
 
 // size orders requirements largest first: GPUs dominate, then CPU and
@@ -743,12 +743,12 @@ func (ps *pass) cover(items []coverItem) {
 				comingRooms[i] = forWork(*coming[i].host, coming[i].room)
 				coming[i].host.Load = coming[i].host.Load.Plus(reservedShape(it.need))
 				ps.claimed[coming[i].host.ID] = true
-				ps.provisioning(it, ptr(coming[i].host.ID), nil)
+				ps.provisioning(it, new(coming[i].host.ID), nil)
 				continue
 			}
 			// A stale reserve resumed for it serves once its agent updates.
 			if i := slices.IndexFunc(ready, func(b bin) bool { return b.host.ID == *it.bought && b.host.UpdateDue }); i >= 0 {
-				ps.provisioning(it, ptr(ready[i].host.ID), nil)
+				ps.provisioning(it, new(ready[i].host.ID), nil)
 				continue
 			}
 		}
@@ -759,7 +759,7 @@ func (ps *pass) cover(items []coverItem) {
 		if i := ps.comingFor(coming, comingRooms, booting, floor); i >= 0 {
 			coming[i].host.Load = coming[i].host.Load.Plus(reservedShape(it.need))
 			ps.claimed[coming[i].host.ID] = true
-			ps.provisioning(it, ptr(coming[i].host.ID), nil)
+			ps.provisioning(it, new(coming[i].host.ID), nil)
 			continue
 		}
 		left = append(left, it)
@@ -845,13 +845,13 @@ func (ps *pass) boughtBin(it coverItem, ready []bin, rooms []HostCapacity) int {
 // provisioning records that a pending container waits for a host.
 func (ps *pass) provisioning(it coverItem, host *HostID, action *int) {
 	w := &ps.plan.Waits[it.wait]
-	w.Wait, w.Host, w.Action = ptr(WaitProvisioning), host, action
+	w.Wait, w.Host, w.Action = new(WaitProvisioning), host, action
 }
 
 // waits records why a pending container no host serves or is coming for
 // waits; its market waits with it.
 func (ps *pass) waits(it coverItem, wait CapacityWait) {
-	ps.plan.Waits[it.wait].Wait = ptr(wait)
+	ps.plan.Waits[it.wait].Wait = new(wait)
 	ps.waiting[it.market] = true
 }
 
@@ -919,7 +919,7 @@ func (ps *pass) handBack() {
 		if back {
 			kind, reason = ActionHandBack, ReasonSpotHosts
 		}
-		ps.act(FleetAction{Kind: kind, Reason: reason, Market: h.market(), Host: ptr(h.ID)})
+		ps.act(FleetAction{Kind: kind, Reason: reason, Market: h.market(), Host: new(h.ID)})
 	}
 }
 
@@ -1016,7 +1016,7 @@ func (ps *pass) resumeFor(items []coverItem) []coverItem {
 		var rest []coverItem
 		for n, it := range items {
 			if slices.Contains(taken, n) {
-				ps.provisioning(it, ptr(h.ID), nil)
+				ps.provisioning(it, new(h.ID), nil)
 				continue
 			}
 			rest = append(rest, it)
@@ -1266,7 +1266,7 @@ func (ps *pass) buyFor(items []coverItem) {
 					ps.batched[c.market] = true
 				default:
 					if short == nil {
-						short = ptr(ps.shortReason(c.market, needOf(c.need, g.shape), false))
+						short = new(ps.shortReason(c.market, needOf(c.need, g.shape), false))
 					}
 					ps.waits(it, *short)
 				}
@@ -1394,7 +1394,7 @@ func (ps *pass) coverClass(c *demandClass, m ReserveMarket, offers []FleetOffer,
 		}
 		action := ps.buy(m, node.Offer, ActionBuy, reason, holds, ids, nil)
 		for _, it := range taken {
-			ps.provisioning(it, nil, ptr(action))
+			ps.provisioning(it, nil, new(action))
 		}
 	}
 }

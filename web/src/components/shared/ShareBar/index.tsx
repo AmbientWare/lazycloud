@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  */
 const MINIMUM_FILL_PERCENT = 3;
 
-export type ShareBarTone = "brand" | "capacity";
+type ShareBarTone = "brand" | "capacity";
 
 /**
  * One share of a whole, as a filled length against a quiet track.

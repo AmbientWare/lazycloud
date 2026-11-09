@@ -266,16 +266,14 @@ func (c *Callbacks) claimCallbacks(ctx context.Context, n int) ([]claimedCallbac
 
 // Purge deletes callbacks and webhook deliveries that finished more than a
 // week ago.
-func (c *Callbacks) Purge(ctx context.Context) (int64, error) {
-	n, err := c.queries.PurgeFinishedCallbacks(ctx, PurgeFinishedCallbacksParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
-	if err != nil {
-		return 0, fmt.Errorf("purge callbacks: %w", err)
+func (c *Callbacks) Purge(ctx context.Context) error {
+	if _, err := c.queries.PurgeFinishedCallbacks(ctx, PurgeFinishedCallbacksParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch}); err != nil {
+		return fmt.Errorf("purge callbacks: %w", err)
 	}
-	m, err := c.queries.PurgeFinishedWebhookDeliveries(ctx, PurgeFinishedWebhookDeliveriesParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
-	if err != nil {
-		return n, fmt.Errorf("purge webhook deliveries: %w", err)
+	if _, err := c.queries.PurgeFinishedWebhookDeliveries(ctx, PurgeFinishedWebhookDeliveriesParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch}); err != nil {
+		return fmt.Errorf("purge webhook deliveries: %w", err)
 	}
-	return n + m, nil
+	return nil
 }
 
 // deliverOne sends one callback and records the outcome under its lease.
@@ -283,30 +281,61 @@ func (c *Callbacks) deliverOne(ctx context.Context, claimed claimedCallback) {
 	row, deliveries := claimed.CallbackDeliveriesRow, claimed.deliveries
 	log := c.logger.With("task_id", row.TaskID, "request_id", row.RequestID, "event", row.Event, "attempt", row.Attempt, "delivery", deliveries)
 	retry, err := c.send(ctx, row)
+	c.settle(ctx, log, "callback", deliveries, retry, err,
+		func(state string, lastError *string) error {
+			return c.queries.FinishCallback(ctx, FinishCallbackParams{ID: row.ID, Deliveries: deliveries, State: state, LastError: lastError})
+		},
+		func(lastError *string, delaySeconds float64) error {
+			return c.queries.RetryCallback(ctx, RetryCallbackParams{ID: row.ID, Deliveries: deliveries, LastError: lastError, DelaySeconds: delaySeconds})
+		})
+}
+
+// settle records a delivery's outcome under its lease: delivered, sent
+// again after the next retry delay while retry allows and attempts remain,
+// else failed. A delivery the pass cut short records nothing; its lease
+// expires and another pass sends it again.
+func (c *Callbacks) settle(ctx context.Context, log *slog.Logger, what string, deliveries int32, retry bool, err error,
+	finish func(state string, lastError *string) error, again func(lastError *string, delaySeconds float64) error,
+) {
 	if ctx.Err() != nil {
-		// The lease expires and another pass sends it again.
 		return
 	}
 	var record error
 	switch {
 	case err == nil:
-		log.InfoContext(ctx, "callback delivered")
-		record = c.queries.FinishCallback(ctx, FinishCallbackParams{ID: row.ID, Deliveries: deliveries, State: "delivered"})
+		log.InfoContext(ctx, what+" delivered")
+		record = finish("delivered", nil)
 	case retry && deliveries < callbackAttempts:
 		message := err.Error()
-		log.InfoContext(ctx, "callback failed; retrying", "error", message)
-		record = c.queries.RetryCallback(ctx, RetryCallbackParams{
-			ID: row.ID, Deliveries: deliveries, LastError: &message,
-			DelaySeconds: c.retryDelays[deliveries-1].Seconds(),
-		})
+		log.InfoContext(ctx, what+" failed; retrying", "error", message)
+		record = again(&message, c.retryDelays[deliveries-1].Seconds())
 	default:
 		message := err.Error()
-		log.WarnContext(ctx, "callback failed", "error", message)
-		record = c.queries.FinishCallback(ctx, FinishCallbackParams{ID: row.ID, Deliveries: deliveries, State: "failed", LastError: &message})
+		log.WarnContext(ctx, what+" failed", "error", message)
+		record = finish("failed", &message)
 	}
 	if record != nil {
-		log.ErrorContext(ctx, "recording callback outcome failed", "error", record)
+		log.ErrorContext(ctx, "recording "+what+" outcome failed", "error", record)
 	}
+}
+
+// signed is a JSON POST of body to target, signed with the workspace's key
+// in the prefix's Signature and Timestamp headers. retry reports whether a
+// later attempt could build it.
+func (c *Callbacks) signed(ctx context.Context, workspace uuid.UUID, target string, body []byte, prefix string) (req *http.Request, retry bool, err error) {
+	key, err := c.secrets.SigningKey(ctx, identity.WorkspaceID(workspace))
+	if err != nil {
+		return nil, true, fmt.Errorf("read signing key: %w", err)
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, false, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(prefix+"Signature", Sign(key, body, timestamp))
+	req.Header.Set(prefix+"Timestamp", timestamp)
+	return req, false, nil
 }
 
 // send posts one callback. retry reports whether a later attempt could
@@ -326,18 +355,12 @@ func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry 
 	if err != nil {
 		return false, err
 	}
-	key, err := c.secrets.SigningKey(ctx, identity.WorkspaceID(row.WorkspaceID))
+	req, retry, err := c.signed(ctx, row.WorkspaceID, row.Url, body, "X-Task-")
 	if err != nil {
-		return true, fmt.Errorf("read signing key: %w", err)
-	}
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, row.Url, bytes.NewReader(body))
-	if err != nil {
-		return false, fmt.Errorf("build callback request: %w", err)
+		return retry, fmt.Errorf("callback %w", err)
 	}
 	subject := subjectOf(row)
 	idempotency := sha256.Sum256(fmt.Appendf(nil, "%s:%d:%s", subject, row.Attempt, row.Event))
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", hex.EncodeToString(idempotency[:]))
 	// A request's callback names the request where a task's names the task.
 	req.Header.Set("X-Task-ID", subject.String())
@@ -346,8 +369,6 @@ func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry 
 	}
 	req.Header.Set("X-Task-Status", row.Event)
 	req.Header.Set("X-Task-Attempt", strconv.Itoa(int(row.Attempt)))
-	req.Header.Set("X-Task-Signature", Sign(key, body, timestamp))
-	req.Header.Set("X-Task-Timestamp", timestamp)
 	if _, retry, err = c.post(req); err != nil {
 		return retry, fmt.Errorf("callback %w", err)
 	}

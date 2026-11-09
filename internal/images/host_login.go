@@ -49,9 +49,6 @@ func (l *platformLogin) host(ctx context.Context, access hostAccess, until time.
 	if l.ecr == nil {
 		return l.static, nil
 	}
-	if l.hostRole == "" {
-		return nil, fmt.Errorf("the image registry has no host role to scope host logins")
-	}
 	key := access.key()
 	l.mu.Lock()
 	cached, ok := l.hosts[key]

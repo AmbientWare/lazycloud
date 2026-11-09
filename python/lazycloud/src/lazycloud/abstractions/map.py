@@ -5,7 +5,7 @@ from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from lazycloud.clients.api import ApiError
+from lazycloud.clients.api import ApiError, pages
 from lazycloud.clients.storage import StorageClient
 from lazycloud.contracts.api import ErrorCode, SetMapEntryRequest
 from lazycloud.control import (
@@ -16,10 +16,6 @@ from lazycloud.values import decode_value, encode_value
 
 MAX_MAP_TTL_SECONDS = 7 * 24 * 60 * 60
 _MISSING = object()
-
-
-class MapSetError(ValueError):
-    pass
 
 
 @dataclass(slots=True)
@@ -82,13 +78,10 @@ class Map(ResourceControlBinding[StorageClient], MutableMapping[str, Any]):
         return isinstance(key, str) and self.get(key, _MISSING) is not _MISSING
 
     def __iter__(self) -> Iterator[str]:
-        cursor: str | None = None
-        while True:
-            page = self.control_client.list_map_keys(self.name, cursor=cursor)
+        for page in pages(
+            lambda cursor: self.control_client.list_map_keys(self.name, cursor=cursor)
+        ):
             yield from page.keys
-            if not page.next_cursor:
-                return
-            cursor = page.next_cursor
 
     def __len__(self) -> int:
         return self.control_client.get_map(self.name).count
@@ -110,5 +103,4 @@ def _normalize_ttl(value: int) -> int:
 __all__ = [
     "MAX_MAP_TTL_SECONDS",
     "Map",
-    "MapSetError",
 ]

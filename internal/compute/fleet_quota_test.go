@@ -96,7 +96,7 @@ func TestPlanCountsRunningHostsAgainstQuotasButNotStoppedReserves(t *testing.T) 
 func TestWorkWaitsForAStoppingReserveInAFullQuota(t *testing.T) {
 	t.Parallel()
 	h := planHost(1, planSmall, FleetStopping)
-	h.Market, h.StoppedAt = MarketSpot, ptr(offerNow.Add(-DefaultPolicy().Starts.SpotDisable))
+	h.Market, h.StoppedAt = MarketSpot, new(offerNow.Add(-DefaultPolicy().Starts.SpotDisable))
 	s := planSnapshot(t, h)
 	s.Offers.Quotas = []VCPUQuota{{Key: QuotaKey{Region: "us-east-2", Class: QuotaStandard, Market: MarketSpot}, VCPUs: 16}}
 	g, _ := pendingOne(Requirement{Preemptible: true, CPUMillis: 1000, MemoryBytes: gib}, nil)

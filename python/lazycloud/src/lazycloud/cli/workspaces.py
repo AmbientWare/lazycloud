@@ -5,9 +5,8 @@ from typing import Annotated, Literal
 import typer
 
 from lazycloud._terminal.cards import notice_card
-from lazycloud._terminal.streams import console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import emit, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings
@@ -26,7 +25,6 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
     set_profile(
         stored.model_copy(update={"workspace": name}),
         activate=False,
-        replace_legacy=True,
     )
 
 
@@ -79,10 +77,7 @@ def _selection_error(
 @workspace_app.command("list", help="List accessible workspaces.")
 def workspace_list(ctx: typer.Context) -> None:
     with workspace_client() as client:
-        workspaces = client.list_workspaces()
-    if json_output_enabled(ctx):
-        print_payload(ctx, {"workspaces": [ws.model_dump(mode="json") for ws in workspaces]})
-        return
+        workspaces = client.me().workspaces
     current = get_profile().workspace
     rows = [
         [
@@ -93,7 +88,11 @@ def workspace_list(ctx: typer.Context) -> None:
         ]
         for workspace in sorted(workspaces, key=lambda item: item.name)
     ]
-    console.print(table("Workspaces", ["name", "current"], rows))
+    emit(
+        ctx,
+        payload={"workspaces": [ws.model_dump(mode="json") for ws in workspaces]},
+        view=table("Workspaces", ["name", "current"], rows),
+    )
 
 
 @workspace_app.command(
@@ -143,14 +142,16 @@ def workspace_use(ctx: typer.Context, name: str) -> None:
     _require_profile_workspace()
     profile = get_profile()
     with workspace_client() as client:
-        workspaces = client.list_workspaces()
-    workspace = next((item for item in workspaces if item.name == name), None)
-    if workspace is None:
-        raise ClientError(
-            f"Workspace not found: {name}",
-            type="not_found",
-            title="Workspace not found",
-        )
+        try:
+            workspace = client.get_workspace(name)
+        except ApiError as exc:
+            if exc.status_code not in (403, 404):
+                raise
+            raise ClientError(
+                f"Workspace not found: {name}",
+                type="not_found",
+                title="Workspace not found",
+            ) from exc
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:
@@ -228,7 +229,7 @@ def workspace_delete(
                 remaining = sorted(
                     (
                         item
-                        for item in client.list_workspaces()
+                        for item in client.me().workspaces
                         if item.state is WorkspaceState.active and item.name != name
                     ),
                     key=lambda item: item.name,

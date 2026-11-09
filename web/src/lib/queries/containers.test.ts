@@ -30,7 +30,7 @@ function api(handle: (url: URL) => unknown) {
   return fetchMock;
 }
 
-const checkout = { app: "shop", kind: "pod", name: "checkout" } as const;
+const checkout = { id: "workload-1", app: "shop", kind: "pod", name: "checkout" } as const;
 
 describe("container pagination", () => {
   it("asks the server for one workload's live containers and keeps what it answers", async () => {
@@ -40,10 +40,12 @@ describe("container pagination", () => {
     );
 
     const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
-    expect(request.pathname).toBe(
-      "/v1/workspaces/workspace/apps/shop/workloads/pod/checkout/containers",
-    );
-    expect(Object.fromEntries(request.searchParams)).toEqual({ live: "true", limit: "100" });
+    expect(request.pathname).toBe("/v1/workspaces/workspace/containers");
+    expect(Object.fromEntries(request.searchParams)).toEqual({
+      workload_id: "workload-1",
+      live: "true",
+      limit: "100",
+    });
     expect(page.pages[0]?.data.map((item) => item.id)).toEqual(["one", "two"]);
   });
 

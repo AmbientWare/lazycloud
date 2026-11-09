@@ -1957,21 +1957,6 @@ func (e RichDisplayKind) Valid() bool {
 	}
 }
 
-// Defines values for RichDisplayMediaType.
-const (
-	Imagepng RichDisplayMediaType = "image/png"
-)
-
-// Valid indicates whether the value is a known member of the RichDisplayMediaType enum.
-func (e RichDisplayMediaType) Valid() bool {
-	switch e {
-	case Imagepng:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SandboxStatus.
 const (
 	SandboxStatusFailed   SandboxStatus = "failed"
@@ -2443,6 +2428,36 @@ func (e WorkspaceState) Valid() bool {
 	}
 }
 
+// Defines values for SetSecretParamsIfNoneMatch.
+const (
+	SetSecretParamsIfNoneMatchAsterisk SetSecretParamsIfNoneMatch = "*"
+)
+
+// Valid indicates whether the value is a known member of the SetSecretParamsIfNoneMatch enum.
+func (e SetSecretParamsIfNoneMatch) Valid() bool {
+	switch e {
+	case SetSecretParamsIfNoneMatchAsterisk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SetSecretParamsIfMatch.
+const (
+	SetSecretParamsIfMatchAsterisk SetSecretParamsIfMatch = "*"
+)
+
+// Valid indicates whether the value is a known member of the SetSecretParamsIfMatch enum.
+func (e SetSecretParamsIfMatch) Valid() bool {
+	switch e {
+	case SetSecretParamsIfMatchAsterisk:
+		return true
+	default:
+		return false
+	}
+}
+
 // AbortVolumeUploadRequest defines model for AbortVolumeUploadRequest.
 type AbortVolumeUploadRequest struct {
 	// Path A file or directory below the volume root.
@@ -2562,6 +2577,11 @@ type AppRef = string
 // AppState defines model for AppState.
 type AppState string
 
+// AppUpdate defines model for AppUpdate.
+type AppUpdate struct {
+	Paused bool `json:"paused"`
+}
+
 // Artifact defines model for Artifact.
 type Artifact struct {
 	App         *AppName            `json:"app,omitempty"`
@@ -2639,15 +2659,8 @@ type AwsAuthorizationGeneration struct {
 	Generation              int                                         `json:"generation"`
 	LastValidatedAt         *time.Time                                  `json:"last_validated_at,omitempty"`
 	LastValidationStartedAt *time.Time                                  `json:"last_validation_started_at,omitempty"`
-	ManagedAuthorization    *struct {
-		Generation      int     `json:"generation"`
-		Region          string  `json:"region"`
-		StackId         *string `json:"stack_id,omitempty"`
-		StackName       string  `json:"stack_name"`
-		TemplateSha256  string  `json:"template_sha256"`
-		TemplateVersion string  `json:"template_version"`
-	} `json:"managed_authorization,omitempty"`
-	Phase AwsAuthorizationPhase `json:"phase"`
+	ManagedAuthorization    *AwsManagedAuthorization                    `json:"managed_authorization,omitempty"`
+	Phase                   AwsAuthorizationPhase                       `json:"phase"`
 
 	// SetupStep Where the customer's creation of a managed authorization's stack stands while the authorization has never validated.
 	SetupStep *AwsSetupStep `json:"setup_step,omitempty"`
@@ -2769,6 +2782,16 @@ type AwsLeftover struct {
 
 // AwsLeftoverKind defines model for AwsLeftover.Kind.
 type AwsLeftoverKind string
+
+// AwsManagedAuthorization defines model for AwsManagedAuthorization.
+type AwsManagedAuthorization struct {
+	Generation      int     `json:"generation"`
+	Region          string  `json:"region"`
+	StackId         *string `json:"stack_id,omitempty"`
+	StackName       string  `json:"stack_name"`
+	TemplateSha256  string  `json:"template_sha256"`
+	TemplateVersion string  `json:"template_version"`
+}
 
 // AwsReconnectRequest defines model for AwsReconnectRequest.
 type AwsReconnectRequest struct {
@@ -2971,6 +2994,12 @@ type ComplimentaryRequest struct {
 	Complimentary bool `json:"complimentary"`
 }
 
+// ComputeConnection defines model for ComputeConnection.
+type ComputeConnection struct {
+	AccountId string             `json:"account_id"`
+	Phase     AwsConnectionPhase `json:"phase"`
+}
+
 // ComputeInstance defines model for ComputeInstance.
 type ComputeInstance struct {
 	AvailabilityZone string `json:"availability_zone"`
@@ -3030,11 +3059,8 @@ type ComputeRate struct {
 // ComputeSummary defines model for ComputeSummary.
 type ComputeSummary struct {
 	// Connection The connected account the workspace lives in; absent on platform compute.
-	Connection *struct {
-		AccountId string             `json:"account_id"`
-		Phase     AwsConnectionPhase `json:"phase"`
-	} `json:"connection,omitempty"`
-	Cost struct {
+	Connection *ComputeConnection `json:"connection,omitempty"`
+	Cost       struct {
 		Currency     ComputeSummaryCostCurrency `json:"currency"`
 		DailyMicros  *int64                     `json:"daily_micros,omitempty"`
 		Estimated    bool                       `json:"estimated"`
@@ -3821,6 +3847,21 @@ type FleetNodePage struct {
 	ObservedAt time.Time   `json:"observed_at"`
 }
 
+// FleetPlan defines model for FleetPlan.
+type FleetPlan struct {
+	ExpiresAt   time.Time     `json:"expires_at"`
+	GeneratedAt time.Time     `json:"generated_at"`
+	Markets     []FleetMarket `json:"markets"`
+}
+
+// FleetRelease defines model for FleetRelease.
+type FleetRelease struct {
+	// Complete Every connected platform host runs the release.
+	Complete bool           `json:"complete"`
+	Phases   map[string]int `json:"phases"`
+	Version  string         `json:"version"`
+}
+
 // FleetSpend defines model for FleetSpend.
 type FleetSpend struct {
 	// HourlyMicros The fleet's cost an hour now
@@ -3861,21 +3902,10 @@ type FleetSummary struct {
 	ObservedAt time.Time `json:"observed_at"`
 
 	// Plan The planner's last published plan; absent once it expires.
-	Plan *struct {
-		ExpiresAt   time.Time     `json:"expires_at"`
-		GeneratedAt time.Time     `json:"generated_at"`
-		Markets     []FleetMarket `json:"markets"`
-	} `json:"plan,omitempty"`
+	Plan *FleetPlan `json:"plan,omitempty"`
 
 	// Release The agent release platform hosts move to.
-	Release *struct {
-		// Complete Every connected platform host runs the release.
-		Complete              bool           `json:"complete"`
-		Generation            int            `json:"generation"`
-		PendingCapacityOwners int            `json:"pending_capacity_owners"`
-		Phases                map[string]int `json:"phases"`
-		Version               string         `json:"version"`
-	} `json:"release,omitempty"`
+	Release *FleetRelease `json:"release,omitempty"`
 }
 
 // GpuRate defines model for GpuRate.
@@ -3979,9 +4009,6 @@ type HttpUrls struct {
 
 	// Url Follows the active release across deploys.
 	Url string `json:"url"`
-
-	// VersionInvokePath The API-host path pinned to the release's version.
-	VersionInvokePath string `json:"version_invoke_path"`
 
 	// VersionUrl Pinned to the release's version.
 	VersionUrl string `json:"version_url"`
@@ -4879,17 +4906,13 @@ type RetryPolicyRetryOn string
 
 // RichDisplay `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters, which the dashboard shows in a sandboxed frame without scripts or network access.
 type RichDisplay struct {
-	Html        *string               `json:"html,omitempty"`
-	Kind        RichDisplayKind       `json:"kind"`
-	MediaType   *RichDisplayMediaType `json:"media_type,omitempty"`
-	ValueBase64 *string               `json:"value_base64,omitempty"`
+	Html        *string         `json:"html,omitempty"`
+	Kind        RichDisplayKind `json:"kind"`
+	ValueBase64 *string         `json:"value_base64,omitempty"`
 }
 
 // RichDisplayKind defines model for RichDisplay.Kind.
 type RichDisplayKind string
-
-// RichDisplayMediaType defines model for RichDisplay.MediaType.
-type RichDisplayMediaType string
 
 // RunTaskRequest defines model for RunTaskRequest.
 type RunTaskRequest struct {
@@ -4990,13 +5013,6 @@ type Secret struct {
 
 	// UsedBy Workloads whose active release receives the secret.
 	UsedBy []WorkloadRef `json:"used_by"`
-}
-
-// SecretCreate defines model for SecretCreate.
-type SecretCreate struct {
-	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
-	Name  SecretName `json:"name"`
-	Value SecretText `json:"value"`
 }
 
 // SecretName An environment variable name; the LAZYCLOUD_ prefix is reserved.
@@ -5517,19 +5533,16 @@ type User struct {
 	Status UserStatus `json:"status"`
 }
 
-// UserRoleRequest defines model for UserRoleRequest.
-type UserRoleRequest struct {
-	// Role An account's standing on the platform; administrators reach every workspace.
-	Role PlatformRole `json:"role"`
-}
-
 // UserStatus A disabled account cannot sign in or authenticate.
 type UserStatus string
 
-// UserStatusRequest defines model for UserStatusRequest.
-type UserStatusRequest struct {
+// UserUpdate One change; role grants or withdraws platform administration.
+type UserUpdate struct {
+	// Role An account's standing on the platform; administrators reach every workspace.
+	Role *PlatformRole `json:"role,omitempty"`
+
 	// Status A disabled account cannot sign in or authenticate.
-	Status UserStatus `json:"status"`
+	Status *UserStatus `json:"status,omitempty"`
 }
 
 // Version defines model for Version.
@@ -5867,13 +5880,6 @@ type Workspace struct {
 	State WorkspaceState `json:"state"`
 }
 
-// WorkspaceList defines model for WorkspaceList.
-type WorkspaceList struct {
-	// NextCursor Pass as `cursor` for the next page; absent after the last.
-	NextCursor *Name       `json:"next_cursor,omitempty"`
-	Workspaces []Workspace `json:"workspaces"`
-}
-
 // WorkspaceRequest defines model for WorkspaceRequest.
 type WorkspaceRequest struct {
 	// Cloud aws places the workspace in the caller's ready AWS connection, for good.
@@ -5982,9 +5988,6 @@ type UserCodePath = string
 
 // UserPath defines model for UserPath.
 type UserPath = openapi_types.UUID
-
-// VersionPath defines model for VersionPath.
-type VersionPath = int
 
 // VersionQuery defines model for VersionQuery.
 type VersionQuery = int
@@ -6116,14 +6119,6 @@ type ListTokensParams struct {
 	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
-// ListWorkspacesParams defines parameters for ListWorkspaces.
-type ListWorkspacesParams struct {
-	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The `next_cursor` of the previous page.
-	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
-}
-
 // ListAppsParams defines parameters for ListApps.
 type ListAppsParams struct {
 	// State Only apps in this state. Omitted lists active and paused apps.
@@ -6159,26 +6154,10 @@ type RunTaskParams struct {
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
-// InvokeFunctionVersionParams defines parameters for InvokeFunctionVersion.
-type InvokeFunctionVersionParams struct {
-	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
-	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
-}
-
 // GetWorkloadParams defines parameters for GetWorkload.
 type GetWorkloadParams struct {
 	// Version Describe this version instead of the active one.
 	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
-}
-
-// ListWorkloadContainersParams defines parameters for ListWorkloadContainers.
-type ListWorkloadContainersParams struct {
-	// Live Only containers that have not stopped.
-	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // StreamWorkloadLogsParams defines parameters for StreamWorkloadLogs.
@@ -6252,8 +6231,11 @@ type ListContainersParams struct {
 	Live *bool `form:"live,omitempty" json:"live,omitempty"`
 
 	// App Only the containers of this app's workloads.
-	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// WorkloadId Only the containers of this workload's releases.
+	WorkloadId *openapi_types.UUID `form:"workload_id,omitempty" json:"workload_id,omitempty"`
+	Limit      *PageLimit          `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -6495,6 +6477,18 @@ type ListSecretsParams struct {
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SetSecretParams defines parameters for SetSecret.
+type SetSecretParams struct {
+	IfNoneMatch *SetSecretParamsIfNoneMatch `json:"If-None-Match,omitempty"`
+	IfMatch     *SetSecretParamsIfMatch     `json:"If-Match,omitempty"`
+}
+
+// SetSecretParamsIfNoneMatch defines parameters for SetSecret.
+type SetSecretParamsIfNoneMatch string
+
+// SetSecretParamsIfMatch defines parameters for SetSecret.
+type SetSecretParamsIfMatch string
+
 // ListSshHostsParams defines parameters for ListSshHosts.
 type ListSshHostsParams struct {
 	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
@@ -6652,17 +6646,17 @@ type UpdateMachineJSONRequestBody = MachineUpdate
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = TokenCreateRequest
 
-// SetUserRoleJSONRequestBody defines body for SetUserRole for application/json ContentType.
-type SetUserRoleJSONRequestBody = UserRoleRequest
-
-// SetUserStatusJSONRequestBody defines body for SetUserStatus for application/json ContentType.
-type SetUserStatusJSONRequestBody = UserStatusRequest
+// UpdateUserJSONRequestBody defines body for UpdateUser for application/json ContentType.
+type UpdateUserJSONRequestBody = UserUpdate
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = WorkspaceRequest
 
 // RenameWorkspaceJSONRequestBody defines body for RenameWorkspace for application/json ContentType.
 type RenameWorkspaceJSONRequestBody = WorkspaceRequest
+
+// UpdateAppJSONRequestBody defines body for UpdateApp for application/json ContentType.
+type UpdateAppJSONRequestBody = AppUpdate
 
 // PlanDeploymentJSONRequestBody defines body for PlanDeployment for application/json ContentType.
 type PlanDeploymentJSONRequestBody = DeploymentPlanRequest
@@ -6684,9 +6678,6 @@ type RunTaskJSONRequestBody = RunTaskRequest
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
-
-// InvokeFunctionVersionJSONRequestBody defines body for InvokeFunctionVersion for application/json ContentType.
-type InvokeFunctionVersionJSONRequestBody = InvocationBody
 
 // ScaleWorkloadJSONRequestBody defines body for ScaleWorkload for application/json ContentType.
 type ScaleWorkloadJSONRequestBody = ScaleRequest
@@ -6753,12 +6744,6 @@ type SetMemberRoleJSONRequestBody = MemberRoleRequest
 
 // PutQueueMessagesJSONRequestBody defines body for PutQueueMessages for application/json ContentType.
 type PutQueueMessagesJSONRequestBody = PutQueueMessagesRequest
-
-// CreateSecretJSONRequestBody defines body for CreateSecret for application/json ContentType.
-type CreateSecretJSONRequestBody = SecretCreate
-
-// UpdateSecretJSONRequestBody defines body for UpdateSecret for application/json ContentType.
-type UpdateSecretJSONRequestBody = SecretValueUpdate
 
 // SetSecretJSONRequestBody defines body for SetSecret for application/json ContentType.
 type SetSecretJSONRequestBody = SecretValueUpdate

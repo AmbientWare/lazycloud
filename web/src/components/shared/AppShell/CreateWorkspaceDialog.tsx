@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,8 +85,7 @@ export function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
             </fieldset>
           ) : null}
           <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-              {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            <Button pending={create.isPending} type="submit" size="sm" disabled={!name.trim()}>
               Create
             </Button>
             <Button

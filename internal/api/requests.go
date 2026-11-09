@@ -9,16 +9,9 @@ import (
 )
 
 // ListHttpRequests lists an app's endpoint and ASGI requests, newest first.
-func (s *Server) ListHttpRequests(ctx context.Context, req ListHttpRequestsRequestObject) (ListHttpRequestsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	limit := 50
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	requests, next, err := s.owners.Edge.ListRequests(ctx, ws.ID, req.App, req.Params.Name, req.Params.Before, limit)
+func (s *server) ListHttpRequests(ctx context.Context, req ListHttpRequestsRequestObject) (ListHttpRequestsResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	requests, next, err := s.owners.Edge.ListRequests(ctx, ws.ID, req.App, req.Params.Name, req.Params.Before, valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -26,11 +19,8 @@ func (s *Server) ListHttpRequests(ctx context.Context, req ListHttpRequestsReque
 }
 
 // GetHttpRequest returns one request by its X-Request-Id.
-func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestObject) (GetHttpRequestResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestObject) (GetHttpRequestResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	out, err := s.owners.Edge.Request(ctx, ws.ID, req.HttpRequest)
 	if err != nil {
 		return nil, err
@@ -40,26 +30,15 @@ func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestOb
 
 // ListHttpRequestLogs returns what the workload wrote while serving the
 // request.
-func (s *Server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLogsRequestObject) (ListHttpRequestLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	var after int64
-	if req.Params.After != nil {
-		after = *req.Params.After
-	}
-	limit := 1000
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), req.HttpRequest, after, limit)
+func (s *server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLogsRequestObject) (ListHttpRequestLogsResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), req.HttpRequest, valueOr(req.Params.After, 0), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
 	out := ListHttpRequestLogs200JSONResponse{Data: make([]apitypes.ContainerLogEntry, len(entries))}
 	for n, e := range entries {
-		out.Data[n] = apitypes.ContainerLogEntry{Id: e.ID, Stream: apitypes.ContainerLogEntryStream(e.Stream), Data: e.Data, Time: e.Time}
+		out.Data[n] = containerLogOut(e)
 	}
 	return out, nil
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Plus, Trash2 } from "lucide-react";
 
 import { useCopyToClipboard } from "@/components/shared/CopyButton/useCopyToClipboard";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -79,8 +79,13 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
               className="h-8 min-w-0 flex-1 sm:w-56"
               disabled={pending}
             />
-            <Button size="sm" type="submit" disabled={pending || !hostname.trim()}>
-              {register.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
+            <Button
+              pending={register.isPending}
+              icon={<Plus />}
+              size="sm"
+              type="submit"
+              disabled={pending || !hostname.trim()}
+            >
               Add
             </Button>
           </form>

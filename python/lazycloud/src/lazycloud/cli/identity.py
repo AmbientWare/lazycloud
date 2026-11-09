@@ -252,7 +252,6 @@ def login(
             tls=selected_tls,
         ),
         activate=activate,
-        replace_legacy=True,
     )
     payload: dict[str, object] = {
         **profile_payload(saved),
@@ -362,7 +361,6 @@ def profile_set(
     saved = set_profile(
         existing.model_copy(update=updates),
         activate=activate,
-        replace_legacy=True,
     )
     payload = profile_payload(saved)
     emit(
@@ -415,7 +413,6 @@ def token_set(
     set_profile(
         selected.model_copy(update={"token": value}),
         activate=profile_name == _active_profile_name_or_default(),
-        replace_legacy=True,
     )
     emit(
         ctx,

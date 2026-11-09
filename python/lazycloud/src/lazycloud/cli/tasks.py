@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import islice
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -22,7 +23,7 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.cli.components.results import emit_python_result
 from lazycloud.cli.control import api_session
-from lazycloud.contracts.api import Task as TaskView
+from lazycloud.clients.api import pages
 from lazycloud.session.task import TERMINAL_STATUSES, Task, decode_payload
 
 task_app = typer.Typer(help="Inspect and manage tasks.")
@@ -44,24 +45,25 @@ def task_list(
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
     selected_app = app_name(client, selected_workspace, app) if app else None
-    tasks: list[TaskView] = []
-    cursor: str | None = None
-    while len(tasks) < limit:
-        page = client.list_tasks(
-            selected_workspace, app=selected_app, limit=min(1000, limit - len(tasks)), cursor=cursor
+    found = (
+        item
+        for page in pages(
+            lambda cursor: client.list_tasks(
+                selected_workspace, app=selected_app, limit=min(1000, limit), cursor=cursor
+            )
         )
-        tasks.extend(page.tasks)
-        if page.next_cursor is None:
-            break
-        cursor = page.next_cursor
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in tasks])
-        return
+        for item in page.tasks
+    )
+    tasks = list(islice(found, limit))
     rows: list[list[object]] = [
         [item.function, item.status.value, timestamp(item.created_at), str(item.id)]
         for item in tasks
     ]
-    console.print(table("Tasks", ["workload", "status", "requested", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in tasks],
+        view=table("Tasks", ["workload", "status", "requested", "id"], rows),
+    )
 
 
 @task_app.command("stop", help="Stop one or more tasks.")

@@ -214,32 +214,39 @@ func check(name string, ok bool, message, remediation string) *hostproto.Preflig
 // detectGPUs lists NVIDIA GPUs. A host without nvidia-smi, or one where it
 // fails, has none.
 func detectGPUs(ctx context.Context) []gpuDevice {
-	if _, err := exec.LookPath("nvidia-smi"); err != nil {
-		return nil
+	var gpus []gpuDevice
+	for _, row := range queryGPUs(ctx, gpuQueryTimeout, "index,uuid,name") {
+		gpus = append(gpus, gpuDevice{Index: row[0], UUID: row[1], Model: gpuModel(row[2])})
 	}
-	ctx, cancel := context.WithTimeout(ctx, gpuQueryTimeout)
+	return gpus
+}
+
+// queryGPUs reads fields, comma-separated nvidia-smi query names, of every
+// GPU: a row of values per GPU, none when nvidia-smi is missing, fails or
+// takes longer than timeout.
+func queryGPUs(ctx context.Context, timeout time.Duration, fields string) [][]string {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=index,uuid,name", "--format=csv,noheader").Output()
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu="+fields, "--format=csv,noheader,nounits").Output() //nolint:gosec // Fixed query names.
 	if err != nil {
 		return nil
 	}
-	return parseGPUs(string(out))
+	return parseGPURows(string(out), strings.Count(fields, ",")+1)
 }
 
-func parseGPUs(output string) []gpuDevice {
-	var gpus []gpuDevice
+func parseGPURows(output string, columns int) [][]string {
+	var rows [][]string
 	for line := range strings.Lines(output) {
-		fields := strings.SplitN(line, ",", 3)
-		if len(fields) != 3 {
+		row := strings.Split(line, ",")
+		if len(row) != columns {
 			continue
 		}
-		gpus = append(gpus, gpuDevice{
-			Index: strings.TrimSpace(fields[0]),
-			UUID:  strings.TrimSpace(fields[1]),
-			Model: gpuModel(fields[2]),
-		})
+		for i := range row {
+			row[i] = strings.TrimSpace(row[i])
+		}
+		rows = append(rows, row)
 	}
-	return gpus
+	return rows
 }
 
 func nvidiaRuntimeInstalled() bool {

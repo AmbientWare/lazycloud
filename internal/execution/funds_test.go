@@ -1,12 +1,12 @@
 package execution
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -74,8 +74,7 @@ func TestSubmitNeedsCreditAndRoomForColdWork(t *testing.T) {
 		return err
 	}
 	unwaive(t, pool, rf, 0)
-	var unpaid *billing.PaymentRequiredError
-	if err := submit(); !errors.As(err, &unpaid) {
+	if err := submit(); apitypes.CodeOf(err) != apitypes.PaymentRequired {
 		t.Fatalf("submit without credit: %v", err)
 	}
 	// The account runs ten containers of another workspace: cold work here
@@ -92,8 +91,7 @@ with ws as (insert into workspaces (id, name) values ($1, 'other') returning id)
              select id, 1, '{}'::jsonb, sha256('busy'), sha256('src') from wl returning id, workload_id)
 insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
 select ws.id, rel.id, rel.workload_id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(1, 10)`, uuid.UUID(other), uuid.UUID(f.workspace))
-	var limit *billing.LimitError
-	if err := submit(); !errors.As(err, &limit) {
+	if err := submit(); apitypes.CodeOf(err) != apitypes.LimitReached {
 		t.Fatalf("cold submit at the limit: %v", err)
 	}
 	// Warm work queues behind its own containers.

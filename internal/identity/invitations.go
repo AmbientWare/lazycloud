@@ -11,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -54,7 +56,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 		return Invitation{}, err
 	}
 	if role != RoleAdministrator && role != RoleMember {
-		return Invitation{}, &InvalidError{Message: "an invitation offers administrator or member"}
+		return Invitation{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "an invitation offers administrator or member"}
 	}
 	ws, err := i.AuthorizeWorkspaceRole(ctx, p, workspace, RoleAdministrator)
 	if err != nil {
@@ -64,7 +66,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockActiveWorkspace(ctx, uuid.UUID(ws.ID)); errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: "the workspace is being deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace is being deleted"}
 		} else if err != nil {
 			return fmt.Errorf("lock workspace: %w", err)
 		}
@@ -73,7 +75,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 			return fmt.Errorf("check membership: %w", err)
 		}
 		if member {
-			return &ConflictError{Message: fmt.Sprintf("%s is already a member of this workspace", address)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("%s is already a member of this workspace", address)}
 		}
 		// Billing applies the owner's member limit; an open invitation
 		// holds a seat.
@@ -86,7 +88,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 		}
 		inviterName := inviter.DisplayName
 		if inviterName == "" {
-			inviterName = deref(inviter.Email)
+			inviterName = database.Value(inviter.Email)
 		}
 		token, digest, err := newSecret(invitationPrefix)
 		if err != nil {
@@ -104,7 +106,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 			TokenHash: digest, MessageID: &messageID, ExpiresAt: expires,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: fmt.Sprintf("an invitation for %s is already open; resend that one instead", address)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("an invitation for %s is already open; resend that one instead", address)}
 		}
 		if err != nil {
 			return fmt.Errorf("insert invitation: %w", err)
@@ -184,7 +186,7 @@ func (i *Identity) changeInvitation(ctx context.Context, p Principal, workspace 
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockActiveWorkspace(ctx, uuid.UUID(ws.ID)); errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: "the workspace is being deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace is being deleted"}
 		} else if err != nil {
 			return fmt.Errorf("lock workspace: %w", err)
 		}
@@ -275,7 +277,7 @@ func (i *Identity) PreviewInvitation(ctx context.Context, token string) (Invitat
 // lock, so it is redeemed once. A member already holding less than the
 // offered role is raised to it.
 func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token string) (Workspace, Member, error) {
-	if err := p.requireAccount("accept invitations"); err != nil {
+	if err := p.RequireAccount("accept invitations"); err != nil {
 		return Workspace{}, Member{}, err
 	}
 	var (
@@ -318,7 +320,7 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 			return fmt.Errorf("read member: %w", err)
 		}
 		ws = Workspace{ID: WorkspaceID(active.ID), Name: active.Name, State: WorkspaceActive, Role: role, CreatedAt: active.CreatedAt}
-		member = Member{User: p.User, DisplayName: profile.DisplayName, Email: deref(profile.Email), Role: role, CreatedAt: since}
+		member = Member{User: p.User, DisplayName: profile.DisplayName, Email: database.Value(profile.Email), Role: role, CreatedAt: since}
 		return nil
 	})
 	if err != nil {
@@ -378,7 +380,7 @@ func redeemable(ctx context.Context, q *Queries, token string) (LockInvitationBy
 		return inv, active, fmt.Errorf("lock invitation: %w", err)
 	}
 	if inv.Expired {
-		return inv, active, &ConflictError{Message: "this invitation has expired; ask for a new one"}
+		return inv, active, &apitypes.Error{Code: apitypes.Conflict, Message: "this invitation has expired; ask for a new one"}
 	}
 	return inv, active, nil
 }
@@ -405,7 +407,7 @@ func normalizeEmail(value string) (string, error) {
 	local, domain, ok := strings.Cut(email, "@")
 	if len(email) > 320 || !ok || strings.Contains(domain, "@") || strings.ContainsAny(email, " \t\r\n") ||
 		local == "" || !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
-		return "", &InvalidError{Message: "invitation email must be a single address such as name@example.com"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "invitation email must be a single address such as name@example.com"}
 	}
 	return email, nil
 }
@@ -429,12 +431,7 @@ func invitationEmail(to string, role Role, expires time.Time, workspace, inviter
 		"It expires on %s. If you were not expecting this, you can ignore this message.",
 		who, workspace, displayName, described, link, date)
 	h := html.EscapeString
-	body := `<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,` +
-		`Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;` +
-		`color:#1a1a1a;line-height:1.5">` +
-		`<h1 style="font-size:20px;margin:0 0 16px">` +
-		`You have been invited to ` + h(workspace) + `</h1>` +
-		`<p><strong>` + h(who) + `</strong> invited you to join the workspace ` +
+	body := `<p><strong>` + h(who) + `</strong> invited you to join the workspace ` +
 		`<strong>` + h(workspace) + `</strong> on ` + h(displayName) + ` as ` + described + `.</p>` +
 		`<p style="margin:24px 0"><a href="` + h(link) + `" style="display:inline-block;` +
 		`background:#1a1a1a;color:#ffffff;padding:12px 20px;border-radius:6px;` +
@@ -443,11 +440,11 @@ func invitationEmail(to string, role Role, expires time.Time, workspace, inviter
 		`are not already. The link joins as whichever account you are signed in as, so ` +
 		`keep it to yourself. It expires on ` + h(date) + `.</p>` +
 		`<p style="color:#888;font-size:13px">If you were not expecting this, you can ignore ` +
-		`this message.</p></div>`
+		`this message.</p>`
 	return notifications.Email{
 		To:      to,
 		Subject: fmt.Sprintf("%s invited you to %s on %s", who, workspace, displayName),
-		HTML:    body,
+		HTML:    notifications.Page("You have been invited to "+workspace, body),
 		Text:    text,
 	}
 }

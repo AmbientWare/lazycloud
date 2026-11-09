@@ -44,7 +44,7 @@ class Secret(ResourceControlBinding[ApiClient]):
         """Create the secret; an existing one is an error."""
         client, workspace = self._session()
         try:
-            client.create_secret(workspace, self.name, value)
+            client.set_secret(workspace, self.name, value, exists=False)
         except SdkError as exc:
             raise SecretOperationError(
                 _message(exc, f"failed to create secret: {self.name}")
@@ -55,7 +55,7 @@ class Secret(ResourceControlBinding[ApiClient]):
         """Replace an existing secret's value."""
         client, workspace = self._session()
         try:
-            client.update_secret(workspace, self.name, value)
+            client.set_secret(workspace, self.name, value, exists=True)
         except SdkError as exc:
             raise SecretOperationError(
                 _message(exc, f"failed to update secret: {self.name}")

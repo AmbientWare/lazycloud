@@ -17,53 +17,29 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 var (
 	// ErrUnauthenticated means the credential is missing, unknown, expired
 	// or revoked.
-	ErrUnauthenticated = errors.New("unauthenticated")
+	ErrUnauthenticated error = &apitypes.Error{Code: apitypes.Unauthenticated, Message: "a valid bearer token or session is required"}
 	// ErrForbidden means the principal may not reach the workspace. A
 	// non-administrator gets it for workspaces that do not exist too, so
 	// names of other tenants' workspaces stay private.
-	ErrForbidden = errors.New("forbidden")
+	ErrForbidden error = &apitypes.Error{Code: apitypes.Forbidden, Message: "the token cannot reach this workspace"}
 	// ErrNotFound means the named user, workspace or resource does not
 	// exist.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrExists means a user or workspace with that name already exists.
 	ErrExists = errors.New("already exists")
 	// ErrAdminRequired means the action needs a platform administrator.
-	ErrAdminRequired = errors.New("platform administrator access is required")
+	ErrAdminRequired error = &apitypes.Error{Code: apitypes.Forbidden, Message: "platform administrator access is required"}
 )
-
-// ConflictError is a request the current state refuses.
-type ConflictError struct{ Message string }
-
-func (e *ConflictError) Error() string { return e.Message }
-
-// InvalidError is a request whose content identity rejects.
-type InvalidError struct{ Message string }
-
-func (e *InvalidError) Error() string { return e.Message }
-
-// RoleError means the caller's workspace role is below Required.
-type RoleError struct{ Required Role }
-
-func (e *RoleError) Error() string {
-	return fmt.Sprintf("this needs the %s role in the workspace", e.Required)
-}
-
-// AccountError means a token restricted to one workspace asked for
-// something only an account credential may do.
-type AccountError struct{ Action string }
-
-func (e *AccountError) Error() string {
-	return fmt.Sprintf("a token restricted to one workspace cannot %s", e.Action)
-}
 
 // UserID identifies a user.
 type UserID uuid.UUID
@@ -98,11 +74,11 @@ type Principal struct {
 	Session *SessionID
 }
 
-// requireAccount refuses a token restricted to one workspace: it carries
+// RequireAccount refuses a token restricted to one workspace: it carries
 // no authority over the account, so it cannot act for it.
-func (p Principal) requireAccount(action string) error {
+func (p Principal) RequireAccount(action string) error {
 	if p.TokenWorkspace != nil {
-		return &AccountError{Action: action}
+		return &apitypes.Error{Code: apitypes.Forbidden, Message: "a token restricted to one workspace cannot " + action}
 	}
 	return nil
 }
@@ -227,7 +203,7 @@ func (i *Identity) Authenticate(ctx context.Context, token string) (Principal, e
 	}
 	id := TokenID(row.ID)
 	i.recordTokenUse(id, time.Now())
-	p := Principal{User: UserID(row.UserID), Email: deref(row.Email), IsAdmin: row.IsAdmin, Token: &id}
+	p := Principal{User: UserID(row.UserID), Email: database.Value(row.Email), IsAdmin: row.IsAdmin, Token: &id}
 	if row.WorkspaceID != nil {
 		ws := WorkspaceID(*row.WorkspaceID)
 		p.TokenWorkspace = &ws
@@ -244,7 +220,7 @@ func (i *Identity) AuthorizeWorkspace(ctx context.Context, p Principal, name str
 		return Workspace{}, err
 	}
 	if ws.State == WorkspaceDeleting {
-		return Workspace{}, &ConflictError{Message: fmt.Sprintf("workspace %s is being deleted", ws.Name)}
+		return Workspace{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("workspace %s is being deleted", ws.Name)}
 	}
 	return ws, nil
 }
@@ -257,7 +233,7 @@ func (i *Identity) AuthorizeWorkspaceRole(ctx context.Context, p Principal, name
 		return Workspace{}, err
 	}
 	if !p.IsAdmin && !ws.Role.covers(required) {
-		return Workspace{}, &RoleError{Required: required}
+		return Workspace{}, &apitypes.Error{Code: apitypes.Forbidden, Message: fmt.Sprintf("this needs the %s role in the workspace", required)}
 	}
 	return ws, nil
 }
@@ -292,17 +268,23 @@ const maxMemberships = 1000
 // Workspaces lists the workspaces p is a member of and its token reaches,
 // deleting ones included.
 func (i *Identity) Workspaces(ctx context.Context, p Principal) ([]Workspace, error) {
-	page, err := i.ListWorkspaces(ctx, p, WorkspacePage{MembersOnly: true, Limit: maxMemberships})
+	rows, err := i.queries.MemberWorkspaces(ctx, MemberWorkspacesParams{
+		UserID: uuid.UUID(p.User), RestrictTo: (*uuid.UUID)(p.TokenWorkspace), RowLimit: maxMemberships,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list workspaces: %w", err)
 	}
-	return page.Workspaces, nil
+	out := make([]Workspace, len(rows))
+	for n, row := range rows {
+		out[n] = Workspace{ID: WorkspaceID(row.ID), Name: row.Name, State: WorkspaceState(row.State), Role: Role(row.Role), CreatedAt: row.CreatedAt}
+	}
+	return out, nil
 }
 
 // CreateUser adds a user. Administrators reach every workspace.
 func (i *Identity) CreateUser(ctx context.Context, email string, admin bool) (UserID, error) {
 	id, err := i.queries.InsertUser(ctx, InsertUserParams{Email: &email, IsAdmin: admin})
-	if isUniqueViolation(err) {
+	if database.IsUniqueViolation(err) {
 		return UserID{}, fmt.Errorf("user %s: %w", email, ErrExists)
 	}
 	if err != nil {
@@ -341,7 +323,7 @@ func addWorkspace(ctx context.Context, tx pgx.Tx, name string, owner UserID) (Wo
 	}
 	q := New(tx)
 	row, err := q.InsertWorkspace(ctx, name)
-	if isUniqueViolation(err) {
+	if database.IsUniqueViolation(err) {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", name, ErrExists)
 	}
 	if err != nil {
@@ -422,16 +404,4 @@ func (i *Identity) Housekeeping(ctx context.Context, logger *slog.Logger) error 
 		logger.InfoContext(ctx, "identity housekeeping", "sessions", sessions, "device_codes", codes, "feedback", feedback)
 	}
 	return nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

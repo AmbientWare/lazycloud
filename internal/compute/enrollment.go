@@ -93,7 +93,7 @@ func (c *Compute) Enroll(ctx context.Context, joinToken string, report HostRepor
 		phase, message, failure := PhaseJoining, PhaseJoining.Message(), (*string)(nil)
 		if failed := failedChecks(report.Preflight); len(failed) > 0 {
 			phase, message = PhaseFailed, strings.Join(failed, "; ")
-			failure = ptr(string(FailurePreflight))
+			failure = new(string(FailurePreflight))
 		}
 		id, err = q.EnrollMachine(ctx, EnrollMachineParams{
 			ID: *used.HostID, TokenHash: digest, Phase: string(phase), PhaseMessage: message, Failure: failure,
@@ -133,8 +133,6 @@ func nonNil[T any](s []T) []T {
 	}
 	return s
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // AuthenticateHost resolves a host token.
 func (c *Compute) AuthenticateHost(ctx context.Context, token string) (HostID, error) {

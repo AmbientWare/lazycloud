@@ -92,7 +92,7 @@ func (b *browser) do(method, path string, body any, out any) answer {
 func (b *browser) signIn(returnTo string, account identitytest.Account) string {
 	b.e.t.Helper()
 	resp := b.do("GET", "/auth/github/start?return_to="+url.QueryEscape(returnTo), nil, nil)
-	if resp.StatusCode != http.StatusFound || b.cookies[api.SignInCookie] == "" {
+	if resp.StatusCode != http.StatusFound || b.cookies["__Host-lazycloud_sign_in"] == "" {
 		b.e.t.Fatalf("start: %d %v", resp.StatusCode, b.cookies)
 	}
 	code := "code-" + account.Login
@@ -101,7 +101,7 @@ func (b *browser) signIn(returnTo string, account identitytest.Account) string {
 	if resp.StatusCode != http.StatusSeeOther {
 		b.e.t.Fatalf("callback: %d", resp.StatusCode)
 	}
-	if _, ok := b.cookies[api.SignInCookie]; ok {
+	if _, ok := b.cookies["__Host-lazycloud_sign_in"]; ok {
 		b.e.t.Fatal("sign-in cookie not cleared")
 	}
 	return resp.Header.Get("Location")
@@ -117,7 +117,7 @@ func TestBrowserSessionAndDeviceLogin(t *testing.T) {
 	}
 	var me apitypes.Me
 	if resp := b.do("GET", "/v1/me", nil, &me); resp.StatusCode != 200 || me.User.DisplayName != "Dana" ||
-		len(me.Workspaces) != 1 || me.Workspaces[0].Name != "dana" || resp.Header.Get(api.RecommendedClientHeader) != "9.9.9" {
+		len(me.Workspaces) != 1 || me.Workspaces[0].Name != "dana" || resp.Header.Get("X-Lazycloud-Recommended-Client-Version") != "9.9.9" {
 		t.Fatalf("me: %d %+v", resp.StatusCode, me)
 	}
 

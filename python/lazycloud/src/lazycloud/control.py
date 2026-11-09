@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
-from urllib.parse import urlencode
 
 from lazycloud.exceptions import ConfigurationError
 
@@ -139,27 +138,6 @@ def require_workspace(config: ControlClientConfig) -> str:
     return workspace
 
 
-def workspace_query(workspace: str) -> dict[str, str]:
-    """The workspace a request names, or nothing at all.
-
-    Blank is not a missing value to be filled in with a guess: it means the
-    caller chose none, and the control plane answers that with the account's
-    own. Clients ask here rather than building the query themselves so the
-    question has one answer.
-    """
-    selected = workspace.strip()
-    return {"workspace": selected} if selected else {}
-
-
-def workspace_path(path: str, workspace: str) -> str:
-    """`path` with the workspace named on it, or unchanged when none was chosen."""
-    query = workspace_query(workspace)
-    if not query:
-        return path
-    separator = "&" if "?" in path else "?"
-    return f"{path}{separator}{urlencode(query)}"
-
-
 @contextmanager
 def control_workspace_scope(workspace: str) -> Iterator[None]:
     """Act in one workspace for the duration, or leave the choice unmade.
@@ -188,6 +166,4 @@ __all__ = [
     "resolve_control_client_config",
     "storage_client",
     "workloads_client",
-    "workspace_path",
-    "workspace_query",
 ]

@@ -2,22 +2,10 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { allPages } from "./infinite-list";
+import { criticalLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /** Every page of a collection; the storage tabs list all of it. */
-export async function allPages<T>(
-  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
-): Promise<T[]> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await read(cursor);
-    items.push(...page.items);
-    cursor = page.next;
-  } while (cursor);
-  return items;
-}
-
 // --- Secrets (collection reads carry no value; cleartext is fetched only on demand) ---
 
 export function secretsQueryOptions(workspace: string) {
@@ -32,7 +20,7 @@ export function secretsQueryOptions(workspace: string) {
         );
         return { items: page.secrets, next: page.next_cursor };
       }),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -40,19 +28,12 @@ const secretPath = (workspace: string, secret: string) => ({
   params: { path: { workspace, secret } },
 });
 
-export function createSecret(workspace: string, name: string, value: string) {
+/** Store a secret's value; `exists` false only creates it, true only replaces it. */
+export function setSecret(workspace: string, name: string, value: string, exists: boolean) {
+  const header = exists ? { "If-Match": "*" as const } : { "If-None-Match": "*" as const };
   return ok(
-    api.POST("/v1/workspaces/{workspace}/secrets", {
-      params: { path: { workspace } },
-      body: { name, value },
-    }),
-  );
-}
-
-export function updateSecretValue(workspace: string, name: string, value: string) {
-  return ok(
-    api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
-      ...secretPath(workspace, name),
+    api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
+      params: { path: { workspace, secret: name }, header },
       body: { value },
     }),
   );
@@ -87,7 +68,7 @@ export function disksQueryOptions(workspace: string) {
         }),
       ),
     getNextPageParam: (page) => page.next_cursor,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -117,7 +98,7 @@ export function volumesQueryOptions(workspace: string) {
         );
         return { items: page.volumes, next: page.next_cursor };
       }),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

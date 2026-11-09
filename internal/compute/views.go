@@ -2,14 +2,13 @@ package compute
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -43,8 +42,8 @@ func (c *Compute) WorkspaceSummary(ctx context.Context, workspace identity.Works
 	}
 	if row.AwsAccountID != nil {
 		s.AWSAccountID = *row.AwsAccountID
-		s.ConnectionPhase = ConnectionPhase(deref(row.ConnectionPhase))
-		s.HourlyMicros = ptr(row.HourlyMicros)
+		s.ConnectionPhase = ConnectionPhase(database.Value(row.ConnectionPhase))
+		s.HourlyMicros = new(row.HourlyMicros)
 	}
 	return s, nil
 }
@@ -79,10 +78,7 @@ func (c *Compute) Workloads(ctx context.Context, workspace identity.WorkspaceID,
 	}
 	out := make([]Workload, 0, len(rows))
 	for _, row := range rows {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return nil, fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		w := Workload{
 			ID: row.ID, App: row.App, Name: row.Name, Kind: row.Kind,
 			CPUMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,
@@ -146,7 +142,7 @@ func (c *Compute) Instances(ctx context.Context, account identity.UserID, before
 	out := make([]Instance, 0, len(rows))
 	for _, row := range rows {
 		i := Instance{
-			ID: HostID(row.ID), Region: row.Region, Zone: row.AvailabilityZone, InstanceID: deref(row.InstanceID),
+			ID: HostID(row.ID), Region: row.Region, Zone: row.AvailabilityZone, InstanceID: database.Value(row.InstanceID),
 			InstanceType: row.InstanceType, Market: marketOf(row.Market), Phase: Phase(row.Phase),
 			PhaseMessage: row.PhaseMessage, PhaseAt: row.PhaseAt, Connected: connected(row.State, row.LastSeenAt),
 			CapacityState: CapacityState(row.CapacityState), CapacityReason: row.CapacityReason,

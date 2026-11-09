@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -92,14 +93,14 @@ const (
 	CallbackCancelled CallbackEvent = "cancelled"
 )
 
-// recordCallbacks records in q's transaction a callback for each task whose
-// release has a callback_url and, for a terminal event, the task's webhook
-// events. failures, nil or one per task, are the attempt failures behind
-// retries.
-func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks []uuid.UUID, failures []Failure) error {
+// recordCallbacks records in tx a callback for each task whose release has
+// a callback_url and, for a terminal event, the task's webhook events.
+// failures, nil or one per task, are the attempt failures behind retries.
+func recordCallbacks(ctx context.Context, tx pgx.Tx, event CallbackEvent, tasks []uuid.UUID, failures []Failure) error {
 	if len(tasks) == 0 {
 		return nil
 	}
+	q := New(tx)
 	if event != CallbackRetry {
 		if err := q.EnqueueTaskWebhooks(ctx, EnqueueTaskWebhooksParams{Event: "task." + string(event), TaskIds: tasks}); err != nil {
 			return fmt.Errorf("enqueue task.%s webhooks: %w", event, err)
@@ -119,8 +120,5 @@ func recordCallbacks(ctx context.Context, q *Queries, event CallbackEvent, tasks
 	if queued == 0 {
 		return nil
 	}
-	if err := q.WakeCallbackDelivery(ctx); err != nil {
-		return fmt.Errorf("wake callback delivery: %w", err)
-	}
-	return nil
+	return database.Notify(ctx, tx, database.ChannelCallback, "")
 }

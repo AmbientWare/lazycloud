@@ -167,16 +167,17 @@ func (s *Server) Wait() {
 
 type hostKey struct{}
 
-func hostFrom(ctx context.Context) compute.HostID {
-	host, _ := ctx.Value(hostKey{}).(compute.HostID)
-	return host
-}
-
 // HostFrom is the host that authenticated a call on the server's connection,
 // for other services registered with ServerOptions.
 func HostFrom(ctx context.Context) (compute.HostID, bool) {
 	host, ok := ctx.Value(hostKey{}).(compute.HostID)
 	return host, ok
+}
+
+// hostFrom is the host of a call that passed authentication.
+func hostFrom(ctx context.Context) compute.HostID {
+	host, _ := HostFrom(ctx)
+	return host
 }
 
 func (s *Server) authenticate(ctx context.Context) (context.Context, error) {

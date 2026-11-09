@@ -8,12 +8,7 @@ import {
 } from "@tanstack/react-query";
 
 import { ApiError, type Schemas } from "@/lib/api/client";
-import {
-  billingAccountsQueryOptions,
-  setComplimentary,
-  setUserRole,
-  setUserStatus,
-} from "@/lib/queries/admin";
+import { billingAccountsQueryOptions, setComplimentary, updateUser } from "@/lib/queries/admin";
 import { accountQueryKeys, EVERY_ACCOUNT, type AccountScope } from "@/lib/queries/workspace-keys";
 
 type BillingAccountAdmin = Schemas["BillingAccountAdmin"];
@@ -45,7 +40,7 @@ export function useDebounced<T>(value: T, delayMs: number): T {
  * second look before they happen. Each takes something away, and two of them
  * can lock a person out.
  */
-export type ConfirmedAction = "demote" | "disable" | "revoke";
+type ConfirmedAction = "demote" | "disable" | "revoke";
 
 export type PendingConfirmation = {
   action: ConfirmedAction;
@@ -59,7 +54,7 @@ type Command =
 
 type CommandResult = { user: User } | { account: BillingAccountAdmin };
 
-export type AccountFilters = AccountScope;
+type AccountFilters = AccountScope;
 
 export type AdminSettingsController = {
   accounts: readonly BillingAccountAdmin[];
@@ -215,9 +210,9 @@ export function platformRole(user: User): PlatformRole {
 async function runCommand(sent: Command): Promise<CommandResult> {
   switch (sent.kind) {
     case "role":
-      return { user: await setUserRole(sent.userId, sent.role) };
+      return { user: await updateUser(sent.userId, { role: sent.role }) };
     case "status":
-      return { user: await setUserStatus(sent.userId, sent.status) };
+      return { user: await updateUser(sent.userId, { status: sent.status }) };
     case "complimentary":
       return { account: await setComplimentary(sent.userId, sent.complimentary) };
   }

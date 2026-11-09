@@ -12,23 +12,72 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-// Server implements the public operations. Each authorizes the workspace,
-// invokes one owner and maps its result.
-type Server struct {
+// server implements the public operations. Each invokes one owner for the
+// workspace authorizeWorkspace authorized and maps its result.
+type server struct {
 	owners Owners
 	cfg    Config
 	logger *slog.Logger
 }
 
-var _ StrictServerInterface = (*Server)(nil)
+var _ StrictServerInterface = (*server)(nil)
 
-func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
+// refusedToContainers reports the operations a container may not call: a
+// function may drive the instances it started, nothing more.
+func refusedToContainers(operationID string) bool {
+	switch operationID {
+	case "ScaleWorkload", "GetDevbox", "StartDevbox", "StopDevbox", "ListSandboxes", "GetSandboxStats",
+		"CreateSshCertificate", "ListSshHosts", "SetContainerTtl", "GetContainerNetwork", "SetContainerNetwork",
+		"SnapshotContainer", "CreateFilesystemImage", "OpenContainerShell", "OpenSshTunnel":
+		return true
+	}
+	return false
+}
+
+// identityScoped reports the operations on a workspace whose roles identity
+// checks itself, in any workspace state.
+func identityScoped(operationID string) bool {
+	switch operationID {
+	case "GetWorkspace", "RenameWorkspace", "DeleteWorkspace", "ListMembers", "SetMemberRole", "RemoveMember",
+		"ListInvitations", "CreateInvitation", "RevokeInvitation", "ResendInvitation":
+		return true
+	}
+	return false
+}
+
+type workspaceKey struct{}
+
+// authorizeWorkspace refuses a container the operations refusedToContainers
+// names, then authorizes the workspace the operation's path names for its
+// handler, which reads it with workspaceFrom.
+func (s *server) authorizeWorkspace(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		if _, ok := containerFrom(ctx); ok && refusedToContainers(operationID) {
+			return nil, errFromContainer
+		}
+		name := r.PathValue("workspace")
+		if name == "" || identityScoped(operationID) {
+			return next(ctx, w, r, request)
+		}
+		ws, err := s.workspace(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return next(context.WithValue(ctx, workspaceKey{}, ws), w, r, request)
+	}
+}
+
+func workspaceFrom(ctx context.Context) identity.Workspace {
+	ws, _ := ctx.Value(workspaceKey{}).(identity.Workspace)
+	return ws
+}
+
+func (s *server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
 	if c, ok := containerFrom(ctx); ok {
 		return c.AuthorizeWorkspace(name)
 	}
@@ -40,11 +89,8 @@ func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace
 }
 
 // CreateSourceUpload registers a source archive or returns where to upload it.
-func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	digest, err := storage.ParseDigest(req.Body.Sha256)
 	if err != nil {
 		return nil, err
@@ -64,11 +110,8 @@ func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadR
 }
 
 // DeployApp makes the app's workloads match the request.
-func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.checkImages(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}
@@ -78,9 +121,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 	}
 	for n, release := range deployment.Releases {
 		if release.Spec.Http != nil || release.Spec.Kind == apitypes.WorkloadKindFunction {
-			url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
-			path := edge.InvokePath(ws.Name, req.App, release.Spec.Kind, release.Name, nil)
-			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = &url, &path
+			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = s.invokeURLs(ws, req.App, release.Spec)
 		}
 		if url := s.owners.Edge.PodURL(release.Id, release.Spec); release.Spec.Pod != nil && url != "" {
 			deployment.Releases[n].Url = &url
@@ -90,11 +131,8 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 }
 
 // SubmitTasks admits one task per input.
-func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) (SubmitTasksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) (SubmitTasksResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	submit, err := submitRequest(ctx, ws, req.App, req.Name, req.Body.Inputs, req.Body.ReleaseId, req.Body.ParentTaskId)
 	if err != nil {
 		return nil, err
@@ -105,7 +143,7 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 	}
 	out := SubmitTasks201JSONResponse{Tasks: make([]apitypes.Task, len(tasks))}
 	for n, task := range tasks {
-		out.Tasks[n] = taskOut(task)
+		out.Tasks[n] = execution.APITask(task)
 	}
 	return out, nil
 }
@@ -139,28 +177,19 @@ func submitRequest(ctx context.Context, ws identity.Workspace, app, function str
 }
 
 // GetTask reads a task, waiting for it to finish when asked.
-func (s *Server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	wait := time.Duration(0)
-	if req.Params.WaitSeconds != nil {
-		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
-	}
+func (s *server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	task, err := s.owners.Execution.GetTask(ctx, s.owners.Listener, ws.ID, execution.TaskID(req.Task), wait)
 	if err != nil {
 		return nil, err
 	}
-	return GetTask200JSONResponse(taskOut(task)), nil
+	return GetTask200JSONResponse(execution.APITask(task)), nil
 }
 
 // GetTaskResult returns a succeeded task's value.
-func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObject) (GetTaskResultResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObject) (GetTaskResultResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	result, err := s.owners.Execution.TaskResult(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
@@ -171,19 +200,13 @@ func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObje
 // WaitTasks returns the listed tasks that have finished and those the
 // workspace does not have, waiting for either when asked. The schema bounds
 // the ids and the wait.
-func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	ids := make([]execution.TaskID, len(req.Body.TaskIds))
 	for n, id := range req.Body.TaskIds {
 		ids[n] = execution.TaskID(id)
 	}
-	wait := time.Duration(0)
-	if req.Body.WaitSeconds != nil {
-		wait = time.Duration(*req.Body.WaitSeconds) * time.Second
-	}
+	wait := time.Duration(valueOr(req.Body.WaitSeconds, 0)) * time.Second
 	found, err := s.owners.Execution.WaitTasks(ctx, s.owners.Listener, ws.ID, ids, wait)
 	if err != nil {
 		return nil, err
@@ -192,7 +215,7 @@ func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (Wai
 		Tasks: make([]apitypes.FinishedTask, len(found.Finished)), MissingTaskIds: taskUUIDs(found.Missing),
 	}
 	for n, f := range found.Finished {
-		out.Tasks[n] = apitypes.FinishedTask{Task: taskOut(f.Task), ResultOmitted: f.ResultOmitted}
+		out.Tasks[n] = apitypes.FinishedTask{Task: execution.APITask(f.Task), ResultOmitted: f.ResultOmitted}
 		if f.Result != nil {
 			result := payloadOut(*f.Result)
 			out.Tasks[n].Result = &result
@@ -220,16 +243,13 @@ func (r waitTasksResponse) VisitWaitTasksResponse(w http.ResponseWriter) error {
 }
 
 // CancelTask cancels a queued or running task.
-func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	task, err := s.owners.Execution.CancelTask(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
 	}
-	return CancelTask200JSONResponse(taskOut(task)), nil
+	return CancelTask200JSONResponse(execution.APITask(task)), nil
 }
 
 // logHeartbeat is the longest a followed log stream stays silent: it writes a
@@ -237,89 +257,97 @@ func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (C
 const logHeartbeat = 15 * time.Second
 
 // StreamTaskLogs writes the task's log entries as NDJSON.
-func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
 }
 
 // logStream checks the source before the response starts, so an unknown one
 // is an error response rather than an empty stream.
-func (s *Server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (logStream, error) {
+func (s *server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (written, error) {
 	if err := s.owners.Execution.CheckLogSource(ctx, ws.ID, source); err != nil {
-		return logStream{}, err
+		return nil, err
 	}
-	stream := logStream{
-		ctx: ctx, server: s, workspace: ws.ID, source: source,
-		query: execution.LogQuery{Heartbeat: logHeartbeat},
+	query := execution.LogQuery{
+		After: valueOr(after, 0), Tail: valueOr(tail, 0), Follow: valueOr(follow, false), Heartbeat: logHeartbeat,
 	}
-	if after != nil {
-		stream.query.After = *after
-	}
-	if tail != nil {
-		stream.query.Tail = *tail
-	}
-	if follow != nil {
-		stream.query.Follow = *follow
-	}
-	return stream, nil
+	return ndjson(s, ctx, logEntryOut, func(emit func([]execution.LogEntry) error) error {
+		return s.owners.Execution.StreamLogs(ctx, s.owners.Listener, ws.ID, source, query, emit)
+	}, "log stream", "source", source.Kind, "id", source.ID), nil
 }
 
-// logStream writes log entries as NDJSON, flushing each batch, and a blank
-// line for each heartbeat of a followed stream.
-type logStream struct {
-	// ctx is the request's context; the generated visitor does not pass one.
-	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
-	workspace identity.WorkspaceID
-	source    execution.LogSource
-	query     execution.LogQuery
+// written is a response its operation writes itself: a stream, a socket or
+// a forwarded answer, once the operation's checks passed.
+type written func(http.ResponseWriter) error
+
+func (f written) VisitStreamTaskLogsResponse(w http.ResponseWriter) error       { return f(w) }
+func (f written) VisitStreamWorkloadLogsResponse(w http.ResponseWriter) error   { return f(w) }
+func (f written) VisitStreamContainerLogsResponse(w http.ResponseWriter) error  { return f(w) }
+func (f written) VisitStreamImageBuildLogsResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitStreamContainerOutputResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitStreamPreviewOutputResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitListProcessesResponse(w http.ResponseWriter) error       { return f(w) }
+func (f written) VisitStartProcessResponse(w http.ResponseWriter) error        { return f(w) }
+func (f written) VisitGetProcessResponse(w http.ResponseWriter) error          { return f(w) }
+func (f written) VisitKillProcessResponse(w http.ResponseWriter) error         { return f(w) }
+func (f written) VisitListContainerFilesResponse(w http.ResponseWriter) error  { return f(w) }
+func (f written) VisitDeleteContainerFileResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitStatContainerFileResponse(w http.ResponseWriter) error   { return f(w) }
+func (f written) VisitDownloadContainerFileResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitUploadContainerFileResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitFindInContainerFilesResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitReplaceInContainerFilesResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitCreateContainerDirectoryResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter) error {
+	return f(w)
 }
 
-func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error { return l.visit(w) }
-
-func (l logStream) VisitStreamWorkloadLogsResponse(w http.ResponseWriter) error {
-	return l.visit(w)
-}
-
-func (l logStream) VisitStreamContainerLogsResponse(w http.ResponseWriter) error {
-	return l.visit(w)
-}
-
-func (l logStream) visit(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w)
-	// Send the status now; a follower may wait long for the first entry.
-	if err := flush.Flush(); err != nil {
-		return nil //nolint:nilerr // The client is gone.
-	}
-	enc := json.NewEncoder(w)
-	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.source, l.query,
-		func(batch []execution.LogEntry) error {
+// ndjson writes stream's batches as NDJSON: line maps each entry to its
+// line, an empty batch is a blank heartbeat line, and each batch is flushed.
+// The status is sent first, so a failure only ends the stream early, which
+// is logged as what with attrs.
+func ndjson[E, L any](s *server, ctx context.Context, line func(E) L, stream func(emit func([]E) error) error, what string, attrs ...any) written {
+	return func(w http.ResponseWriter) error {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		flush := http.NewResponseController(w)
+		// Send the status now; a follower may wait long for the first entry.
+		if err := flush.Flush(); err != nil {
+			return nil //nolint:nilerr // The client is gone.
+		}
+		enc := json.NewEncoder(w)
+		err := stream(func(batch []E) error {
 			if len(batch) == 0 {
 				if _, err := w.Write([]byte("\n")); err != nil {
 					return fmt.Errorf("write heartbeat: %w", err)
 				}
 			}
 			for _, entry := range batch {
-				if err := enc.Encode(logEntryOut(entry)); err != nil {
-					return fmt.Errorf("write log entry: %w", err)
+				if err := enc.Encode(line(entry)); err != nil {
+					return fmt.Errorf("write entry: %w", err)
 				}
 			}
 			if err := flush.Flush(); err != nil {
-				return fmt.Errorf("flush log entries: %w", err)
+				return fmt.Errorf("flush entries: %w", err)
 			}
 			return nil
 		})
-	// The status is sent, so a failure can only end the stream early.
-	if err != nil && l.ctx.Err() == nil {
-		l.server.logger.WarnContext(l.ctx, "log stream ended early", "source", l.source.Kind, "id", l.source.ID, "error", err)
+		if err != nil && ctx.Err() == nil {
+			s.logger.WarnContext(ctx, what+" ended early", append(attrs, "error", err)...)
+		}
+		return nil
 	}
-	return nil
 }
 
 func logEntryOut(e execution.LogEntry) apitypes.LogEntry {
@@ -362,5 +390,3 @@ func payloadOut(p execution.Payload) apitypes.Payload {
 	}
 	return apitypes.Payload{Encoding: apitypes.PayloadEncoding(p.Encoding)}
 }
-
-func taskOut(t execution.Task) apitypes.Task { return execution.APITask(t) }

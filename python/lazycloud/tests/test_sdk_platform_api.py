@@ -496,7 +496,7 @@ def test_deploy_maps_gpu_and_placement_options(
         ('gpu="A100"', "is not a GPU this platform schedules"),
         ('gpu=["any", "T4"]', "nothing after it is ever reached: T4"),
         ('gpu="T4", gpu_count=-1', "gpu_count cannot be negative"),
-        ('region="mars"', "'mars' is not a valid ProductRegion"),
+        ('region="mars"', "region 'mars' is not one of"),
         (
             'region="us-east", machine="gpu-1"',
             "region or availability zone and a named machine cannot be selected together",
@@ -689,7 +689,6 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
                     "version_url": url,
                     "release_url": url,
                     "invoke_path": f"{workload}/invoke",
-                    "version_invoke_path": f"{workload}/versions/1/invoke",
                 },
             }
         )

@@ -15,10 +15,10 @@ export type LogSource =
 type StreamSource = Exclude<LogSource, { request: string }>;
 
 /** The stored lines a log view opens with. */
-export const LOG_HISTORY_LINES = 200;
+const LOG_HISTORY_LINES = 200;
 
 /** A followed stream sends a keep-alive every 15 seconds; two missed ones is a dead stream. */
-export const LOG_FOLLOW_IDLE_MS = 30_000;
+const LOG_FOLLOW_IDLE_MS = 30_000;
 
 const REQUEST_LOG_PAGE = 1000;
 

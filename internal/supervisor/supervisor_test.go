@@ -189,7 +189,7 @@ func TestSupervisorRunsAttemptsWithTheirOutput(t *testing.T) {
 	c.configure(t, "app:handle", 2)
 	ready, output := c.until(t, isReady)
 	t.Logf("configure to SlotsReady with 2 slots: %s", time.Since(started))
-	if ready.GetReady().GetSlots() != 2 || !strings.Contains(output[""], "app imported") {
+	if !strings.Contains(output[""], "app imported") {
 		t.Fatalf("ready %v, import output %q", ready, output[""])
 	}
 

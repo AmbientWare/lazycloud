@@ -9,7 +9,7 @@ import { workspaceDeleteAvailability } from "@/lib/workspace-deletion";
 
 type Workspace = Schemas["Workspace"];
 
-export type WorkspaceDeletionTarget = {
+type WorkspaceDeletionTarget = {
   workspace: Workspace;
   selected: boolean;
 };

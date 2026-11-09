@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import copy_context
 from dataclasses import dataclass, field
@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Generic,
     ParamSpec,
-    TypedDict,
     TypeGuard,
     TypeVar,
     cast,
@@ -28,24 +28,18 @@ from lazycloud._shared.autoscaling import Autoscaler
 from lazycloud._shared.callbacks import normalize_callback_url
 from lazycloud._shared.deployment_records import (
     DEFAULT_CPU,
-    DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_MEMORY,
     DEFAULT_FUNCTION_RETRIES,
     DEFAULT_FUNCTION_TIMEOUT_SECONDS,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    Resources,
-    VolumeMount,
 )
 from lazycloud._shared.deployments import DeploymentKind
 from lazycloud._shared.function_payloads import FunctionPayloadEncoding
 from lazycloud._shared.gpu import GpuInput, gpu_preference
 from lazycloud._shared.image_building.python import python_minor_version
-from lazycloud._shared.lifecycle import LifecycleHooks
-from lazycloud._shared.placement import ProductRegion
 from lazycloud._shared.resources import parse_memory_mib
 from lazycloud._shared.serialization import to_json_value
 from lazycloud._shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
@@ -55,17 +49,13 @@ from lazycloud.abstractions.metadata import (
     MachineInput,
     RetryPolicyInput,
     SchemaInput,
-    build_resource_metadata,
+    check_workload_options,
     lifecycle_hooks,
     retry_policy_config,
 )
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.abstractions.volume import VolumeExport, VolumeMount, volume_mounts
 from lazycloud.aio import to_thread
-from lazycloud.client_contracts import (
-    build_client_contract,
-    schema_from_contract_parameters,
-    schema_from_contract_return,
-)
+from lazycloud.client_contracts import build_client_contract
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -118,49 +108,9 @@ class _Unset:
 _UNSET = _Unset()
 
 
-class FunctionOptions(TypedDict, total=False):
-    image: Image | None
-    name: str | None
-    cpu: CpuRequest | None
-    memory: MemoryRequest | None
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    timeout_seconds: int | None
-    concurrency: int
-    in_process: bool
-    cron: str | None
-    keep_warm: int | None
-    max_pending_tasks: int | None
-    autoscaler: Autoscaler | Mapping[str, Any] | None
-    retries: int | None
-    retry_policy: RetryPolicyInput
-    retry_delay_seconds: float | None
-    callback_url: str | None
-    authorized: bool | None
-    env: dict[str, str] | None
-    secrets: list[str] | None
-    volumes: Iterable[VolumeMount | VolumeExport] | None
-    on_start: LifecycleHookInput
-    on_running: LifecycleHookInput
-    on_success: LifecycleHookInput
-    on_error: LifecycleHookInput
-    on_retry: LifecycleHookInput
-    on_failure: LifecycleHookInput
-    on_finish: LifecycleHookInput
-    task_policy: TaskPolicy | Mapping[str, Any] | None
-    inputs: SchemaInput
-    outputs: SchemaInput
-    docker_enabled: bool
-    preemptible: bool
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-    metadata: dict[str, Any] | None
-
-
 @dataclass
 class Function(Generic[P, R]):
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Function
     func: Callable[P, R]
     _app_slug: str
     image: Image = field(default_factory=Image)
@@ -208,6 +158,14 @@ class Function(Generic[P, R]):
 
     def __post_init__(self) -> None:
         update_wrapper(self, self.func)
+        self.image = self.image or Image()
+        self.env = dict(self.env or {})
+        self.secrets = list(self.secrets or [])
+        self.volumes = volume_mounts(self.volumes or ())
+        if self.task_policy is not None:
+            self.task_policy = TaskPolicy.model_validate(self.task_policy)
+        self.metadata = dict(self.metadata or {})
+        check_workload_options(self)
 
     @property
     def terminal(self) -> Terminal | None:
@@ -248,76 +206,6 @@ class Function(Generic[P, R]):
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )
 
-    def spec(self) -> DeploymentSpec:
-        kind = DeploymentKind.Function
-        client_contract = build_client_contract(
-            self.func,
-            kind=kind,
-            inputs=self.inputs,
-            outputs=self.outputs,
-        )
-        return DeploymentSpec(
-            name=self.resource_name,
-            kind=kind,
-            handler=dotted_reference(self.func),
-            cron=self.cron,
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                timeout_seconds=self._effective_timeout_seconds(),
-                concurrency=self.concurrency,
-                keep_warm=self.keep_warm,
-                preemptible=self.preemptible,
-            ),
-            env=self.env,
-            secrets=self.secrets,
-            volumes=list(self.volumes),
-            retry_policy=retry_policy_config(
-                self.retry_policy,
-                retries=self.retries,
-                retry_delay_seconds=self.retry_delay_seconds,
-                default_retries=DEFAULT_FUNCTION_RETRIES,
-            ),
-            lifecycle_hooks=lifecycle_hooks(
-                on_start=self.on_start,
-                on_running=self.on_running,
-                on_success=self.on_success,
-                on_error=self.on_error,
-                on_retry=self.on_retry,
-                on_failure=self.on_failure,
-                on_finish=self.on_finish,
-            ),
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                autoscaler=self.autoscaler,
-                max_pending_tasks=self.max_pending_tasks,
-                callback_url=self.callback_url,
-                authorized=self.authorized,
-                in_process=self.in_process,
-                task_policy=self.task_policy,
-                inputs=(
-                    self.inputs
-                    if self.inputs is not None
-                    else schema_from_contract_parameters(client_contract)
-                ),
-                outputs=(
-                    self.outputs
-                    if self.outputs is not None
-                    else schema_from_contract_return(client_contract)
-                ),
-                docker_enabled=self.docker_enabled,
-                machine=self.machine,
-                extra=self.metadata,
-            ),
-            client_contract=client_contract,
-        )
-
     def handler_reference(self) -> str:
         """The `module:qualname` the runner imports."""
         return dotted_reference(self.func)
@@ -326,80 +214,37 @@ class Function(Generic[P, R]):
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
     ) -> WorkloadSpec:
         """The API definition of this function for an uploaded source and a ready image."""
-        from lazycloud.contracts.api import WorkloadSpec
 
-        policy = self._retry_policy()
-        spec: dict[str, Any] = {
-            "kind": "function",
-            "name": self.resource_name,
-            "handler": handler,
-            "source": {"sha256": source_sha256},
-            "image": {
-                "python_version": python_minor_version(image.python_version),
-                "image_id": image.image_id,
-            },
-            "resources": _resources(self.cpu, self.memory, self.disk),
-            "retry_policy": _retry_policy_spec(policy),
-            "concurrency": self.concurrency,
-        }
+        spec = base_workload_spec(self, kind="function", source_sha256=source_sha256, image=image)
+        spec["handler"] = handler
+        spec["retry_policy"] = _retry_policy_spec(self._retry_policy())
+        spec["concurrency"] = self.concurrency
         timeout_seconds = self._effective_timeout_seconds()
         if timeout_seconds is not None:
             spec["timeout_seconds"] = timeout_seconds
         if self.keep_warm is not None:
             spec["keep_warm_seconds"] = self.keep_warm
         if self.autoscaler is not None:
-            spec["autoscaler"] = Autoscaler.model_validate(self.autoscaler).model_dump(
-                include={"min_containers", "max_containers", "tasks_per_container"}
-            )
+            spec["autoscaler"] = autoscaler_spec(self.autoscaler)
         if self.max_pending_tasks is not None:
             spec["max_pending_tasks"] = self.max_pending_tasks
-        if self.env:
-            spec["environment"] = dict(self.env)
-        if self.metadata:
-            spec["metadata"] = dict(self.metadata)
-        if self.volumes:
-            spec["volumes"] = [_volume_spec(volume) for volume in self.volumes]
         if self.cron:
             spec["cron"] = self.cron
-        if self.secrets:
-            spec["secrets"] = list(dict.fromkeys(self.secrets))
         if self.in_process:
             spec["in_process"] = True
         if self.authorized is False:
             spec["authorized"] = False
-        if self.docker_enabled:
-            spec["docker_enabled"] = True
-        try:
-            callback_url = normalize_callback_url(self.callback_url)
-            hooks = self._lifecycle_hooks()
-            gpu = gpu_preference(self.gpu)
-            placement = self._placement()
-        except (TypeError, ValueError) as exc:
-            msg = f"function {self.resource_name} has invalid options: {exc}"
-            raise FunctionOperationError(msg) from exc
-        if gpu:
-            spec["resources"]["gpu"] = list(gpu)
-        if self.gpu_count:
-            # Without gpu_count the server reserves one card per container.
-            spec["resources"]["gpu_count"] = self.gpu_count
-        if placement:
-            spec["placement"] = placement
-        if callback_url is not None:
-            spec["callback_url"] = callback_url
-        if hooks.configured:
-            spec["lifecycle_hooks"] = {
-                name: list(refs) for name, refs in hooks.model_dump().items() if refs
-            }
+        hooks = lifecycle_hooks(self)
+        if hooks:
+            spec["lifecycle_hooks"] = hooks
         contract = build_client_contract(
             self.func, kind=DeploymentKind.Function, inputs=self.inputs, outputs=self.outputs
         )
         if contract is not None:
             spec["client_contract"] = contract.model_dump(mode="json")
-        try:
-            return WorkloadSpec.model_validate(spec)
-        except ValidationError as exc:
-            msg = f"function {self.resource_name} has invalid options: {exc}"
-            raise FunctionOperationError(msg) from exc
+        return validated_workload_spec(
+            spec, label=f"function {self.resource_name}", error=FunctionOperationError
+        )
 
     def prepare(
         self,
@@ -775,24 +620,6 @@ class Function(Generic[P, R]):
             self.client = api_client(config)
         return self.client, require_workspace(config)
 
-    def _lifecycle_hooks(self) -> LifecycleHooks:
-        return lifecycle_hooks(
-            on_start=self.on_start,
-            on_running=self.on_running,
-            on_success=self.on_success,
-            on_error=self.on_error,
-            on_retry=self.on_retry,
-            on_failure=self.on_failure,
-            on_finish=self.on_finish,
-        )
-
-    def _placement(self) -> dict[str, Any]:
-        """The placement fields this function sets; empty runs anywhere in the workspace.
-
-        `spec()` validates the combination when the function is declared.
-        """
-        return placement_fields(self)
-
     def _retry_policy(self) -> RetryPolicy:
         policy = retry_policy_config(
             self.retry_policy,
@@ -933,7 +760,7 @@ def _memory_mib(value: str | int) -> int:
     return mib
 
 
-def placement_fields(owner: Any) -> dict[str, Any]:
+def placement_fields(owner: Any, *, preemptible: bool | None = None) -> dict[str, Any]:
     """The machine, region, zone and market a workload sets; empty runs anywhere."""
     placement: dict[str, Any] = {}
     if owner.machine:
@@ -942,9 +769,71 @@ def placement_fields(owner: Any) -> dict[str, Any]:
         placement["region"] = owner.region
     if owner.availability_zone:
         placement["availability_zone"] = owner.availability_zone
-    if not owner.preemptible:
+    if not (owner.preemptible if preemptible is None else preemptible):
         placement["preemptible"] = False
     return placement
+
+
+def autoscaler_spec(value: Autoscaler | Mapping[str, Any]) -> dict[str, Any]:
+    return Autoscaler.model_validate(value).model_dump(
+        include={"min_containers", "max_containers", "tasks_per_container"}
+    )
+
+
+def base_workload_spec(
+    owner: Any,
+    *,
+    kind: str,
+    source_sha256: str,
+    image: ImageBuildResult,
+    preemptible: bool | None = None,
+) -> dict[str, Any]:
+    """The API fields every workload kind shares: identity, image, resources and placement."""
+    spec: dict[str, Any] = {
+        "kind": kind,
+        "name": owner.resource_name,
+        "source": {"sha256": source_sha256},
+        "image": {
+            "python_version": python_minor_version(image.python_version),
+            "image_id": image.image_id,
+        },
+        "resources": _resources(owner.cpu, owner.memory, owner.disk),
+    }
+    gpu = gpu_preference(owner.gpu)
+    if gpu:
+        spec["resources"]["gpu"] = list(gpu)
+    if owner.gpu_count:
+        # Without gpu_count the server reserves one card per container.
+        spec["resources"]["gpu_count"] = owner.gpu_count
+    if owner.env:
+        spec["environment"] = dict(owner.env)
+    if getattr(owner, "metadata", None):
+        spec["metadata"] = dict(owner.metadata)
+    if owner.secrets:
+        spec["secrets"] = list(dict.fromkeys(owner.secrets))
+    if owner.volumes:
+        spec["volumes"] = [_volume_spec(volume) for volume in owner.volumes]
+    if getattr(owner, "docker_enabled", False):
+        spec["docker_enabled"] = True
+    callback_url = normalize_callback_url(getattr(owner, "callback_url", None))
+    if callback_url is not None:
+        # Each task, or each request of an HTTP workload, is called back once it ends.
+        spec["callback_url"] = callback_url
+    placement = placement_fields(owner, preemptible=preemptible)
+    if placement:
+        spec["placement"] = placement
+    return spec
+
+
+def validated_workload_spec(
+    spec: dict[str, Any], *, label: str, error: type[SdkError]
+) -> WorkloadSpec:
+    from lazycloud.contracts.api import WorkloadSpec
+
+    try:
+        return WorkloadSpec.model_validate(spec)
+    except ValidationError as exc:
+        raise error(f"{label} has invalid options: {exc}") from exc
 
 
 def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
@@ -981,202 +870,8 @@ def _is_invocation_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
 
 
-@overload
-def _function(
-    func: Callable[P, R],
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
-    concurrency: int = 1,
-    in_process: bool = False,
-    cron: str | None = None,
-    keep_warm: int | None = None,
-    max_pending_tasks: int | None = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    callback_url: str | None = None,
-    authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    on_running: LifecycleHookInput = None,
-    on_success: LifecycleHookInput = None,
-    on_error: LifecycleHookInput = None,
-    on_retry: LifecycleHookInput = None,
-    on_failure: LifecycleHookInput = None,
-    on_finish: LifecycleHookInput = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Function[P, R]: ...
-
-
-@overload
-def _function(
-    func: None = None,
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
-    concurrency: int = 1,
-    in_process: bool = False,
-    cron: str | None = None,
-    keep_warm: int | None = None,
-    max_pending_tasks: int | None = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    callback_url: str | None = None,
-    authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    on_running: LifecycleHookInput = None,
-    on_success: LifecycleHookInput = None,
-    on_error: LifecycleHookInput = None,
-    on_retry: LifecycleHookInput = None,
-    on_failure: LifecycleHookInput = None,
-    on_finish: LifecycleHookInput = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], Function[P, R]]: ...
-
-
-def _function(
-    func: Callable[P, R] | None = None,
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_FUNCTION_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = DEFAULT_FUNCTION_TIMEOUT_SECONDS,
-    concurrency: int = 1,
-    in_process: bool = False,
-    cron: str | None = None,
-    keep_warm: int | None = None,
-    max_pending_tasks: int | None = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    callback_url: str | None = None,
-    authorized: bool | None = DEFAULT_FUNCTION_AUTHORIZED,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    on_running: LifecycleHookInput = None,
-    on_success: LifecycleHookInput = None,
-    on_error: LifecycleHookInput = None,
-    on_retry: LifecycleHookInput = None,
-    on_failure: LifecycleHookInput = None,
-    on_finish: LifecycleHookInput = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], Function[P, R]] | Function[P, R]:
-    def decorate(target: Callable[P, R]) -> Function[P, R]:
-        return Function(
-            target,
-            _app_slug=_app_slug,
-            image=image or Image(),
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            concurrency=concurrency,
-            in_process=in_process,
-            cron=cron,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            autoscaler=autoscaler,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env or {},
-            secrets=secrets or [],
-            volumes=volume_mounts(volumes or ()),
-            on_start=on_start,
-            on_running=on_running,
-            on_success=on_success,
-            on_error=on_error,
-            on_retry=on_retry,
-            on_failure=on_failure,
-            on_finish=on_finish,
-            task_policy=_normalized_task_policy(task_policy),
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=metadata or {},
-        )
-
-    if func is None:
-        return decorate
-    return decorate(func)
-
-
-def _normalized_task_policy(
-    value: TaskPolicy | Mapping[str, Any] | None,
-) -> TaskPolicy | None:
-    if value is None:
-        return None
-    return TaskPolicy.model_validate(value)
-
-
 __all__ = [
     "Function",
     "FunctionOperationError",
-    "FunctionOptions",
     "VolumeExport",
-    "_function",
 ]

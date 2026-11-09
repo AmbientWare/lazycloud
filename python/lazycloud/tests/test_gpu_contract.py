@@ -1,6 +1,6 @@
 import pytest
 from lazycloud._shared.gpu import (
-    SUPPORTED_GPU_TYPES,
+    SUPPORTED_GPU_NAMES,
     gpu_preference,
     normalize_gpu_type,
 )
@@ -24,8 +24,8 @@ def test_gpu_normalization_keeps_unknown_provider_hardware_as_reported() -> None
 
 
 def test_every_supported_model_is_already_its_own_normalized_form() -> None:
-    for gpu in SUPPORTED_GPU_TYPES:
-        assert normalize_gpu_type(gpu.value) == gpu.value
+    for gpu in SUPPORTED_GPU_NAMES:
+        assert normalize_gpu_type(gpu) == gpu
 
 
 def test_an_order_is_kept_and_a_wildcard_cannot_hide_what_follows_it() -> None:

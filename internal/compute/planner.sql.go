@@ -277,21 +277,6 @@ func (q *Queries) LockFleet(ctx context.Context) (LockFleetRow, error) {
 	return i, err
 }
 
-const notifyHosts = `-- name: NotifyHosts :exec
-select pg_notify($1::text, v.id) from unnest($2::text[]) as v(id)
-`
-
-type NotifyHostsParams struct {
-	Channel string
-	Ids     []string
-}
-
-// Wakes the sessions of hosts the pass moved, once it commits.
-func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error {
-	_, err := q.db.Exec(ctx, notifyHosts, arg.Channel, arg.Ids)
-	return err
-}
-
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,
@@ -455,13 +440,13 @@ select h.id, h.kind, h.connection_id, h.phase, h.phase_at, h.state, h.capacity_s
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(m.gpus) as gpus,
+           sum(c.gpu_count) as gpus,
            sum(c.cpu_millis) filter (where p.packed) as packed_cpu, sum(c.memory_bytes) filter (where p.packed) as packed_memory,
            array_agg(c.id order by c.id) filter (where p.packed) as packed_ids,
            bool_or(not m.moves) as stays,
            array_agg(c.cpu_millis) filter (where m.moves) as move_cpu,
            array_agg(c.memory_bytes) filter (where m.moves) as move_memory,
-           array_agg(m.gpus) filter (where m.moves) as move_gpu_count,
+           array_agg(c.gpu_count) filter (where m.moves) as move_gpu_count,
            -- The GPU models each accepts, comma-separated.
            array_agg(array_to_string(array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb))), ','))
                filter (where m.moves) as move_gpus,
@@ -470,10 +455,7 @@ left join lateral (
            count(*) filter (where not p.packed) as containers
     from containers c
     left join releases r on r.id = c.release_id
-    cross join lateral (
-        select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves,
-               case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end as gpus
-    ) m
+    cross join lateral (select coalesce(c.purpose = 'serve' and release_moves(r.spec), false) as moves) m
     cross join lateral (select packed(h.provider, h.gpu_count, c.gpu_count) as packed) p
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true

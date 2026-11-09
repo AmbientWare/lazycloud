@@ -4,7 +4,11 @@ import { api, ok, type Schemas } from "@/lib/api/client";
 import type { operations } from "@/lib/api/generated/openapi";
 
 import { LIVE_LIST_MAX_PAGES, nextListCursor, selectInfiniteList } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import {
+  criticalLiveQueryMeta,
+  workspaceLiveQueryMeta,
+  workspaceQueryKeys,
+} from "./workspace-keys";
 
 /** A row of a task list: a task, or an endpoint or ASGI request record. */
 export type TaskRow = Schemas["Task"] | Schemas["HttpRequest"];
@@ -27,7 +31,7 @@ export function taskFinished(status: Schemas["TaskStatus"]): boolean {
  * ends: failed when the workload answered with a server error, cancelled when
  * the caller left first (499).
  */
-export function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskStatus"] {
+function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskStatus"] {
   if (request.status === 499) return "cancelled";
   return request.status >= 500 ? "failed" : "succeeded";
 }
@@ -78,7 +82,7 @@ export function cancelTask(workspace: string, taskId: string): Promise<Schemas["
 
 type TaskListQuery = NonNullable<operations["listTasks"]["parameters"]["query"]>;
 
-export type TaskFilter = Omit<TaskListQuery, "limit" | "cursor">;
+type TaskFilter = Omit<TaskListQuery, "limit" | "cursor">;
 
 const TASK_PAGE_SIZE = 50;
 
@@ -136,7 +140,7 @@ export function tasksQueryOptions(
   return queryOptions({
     queryKey: taskListKey(workspace, filter, limit, "page"),
     queryFn: async ({ signal }) => (await listTasks(workspace, filter, limit, "", signal)).data,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -151,7 +155,7 @@ export function tasksInfiniteQueryOptions(
     queryFn: ({ pageParam, signal }) => listTasks(workspace, filter, limit, pageParam, signal),
     getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -179,11 +183,11 @@ export function requestsQueryOptions(workspace: string, app: string, name: strin
           }),
         )
       ).data,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
-export type TaskDetail = {
+type TaskDetail = {
   task: Schemas["Task"];
   result: Schemas["Payload"] | null;
 };
@@ -267,7 +271,7 @@ export function callGraphQueryOptions(workspace: string, rootTaskId: string) {
       }
       return roots;
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -284,6 +288,6 @@ export function taskMetricsQueryOptions(workspace: string, hours = 24, app?: str
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }

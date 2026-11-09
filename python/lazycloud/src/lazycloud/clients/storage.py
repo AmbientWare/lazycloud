@@ -29,6 +29,8 @@ from lazycloud.contracts.api import (
     CreateArtifactRequest,
     CreateVolumeRequest,
     CreateVolumeUploadRequest,
+    DeleteArtifactsRequest,
+    DeletedArtifacts,
     DiskPage,
     MapEntry,
     MapEntryWrite,
@@ -187,8 +189,12 @@ class StorageClient:
     def get_artifact(self, artifact_id: UUID) -> Artifact:
         return self.api._send(Artifact, "GET", self._path("artifacts", str(artifact_id)))
 
-    def delete_artifact(self, artifact_id: UUID) -> None:
-        self.api._send(None, "DELETE", self._path("artifacts", str(artifact_id)))
+    def delete_artifacts(self, ids: Sequence[UUID]) -> list[UUID]:
+        """Delete up to 100 artifacts; returns the ids that existed and were deleted."""
+        request = DeleteArtifactsRequest(ids=list(ids))
+        return self.api._send(
+            DeletedArtifacts, "POST", self._path("artifacts", "delete"), body=request
+        ).deleted
 
     def complete_artifact(self, artifact_id: UUID, request: CompleteArtifactRequest) -> Artifact:
         return self.api._send(

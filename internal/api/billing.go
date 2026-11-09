@@ -11,44 +11,11 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// payer is the account a billing operation acts for: the caller's own,
-// reached only with an account credential.
-func (s *Server) payer(ctx context.Context) (uuid.UUID, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return uuid.UUID{}, err
-	}
-	if p.TokenWorkspace != nil {
-		return uuid.UUID{}, &identity.AccountError{Action: "manage billing"}
-	}
-	return uuid.UUID(p.User), nil
-}
-
-// billingAdmin admits platform administrators with an account credential.
-func (s *Server) billingAdmin(ctx context.Context) error {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return err
-	}
-	if p.TokenWorkspace != nil {
-		return &identity.AccountError{Action: "administer billing"}
-	}
-	if !p.IsAdmin {
-		return identity.ErrAdminRequired
-	}
-	return nil
-}
-
 // GetPricing returns the public pricing catalog.
-func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
-	at := time.Now()
-	if req.Params.At != nil {
-		at = *req.Params.At
-	}
-	catalog, err := s.owners.Billing.Catalog(at)
+func (s *server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
+	catalog, err := s.owners.Billing.Catalog(valueOr(req.Params.At, time.Now()))
 	if err != nil {
 		return nil, err
 	}
@@ -57,12 +24,12 @@ func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (Get
 }
 
 // GetBilling returns the caller's billing account.
-func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (GetBillingResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (GetBillingResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.Account(ctx, user)
+	account, err := s.owners.Billing.Account(ctx, uuid.UUID(p.User))
 	if err != nil {
 		return nil, err
 	}
@@ -70,12 +37,12 @@ func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (Get
 }
 
 // SetBillingPreferences sets the monthly usage limit and automatic reload.
-func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPreferencesRequestObject) (SetBillingPreferencesResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) SetBillingPreferences(ctx context.Context, req SetBillingPreferencesRequestObject) (SetBillingPreferencesResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.SetPreferences(ctx, user, *req.Body)
+	account, err := s.owners.Billing.SetPreferences(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -83,12 +50,12 @@ func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPrefer
 }
 
 // ResumeAutomaticReload resumes reload after a failed payment.
-func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticReloadRequestObject) (ResumeAutomaticReloadResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticReloadRequestObject) (ResumeAutomaticReloadResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.ResumeReload(ctx, user)
+	account, err := s.owners.Billing.ResumeReload(ctx, uuid.UUID(p.User))
 	if err != nil {
 		return nil, err
 	}
@@ -96,12 +63,12 @@ func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticRel
 }
 
 // ChangePlan moves the account onto published plan terms.
-func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (ChangePlanResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (ChangePlanResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.ChangePlan(ctx, user, *req.Body)
+	account, err := s.owners.Billing.ChangePlan(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +76,12 @@ func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (C
 }
 
 // StartPaymentMethodSetup opens Stripe's card page.
-func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMethodSetupRequestObject) (StartPaymentMethodSetupResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMethodSetupRequestObject) (StartPaymentMethodSetupResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	url, err := s.owners.Billing.PaymentMethodSession(ctx, user, *req.Body)
+	url, err := s.owners.Billing.PaymentMethodSession(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +89,12 @@ func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMe
 }
 
 // StartBillingPortal opens Stripe's invoices page.
-func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalRequestObject) (StartBillingPortalResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) StartBillingPortal(ctx context.Context, req StartBillingPortalRequestObject) (StartBillingPortalResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	url, err := s.owners.Billing.PortalSession(ctx, user, *req.Body)
+	url, err := s.owners.Billing.PortalSession(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -135,51 +102,30 @@ func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalR
 }
 
 // CreateCreditPurchase starts a credit purchase through Checkout.
-func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurchaseRequestObject) (CreateCreditPurchaseResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurchaseRequestObject) (CreateCreditPurchaseResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	purchase, err := s.owners.Billing.BuyCredit(ctx, user, *req.Body)
+	purchase, err := s.owners.Billing.BuyCredit(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
 	return CreateCreditPurchase201JSONResponse(purchase), nil
 }
 
-// GetCreditPurchase returns one of the caller's purchases.
-func (s *Server) GetCreditPurchase(ctx context.Context, req GetCreditPurchaseRequestObject) (GetCreditPurchaseResponseObject, error) {
-	user, err := s.payer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	purchase, err := s.owners.Billing.CreditPurchase(ctx, user, req.Purchase)
-	if err != nil {
-		return nil, err
-	}
-	return GetCreditPurchase200JSONResponse(purchase), nil
-}
-
 // ListCosts pages through the account's usage cost.
-func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
 	q := billing.CostQuery{
-		Start: req.Params.Start, End: req.Params.End, GroupBy: apitypes.UsageCostGroupApp,
-		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Workload: req.Params.WorkloadId, Category: req.Params.Category, Limit: 50,
+		Start: req.Params.Start, End: req.Params.End, GroupBy: valueOr(req.Params.GroupBy, apitypes.UsageCostGroupApp),
+		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Workload: req.Params.WorkloadId, Category: req.Params.Category,
+		Cursor: valueOr(req.Params.Cursor, ""), Limit: valueOr(req.Params.Limit, 50),
 	}
-	if req.Params.GroupBy != nil {
-		q.GroupBy = *req.Params.GroupBy
-	}
-	if req.Params.Cursor != nil {
-		q.Cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		q.Limit = *req.Params.Limit
-	}
-	page, err := s.owners.Billing.Costs(ctx, user, q)
+	page, err := s.owners.Billing.Costs(ctx, uuid.UUID(p.User), q)
 	if err != nil {
 		return nil, err
 	}
@@ -187,16 +133,12 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 }
 
 // GetCostSeries returns the account's spend interval by interval.
-func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObject) (GetCostSeriesResponseObject, error) {
-	user, err := s.payer(ctx)
+func (s *server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObject) (GetCostSeriesResponseObject, error) {
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	bucket := apitypes.Day
-	if req.Params.Bucket != nil {
-		bucket = *req.Params.Bucket
-	}
-	series, err := s.owners.Billing.CostSeries(ctx, user, req.Params.Start, req.Params.End, bucket)
+	series, err := s.owners.Billing.CostSeries(ctx, uuid.UUID(p.User), req.Params.Start, req.Params.End, valueOr(req.Params.Bucket, apitypes.Day))
 	if err != nil {
 		return nil, err
 	}
@@ -205,23 +147,16 @@ func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObje
 
 // ListBillingAccounts lists every user's billing standing for
 // administrators.
-func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccountsRequestObject) (ListBillingAccountsResponseObject, error) {
-	if err := s.billingAdmin(ctx); err != nil {
+func (s *server) ListBillingAccounts(ctx context.Context, req ListBillingAccountsRequestObject) (ListBillingAccountsResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
-	f := billing.AccountFilter{Status: req.Params.Status, Limit: 50}
-	if req.Params.Search != nil {
-		f.Search = *req.Params.Search
+	f := billing.AccountFilter{
+		Status: req.Params.Status, Search: valueOr(req.Params.Search, ""), Cursor: valueOr(req.Params.Cursor, ""), Limit: valueOr(req.Params.Limit, 50),
 	}
 	if req.Params.Role != nil {
 		admin := *req.Params.Role == apitypes.PlatformRoleAdministrator
 		f.Admin = &admin
-	}
-	if req.Params.Cursor != nil {
-		f.Cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		f.Limit = *req.Params.Limit
 	}
 	page, err := s.owners.Billing.Accounts(ctx, f)
 	if err != nil {
@@ -231,8 +166,8 @@ func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccount
 }
 
 // SetComplimentary waives a user's usage charges or stops waiving them.
-func (s *Server) SetComplimentary(ctx context.Context, req SetComplimentaryRequestObject) (SetComplimentaryResponseObject, error) {
-	if err := s.billingAdmin(ctx); err != nil {
+func (s *server) SetComplimentary(ctx context.Context, req SetComplimentaryRequestObject) (SetComplimentaryResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	account, err := s.owners.Billing.SetComplimentary(ctx, req.User, req.Body.Complimentary)
@@ -245,7 +180,7 @@ func (s *Server) SetComplimentary(ctx context.Context, req SetComplimentaryReque
 // receiveStripeWebhook stores a verified Stripe delivery; the scheduler
 // processes it. The caller is Stripe, which holds no token: the signature
 // stands in for one.
-func (s *Server) receiveStripeWebhook(w http.ResponseWriter, r *http.Request) {
+func (s *server) receiveStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBytes))
 	if err != nil {
 		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "the delivery is too large")

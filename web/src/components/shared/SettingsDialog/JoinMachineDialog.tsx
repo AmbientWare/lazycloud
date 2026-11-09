@@ -161,8 +161,7 @@ function GenerateCommandStep({
         </p>
       </div>
       <div className="mt-4">
-        <Button type="submit" disabled={!canGenerate}>
-          {pending ? <Loader2 className="animate-spin" /> : null}
+        <Button pending={pending} type="submit" disabled={!canGenerate}>
           Generate install command
         </Button>
       </div>

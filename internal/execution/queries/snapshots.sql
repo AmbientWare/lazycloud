@@ -50,10 +50,13 @@ where s.id in (
 )
 returning s.id;
 
--- name: AutomaticSnapshotCandidates :many
--- Ready serve containers of checkpoint-enabled releases that have no
--- automatic snapshot pending or available: the oldest per release takes one.
-select distinct on (c.release_id) c.id, c.workspace_id, c.release_id::uuid as release_id
+-- name: TakeAutomaticSnapshots :many
+-- Requests a snapshot of the oldest ready serve container of each
+-- checkpoint-enabled release with no automatic snapshot pending or
+-- available, and returns the hosts to wake. One automatic snapshot per
+-- release at a time; a concurrent request loses.
+insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
+select distinct on (c.release_id) c.workspace_id, c.release_id, c.id, true, 'pending', sqlc.narg('traceparent')::text
 from containers c
 join releases r on r.id = c.release_id
 where c.state = 'ready' and c.purpose = 'serve' and r.spec ? 'checkpoint'
@@ -61,13 +64,9 @@ where c.state = 'ready' and c.purpose = 'serve' and r.spec ? 'checkpoint'
       select 1 from memory_snapshots s where s.release_id = c.release_id and s.automatic and s.state <> 'failed'
   )
 order by c.release_id, c.ready_at, c.id
-limit 100;
-
--- name: InsertAutomaticSnapshot :execrows
--- One automatic snapshot per release at a time; a concurrent insert loses.
-insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
-values (@workspace_id, @release_id, @container_id, true, 'pending', sqlc.narg('traceparent')::text)
-on conflict (release_id) where automatic and state <> 'failed' do nothing;
+limit 100
+on conflict (release_id) where automatic and state <> 'failed' do nothing
+returning (select h.host_id from containers h where h.id = container_id) as host_id;
 
 -- name: RestoreSnapshot :one
 -- What a starting container restores: its own snapshot, or the available
@@ -107,7 +106,7 @@ where f.id = @id and f.state = 'publishing' and c.id = f.container_id and c.id =
 returning f.id, f.workspace_id;
 
 -- name: FilesystemImageView :one
-select id, state, image_id, failure from filesystem_images where id = @id;
+select state, image_id, failure from filesystem_images where id = @id;
 
 -- name: FailStaleFilesystemImages :many
 update filesystem_images f

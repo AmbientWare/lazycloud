@@ -128,22 +128,22 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 	if err := e.HoldContainers(t.Context(), holder, []ContainerID{inst.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := e.StopIdle(t.Context(), logger); err != nil || n != 0 {
-		t.Fatalf("stop idle with a connection: %d, %v", n, err)
+	stopIdle := func(id ContainerID, want ContainerState, why string) {
+		t.Helper()
+		if err := e.StopIdle(t.Context(), logger); err != nil {
+			t.Fatal(err)
+		}
+		if got := containerState(t, pool, uuid.UUID(id)); got != want {
+			t.Fatalf("%s: the instance is %s, want %s", why, got, want)
+		}
 	}
+	stopIdle(inst.ID, ContainerReady, "stop idle with a connection")
 	if err := e.ReleaseContainers(t.Context(), holder, []ContainerID{inst.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := e.StopIdle(t.Context(), logger); err != nil || n != 0 {
-		t.Fatalf("stop idle inside the window after the connection: %d, %v", n, err)
-	}
+	stopIdle(inst.ID, ContainerReady, "stop idle inside the window after the connection")
 	age(t, pool, inst.ID, 61*time.Second)
-	if n, err := e.StopIdle(t.Context(), logger); err != nil || n != 1 {
-		t.Fatalf("stop idle: %d, %v", n, err)
-	}
-	if got := containerState(t, pool, uuid.UUID(inst.ID)); got != ContainerDraining {
-		t.Fatalf("idle instance is %s", got)
-	}
+	stopIdle(inst.ID, ContainerDraining, "stop idle")
 
 	// A TTL of 0 keeps another one up without a limit; a call is activity.
 	other, err := e.CreateInstance(t.Context(), f.workspace, InstanceRequest{Release: &f.release})
@@ -155,9 +155,7 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 	if err != nil || ttl.Seconds != -1 || ttl.ExpiresAt != nil {
 		t.Fatalf("ttl = %+v, %v", ttl, err)
 	}
-	if n, err := e.StopIdle(t.Context(), logger); err != nil || n != 0 {
-		t.Fatalf("stop idle without a limit: %d, %v", n, err)
-	}
+	stopIdle(other.ID, ContainerReady, "stop idle without a limit")
 	if _, err := e.SetTTL(t.Context(), f.workspace, other.ID, 120); err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +164,7 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	age(t, pool, other.ID, 30*time.Second)
-	if n, err := e.StopIdle(t.Context(), logger); err != nil || n != 0 {
-		t.Fatalf("a call did not count as activity: %d, %v", n, err)
-	}
+	stopIdle(other.ID, ContainerReady, "a call did not count as activity")
 }
 
 func TestInstancesNeedAPodOrAShell(t *testing.T) {
@@ -419,8 +415,7 @@ func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{}`)
 	container := readyContainer(t, pool, f, newHost(t, pool), time.Minute)
-	var invalid *InvalidError
-	if _, err := e.CreateSnapshot(t.Context(), identity.WorkspaceID(f.workspace), ContainerID(container), nil); !errors.As(err, &invalid) {
+	if _, err := e.CreateSnapshot(t.Context(), identity.WorkspaceID(f.workspace), ContainerID(container), nil); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("snapshot of a plain function: %v", err)
 	}
 }
@@ -570,7 +565,7 @@ func TestInstancesEndWithTheirWorkload(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), "update apps set state = 'paused'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.StopIdle(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+	if err := e.StopIdle(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if got := containerState(t, pool, uuid.UUID(running.ID)); got != ContainerDraining {

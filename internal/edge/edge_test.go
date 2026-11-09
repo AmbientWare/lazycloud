@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -46,15 +46,13 @@ func newTestEdgeFlushing(t *testing.T, pool *pgxpool.Pool, flush time.Duration) 
 	logger := slog.New(slog.DiscardHandler)
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
 		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
-			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck, RequestFlush: flush,
+			URL: "http://lazycloud.localhost:8082", SessionPool: pool, FailureCheckInterval: testFailureCheck, RequestFlush: flush,
 		}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return e
 }
-
-func version(n int) *int { return &n }
 
 // After a rollback the active release is older than one that still has
 // containers; latest waits for the active release rather than serve the one
@@ -63,8 +61,8 @@ func TestLatestFallsBackOnlyToAnOlderRelease(t *testing.T) {
 	t.Parallel()
 	e := newTestEdge(t, nil)
 	v1, v2 := uuid.New(), uuid.New()
-	e.releases[v1] = &release{id: v1, version: version(1), capacity: 1}
-	e.releases[v2] = &release{id: v2, version: version(2), capacity: 1}
+	e.releases[v1] = &release{id: v1, version: new(1), capacity: 1}
+	e.releases[v2] = &release{id: v2, version: new(2), capacity: 1}
 	ws := &workloadState{containers: map[uuid.UUID]*slot{}}
 	only := func(rel uuid.UUID, v int) {
 		ws.containers = map[uuid.UUID]*slot{uuid.New(): {id: uuid.New(), release: rel, version: v}}
@@ -85,8 +83,8 @@ func TestAnOlderContainerReadNeverReplacesANewerOne(t *testing.T) {
 	t.Parallel()
 	e := newTestEdge(t, nil)
 	ws := e.stateLocked(uuid.New())
-	older := []execution.EndpointContainer{{Container: execution.ContainerID(uuid.New()), Version: 1}}
-	newer := []execution.EndpointContainer{{Container: execution.ContainerID(uuid.New()), Version: 2}}
+	older := []execution.ReadyContainer{{Container: execution.ContainerID(uuid.New()), Version: 1}}
+	newer := []execution.ReadyContainer{{Container: execution.ContainerID(uuid.New()), Version: 2}}
 	e.applyLocked(ws, 2, newer)
 	e.applyLocked(ws, 1, older)
 	if len(ws.containers) != 1 || ws.containers[uuid.UUID(newer[0].Container)] == nil {
@@ -337,9 +335,8 @@ select o.id, s.id from o, s`).Scan(&owner, &stranger)
 		t.Fatal("the owner's ready registration does not serve the route")
 	}
 	// The owner cannot remove it while the route holds it.
-	var conflict *DomainConflictError
-	if err := e.RemoveDomain(ctx, identity.UserID(owner), "shop.example.com"); !errors.As(err, &conflict) {
-		t.Fatalf("remove a domain a route holds: %v; want DomainConflictError", err)
+	if err := e.RemoveDomain(ctx, identity.UserID(owner), "shop.example.com"); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("remove a domain a route holds: %v; want a DomainConflict refusal", err)
 	}
 }
 
@@ -632,7 +629,7 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", SessionPool: pool, Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,9 +641,8 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `update billing_accounts set complimentary_since = null returning user_id`).Scan(&user); err != nil {
 		t.Fatal(err)
 	}
-	var payment *billing.PaymentRequiredError
-	if _, err := e.RegisterDomain(t.Context(), identity.UserID(user), "shop.example.com"); !errors.As(err, &payment) || provider.created != 0 {
-		t.Fatalf("register on the Free plan: %v, %d provider calls; want PaymentRequiredError and none", err, provider.created)
+	if _, err := e.RegisterDomain(t.Context(), identity.UserID(user), "shop.example.com"); apitypes.CodeOf(err) != apitypes.PaymentRequired || provider.created != 0 {
+		t.Fatalf("register on the Free plan: %v, %d provider calls; want a PaymentRequired refusal and none", err, provider.created)
 	}
 }
 

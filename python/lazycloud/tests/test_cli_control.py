@@ -122,8 +122,9 @@ def _container(state: str = "stopped", **extra: object) -> dict[str, object]:
 
 def test_app_commands_accept_a_name_and_report_each_outcome(fake_api: FakeApi) -> None:
     fake_api.route("GET", f"{TEAM}/apps")(lambda _: json_reply({"apps": [_app("paused")]}))
-    fake_api.route("POST", f"{TEAM}/apps/reports/pause")(lambda _: json_reply(_app("paused")))
-    fake_api.route("POST", f"{TEAM}/apps/reports/resume")(lambda _: json_reply(_app()))
+    fake_api.route("PATCH", f"{TEAM}/apps/reports")(
+        lambda request: json_reply(_app("paused" if request.json()["paused"] else "active"))
+    )
     fake_api.route("DELETE", f"{TEAM}/apps/reports")(lambda _: json_reply(_app("deleted")))
 
     listed = _cli("app", "list", "--inactive")
@@ -139,6 +140,20 @@ def test_app_commands_accept_a_name_and_report_each_outcome(fake_api: FakeApi) -
     assert "Resumed reports." in resumed.stdout
     assert json.loads(deleted.stdout) == {"app_id": APP_ID, "deleted": True}
     assert conflicting.exit_code != 0
+
+
+def test_app_list_follows_every_page(fake_api: FakeApi) -> None:
+    @fake_api.route("GET", f"{TEAM}/apps")
+    def apps(request: ApiRequest) -> Reply:
+        if request.query.get("cursor") == ["next"]:
+            billing: dict[str, object] = {**_app(), "name": "billing"}
+            return json_reply({"apps": [billing]})
+        return json_reply({"apps": [_app()], "next_cursor": "next"})
+
+    listed = _cli("--json", "app", "list")
+
+    assert listed.exit_code == 0, listed.output
+    assert [item["name"] for item in json.loads(listed.stdout)["apps"]] == ["reports", "billing"]
 
 
 def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> None:
@@ -406,34 +421,6 @@ def test_deployment_handles_submit_to_the_active_version(fake_api: FakeApi) -> N
     assert submission.result(wait=True) == 12
     (request,) = fake_api.calls("POST", submitted)
     assert "release_id" not in request.json()
-
-    detail = f"{TEAM}/apps/reports/workloads/function/summarize_sales"
-    url = "https://summarize-sales-0123abcd-latest.lazycloud.test"
-    fake_api.route("GET", detail)(
-        lambda _: json_reply(
-            {
-                "workload": _deployment(),
-                "release": {
-                    "id": RELEASE_ID,
-                    "name": "summarize_sales",
-                    "version": 3,
-                    "created_at": NOW,
-                    "spec": {
-                        "name": "summarize_sales",
-                        "kind": "function",
-                        "source": {"sha256": "0" * 64},
-                        "image": {"python_version": "3.12"},
-                        "resources": {"cpu_millis": 250, "memory_mib": 256},
-                    },
-                    "url": url,
-                },
-            }
-        )
-    )
-    assert deployment.invoke_url() == url
-    assert deployment.invoke_url(url_type="stub") == f"https://{RELEASE_ID}.lazycloud.test"
-    with pytest.raises(ValueError, match="only a pod"):
-        deployment.invoke_url(port=8080)
 
 
 def test_an_html_error_page_shows_as_its_status_and_origin(

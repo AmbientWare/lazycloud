@@ -1,7 +1,6 @@
 package schedules_test
 
 import (
-	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -87,13 +86,11 @@ func (f fixture) scheduledTasks(t *testing.T) int {
 	return n
 }
 
-func ptr(s string) *string { return &s }
-
 func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	deployed := time.Now()
-	f.deploy(t, ptr("Every 5m"), 10)
+	f.deploy(t, new("Every 5m"), 10)
 	first := f.schedule(t)
 	// The next occurrence follows the deploy; comparing with a later clock
 	// reading fails when the deploy lands just before a boundary.
@@ -112,7 +109,7 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 		t.Fatalf("a scheduled function keeps containers warm for %d s", *release.Spec.KeepWarmSeconds)
 	}
 
-	f.deploy(t, ptr("@hourly"), 10)
+	f.deploy(t, new("@hourly"), 10)
 	if s := f.schedule(t); s.Expression != "@hourly" || s.NextRunAt.Minute() != 0 {
 		t.Fatalf("replaced schedule: %+v", s)
 	}
@@ -122,13 +119,12 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 		t.Fatalf("schedule after removing cron: %+v", s)
 	}
 
-	var invalid *control.InvalidSpecError
 	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{{
 		Kind: apitypes.WorkloadKindFunction, Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
 		Image: apitypes.ImageSpec{PythonVersion: apitypes.N312}, Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
-		Cron: ptr("every 60m"),
+		Cron: new("every 60m"),
 	}}})
-	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "unsupported cron interval: every 60m") {
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), "unsupported cron interval: every 60m") {
 		t.Fatalf("invalid cron deploy = %v", err)
 	}
 }
@@ -136,16 +132,15 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 10)
+	f.deploy(t, new("every 1m"), 10)
 	missed := f.due(t, 10*time.Minute)
 
 	fired := time.Now()
-	result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler))
-	if err != nil {
+	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
-	if result.Admitted != 1 || f.scheduledTasks(t) != 1 {
-		t.Fatalf("fire admitted %d, %d scheduled tasks", result.Admitted, f.scheduledTasks(t))
+	if n := f.scheduledTasks(t); n != 1 {
+		t.Fatalf("%d scheduled tasks, want 1", n)
 	}
 	s := f.schedule(t)
 	if !s.LastRunAt.Equal(missed) || s.LastTask == nil || !s.NextRunAt.After(fired) {
@@ -158,52 +153,44 @@ func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 	if !scheduledFor.Equal(missed) {
 		t.Fatalf("task scheduled for %s, want %s", scheduledFor, missed)
 	}
-	if result, _ := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); result.Admitted != 0 {
-		t.Fatalf("a second pass admitted %d", result.Admitted)
+	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.scheduledTasks(t) != 1 {
+		t.Fatalf("a second pass: %d scheduled tasks, %v", f.scheduledTasks(t), err)
 	}
 }
 
 func TestConcurrentSchedulersAdmitAnOccurrenceOnce(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 100)
+	f.deploy(t, new("every 1m"), 100)
 	f.due(t, time.Minute)
 
 	var wg sync.WaitGroup
-	admitted := make([]int, 8)
-	for n := range admitted {
+	for range 8 {
 		wg.Go(func() {
-			result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler))
-			if err != nil {
+			if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 				t.Error(err)
 			}
-			admitted[n] = result.Admitted
 		})
 	}
 	wg.Wait()
-	total := 0
-	for _, n := range admitted {
-		total += n
-	}
-	if total != 1 || f.scheduledTasks(t) != 1 {
-		t.Fatalf("%d schedulers admitted %d tasks, %d stored", len(admitted), total, f.scheduledTasks(t))
+	if n := f.scheduledTasks(t); n != 1 {
+		t.Fatalf("8 schedulers stored %d tasks, want 1", n)
 	}
 }
 
 func TestRejectedOccurrencesAdvanceWithTheirReason(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 1)
+	f.deploy(t, new("every 1m"), 1)
 	// One queued task fills max_pending_tasks.
 	f.due(t, 2*time.Minute)
-	if result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || result.Admitted != 1 {
-		t.Fatalf("first occurrence: %+v, %v", result, err)
+	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.scheduledTasks(t) != 1 {
+		t.Fatalf("first occurrence: %d scheduled tasks, %v", f.scheduledTasks(t), err)
 	}
 	f.due(t, time.Minute)
 	fired := time.Now()
-	result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler))
-	if err != nil || result.Skipped != 1 {
-		t.Fatalf("second occurrence: %+v, %v", result, err)
+	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.scheduledTasks(t) != 1 {
+		t.Fatalf("second occurrence: %d scheduled tasks, %v", f.scheduledTasks(t), err)
 	}
 	s := f.schedule(t)
 	if s.LastError == nil || !strings.Contains(*s.LastError, "max_pending_tasks") || !s.NextRunAt.After(fired) {
@@ -215,8 +202,8 @@ func TestRejectedOccurrencesAdvanceWithTheirReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.due(t, time.Minute)
-	if result, _ := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); result.Skipped != 1 {
-		t.Fatalf("paused app: %+v", result)
+	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.scheduledTasks(t) != 1 {
+		t.Fatalf("paused app: %d scheduled tasks, %v", f.scheduledTasks(t), err)
 	}
 	if s := f.schedule(t); !strings.Contains(*s.LastError, "paused") {
 		t.Fatalf("paused app reason %q", *s.LastError)

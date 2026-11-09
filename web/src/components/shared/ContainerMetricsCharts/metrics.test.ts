@@ -49,7 +49,7 @@ describe("container metric chart data", () => {
     expect(data[0].diskWriteRate).toBeNull();
     expect(latestComputeReadout(data)).toEqual({
       cpu: "0.25 CPU",
-      memory: "100.0 MiB",
+      memory: "100 MiB",
       network: null,
     });
     expect(latestComputeReadout([])).toBeNull();

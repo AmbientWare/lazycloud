@@ -39,7 +39,7 @@ func stripeMock(t *testing.T) StripeConfig {
 func newStripeFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := newFixture(t)
-	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", Stripe: stripeMock(t)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", SessionPool: f.pool, Stripe: stripeMock(t)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return f
 }
 
@@ -132,8 +132,7 @@ func TestReturnAddressesStayOnThePlatform(t *testing.T) {
 	f := newStripeFixture(t)
 	user := f.user()
 	for _, target := range []string{"https://evil.test/billing", "http://lazycloud.test/billing", "://"} {
-		var invalid *InvalidError
-		if _, err := f.billing.PaymentMethodSession(t.Context(), user, hosted(target)); !errors.As(err, &invalid) {
+		if _, err := f.billing.PaymentMethodSession(t.Context(), user, hosted(target)); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("return address %q: %v", target, err)
 		}
 	}

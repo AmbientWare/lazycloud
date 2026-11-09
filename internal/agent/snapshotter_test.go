@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
@@ -23,7 +24,7 @@ func TestTheSnapshotterIsReplacedOnlyWhenIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := writeFileAtomic(layersource.Binary, installed, 0o755); err != nil { //nolint:gosec // An executable.
+		if err := hostproto.WriteFile(layersource.Binary, installed, 0o755); err != nil { //nolint:gosec // An executable.
 			t.Error(err)
 		}
 	})

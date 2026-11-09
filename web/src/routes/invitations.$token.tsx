@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AuthGate } from "@/components/shared/AuthGate";
@@ -105,16 +104,20 @@ function InvitationPage() {
           </p>
           <div className="mt-5 flex gap-2">
             <Button
+              pending={decline.isPending}
               className="flex-1"
               disabled={busy}
               onClick={() => decline.mutate()}
               variant="outline"
             >
-              {decline.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
               Decline
             </Button>
-            <Button className="flex-1" disabled={busy} onClick={() => accept.mutate()}>
-              {accept.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            <Button
+              pending={accept.isPending}
+              className="flex-1"
+              disabled={busy}
+              onClick={() => accept.mutate()}
+            >
               Accept
             </Button>
           </div>

@@ -1,7 +1,6 @@
 package edge
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,7 +33,7 @@ type Config struct {
 	// none.
 	TCPURL string
 	// SessionPool holds the route listener's LISTEN connection
-	// (database.OpenSession); nil uses the edge's pool.
+	// (database.OpenSession).
 	SessionPool *pgxpool.Pool
 	// FailureCheckInterval bounds how often waiting requests of one
 	// release ask whether it can start; FailureCheckInterval in production.
@@ -50,8 +49,8 @@ const FailureCheckInterval = time.Second
 // RequestFlush is Config.RequestFlush in production.
 const RequestFlush = time.Second
 
-// Validate refuses settings the edge cannot run with.
-func (c Config) Validate() error {
+// validate refuses settings the edge cannot run with.
+func (c Config) validate() error {
 	if c.FailureCheckInterval <= 0 {
 		return fmt.Errorf("edge: the failure check interval must be positive, not %s", c.FailureCheckInterval)
 	}
@@ -119,7 +118,7 @@ type versionKey struct {
 // NewEdge returns the edge. listener must listen on database.ChannelTask
 // for function invocations.
 func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Execution, listener *database.Listener, cfg Config, logger *slog.Logger) (*Edge, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	urls, err := ParseURLs(cfg.URL)
@@ -127,7 +126,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		return nil, err
 	}
 	e := &Edge{
-		id: uuid.New(), pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), identity: id, execution: exec, listener: listener,
+		id: uuid.New(), pool: pool, session: cfg.SessionPool, queries: New(pool), identity: id, execution: exec, listener: listener,
 		urls: urls, domains: cfg.Domains, logger: logger, failureCheck: cfg.FailureCheckInterval, requestFlush: cfg.RequestFlush,
 		releases:  map[uuid.UUID]*release{},
 		versions:  map[versionKey]uuid.UUID{},

@@ -81,10 +81,7 @@ func TestInProcessSlotsShareOneRunnerAndCancelRestartsIt(t *testing.T) {
 	h := startSupervisor(t)
 	c := h.accept()
 	c.configureWith(t, &hostproto.Configure{Handler: "app:handle", Slots: 2, InProcess: true})
-	ready, _ := c.until(t, isReady)
-	if ready.GetReady().GetSlots() != 2 {
-		t.Fatalf("ready %v", ready)
-	}
+	c.until(t, isReady)
 
 	began := time.Now()
 	c.run(t, "s1", `{"args": ["sleep", 1]}`)
@@ -146,9 +143,9 @@ func (l *apiLink) API(stream hostproto.ContainerLink_APIServer) error {
 		}
 		body = append(body, msg.GetBody()...)
 	}
-	head := &hostproto.APIResponseHead{Status: http.StatusTeapot}
+	head := &hostproto.ResponseHead{Status: http.StatusTeapot}
 	for _, h := range first.GetHead().GetHeaders() {
-		head.Headers = append(head.Headers, &hostproto.APIHeader{Name: "Echo-" + h.GetName(), Value: h.GetValue()})
+		head.Headers = append(head.Headers, &hostproto.Header{Name: "Echo-" + h.GetName(), Value: h.GetValue()})
 	}
 	if err := stream.Send(&hostproto.APIResponse{Head: head, Body: []byte(first.GetHead().GetMethod() + " " + first.GetHead().GetTarget() + "\n")}); err != nil {
 		return err
