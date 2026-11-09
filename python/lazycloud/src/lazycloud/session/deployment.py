@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from lazycloud._terminal.formatting import short_id
@@ -30,7 +29,6 @@ from lazycloud.contracts.api import (
     SourceUploadRequest,
     SubmitTasksRequest,
     Workload,
-    WorkloadKind,
     WorkloadSpec,
 )
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
@@ -233,34 +231,6 @@ class Deployment:
         """The active release, which deployed calls run on."""
         release = self.deployment.release_id
         return str(release) if release is not None else ""
-
-    def invoke_url(self, *, port: int | None = None, url_type: str | None = None) -> str:
-        """Where the workload answers, following its active release.
-
-        `url_type="stub"` pins the active release's own host instead, and
-        `port` picks one of a pod's ports.
-        """
-        if url_type not in (None, "deployment", "stub"):
-            raise ValueError(f"url_type must be 'deployment' or 'stub', not {url_type!r}")
-        workload = self.deployment
-        if port is not None and workload.kind is not WorkloadKind.pod:
-            raise ValueError("only a pod's URL takes a port")
-        url = workload.url
-        if url is None:
-            client, workspace = self.client._session()
-            detail = client.get_workload(workspace, workload.app, workload.kind, workload.name)
-            url = detail.release.url
-        if url is None:
-            raise LookupError(f"deployment {self.name} has no URL")
-        parts = urlsplit(url)
-        label, _, base = (parts.hostname or "").partition(".")
-        if url_type == "stub" and workload.kind is not WorkloadKind.pod:
-            label = self.stub_id
-        if port is not None:
-            # A pod port answers on <release>-<port>.<base>.
-            label = f"{label.rsplit('-', 1)[0]}-{port}"
-        netloc = f"{label}.{base}" + (f":{parts.port}" if parts.port else "")
-        return urlunsplit(parts._replace(netloc=netloc))
 
     def submit(
         self, *args: object, kwargs: dict[str, object] | None = None

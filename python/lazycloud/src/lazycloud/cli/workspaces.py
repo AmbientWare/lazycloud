@@ -25,7 +25,6 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
     set_profile(
         stored.model_copy(update={"workspace": name}),
         activate=False,
-        replace_legacy=True,
     )
 
 

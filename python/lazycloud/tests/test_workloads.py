@@ -709,7 +709,7 @@ def test_sandbox_ports_network_lifetime_snapshots_and_termination(fake_api: Fake
         sandbox.update_network_permissions(block_network=True, allow_list=["10.0.0.0/8"])
 
 
-def test_sandbox_listing_stats_and_timeline(
+def test_sandbox_listing_and_stats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     tools = _project(tmp_path, monkeypatch)
@@ -735,24 +735,8 @@ def test_sandbox_listing_stats_and_timeline(
             }
         )
     )
-    fake_api.route("GET", f"{BOX}/lifecycle")(
-        lambda request: json_reply(
-            {
-                "container_id": CONTAINER,
-                "state": "stopped",
-                "stop_reason": "crashed",
-                "created_at": "2026-10-01T12:00:00Z",
-                "assigned_at": "2026-10-01T12:00:01Z",
-                "ready_at": "2026-10-01T12:00:03Z",
-                "stopped_at": "2026-10-01T12:01:03Z",
-                "stages": [],
-            }
-        )
-    )
-
     rows = tools.scratch.list(app_id="tools", limit=5)
     stats = tools.scratch.stats()
-    timeline = tools.scratch.timeline(RELEASE)
 
     assert fake_api.calls("GET", f"{TEAM}/sandboxes")[0].query == {
         "app": ["tools"],
@@ -760,12 +744,6 @@ def test_sandbox_listing_stats_and_timeline(
     }
     assert [str(item.id) for item in rows] == [CONTAINER]
     assert stats.total_created == 3
-    assert timeline.status.value == "failed"
-    assert (timeline.scheduling_ms, timeline.startup_ms, timeline.runtime_ms) == (
-        1000,
-        3000,
-        60000,
-    )
 
 
 def test_container_attach_follows_a_pod_command_to_its_exit_code(fake_api: FakeApi) -> None:

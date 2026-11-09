@@ -823,11 +823,6 @@ class ApiClient:
             body=WebhookCreate.model_validate(fields),
         )
 
-    def get_webhook(self, workspace: str, webhook: UUID) -> Webhook:
-        return self._send(
-            Webhook, "GET", _path("v1", "workspaces", workspace, "webhooks", str(webhook))
-        )
-
     def update_webhook(
         self,
         workspace: str,

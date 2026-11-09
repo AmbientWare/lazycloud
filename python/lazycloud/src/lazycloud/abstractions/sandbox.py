@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import JsonValue, ValidationError
 from typing_extensions import Never, Self
 
 from lazycloud._shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
@@ -34,8 +34,6 @@ from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECON
 from lazycloud.contracts.api import (
     CommandItem,
     ContainerFile,
-    ContainerLifecycle,
-    ContainerState,
     CreateInstanceRequest,
     ErrorCode,
     FileMatch,
@@ -47,8 +45,6 @@ from lazycloud.contracts.api import (
     Process,
     ProcessRequest,
     ReplaceInFilesRequest,
-    SandboxStatus,
-    StopReason,
     WorkloadSpec,
 )
 from lazycloud.contracts.api import Sandbox as SandboxRow
@@ -75,16 +71,6 @@ SANDBOX_CONTROL_TIMEOUT_SECONDS = 30.0
 SANDBOX_READY_TIMEOUT_SECONDS = 120.0
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.5
 _DOCKER_SANDBOX_SECURITY_OPTIONS = ("systempaths=unconfined",)
-# Stop reasons that mean a sandbox failed rather than was stopped.
-_FAILED_STOP_REASONS = frozenset(
-    {
-        StopReason.load_error,
-        StopReason.start_failed,
-        StopReason.crashed,
-        StopReason.out_of_memory,
-        StopReason.host_lost,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,20 +199,6 @@ class _SandboxCombinedStream:
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.read().splitlines())
-
-
-class SandboxTimeline(BaseModel):
-    """When a sandbox container was created, placed, ready and stopped."""
-
-    container_id: str | None = None
-    status: SandboxStatus
-    created_at: datetime
-    scheduled_at: datetime | None = None
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    scheduling_ms: int | None = None
-    startup_ms: int | None = None
-    runtime_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -1621,27 +1593,6 @@ class Sandbox(ControlClientConfigMixin):
     ) -> SandboxStatsResponse:
         return self._client_for(workspace).sandbox_stats(app=app_id)
 
-    def timeline(
-        self,
-        stub_id: str,
-        *,
-        workspace: str | None = None,
-        container_id: str | None = None,
-    ) -> SandboxTimeline:
-        """When the release's newest sandbox, or `container_id`, was placed, ready and stopped."""
-        client = self._client_for(workspace)
-        selected = container_id or self._newest_container(client, stub_id)
-        return _timeline(client.lifecycle(UUID(selected)))
-
-    def _newest_container(self, client: WorkloadsClient, stub_id: str) -> str:
-        for page in pages(
-            lambda cursor: client.list_sandboxes(app=self._app_slug, limit=1000, cursor=cursor)
-        ):
-            for row in page.sandboxes:
-                if str(row.release_id) == stub_id:
-                    return str(row.id)
-        raise SandboxConnectionError(f"sandbox release {stub_id} has no container")
-
     def _client_for(self, workspace: str | None) -> WorkloadsClient:
         if workspace is None or workspace == self.control_client.workspace:
             return self.control_client
@@ -1802,38 +1753,6 @@ def _network_policy(policy: NetworkPolicy) -> SandboxNetworkPolicy:
         block_network=policy.block_network,
         allow_list=[item.root for item in policy.allow_list],
     )
-
-
-def _timeline(lifecycle: ContainerLifecycle) -> SandboxTimeline:
-    return SandboxTimeline(
-        container_id=str(lifecycle.container_id),
-        status=_sandbox_status(lifecycle),
-        created_at=lifecycle.created_at,
-        scheduled_at=lifecycle.assigned_at,
-        started_at=lifecycle.ready_at,
-        ended_at=lifecycle.stopped_at,
-        scheduling_ms=_duration_ms(lifecycle.created_at, lifecycle.assigned_at),
-        startup_ms=_duration_ms(lifecycle.created_at, lifecycle.ready_at),
-        runtime_ms=_duration_ms(lifecycle.ready_at, lifecycle.stopped_at),
-    )
-
-
-def _sandbox_status(lifecycle: ContainerLifecycle) -> SandboxStatus:
-    if lifecycle.state is ContainerState.stopped:
-        if lifecycle.stop_reason in _FAILED_STOP_REASONS:
-            return SandboxStatus.failed
-        return SandboxStatus.stopped
-    if lifecycle.state is ContainerState.ready:
-        return SandboxStatus.running
-    if lifecycle.state is ContainerState.draining:
-        return SandboxStatus.stopping
-    return SandboxStatus.pending
-
-
-def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
-    if start is None or end is None:
-        return None
-    return max(0, int((end - start).total_seconds() * 1000))
 
 
 def _cpu_value(value: CpuRequest | str) -> CpuRequest:
@@ -1999,5 +1918,4 @@ __all__ = [
     "SandboxProcessTimeoutError",
     "SandboxRow",
     "SandboxStatsResponse",
-    "SandboxTimeline",
 ]

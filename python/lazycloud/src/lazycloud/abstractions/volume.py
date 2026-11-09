@@ -71,12 +71,6 @@ class VolumePathInfo:
 
 
 @dataclass(frozen=True)
-class VolumeFileServiceInfo:
-    enabled: bool = True
-    command_version: int = 1
-
-
-@dataclass(frozen=True)
 class PresignedUrl:
     method: PresignedUrlMethod
     url: str
@@ -294,9 +288,6 @@ class Volume(ResourceControlBinding["StorageClient"]):
         self.volume_id = None
         return True
 
-    def file_service_info(self) -> VolumeFileServiceInfo:
-        return VolumeFileServiceInfo()
-
     def presigned_url(
         self,
         relative_path: str | Path,
@@ -483,7 +474,6 @@ __all__ = [
     "PresignedUrlMethod",
     "Volume",
     "VolumeExport",
-    "VolumeFileServiceInfo",
     "VolumeMount",
     "VolumeOperationError",
     "VolumePathInfo",

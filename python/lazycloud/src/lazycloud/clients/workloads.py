@@ -23,7 +23,6 @@ from lazycloud.clients.api import (
 from lazycloud.contracts.api import (
     ContainerFile,
     ContainerFileList,
-    ContainerLifecycle,
     ContainerLogEntry,
     ContainerPort,
     ContainerPortList,
@@ -105,11 +104,6 @@ class WorkloadsClient:
             tail=None,
             follow=follow,
         )
-
-    def lifecycle(self, container_id: UUID) -> ContainerLifecycle:
-        return self.api._send(ContainerLifecycle, "GET", self._container(container_id, "lifecycle"))
-
-    # Processes
 
     def start_process(self, container_id: UUID, request: ProcessRequest) -> Process:
         return self.api._send(

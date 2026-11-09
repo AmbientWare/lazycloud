@@ -217,21 +217,6 @@ class Artifact:
             )
         return self._save_local(target_dir=target_dir)
 
-    def save_remote(
-        self,
-        client: StorageClient,
-        *,
-        task_id: str,
-        target_dir: str | Path | None = None,
-        chunk_size: int = DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES,
-    ) -> SavedArtifact:
-        return self._save_remote(
-            client,
-            task_id=task_id,
-            target_dir=target_dir,
-            chunk_size=chunk_size,
-        )
-
     def public_url(
         self,
         expires: int = 3600,
