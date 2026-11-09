@@ -254,7 +254,7 @@ func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerO
 	if req.Params.After != nil {
 		out.after = *req.Params.After
 	}
-	out.follow = req.Params.Follow != nil && *req.Params.Follow
+	out.follow = valueOr(req.Params.Follow, false)
 	return out, nil
 }
 

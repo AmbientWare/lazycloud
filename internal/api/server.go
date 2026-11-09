@@ -173,10 +173,7 @@ func submitRequest(ctx context.Context, ws identity.Workspace, app, function str
 // GetTask reads a task, waiting for it to finish when asked.
 func (s *Server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	wait := time.Duration(0)
-	if req.Params.WaitSeconds != nil {
-		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
-	}
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	task, err := s.owners.Execution.GetTask(ctx, s.owners.Listener, ws.ID, execution.TaskID(req.Task), wait)
 	if err != nil {
 		return nil, err
@@ -203,10 +200,7 @@ func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (Wai
 	for n, id := range req.Body.TaskIds {
 		ids[n] = execution.TaskID(id)
 	}
-	wait := time.Duration(0)
-	if req.Body.WaitSeconds != nil {
-		wait = time.Duration(*req.Body.WaitSeconds) * time.Second
-	}
+	wait := time.Duration(valueOr(req.Body.WaitSeconds, 0)) * time.Second
 	found, err := s.owners.Execution.WaitTasks(ctx, s.owners.Listener, ws.ID, ids, wait)
 	if err != nil {
 		return nil, err

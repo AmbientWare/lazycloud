@@ -269,13 +269,8 @@ func (s *Server) GetAccountActivity(ctx context.Context, req GetAccountActivityR
 		return nil, err
 	}
 	q := observability.ActivityQuery{
-		RangeQuery: rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds), Limit: 5,
-	}
-	if req.Params.Measure != nil {
-		q.Measure = *req.Params.Measure
-	}
-	if req.Params.Limit != nil {
-		q.Limit = *req.Params.Limit
+		RangeQuery: rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds),
+		Measure:    valueOr(req.Params.Measure, ""), Limit: valueOr(req.Params.Limit, 5),
 	}
 	activity, err := s.owners.Observability.AccountActivity(ctx, workspaces, q)
 	if err != nil {

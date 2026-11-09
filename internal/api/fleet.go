@@ -74,16 +74,13 @@ func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestOb
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	nodes, err := s.owners.Compute.FleetNodes(ctx, after, limit+1)
 	if err != nil {
 		return nil, err
 	}
 	out := ListFleetNodes200JSONResponse{Nodes: []apitypes.FleetNode{}, ObservedAt: time.Now()}
-	if len(nodes) > limit {
-		nodes = nodes[:limit]
-		out.NextCursor = encodeCursor(uuid.UUID(nodes[limit-1].ID))
-	}
+	nodes, out.NextCursor = pageOf(nodes, limit, func(n compute.FleetNode) any { return uuid.UUID(n.ID) })
 	for _, n := range nodes {
 		node := apitypes.FleetNode{
 			Id: uuid.UUID(n.ID), Provider: apitypes.FleetNodeProvider(n.Provider), Region: n.Region,

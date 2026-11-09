@@ -35,15 +35,8 @@ func (s *Server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject
 	if err != nil {
 		return nil, err
 	}
-	limit := 50
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	f := identity.FeedbackFilter{Kind: (*identity.FeedbackKind)(req.Params.Kind)}
-	if req.Params.Search != nil {
-		f.Search = *req.Params.Search
-	}
-	page, err := s.owners.Identity.ListFeedback(ctx, p, f, (*identity.FeedbackID)(req.Params.Cursor), limit)
+	f := identity.FeedbackFilter{Kind: (*identity.FeedbackKind)(req.Params.Kind), Search: valueOr(req.Params.Search, "")}
+	page, err := s.owners.Identity.ListFeedback(ctx, p, f, (*identity.FeedbackID)(req.Params.Cursor), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}

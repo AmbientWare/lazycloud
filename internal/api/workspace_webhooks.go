@@ -7,8 +7,7 @@ import (
 // ListWebhooks returns a page of the workspace's webhooks.
 func (s *Server) ListWebhooks(ctx context.Context, req ListWebhooksRequestObject) (ListWebhooksResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
-	page, err := s.owners.Webhooks.List(ctx, ws.ID, cursor, limit)
+	page, err := s.owners.Webhooks.List(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +56,7 @@ func (s *Server) TestWebhook(ctx context.Context, req TestWebhookRequestObject) 
 // ListWebhookDeliveries returns a page of the webhook's deliveries.
 func (s *Server) ListWebhookDeliveries(ctx context.Context, req ListWebhookDeliveriesRequestObject) (ListWebhookDeliveriesResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
-	page, err := s.owners.Webhooks.Deliveries(ctx, ws.ID, req.Webhook, cursor, limit)
+	page, err := s.owners.Webhooks.Deliveries(ctx, ws.ID, req.Webhook, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
 		return nil, err
 	}

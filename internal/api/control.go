@@ -14,20 +14,6 @@ import (
 
 // Handlers for apps, workloads, task listing, containers and logs.
 
-func limitOf(l *apitypes.Limit) int {
-	if l == nil {
-		return 0
-	}
-	return *l
-}
-
-func cursorOf(c *apitypes.Cursor) string {
-	if c == nil {
-		return ""
-	}
-	return *c
-}
-
 // ListApps lists apps with a deployed workload.
 func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListAppsResponseObject, error) {
 	ws := workspaceFrom(ctx)
@@ -37,7 +23,7 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 		state = &st
 	}
 	page, err := s.owners.Control.ListApps(ctx, ws.ID, control.AppFilter{State: state, Search: req.Params.Search},
-		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+		valueOr(req.Params.Limit, 0), valueOr(req.Params.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +94,7 @@ func (s *Server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObje
 	ws := workspaceFrom(ctx)
 	p := req.Params
 	page, err := s.owners.Control.ListWorkloads(ctx, ws.ID, control.WorkloadFilter{App: p.App, Kind: p.Kind, Name: p.Name, ID: p.Id, Search: p.Search},
-		limitOf(p.Limit), cursorOf(p.Cursor))
+		valueOr(p.Limit, 0), valueOr(p.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +220,7 @@ func (s *Server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersi
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Control.ListVersions(ctx, ws.ID, id, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Control.ListVersions(ctx, ws.ID, id, valueOr(req.Params.Limit, 0), valueOr(req.Params.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -256,13 +242,13 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	ws := workspaceFrom(ctx)
 	filter := execution.TaskFilter{
 		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search, Version: req.Params.Version,
-		RootOnly: req.Params.RootOnly != nil && *req.Params.RootOnly,
+		RootOnly: valueOr(req.Params.RootOnly, false),
 	}
 	if req.Params.Status != nil {
 		st := execution.TaskStatus(*req.Params.Status)
 		filter.Status = &st
 	}
-	page, err := s.owners.Execution.ListTasks(ctx, ws.ID, filter, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Execution.ListTasks(ctx, ws.ID, filter, valueOr(req.Params.Limit, 0), valueOr(req.Params.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -309,8 +295,8 @@ func (s *Server) RerunTask(ctx context.Context, req RerunTaskRequestObject) (Rer
 func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestObject) (ListContainersResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	p := req.Params
-	filter := execution.ContainerFilter{Live: p.Live != nil && *p.Live, App: p.App, Workload: p.WorkloadId}
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(p.Limit), cursorOf(p.Cursor))
+	filter := execution.ContainerFilter{Live: valueOr(p.Live, false), App: p.App, Workload: p.WorkloadId}
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, valueOr(p.Limit, 0), valueOr(p.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}

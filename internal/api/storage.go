@@ -5,29 +5,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-func orEmpty(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func limitOr(limit *int, def int) int {
-	if limit == nil {
-		return def
-	}
-	return *limit
-}
-
 // ListVolumes returns a page of volumes.
 func (s *Server) ListVolumes(ctx context.Context, req ListVolumesRequestObject) (ListVolumesResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +41,7 @@ func (s *Server) DeleteVolume(ctx context.Context, req DeleteVolumeRequestObject
 // ListVolumeFiles lists one directory.
 func (s *Server) ListVolumeFiles(ctx context.Context, req ListVolumeFilesRequestObject) (ListVolumeFilesResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListVolumeFiles(ctx, ws.ID, req.Volume, orEmpty(req.Params.Path), orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 1000))
+	page, err := s.owners.Storage.ListVolumeFiles(ctx, ws.ID, req.Volume, valueOr(req.Params.Path, ""), valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +51,7 @@ func (s *Server) ListVolumeFiles(ctx context.Context, req ListVolumeFilesRequest
 // StatVolumeFile describes a file or directory.
 func (s *Server) StatVolumeFile(ctx context.Context, req StatVolumeFileRequestObject) (StatVolumeFileResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	file, err := s.owners.Storage.StatVolumeFile(ctx, ws.ID, req.Volume, orEmpty(req.Params.Path))
+	file, err := s.owners.Storage.StatVolumeFile(ctx, ws.ID, req.Volume, valueOr(req.Params.Path, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +120,7 @@ func (s *Server) AbortVolumeUpload(ctx context.Context, req AbortVolumeUploadReq
 // ListDisks returns a page of disks.
 func (s *Server) ListDisks(ctx context.Context, req ListDisksRequestObject) (ListDisksResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +143,7 @@ func (s *Server) ListArtifacts(ctx context.Context, req ListArtifactsRequestObje
 	page, err := s.owners.Storage.ListArtifacts(ctx, ws.ID, storage.ArtifactFilter{
 		Task: p.TaskId, App: p.App, Search: p.Search, ContentType: p.ContentType,
 		CreatedAfter: p.CreatedAfter, CreatedBefore: p.CreatedBefore,
-	}, orEmpty(p.Cursor), limitOr(p.Limit, 50))
+	}, valueOr(p.Cursor, ""), valueOr(p.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -184,11 +169,7 @@ func (s *Server) CreateArtifact(ctx context.Context, req CreateArtifactRequestOb
 // CompleteArtifact records an uploaded artifact.
 func (s *Server) CompleteArtifact(ctx context.Context, req CompleteArtifactRequestObject) (CompleteArtifactResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	var parts []apitypes.CompletedPart
-	if req.Body.Parts != nil {
-		parts = *req.Body.Parts
-	}
-	artifact, err := s.owners.Storage.CompleteArtifact(ctx, ws.ID, req.Artifact, parts)
+	artifact, err := s.owners.Storage.CompleteArtifact(ctx, ws.ID, req.Artifact, valueOr(req.Body.Parts, nil))
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +213,7 @@ func (s *Server) openLink(w http.ResponseWriter, r *http.Request) {
 // PresignArtifact returns a download link of an artifact.
 func (s *Server) PresignArtifact(ctx context.Context, req PresignArtifactRequestObject) (PresignArtifactResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	download := req.Body.Download != nil && *req.Body.Download
+	download := valueOr(req.Body.Download, false)
 	url, err := s.owners.Storage.PresignArtifact(ctx, ws.ID, req.Artifact, req.Body.ExpiresSeconds, download)
 	if err != nil {
 		return nil, err
@@ -253,7 +234,7 @@ func (s *Server) DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest
 // ListQueues returns a page of queues.
 func (s *Server) ListQueues(ctx context.Context, req ListQueuesRequestObject) (ListQueuesResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +272,7 @@ func (s *Server) PutQueueMessages(ctx context.Context, req PutQueueMessagesReque
 // PopQueueMessage removes the oldest message, waiting when asked.
 func (s *Server) PopQueueMessage(ctx context.Context, req PopQueueMessageRequestObject) (PopQueueMessageResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	wait := time.Duration(limitOr(req.Params.WaitSeconds, 0)) * time.Second
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	message, found, err := s.owners.Storage.PopQueueMessage(ctx, s.owners.Listener, ws.ID, req.Queue, wait)
 	if err != nil {
 		return nil, err
@@ -320,7 +301,7 @@ func (s *Server) PeekQueueMessage(ctx context.Context, req PeekQueueMessageReque
 // ListMaps returns a page of maps.
 func (s *Server) ListMaps(ctx context.Context, req ListMapsRequestObject) (ListMapsResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
+	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +330,7 @@ func (s *Server) DeleteMap(ctx context.Context, req DeleteMapRequestObject) (Del
 // ListMapKeys returns a page of keys.
 func (s *Server) ListMapKeys(ctx context.Context, req ListMapKeysRequestObject) (ListMapKeysResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	page, err := s.owners.Storage.ListMapKeys(ctx, ws.ID, req.Map, orEmpty(req.Params.Prefix), orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 1000))
+	page, err := s.owners.Storage.ListMapKeys(ctx, ws.ID, req.Map, valueOr(req.Params.Prefix, ""), valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +350,7 @@ func (s *Server) GetMapEntry(ctx context.Context, req GetMapEntryRequestObject) 
 // SetMapEntry writes one key.
 func (s *Server) SetMapEntry(ctx context.Context, req SetMapEntryRequestObject) (SetMapEntryResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	w := storage.SetMapEntry{Value: req.Body.Value, IfRevision: req.Body.IfRevision, IfAbsent: req.Body.IfAbsent != nil && *req.Body.IfAbsent}
+	w := storage.SetMapEntry{Value: req.Body.Value, IfRevision: req.Body.IfRevision, IfAbsent: valueOr(req.Body.IfAbsent, false)}
 	if req.Body.TtlSeconds != nil {
 		ttl := time.Duration(*req.Body.TtlSeconds) * time.Second
 		w.TTL = &ttl

@@ -37,13 +37,6 @@ func decodeCursor(cursor *string, v any) error {
 	return nil
 }
 
-func pageLimit[T ~int](limit *T) int {
-	if limit == nil {
-		return defaultPageSize
-	}
-	return int(*limit)
-}
-
 // GetComputeSummary summarizes a workspace's compute.
 func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryRequestObject) (GetComputeSummaryResponseObject, error) {
 	ws := workspaceFrom(ctx)
@@ -75,17 +68,13 @@ func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorklo
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	rows, err := s.owners.Compute.Workloads(ctx, ws.ID, after, limit+1)
 	if err != nil {
 		return nil, err
 	}
 	out := ListComputeWorkloads200JSONResponse{Workloads: []apitypes.ComputeWorkload{}}
-	if len(rows) > limit {
-		rows = rows[:limit]
-		last := rows[limit-1]
-		out.NextCursor = encodeCursor(compute.WorkloadCursor{App: last.App, Name: last.Name})
-	}
+	rows, out.NextCursor = pageOf(rows, limit, func(w compute.Workload) any { return compute.WorkloadCursor{App: w.App, Name: w.Name} })
 	for _, w := range rows {
 		gpus := make([]apitypes.GpuType, len(w.GPUs))
 		for n, g := range w.GPUs {
@@ -126,10 +115,7 @@ func machineOut(m compute.Machine) apitypes.Machine {
 
 func machinePage(rows []compute.Machine, limit int) apitypes.MachinePage {
 	out := apitypes.MachinePage{Machines: []apitypes.Machine{}}
-	if len(rows) > limit {
-		rows = rows[:limit]
-		out.NextCursor = encodeCursor(rows[limit-1].Name)
-	}
+	rows, out.NextCursor = pageOf(rows, limit, func(m compute.Machine) any { return m.Name })
 	for _, m := range rows {
 		out.Machines = append(out.Machines, machineOut(m))
 	}
@@ -143,7 +129,7 @@ func (s *Server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMac
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	rows, err := s.owners.Compute.WorkspaceMachines(ctx, ws.ID, after, limit+1)
 	if err != nil {
 		return nil, err
@@ -161,7 +147,7 @@ func (s *Server) ListMachines(ctx context.Context, req ListMachinesRequestObject
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	rows, err := s.owners.Compute.AccountMachines(ctx, p.User, after, limit+1)
 	if err != nil {
 		return nil, err
@@ -266,17 +252,13 @@ func (s *Server) ListComputeInstances(ctx context.Context, req ListComputeInstan
 	if err := decodeCursor(req.Params.Cursor, &before); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	rows, err := s.owners.Compute.Instances(ctx, p.User, before, limit+1)
 	if err != nil {
 		return nil, err
 	}
 	out := ListComputeInstances200JSONResponse{Instances: []apitypes.ComputeInstance{}}
-	if len(rows) > limit {
-		rows = rows[:limit]
-		last := uuid.UUID(rows[limit-1].ID)
-		out.NextCursor = encodeCursor(last)
-	}
+	rows, out.NextCursor = pageOf(rows, limit, func(i compute.Instance) any { return uuid.UUID(i.ID) })
 	for _, i := range rows {
 		item := apitypes.ComputeInstance{
 			Id: uuid.UUID(i.ID), Placement: "connection:" + i.Connection.String(), Provider: apitypes.InstanceAws,

@@ -15,11 +15,7 @@ import (
 
 // GetPricing returns the public pricing catalog.
 func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
-	at := time.Now()
-	if req.Params.At != nil {
-		at = *req.Params.At
-	}
-	catalog, err := s.owners.Billing.Catalog(at)
+	catalog, err := s.owners.Billing.Catalog(valueOr(req.Params.At, time.Now()))
 	if err != nil {
 		return nil, err
 	}
@@ -125,17 +121,9 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 		return nil, err
 	}
 	q := billing.CostQuery{
-		Start: req.Params.Start, End: req.Params.End, GroupBy: apitypes.UsageCostGroupApp,
-		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Workload: req.Params.WorkloadId, Category: req.Params.Category, Limit: 50,
-	}
-	if req.Params.GroupBy != nil {
-		q.GroupBy = *req.Params.GroupBy
-	}
-	if req.Params.Cursor != nil {
-		q.Cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		q.Limit = *req.Params.Limit
+		Start: req.Params.Start, End: req.Params.End, GroupBy: valueOr(req.Params.GroupBy, apitypes.UsageCostGroupApp),
+		Workspace: req.Params.WorkspaceId, App: req.Params.AppId, Workload: req.Params.WorkloadId, Category: req.Params.Category,
+		Cursor: valueOr(req.Params.Cursor, ""), Limit: valueOr(req.Params.Limit, 50),
 	}
 	page, err := s.owners.Billing.Costs(ctx, uuid.UUID(p.User), q)
 	if err != nil {
@@ -150,11 +138,7 @@ func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObje
 	if err != nil {
 		return nil, err
 	}
-	bucket := apitypes.Day
-	if req.Params.Bucket != nil {
-		bucket = *req.Params.Bucket
-	}
-	series, err := s.owners.Billing.CostSeries(ctx, uuid.UUID(p.User), req.Params.Start, req.Params.End, bucket)
+	series, err := s.owners.Billing.CostSeries(ctx, uuid.UUID(p.User), req.Params.Start, req.Params.End, valueOr(req.Params.Bucket, apitypes.Day))
 	if err != nil {
 		return nil, err
 	}
@@ -167,19 +151,12 @@ func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccount
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
-	f := billing.AccountFilter{Status: req.Params.Status, Limit: 50}
-	if req.Params.Search != nil {
-		f.Search = *req.Params.Search
+	f := billing.AccountFilter{
+		Status: req.Params.Status, Search: valueOr(req.Params.Search, ""), Cursor: valueOr(req.Params.Cursor, ""), Limit: valueOr(req.Params.Limit, 50),
 	}
 	if req.Params.Role != nil {
 		admin := *req.Params.Role == apitypes.PlatformRoleAdministrator
 		f.Admin = &admin
-	}
-	if req.Params.Cursor != nil {
-		f.Cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		f.Limit = *req.Params.Limit
 	}
 	page, err := s.owners.Billing.Accounts(ctx, f)
 	if err != nil {

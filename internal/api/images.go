@@ -28,7 +28,7 @@ func (s *Server) ResolveImage(ctx context.Context, req ResolveImageRequestObject
 // BuildImage resolves a definition and builds its image unless it is ready.
 func (s *Server) BuildImage(ctx context.Context, req BuildImageRequestObject) (BuildImageResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	force := req.Params.Force != nil && *req.Params.Force
+	force := valueOr(req.Params.Force, false)
 	resolution, err := s.owners.Images.Build(ctx, ws.ID, *req.Body, force)
 	if err != nil {
 		return nil, err
@@ -59,10 +59,7 @@ func (s *Server) GetImage(ctx context.Context, req GetImageRequestObject) (GetIm
 // GetImageBuild reads a build, waiting for it to finish when asked.
 func (s *Server) GetImageBuild(ctx context.Context, req GetImageBuildRequestObject) (GetImageBuildResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	wait := time.Duration(0)
-	if req.Params.WaitSeconds != nil {
-		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
-	}
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	build, err := s.owners.Images.GetBuild(ctx, s.owners.Listener, ws.ID, req.Build, wait)
 	if err != nil {
 		return nil, err

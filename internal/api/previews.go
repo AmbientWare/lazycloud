@@ -65,14 +65,10 @@ func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObje
 	if err != nil {
 		return nil, err
 	}
-	timeout := 0
-	if req.Body.TimeoutSeconds != nil {
-		timeout = *req.Body.TimeoutSeconds
-	}
 	if err := s.pinImage(ctx, ws.ID, &req.Body.Spec); err != nil {
 		return nil, err
 	}
-	p, err := s.owners.Control.CreatePreview(ctx, ws.ID, caller.User, req.App, req.Body.Spec, timeout)
+	p, err := s.owners.Control.CreatePreview(ctx, ws.ID, caller.User, req.App, req.Body.Spec, valueOr(req.Body.TimeoutSeconds, 0))
 	if err != nil {
 		return nil, err
 	}
@@ -95,10 +91,7 @@ func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (G
 	if err != nil {
 		return nil, err
 	}
-	wait := time.Duration(0)
-	if req.Params.WaitSeconds != nil {
-		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
-	}
+	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	// A container becoming ready wakes claims of its release.
 	wake, cancel := s.owners.Listener.Subscribe(database.ChannelClaim, p.Release.String())
 	defer cancel()

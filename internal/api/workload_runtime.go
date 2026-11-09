@@ -11,15 +11,21 @@ import (
 // defaultPageSize is the page size when a list names no limit.
 const defaultPageSize = 100
 
-func pageArgs(cursor *string, limit *int) (string, int) {
-	c, n := "", defaultPageSize
-	if cursor != nil {
-		c = *cursor
+// valueOr is an optional parameter's value, or def without one.
+func valueOr[T any](p *T, def T) T {
+	if p == nil {
+		return def
 	}
-	if limit != nil {
-		n = *limit
+	return *p
+}
+
+// pageOf trims rows read with a limit of limit+1 and returns the cursor
+// after the last row it keeps, nil on the last page.
+func pageOf[T any](rows []T, limit int, cursor func(T) any) ([]T, *string) {
+	if len(rows) <= limit {
+		return rows, nil
 	}
-	return c, n
+	return rows[:limit], encodeCursor(cursor(rows[limit-1]))
 }
 
 func secretOut(s secrets.Secret) apitypes.Secret {
@@ -40,8 +46,7 @@ func optional(s string) *string {
 // ListSecrets returns one page of secret names.
 func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
-	page, next, err := s.owners.Secrets.List(ctx, ws.ID, cursor, limit)
+	page, next, err := s.owners.Secrets.List(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
 		return nil, err
 	}

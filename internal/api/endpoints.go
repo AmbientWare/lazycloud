@@ -75,14 +75,7 @@ func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	after, limit := "", 100
-	if req.Params.After != nil {
-		after = *req.Params.After
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	domains, next, err := s.owners.Edge.ListDomains(ctx, p.User, after, limit)
+	domains, next, err := s.owners.Edge.ListDomains(ctx, p.User, valueOr(req.Params.After, ""), valueOr(req.Params.Limit, 100))
 	if err != nil {
 		return nil, err
 	}

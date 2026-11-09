@@ -227,7 +227,7 @@ func (s *Server) instanceOut(i execution.Instance) apitypes.Instance {
 func (s *Server) CreateInstance(ctx context.Context, req CreateInstanceRequestObject) (CreateInstanceResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	b := req.Body
-	in := execution.InstanceRequest{Release: b.ReleaseId, Snapshot: b.SnapshotId, Timeout: b.TimeoutSeconds, Shell: b.Shell != nil && *b.Shell}
+	in := execution.InstanceRequest{Release: b.ReleaseId, Snapshot: b.SnapshotId, Timeout: b.TimeoutSeconds, Shell: valueOr(b.Shell, false)}
 	if p, ok := containerFrom(ctx); ok {
 		if in.Shell || in.Snapshot != nil {
 			return nil, errFromContainer
@@ -250,11 +250,7 @@ var errStillStarting = errors.New("the container is still starting")
 // ConnectContainer waits until the container is ready.
 func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerRequestObject) (ConnectContainerResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	wait := 0
-	if req.Params.WaitSeconds != nil {
-		wait = *req.Params.WaitSeconds
-	}
-	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	deadline := time.Now().Add(time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second)
 	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, req.Container.String())
 	defer cancel()
 	for {
@@ -291,7 +287,7 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObject) (ListSandboxesResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	page, err := s.owners.Execution.ListSandboxes(ctx, ws.ID, execution.SandboxFilter{App: req.Params.App, Search: req.Params.Search},
-		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+		valueOr(req.Params.Limit, 0), valueOr(req.Params.Cursor, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +323,7 @@ func (s *Server) CreateSshCertificate(ctx context.Context, req CreateSshCertific
 func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject) (ListSshHostsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	hosts, next, err := s.owners.SSH.Hosts(ctx, ws, execution.SSHHostFilter{App: req.Params.App, Pod: req.Params.Pod, Role: req.Params.Role},
-		cursorOf(req.Params.Cursor), limitOf(req.Params.Limit))
+		valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 0))
 	if err != nil {
 		return nil, err
 	}

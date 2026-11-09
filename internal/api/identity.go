@@ -92,14 +92,7 @@ func (s *Server) ListTokens(ctx context.Context, req ListTokensRequestObject) (L
 	if err != nil {
 		return nil, err
 	}
-	includeDevice, limit := true, 50
-	if req.Params.IncludeDevice != nil {
-		includeDevice = *req.Params.IncludeDevice
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	page, err := s.owners.Identity.ListTokens(ctx, p, includeDevice, (*identity.TokenID)(req.Params.Cursor), limit)
+	page, err := s.owners.Identity.ListTokens(ctx, p, valueOr(req.Params.IncludeDevice, true), (*identity.TokenID)(req.Params.Cursor), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -143,11 +136,7 @@ func (s *Server) RevokeToken(ctx context.Context, req RevokeTokenRequestObject) 
 
 // StartDeviceLogin opens a device-code login; it needs no credential.
 func (s *Server) StartDeviceLogin(ctx context.Context, req StartDeviceLoginRequestObject) (StartDeviceLoginResponseObject, error) {
-	client := ""
-	if req.Body.ClientName != nil {
-		client = *req.Body.ClientName
-	}
-	start, err := s.owners.Identity.StartDeviceLogin(ctx, client)
+	start, err := s.owners.Identity.StartDeviceLogin(ctx, valueOr(req.Body.ClientName, ""))
 	if err != nil {
 		return nil, err
 	}

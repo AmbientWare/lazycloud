@@ -11,11 +11,7 @@ import (
 // ListHttpRequests lists an app's endpoint and ASGI requests, newest first.
 func (s *Server) ListHttpRequests(ctx context.Context, req ListHttpRequestsRequestObject) (ListHttpRequestsResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	limit := 50
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	requests, next, err := s.owners.Edge.ListRequests(ctx, ws.ID, req.App, req.Params.Name, req.Params.Before, limit)
+	requests, next, err := s.owners.Edge.ListRequests(ctx, ws.ID, req.App, req.Params.Name, req.Params.Before, valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -36,15 +32,7 @@ func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestOb
 // request.
 func (s *Server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLogsRequestObject) (ListHttpRequestLogsResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	var after int64
-	if req.Params.After != nil {
-		after = *req.Params.After
-	}
-	limit := 1000
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), req.HttpRequest, after, limit)
+	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), req.HttpRequest, valueOr(req.Params.After, 0), valueOr(req.Params.Limit, 1000))
 	if err != nil {
 		return nil, err
 	}
