@@ -27,3 +27,7 @@ from releases r;
 create function preview_live(p previews) returns boolean
 language sql stable
 return p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now());
+
+-- Nothing reads when a schedule or an edge's demand last changed.
+alter table schedules drop column created_at, drop column updated_at;
+alter table endpoint_loads drop column updated_at;

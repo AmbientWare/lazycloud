@@ -138,8 +138,7 @@ update schedules
 set next_fire_at = $1,
     last_fired_at = $2,
     last_task_id = $3,
-    last_error = $4,
-    updated_at = now()
+    last_error = $4
 where workload_id = $5
 `
 
@@ -170,8 +169,7 @@ set expression = excluded.expression,
     next_fire_at = excluded.next_fire_at,
     last_fired_at = null,
     last_task_id = null,
-    last_error = null,
-    updated_at = now()
+    last_error = null
 `
 
 type ReplaceScheduleParams struct {

@@ -72,12 +72,12 @@ cross join lateral (
 order by r.id;
 
 -- name: UpsertEndpointLoads :exec
-insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, updated_at, expires_at)
+insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, expires_at)
 select unnest(@release_ids::uuid[]), @edge_id, unnest(@in_flight::int[]), unnest(@waiting::int[]), unnest(@window_peak::int[]),
-       now(), now() + make_interval(secs => @ttl_seconds::float8)
+       now() + make_interval(secs => @ttl_seconds::float8)
 on conflict (release_id, edge_id) do update
 set in_flight = excluded.in_flight, waiting = excluded.waiting, window_peak = excluded.window_peak,
-    updated_at = excluded.updated_at, expires_at = excluded.expires_at;
+    expires_at = excluded.expires_at;
 
 -- name: DeleteExpiredEndpointLoads :exec
 delete from endpoint_loads where expires_at < now() - interval '1 hour';

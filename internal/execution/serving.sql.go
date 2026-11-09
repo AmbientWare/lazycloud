@@ -218,12 +218,12 @@ func (q *Queries) ServingReleases(ctx context.Context, arg ServingReleasesParams
 }
 
 const upsertEndpointLoads = `-- name: UpsertEndpointLoads :exec
-insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, updated_at, expires_at)
+insert into endpoint_loads (release_id, edge_id, in_flight, waiting, window_peak, expires_at)
 select unnest($1::uuid[]), $2, unnest($3::int[]), unnest($4::int[]), unnest($5::int[]),
-       now(), now() + make_interval(secs => $6::float8)
+       now() + make_interval(secs => $6::float8)
 on conflict (release_id, edge_id) do update
 set in_flight = excluded.in_flight, waiting = excluded.waiting, window_peak = excluded.window_peak,
-    updated_at = excluded.updated_at, expires_at = excluded.expires_at
+    expires_at = excluded.expires_at
 `
 
 type UpsertEndpointLoadsParams struct {
