@@ -20,8 +20,8 @@ from lazycloud._shared.client_version import (
 from lazycloud._shared.task_context import current_task_id
 from lazycloud.contracts.api import (
     App,
-    AppUpdate,
     AppPage,
+    AppUpdate,
     Container,
     ContainerPage,
     Deployment,

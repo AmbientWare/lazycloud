@@ -58,7 +58,7 @@ class _Workspaces:
 
     def me(self, request: ApiRequest) -> Reply:
         assert request.headers["authorization"] == f"Bearer {TOKEN}"
-        user = {
+        user: dict[str, object] = {
             "id": "0192f0a0-0000-7000-8000-ffffffffffff",
             "email": "dev@example.com",
             "display_name": "Dev",

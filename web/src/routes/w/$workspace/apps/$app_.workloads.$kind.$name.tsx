@@ -73,10 +73,14 @@ function WorkloadDetail({ address }: { address: WorkloadRef }) {
   const loaded = query.data?.workload;
   // Only a Pod lists its containers; a devbox is one machine whose status names it.
   const containers = useInfiniteQuery(
-    containersQueryOptions(workspace.name, { ...address, id: loaded?.id ?? "" }, {
-      live: podInstanceStatus === "active",
-      enabled: loaded?.kind === "pod" && loaded.role !== "devbox",
-    }),
+    containersQueryOptions(
+      workspace.name,
+      { ...address, id: loaded?.id ?? "" },
+      {
+        live: podInstanceStatus === "active",
+        enabled: loaded?.kind === "pod" && loaded.role !== "devbox",
+      },
+    ),
   );
 
   if (query.isPending) return <WorkloadSkeleton />;

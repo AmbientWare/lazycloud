@@ -8,11 +8,7 @@ import {
 } from "@tanstack/react-query";
 
 import { ApiError, type Schemas } from "@/lib/api/client";
-import {
-  billingAccountsQueryOptions,
-  setComplimentary,
-  updateUser,
-} from "@/lib/queries/admin";
+import { billingAccountsQueryOptions, setComplimentary, updateUser } from "@/lib/queries/admin";
 import { accountQueryKeys, EVERY_ACCOUNT, type AccountScope } from "@/lib/queries/workspace-keys";
 
 type BillingAccountAdmin = Schemas["BillingAccountAdmin"];
