@@ -233,7 +233,7 @@ func (a *Agent) saveLeases(container string, disks []*heldDisk) error {
 	if err := os.MkdirAll(a.leaseDir(), 0o700); err != nil {
 		return fmt.Errorf("create lease directory: %w", err)
 	}
-	if err := writeFileAtomic(a.leaseFile(container), data, 0o600); err != nil {
+	if err := hostproto.WriteFile(a.leaseFile(container), data, 0o600); err != nil {
 		return fmt.Errorf("record disk leases: %w", err)
 	}
 	return nil

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
 
@@ -175,12 +176,8 @@ func writeIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // configuration directories are world-readable
 		return false, fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	tmp := path + ".lazycloud.tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil { //nolint:gosec // fixed configuration paths
-		return false, fmt.Errorf("write %s: %w", path, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return false, fmt.Errorf("write %s: %w", path, err)
+	if err := hostproto.WriteFile(path, data, perm); err != nil {
+		return false, err
 	}
 	return true, nil
 }

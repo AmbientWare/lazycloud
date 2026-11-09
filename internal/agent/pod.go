@@ -89,7 +89,7 @@ func (c *container) podLabels(labels map[string]string) error {
 		if err := os.MkdirAll(c.dir, 0o700); err != nil {
 			return fmt.Errorf("create container directory: %w", err)
 		}
-		if err := writeFileAtomic(filepath.Join(c.dir, sshHostKeyFile), key, 0o600); err != nil {
+		if err := hostproto.WriteFile(filepath.Join(c.dir, sshHostKeyFile), key, 0o600); err != nil {
 			return fmt.Errorf("record SSH host key: %w", err)
 		}
 		recorded.Ssh.HostKey = nil

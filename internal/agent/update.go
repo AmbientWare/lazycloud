@@ -165,7 +165,7 @@ func installRelease(ctx context.Context, httpClient *http.Client, root, stateDir
 	if err := replaceLink(filepath.Join(root, "previous"), current); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(filepath.Join(stateDir, TrialFile), []byte(version+"\n"), 0o600); err != nil {
+	if err := hostproto.WriteFile(filepath.Join(stateDir, TrialFile), []byte(version+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write update trial: %w", err)
 	}
 	return replaceLink(filepath.Join(root, "current"), filepath.Join("releases", version))

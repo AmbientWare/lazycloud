@@ -198,11 +198,11 @@ func writeCredentials(dir string, creds processCredentials, keep bool) error {
 	if err != nil {
 		return fmt.Errorf("encode credentials: %w", err)
 	}
-	write := writeFileAtomic
+	place := os.Rename
 	if keep {
-		write = writeFileExclusive
+		place = os.Link
 	}
-	if err := write(filepath.Join(dir, "credentials.json"), data, 0o600); err != nil {
+	if err := hostproto.PlaceFile(filepath.Join(dir, "credentials.json"), bytes.NewReader(data), 0o600, place); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	config := filepath.Join(dir, "config")
@@ -210,7 +210,7 @@ func writeCredentials(dir string, creds processCredentials, keep bool) error {
 		return nil
 	}
 	text := "[default]\ncredential_process = cat /creds/credentials.json\n"
-	if err := writeFileAtomic(config, []byte(text), 0o644); err != nil { //nolint:gosec // Holds no secret.
+	if err := hostproto.WriteFile(config, []byte(text), 0o644); err != nil { //nolint:gosec // Holds no secret.
 		return fmt.Errorf("write credential config: %w", err)
 	}
 	return nil
@@ -239,7 +239,7 @@ func (v *volumes) grant(g *hostproto.StorageGrant) error {
 	if err != nil {
 		return fmt.Errorf("encode grant: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
+	if err := hostproto.WriteFile(filepath.Join(dir, "location.json"), location, 0o600); err != nil {
 		return fmt.Errorf("write bucket location: %w", err)
 	}
 	v.mu.Lock()

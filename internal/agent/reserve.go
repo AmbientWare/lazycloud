@@ -111,7 +111,7 @@ func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareR
 	attempt := sleepAttempt{ID: request.GetAttemptId(), BootID: a.bootID, Gap: a.clock.gap()}
 	data, err := json.Marshal(attempt)
 	if err == nil {
-		err = writeFileAtomic(filepath.Join(a.cfg.StateDir, sleepAttemptFile), data, 0o600)
+		err = hostproto.WriteFile(filepath.Join(a.cfg.StateDir, sleepAttemptFile), data, 0o600)
 	}
 	if err != nil {
 		ready.Refused = "recording the sleep attempt failed: " + err.Error()
