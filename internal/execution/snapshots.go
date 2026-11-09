@@ -310,7 +310,7 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, _ *slog.Logger) 
 		return database.NotifyAll(ctx, tx, database.ChannelHost, wake)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("automatic snapshots: %w", err)
 	}
 	stale, err := e.queries.FailStaleSnapshots(ctx, SnapshotDeadline.Seconds())
 	if err != nil {
