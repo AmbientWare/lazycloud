@@ -8,6 +8,8 @@ import typer
 from lazycloud.cli.components.output import print_payload
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import workspace_storage
+from lazycloud.clients.api import ApiError
+from lazycloud.contracts.api import ErrorCode
 
 artifact_app = typer.Typer(help="Browse artifacts, inspect storage usage, and delete files.")
 
@@ -51,7 +53,8 @@ def delete_artifact(
         consequence="This permanently removes the artifact and settles its storage charges.",
         yes=yes,
     )
-    workspace_storage(workspace=workspace).delete_artifact(selected)
+    if not workspace_storage(workspace=workspace).delete_artifacts([selected]):
+        raise ApiError(status_code=404, code=ErrorCode.not_found, message="artifact not found")
     print_payload(ctx, {"deleted": artifact_id})
 
 

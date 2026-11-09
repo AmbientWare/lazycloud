@@ -170,13 +170,13 @@ class Artifact:
         if not self.id:
             raise ArtifactNotSavedError("artifact has not been saved remotely")
         try:
-            self._artifact_client().delete_artifact(self._remote_id())
+            deleted = self._artifact_client().delete_artifacts([self._remote_id()])
         except ApiError as exc:
-            if exc.code is ErrorCode.not_found:
-                raise ArtifactNotFoundError(exc.message or "artifact not found") from exc
             raise ArtifactDeleteError(exc.message or "failed to delete artifact") from exc
         except ApiConnectionError as exc:
             raise ArtifactDeleteError(str(exc)) from exc
+        if not deleted:
+            raise ArtifactNotFoundError("artifact not found")
 
     def exists(self) -> bool:
         if not self.id:

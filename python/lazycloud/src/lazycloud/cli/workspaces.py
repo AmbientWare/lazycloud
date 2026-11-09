@@ -77,7 +77,7 @@ def _selection_error(
 @workspace_app.command("list", help="List accessible workspaces.")
 def workspace_list(ctx: typer.Context) -> None:
     with workspace_client() as client:
-        workspaces = client.list_workspaces()
+        workspaces = client.me().workspaces
     current = get_profile().workspace
     rows = [
         [
@@ -229,7 +229,7 @@ def workspace_delete(
                 remaining = sorted(
                     (
                         item
-                        for item in client.list_workspaces()
+                        for item in client.me().workspaces
                         if item.state is WorkspaceState.active and item.name != name
                     ),
                     key=lambda item: item.name,

@@ -203,10 +203,6 @@ class ApiClient:
             body=DeviceTokenRequest(device_code=device_code),
         )
 
-    def list_workspaces(self) -> list[Workspace]:
-        """The workspaces the caller is a member of and its token reaches."""
-        return self.me().workspaces
-
     def get_workspace(self, name: str) -> Workspace:
         return self._send(Workspace, "GET", _path("v1", "workspaces", name))
 
@@ -1016,7 +1012,6 @@ __all__ = [
     "ApiClient",
     "ApiConnectionError",
     "ApiError",
-    "CursorPage",
     "is_transient",
     "pages",
 ]
