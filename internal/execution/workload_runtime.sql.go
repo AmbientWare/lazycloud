@@ -159,14 +159,3 @@ func (q *Queries) RunningTaskOnContainer(ctx context.Context, arg RunningTaskOnC
 	err := row.Scan(&i.AttemptID, &i.RootTaskID)
 	return i, err
 }
-
-const wakeCallbackDelivery = `-- name: WakeCallbackDelivery :exec
-select pg_notify('lc_callback', '')
-`
-
-// Delivered when the transaction commits; the deliverer runs at once
-// instead of on its next tick. The channel is database.ChannelCallback.
-func (q *Queries) WakeCallbackDelivery(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, wakeCallbackDelivery)
-	return err
-}

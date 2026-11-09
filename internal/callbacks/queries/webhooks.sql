@@ -42,11 +42,6 @@ from webhooks h
 where h.workspace_id = @workspace_id and h.id = @id
 returning *;
 
--- name: WakeDelivery :exec
--- Delivered when the transaction commits, so the deliverer runs at once.
--- The channel is database.ChannelCallback.
-select pg_notify('lc_callback', '');
-
 -- name: ListWebhookDeliveries :many
 -- The webhook's deliveries below the cursor id, newest first.
 select d.* from webhook_deliveries d

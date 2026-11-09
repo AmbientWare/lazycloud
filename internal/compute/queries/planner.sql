@@ -361,10 +361,6 @@ from jsonb_to_recordset(@markets::jsonb) as v(market text, plan jsonb, generated
 on conflict (market) do update
 set plan = excluded.plan, generated_at = excluded.generated_at, expires_at = excluded.expires_at;
 
--- name: NotifyHosts :exec
--- Wakes the sessions of hosts the pass moved, once it commits.
-select pg_notify(@channel::text, v.id) from unnest(@ids::text[]) as v(id);
-
 -- name: HostWaitTrace :one
 -- The trace of the longest-waiting pending container the fleet bought or
 -- resumed the host for, read through the pending containers.

@@ -211,7 +211,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.SucceedTasks(ctx, results.TaskIds); err != nil {
 			return fmt.Errorf("succeed tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackSucceeded, results.TaskIds, nil); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackSucceeded, results.TaskIds, nil); err != nil {
 			return err
 		}
 	}
@@ -219,7 +219,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.RequeueTasks(ctx, requeue); err != nil {
 			return fmt.Errorf("requeue tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackRetry, requeue.Ids, retryFailures); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackRetry, requeue.Ids, retryFailures); err != nil {
 			return err
 		}
 		if err := database.NotifyAll(ctx, tx, database.ChannelClaim, retryReleases); err != nil {
@@ -230,7 +230,7 @@ func (e *Execution) advanceTasks(ctx context.Context, tx pgx.Tx, live []liveOutc
 		if err := q.FailRunningTasks(ctx, failed); err != nil {
 			return fmt.Errorf("fail tasks: %w", err)
 		}
-		if err := recordCallbacks(ctx, q, CallbackFailed, failed.Ids, nil); err != nil {
+		if err := recordCallbacks(ctx, tx, CallbackFailed, failed.Ids, nil); err != nil {
 			return err
 		}
 	}

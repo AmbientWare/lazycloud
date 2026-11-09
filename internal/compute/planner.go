@@ -747,10 +747,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			return fmt.Errorf("publish fleet markets: %w", err)
 		}
 	}
-	if len(wake) > 0 {
-		if err := q.NotifyHosts(ctx, NotifyHostsParams{Channel: string(database.ChannelHost), Ids: wake}); err != nil {
-			return fmt.Errorf("wake host sessions: %w", err)
-		}
+	// Wakes the sessions of hosts the pass moved, once it commits.
+	if err := database.NotifyAll(ctx, tx, database.ChannelHost, wake); err != nil {
+		return err
 	}
 	if moved {
 		return database.Notify(ctx, tx, ChannelCompute, string(KindPlatform))

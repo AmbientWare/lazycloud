@@ -277,21 +277,6 @@ func (q *Queries) LockFleet(ctx context.Context) (LockFleetRow, error) {
 	return i, err
 }
 
-const notifyHosts = `-- name: NotifyHosts :exec
-select pg_notify($1::text, v.id) from unnest($2::text[]) as v(id)
-`
-
-type NotifyHostsParams struct {
-	Channel string
-	Ids     []string
-}
-
-// Wakes the sessions of hosts the pass moved, once it commits.
-func (q *Queries) NotifyHosts(ctx context.Context, arg NotifyHostsParams) error {
-	_, err := q.db.Exec(ctx, notifyHosts, arg.Channel, arg.Ids)
-	return err
-}
-
 const pendingDemand = `-- name: PendingDemand :many
 with batch as (
     select c.id, c.workspace_id, c.release_id, c.image_build_id, c.cpu_millis, c.memory_bytes, c.capacity_host_id, c.traceparent,

@@ -126,7 +126,7 @@ func (e *Execution) finishTasks(ctx context.Context, tx pgx.Tx, event CallbackEv
 	if len(ids) == 0 {
 		return nil
 	}
-	if err := recordCallbacks(ctx, e.queries.WithTx(tx), event, ids, nil); err != nil {
+	if err := recordCallbacks(ctx, tx, event, ids, nil); err != nil {
 		return err
 	}
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {

@@ -27,11 +27,6 @@ join releases r on r.id = t.release_id
 where r.spec ->> 'callback_url' is not null
 on conflict (task_id, event, attempt) do nothing;
 
--- name: WakeCallbackDelivery :exec
--- Delivered when the transaction commits; the deliverer runs at once
--- instead of on its next tick. The channel is database.ChannelCallback.
-select pg_notify('lc_callback', '');
-
 -- name: EnqueueTaskWebhooks :exec
 -- One event per task for the workspace's webhooks that take it, after the
 -- task reached its terminal status. The exists test skips building data for
