@@ -16,10 +16,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Schemas } from "@/lib/api/client";
-import { deployedAt, workloadRunning } from "@/lib/queries/deployments";
+import {
+  deleteWorkloadMutationOptions,
+  deployedAt,
+  workloadRunning,
+} from "@/lib/queries/deployments";
 import { formatKind } from "@/lib/format";
 
-import { WorkloadRowActions } from "./WorkloadRowActions";
+import { DeleteMenu } from "./DeleteMenu";
 
 export function AppWorkloadsSection({
   workspace,
@@ -144,7 +148,20 @@ export function AppWorkloadsSection({
                       <StatusChip status={active ? "deployed" : "inactive"} live={active} />
                     </span>
                     <span className="flex items-center justify-end gap-1">
-                      <WorkloadRowActions workload={workload} workspace={workspace} />
+                      {workload.state !== "deleted" ? (
+                        <DeleteMenu
+                          workspace={workspace}
+                          name={workload.name}
+                          noun="workload"
+                          description="This stops its containers and deletes every version of this workload. The app stays."
+                          cancelLabel="Cancel"
+                          remove={deleteWorkloadMutationOptions(workspace, workload).mutationFn}
+                          triggerClassName="size-7"
+                          iconClassName="size-3.5"
+                          menuClassName="w-48"
+                          insideLink
+                        />
+                      ) : null}
                       <ChevronRight
                         className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"
                         aria-hidden="true"

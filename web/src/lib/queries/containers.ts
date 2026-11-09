@@ -8,7 +8,12 @@ import {
   selectInfiniteList,
   type InfiniteListQueryData,
 } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./workspace-keys";
+import {
+  criticalLiveQueryMeta,
+  type WorkloadRef,
+  workspaceLiveQueryMeta,
+  workspaceQueryKeys,
+} from "./workspace-keys";
 
 /** The containers of the workload's releases, newest first; `live` keeps those not stopped. */
 export function containersQueryOptions(
@@ -34,7 +39,7 @@ export function containersQueryOptions(
     getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
     enabled,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -55,7 +60,7 @@ export function containerQueryOptions(workspace: string, containerId: string) {
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

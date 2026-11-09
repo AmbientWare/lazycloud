@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Annotated, Protocol
+from typing import Annotated, Any
 
 import typer
 
@@ -43,33 +44,72 @@ from lazycloud.self_update import installed_version
 _GLOBAL_FLAGS = ("--json", "--debug")
 
 
-class CliRootRegistrar(Protocol):
-    def __call__(self, application: typer.Typer, /) -> None: ...
-
-
-class PublicCliRegistry:
-    """Fresh named command and group registry for one CLI build."""
-
-    def __init__(self, application: typer.Typer) -> None:
-        self._application = application
-        self._root_commands: dict[str, CliRootRegistrar] = {}
-        self._groups: dict[str, typer.Typer] = {}
-
-    def add_root_command(self, name: str, registrar: CliRootRegistrar) -> None:
-        if name in self._root_commands:
-            raise ValueError(f"root command {name!r} is already registered")
-        self._root_commands[name] = registrar
-
-    def add_group(self, name: str, template: typer.Typer) -> None:
-        if name in self._groups:
-            raise ValueError(f"command group {name!r} is already registered")
-        self._groups[name] = deepcopy(template)
-
-    def compose(self) -> None:
-        for registrar in self._root_commands.values():
-            registrar(self._application)
-        for name, group in self._groups.items():
-            self._application.add_typer(group, name=name)
+_PASSTHROUGH = {"ignore_unknown_options": True, "allow_extra_args": True}
+_COMMANDS: tuple[tuple[str, Callable[..., Any], dict[str, Any]], ...] = (
+    ("deploy", deploy, {"help": "Deploy a handler or apps from Python files and modules."}),
+    ("run", run, {"help": "Run a handler locally or remotely.", "context_settings": _PASSTHROUGH}),
+    (
+        "shell",
+        shell,
+        {
+            "help": "Open an interactive shell for a handler or container.",
+            "context_settings": _PASSTHROUGH,
+        },
+    ),
+    (
+        "ssh",
+        ssh,
+        {
+            "help": "Open an SSH session to a devbox or a pod that serves SSH.",
+            "context_settings": _PASSTHROUGH,
+        },
+    ),
+    (
+        "ssh-proxy",
+        ssh_proxy,
+        {"help": "Carry an SSH connection to a pod over stdin and stdout.", "hidden": True},
+    ),
+    (
+        "ssh-config",
+        ssh_config,
+        {"help": "Write SSH config so ssh and editors reach devboxes and pods by name."},
+    ),
+    (
+        "ssh-cert",
+        ssh_cert,
+        {"help": "Refresh the SSH certificate for the workspace.", "hidden": True},
+    ),
+    ("serve", serve, {"help": "Serve an app locally."}),
+    ("login", login, {"help": "Authenticate the CLI profile."}),
+    ("dev", dev, {"help": "Run local development helpers."}),
+    ("logs", logs, {"help": "Inspect task and container logs."}),
+    ("update", update, {"help": "Upgrade the installed lazycloud client."}),
+    ("ls", volume_ls, {"help": "List files in a volume."}),
+    ("cp", volume_cp, {"help": "Copy files to or from a volume."}),
+    ("rm", volume_rm, {"help": "Remove files from a volume."}),
+    ("mv", volume_mv, {"help": "Move or rename files in a volume."}),
+)
+_GROUPS: tuple[tuple[str, typer.Typer], ...] = (
+    ("devbox", devbox_app),
+    ("profile", profile_app),
+    ("token", token_app),
+    ("task", task_app),
+    ("deployment", deployment_app),
+    ("container", container_app),
+    ("machine", machine_app),
+    ("secret", secret_app),
+    ("domain", domain_app),
+    ("webhook", webhook_app),
+    ("requests", requests_app),
+    ("volume", volume_app),
+    ("disk", disk_app),
+    ("artifact", artifact_app),
+    ("example", example_app),
+    ("workspace", workspace_app),
+    ("cloud", cloud_app),
+    ("compute", compute_app),
+    ("app", app_app),
+)
 
 
 def build_public_cli() -> typer.Typer:
@@ -81,10 +121,10 @@ def build_public_cli() -> typer.Typer:
         rich_markup_mode="rich",
     )
     application.callback()(_public_cli_callback)
-    registry = PublicCliRegistry(application)
-    _register_public_commands(registry)
-    _register_public_groups(registry)
-    registry.compose()
+    for name, command, options in _COMMANDS:
+        application.command(name, **options)(command)
+    for name, group in _GROUPS:
+        application.add_typer(deepcopy(group), name=name)
     return application
 
 
@@ -145,136 +185,6 @@ def _public_cli_callback(
             )
 
     ctx.with_resource(observe_client_versions(notify_update))
-
-
-def _register_public_commands(registry: PublicCliRegistry) -> None:
-    registry.add_root_command("deploy", _register_deploy)
-    registry.add_root_command("run", _register_run)
-    registry.add_root_command("shell", _register_shell)
-    registry.add_root_command("ssh", _register_ssh)
-    registry.add_root_command("ssh-proxy", _register_ssh_proxy)
-    registry.add_root_command("ssh-config", _register_ssh_config)
-    registry.add_root_command("ssh-cert", _register_ssh_cert)
-    registry.add_root_command("serve", _register_serve)
-    registry.add_root_command("login", _register_login)
-    registry.add_root_command("dev", _register_dev)
-    registry.add_root_command("logs", _register_logs)
-    registry.add_root_command("update", _register_update)
-    registry.add_root_command("ls", _register_volume_ls)
-    registry.add_root_command("cp", _register_volume_cp)
-    registry.add_root_command("rm", _register_volume_rm)
-    registry.add_root_command("mv", _register_volume_mv)
-
-
-def _register_deploy(application: typer.Typer) -> None:
-    application.command("deploy", help="Deploy a handler or apps from Python files and modules.")(
-        deploy
-    )
-
-
-def _register_run(application: typer.Typer) -> None:
-    application.command(
-        "run",
-        help="Run a handler locally or remotely.",
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )(run)
-
-
-def _register_shell(application: typer.Typer) -> None:
-    application.command(
-        "shell",
-        help="Open an interactive shell for a handler or container.",
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )(shell)
-
-
-def _register_ssh(application: typer.Typer) -> None:
-    application.command(
-        "ssh",
-        help="Open an SSH session to a devbox or a pod that serves SSH.",
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )(ssh)
-
-
-def _register_ssh_proxy(application: typer.Typer) -> None:
-    application.command(
-        "ssh-proxy",
-        help="Carry an SSH connection to a pod over stdin and stdout.",
-        hidden=True,
-    )(ssh_proxy)
-
-
-def _register_ssh_config(application: typer.Typer) -> None:
-    application.command(
-        "ssh-config",
-        help="Write SSH config so ssh and editors reach devboxes and pods by name.",
-    )(ssh_config)
-
-
-def _register_ssh_cert(application: typer.Typer) -> None:
-    application.command(
-        "ssh-cert",
-        help="Refresh the SSH certificate for the workspace.",
-        hidden=True,
-    )(ssh_cert)
-
-
-def _register_serve(application: typer.Typer) -> None:
-    application.command("serve", help="Serve an app locally.")(serve)
-
-
-def _register_login(application: typer.Typer) -> None:
-    application.command("login", help="Authenticate the CLI profile.")(login)
-
-
-def _register_logs(application: typer.Typer) -> None:
-    application.command("logs", help="Inspect task and container logs.")(logs)
-
-
-def _register_update(application: typer.Typer) -> None:
-    application.command("update", help="Upgrade the installed lazycloud client.")(update)
-
-
-def _register_dev(application: typer.Typer) -> None:
-    application.command("dev", help="Run local development helpers.")(dev)
-
-
-def _register_volume_ls(application: typer.Typer) -> None:
-    application.command("ls", help="List files in a volume.")(volume_ls)
-
-
-def _register_volume_cp(application: typer.Typer) -> None:
-    application.command("cp", help="Copy files to or from a volume.")(volume_cp)
-
-
-def _register_volume_rm(application: typer.Typer) -> None:
-    application.command("rm", help="Remove files from a volume.")(volume_rm)
-
-
-def _register_volume_mv(application: typer.Typer) -> None:
-    application.command("mv", help="Move or rename files in a volume.")(volume_mv)
-
-
-def _register_public_groups(registry: PublicCliRegistry) -> None:
-    registry.add_group("devbox", devbox_app)
-    registry.add_group("profile", profile_app)
-    registry.add_group("token", token_app)
-    registry.add_group("task", task_app)
-    registry.add_group("deployment", deployment_app)
-    registry.add_group("container", container_app)
-    registry.add_group("machine", machine_app)
-    registry.add_group("secret", secret_app)
-    registry.add_group("domain", domain_app)
-    registry.add_group("webhook", webhook_app)
-    registry.add_group("requests", requests_app)
-    registry.add_group("volume", volume_app)
-    registry.add_group("disk", disk_app)
-    registry.add_group("artifact", artifact_app)
-    registry.add_group("example", example_app)
-    registry.add_group("workspace", workspace_app)
-    registry.add_group("cloud", cloud_app)
-    registry.add_group("compute", compute_app)
-    registry.add_group("app", app_app)
 
 
 if __name__ == "__main__":

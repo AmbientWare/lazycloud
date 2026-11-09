@@ -1,5 +1,4 @@
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -75,8 +74,7 @@ export function WorkspaceRenameDialog({
             <Button disabled={rename.isSaving} onClick={onClose} type="button" variant="outline">
               Cancel
             </Button>
-            <Button disabled={!rename.canSave} type="submit">
-              {rename.isSaving ? <Loader2 className="size-4 animate-spin" /> : null}
+            <Button pending={rename.isSaving} disabled={!rename.canSave} type="submit">
               Rename
             </Button>
           </DialogFooter>

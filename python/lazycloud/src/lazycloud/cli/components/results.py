@@ -41,9 +41,9 @@ def emit_python_result(ctx: typer.Context, value: object, *, output: Path | None
     if output is not None:
         error_console.print(Text(f"Saved {output}", style=theme.MUTED))
         return
-    display = export.display()
-    if display is not None and display.rich is not None:
-        error_console.print(rich_display_hint(display.rich))
+    hint = rich_display_hint(export.display())
+    if hint is not None:
+        error_console.print(hint)
 
 
 def emit_result(

@@ -11,9 +11,10 @@ import typer
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit, write_stream
 from lazycloud.cli.components.progress import ConnectingIndicator
-from lazycloud.cli.control import control_config, workloads
+from lazycloud.cli.control import workloads
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.contracts.api import DevboxPhase, DevboxState, PodRole, WorkloadKind, WorkloadState
+from lazycloud.control import resolve_control_client_config
 from lazycloud.session.ssh import (
     SshAccess,
     SshPaths,
@@ -83,7 +84,7 @@ def ssh_proxy(
     workspace: WorkspaceOption = None,
 ) -> None:
     """Carry an SSH connection over stdin and stdout; used as ssh's ProxyCommand."""
-    config = control_config(workspace=workspace)
+    config = resolve_control_client_config(workspace=workspace)
     if not config.token:
         raise ClientError("not logged in; run `lazycloud login`", type="not_authenticated")
     client = workloads(workspace=workspace)

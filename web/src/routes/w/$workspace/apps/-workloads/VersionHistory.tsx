@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { Pause, Play, Trash2 } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
@@ -147,6 +147,8 @@ function VersionRow({
       <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
         {running ? (
           <Button
+            pending={stop.isPending}
+            icon={<Pause />}
             type="button"
             variant="ghost"
             size="icon"
@@ -154,11 +156,11 @@ function VersionRow({
             title="Pause deployment"
             disabled={pending}
             onClick={() => stop.mutate()}
-          >
-            {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
-          </Button>
+          ></Button>
         ) : (
           <Button
+            pending={start.isPending}
+            icon={<Play />}
             type="button"
             variant="ghost"
             size="icon"
@@ -166,9 +168,7 @@ function VersionRow({
             title="Resume deployment"
             disabled={pending}
             onClick={() => start.mutate()}
-          >
-            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-          </Button>
+          ></Button>
         )}
         {canDelete ? (
           <ConfirmButton

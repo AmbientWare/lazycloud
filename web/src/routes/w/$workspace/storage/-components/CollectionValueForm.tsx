@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -168,11 +167,11 @@ export function CollectionValueForm({
         ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <Button
+            pending={save.isPending}
             type="submit"
             size="sm"
             disabled={!name.trim() || !json.trim() || (kind === "maps" && !key)}
           >
-            {save.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {entry ? "Save value" : kind === "maps" ? "Add key" : "Add message"}
           </Button>
           <Button type="button" variant="ghost" size="sm" onClick={onCancel}>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Archive, Camera, Loader2, Square } from "lucide-react";
+import { Archive, Camera, Square } from "lucide-react";
 
 import { CopyId } from "@/components/shared/CopyId";
 import { StopCause } from "@/components/shared/StopCause";
@@ -166,25 +166,27 @@ function SandboxActions({
     <div className="flex max-w-full flex-wrap justify-end gap-2">
       {running ? (
         <Button
+          pending={image.isPending}
+          icon={<Archive />}
           type="button"
           variant="outline"
           size="sm"
-          disabled={image.isPending || memory.isPending}
+          disabled={memory.isPending}
           onClick={() => image.mutate()}
         >
-          {image.isPending ? <Loader2 className="animate-spin" /> : <Archive />}
           Save image
         </Button>
       ) : null}
       {running ? (
         <Button
+          pending={memory.isPending}
+          icon={<Camera />}
           type="button"
           variant="outline"
           size="sm"
           disabled={image.isPending || memory.isPending}
           onClick={() => memory.mutate()}
         >
-          {memory.isPending ? <Loader2 className="animate-spin" /> : <Camera />}
           Snapshot memory
         </Button>
       ) : null}

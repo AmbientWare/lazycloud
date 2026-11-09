@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, ParamSpec, Protocol, TypeVar, cast, overload
 
 from lazycloud._shared.app_slug import validate_app_slug
 from lazycloud._shared.autoscaling import Autoscaler
@@ -17,11 +17,9 @@ from lazycloud._shared.deployment_records import (
     DEFAULT_POD_CPU,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    VolumeMount,
 )
-from lazycloud._shared.deployments import DeploymentKind, PodRole
+from lazycloud._shared.deployments import DeploymentKind
 from lazycloud._shared.disks import DiskMount, parse_devbox_disk_size_bytes
 from lazycloud._shared.gpu import GpuInput
 from lazycloud._shared.tasks import TaskPolicy
@@ -32,7 +30,7 @@ from lazycloud.abstractions.metadata import (
     RetryPolicyInput,
     SchemaInput,
 )
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.abstractions.volume import VolumeExport, VolumeMount, volume_mounts
 from lazycloud.agent_harness import AgentHarness
 from lazycloud.control import resolve_control_client_config
 from lazycloud.exceptions import SdkError
@@ -56,7 +54,10 @@ class AppOperationError(SdkError):
 
 
 class AppResource(Protocol):
-    def spec(self) -> DeploymentSpec: ...
+    kind: ClassVar[DeploymentKind]
+
+    @property
+    def resource_name(self) -> str: ...
 
 
 ResourceT = TypeVar("ResourceT", bound=AppResource)
@@ -257,52 +258,11 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
-        from lazycloud.abstractions.function import FunctionOptions
-        from lazycloud.abstractions.function import _function as function_decorator
-
-        kwargs = FunctionOptions(
-            image=image,
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            concurrency=concurrency,
-            in_process=in_process,
-            cron=cron,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            autoscaler=autoscaler,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            on_running=on_running,
-            on_success=on_success,
-            on_error=on_error,
-            on_retry=on_retry,
-            on_failure=on_failure,
-            on_finish=on_finish,
-            task_policy=task_policy,
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=metadata,
-        )
+        options = _options(locals())
+        from lazycloud.abstractions.function import Function
 
         def decorate(target: Callable[P, R]) -> Function[P, R]:
-            return self._register(function_decorator(target, _app_slug=self.slug, **kwargs))
+            return self._register(Function(target, _app_slug=self.slug, **options))
 
         return decorate if func is None else decorate(func)
 
@@ -459,49 +419,11 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
-        from lazycloud.abstractions.endpoint import EndpointOptions
-        from lazycloud.abstractions.endpoint import _endpoint as endpoint_decorator
-
-        kwargs = EndpointOptions(
-            image=image,
-            name=name,
-            route=route,
-            domain=domain,
-            methods=methods,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            workers=workers,
-            concurrency=concurrency,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=metadata,
-        )
+        options = _options(locals())
+        from lazycloud.abstractions.endpoint import Endpoint
 
         def decorate(target: Callable[P, R]) -> Endpoint[P, R]:
-            return self._register(endpoint_decorator(target, _app_slug=self.slug, **kwargs))
+            return self._register(Endpoint(target, _app_slug=self.slug, **options))
 
         return decorate if func is None else decorate(func)
 
@@ -560,44 +482,13 @@ class App:
             machine: A joined machine this workload must run on, by name; unset runs
                 in the workspace.
         """
-        from lazycloud.abstractions.endpoint import ASGI, ASGIOptions
-        from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
-
-        kwargs = ASGIOptions(
-            name=name,
-            image=image,
-            route=route,
-            domain=domain,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            workers=workers,
-            concurrent_requests=concurrent_requests,
-            keep_warm_seconds=keep_warm_seconds,
-            max_pending_tasks=max_pending_tasks,
-            authorized=authorized,
-            callback_url=callback_url,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-        )
-        factory = asgi_decorator(resource_type=ASGI, _app_slug=self.slug, **kwargs)
+        options = _options(locals())
+        from lazycloud.abstractions.endpoint import ASGI
 
         def decorate(
             target: Callable[..., Awaitable[Any]] | Callable[..., Any],
         ) -> ASGI:
-            return self._register(factory(target))
+            return self._register(ASGI(target, _app_slug=self.slug, **options))
 
         return decorate
 
@@ -655,42 +546,11 @@ class App:
             machine: A joined machine this workload must run on, by name; unset runs
                 in the workspace.
         """
-        from lazycloud.abstractions.endpoint import ASGIOptions, RealtimeASGI
-        from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
-
-        kwargs = ASGIOptions(
-            name=name,
-            image=image,
-            route=route,
-            domain=domain,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            workers=workers,
-            concurrent_requests=concurrent_requests,
-            keep_warm_seconds=keep_warm_seconds,
-            max_pending_tasks=max_pending_tasks,
-            authorized=authorized,
-            callback_url=callback_url,
-            env=env,
-            secrets=secrets,
-            volumes=volumes,
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-        )
-        factory = asgi_decorator(resource_type=RealtimeASGI, _app_slug=self.slug, **kwargs)
+        options = _options(locals())
+        from lazycloud.abstractions.endpoint import RealtimeASGI
 
         def decorate(target: Callable[..., Any]) -> RealtimeASGI:
-            return self._register(factory(target))
+            return self._register(RealtimeASGI(target, _app_slug=self.slug, **options))
 
         return decorate
 
@@ -761,44 +621,10 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
-        from lazycloud.abstractions.image import Image
-        from lazycloud.abstractions.pod import Pod, PodOptions
+        options = _options(locals())
+        from lazycloud.abstractions.pod import Pod
 
-        kwargs = PodOptions(
-            name=name,
-            image=Image() if image is None else image,
-            command=[str(item) for item in (command or [])],
-            ports=dict(ports or {}),
-            env=dict(env or {}),
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            keep_warm=keep_warm,
-            secrets=[str(secret) for secret in (secrets or [])],
-            volumes=volume_mounts(volumes or ()),
-            disks=disk_mounts(disks or ()),
-            authorized=authorized,
-            checkpoint_enabled=checkpoint_enabled,
-            checkpoint_readiness_path=checkpoint_readiness_path,
-            checkpoint_readiness_port=checkpoint_readiness_port,
-            checkpoint_readiness_timeout_seconds=checkpoint_readiness_timeout_seconds,
-            checkpoint_readiness_interval_seconds=checkpoint_readiness_interval_seconds,
-            health_check_path=health_check_path,
-            health_check_port=health_check_port,
-            tcp=tcp,
-            ssh=ssh,
-            block_network=block_network,
-            allow_list=allow_list,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=dict(metadata or {}),
-        )
-        return self._register(Pod(_app_slug=self.slug, **kwargs))
+        return self._register(Pod(_app_slug=self.slug, **options))
 
     def devbox(
         self,
@@ -871,7 +697,7 @@ class App:
                 _app_slug=self.slug,
                 name=name,
                 image=image,
-                command=[str(item) for item in (command or [])],
+                command=list(command or ()),
                 ports=dict(ports or {}),
                 env=dict(env or {}),
                 cpu=cpu,
@@ -879,13 +705,13 @@ class App:
                 gpu=gpu,
                 gpu_count=gpu_count,
                 keep_warm=keep_warm,
-                secrets=[str(secret) for secret in (secrets or [])],
+                secrets=list(secrets or ()),
                 volumes=volume_mounts(volumes or ()),
                 disks=disk_mounts(disks or ()),
                 ssh=None,
                 docker_enabled=docker_enabled,
                 preemptible=preemptible,
-                role=PodRole.Devbox,
+                devbox=True,
                 root_disk_bytes=parse_devbox_disk_size_bytes(disk),
                 region=region,
                 availability_zone=availability_zone,
@@ -941,34 +767,10 @@ class App:
                 (unset runs in the workspace), and custom metadata.
             command: Optional initial command run by the sandbox container.
         """
-        from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
+        options = _options(locals())
+        from lazycloud.abstractions.sandbox import Sandbox
 
-        kwargs = SandboxOptions(
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            image=image,
-            keep_warm_seconds=keep_warm_seconds,
-            authorized=authorized,
-            name=name,
-            volumes=volumes,
-            secrets=secrets,
-            env=env,
-            sync_local_dir=sync_local_dir,
-            block_network=block_network,
-            allow_list=allow_list,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            ports=ports,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=metadata,
-            command=command,
-        )
-        return self._register(Sandbox(_app_slug=self.slug, **kwargs))
+        return self._register(Sandbox(_app_slug=self.slug, **options))
 
     def deploy(
         self,
@@ -1070,14 +872,10 @@ class App:
         return _invoke_method(selected.serve, {"timeout": timeout, "sync_dir": sync_dir})
 
     def _register(self, resource: ResourceT) -> ResourceT:
-        if not hasattr(resource, "spec"):
-            msg = "app resources must provide spec()"
-            raise AppOperationError(msg)
-        spec = resource.spec()
-        key = (spec.kind, spec.name)
+        key = (resource.kind, resource.resource_name)
         existing = self._resources.get(key)
         if existing is not None and existing is not resource:
-            msg = f"duplicate {spec.kind.value} resource in app {self.slug}: {spec.name}"
+            msg = f"duplicate {resource.kind.value} resource in app {self.slug}: {key[1]}"
             raise AppOperationError(msg)
         self._resources[key] = resource
         return resource
@@ -1119,10 +917,9 @@ class App:
         kind, name = _parse_selector(resource)
         candidates: list[AppResource] = []
         for item in self.resources:
-            spec = item.spec()
-            if kind is not None and spec.kind is not kind:
+            if kind is not None and item.kind is not kind:
                 continue
-            if spec.name == name:
+            if item.resource_name == name:
                 candidates.append(item)
         if not candidates:
             msg = f"resource not found in app {self.slug}: {resource}"
@@ -1143,16 +940,20 @@ def _parse_selector(value: str) -> tuple[DeploymentKind | None, str]:
 
 
 def _resource_selector(resource: AppResource) -> str:
-    spec = resource.spec()
-    return f"{spec.kind.value}:{spec.name}"
+    return f"{resource.kind.value}:{resource.resource_name}"
 
 
 def _is_serveable(resource: AppResource) -> bool:
-    return resource.spec().kind in {
+    return resource.kind in {
         DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
     }
+
+
+def _options(values: Mapping[str, Any]) -> dict[str, Any]:
+    """A decorator's keyword arguments, read from its locals, for the resource it builds."""
+    return {key: value for key, value in values.items() if key not in {"self", "func"}}
 
 
 def _invoke_method(method: Callable[..., Any], kwargs: Mapping[str, object]) -> Any:

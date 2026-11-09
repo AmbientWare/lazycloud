@@ -217,21 +217,6 @@ class Artifact:
             )
         return self._save_local(target_dir=target_dir)
 
-    def save_remote(
-        self,
-        client: StorageClient,
-        *,
-        task_id: str,
-        target_dir: str | Path | None = None,
-        chunk_size: int = DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES,
-    ) -> SavedArtifact:
-        return self._save_remote(
-            client,
-            task_id=task_id,
-            target_dir=target_dir,
-            chunk_size=chunk_size,
-        )
-
     def public_url(
         self,
         expires: int = 3600,
@@ -407,10 +392,6 @@ class ArtifactNotFoundError(RuntimeError):
     pass
 
 
-class ArtifactCannotRunLocallyError(RuntimeError):
-    pass
-
-
 class ArtifactTaskIdError(RuntimeError):
     pass
 
@@ -429,7 +410,6 @@ def guess_content_type(path: Path) -> str:
 __all__ = [
     "DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES",
     "Artifact",
-    "ArtifactCannotRunLocallyError",
     "ArtifactDeleteError",
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",

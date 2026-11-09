@@ -7,7 +7,7 @@ import {
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Plus, Send, Trash2, X } from "lucide-react";
+import { ChevronRight, Plus, Send, Trash2, X } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -30,7 +30,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
-import { webhookEventValues } from "@/lib/api/generated/openapi";
 import { appsQueryOptions } from "@/lib/queries/apps";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
@@ -59,9 +58,11 @@ const EVENTS: Record<WebhookEvent, { group: "Tasks" | "Deploys"; label: string }
   "workload.failed": { group: "Deploys", label: "Version stopped starting" },
 };
 
+const EVENT_NAMES = Object.keys(EVENTS) as WebhookEvent[];
+
 const EVENT_GROUPS = (["Tasks", "Deploys"] as const).map((group) => ({
   group,
-  events: webhookEventValues.filter((event) => EVENTS[event].group === group),
+  events: EVENT_NAMES.filter((event) => EVENTS[event].group === group),
 }));
 
 function eventLabel(event: string): string {
@@ -162,7 +163,7 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
     mutationFn: () =>
       createWebhook(workspace, {
         url: url.trim(),
-        events: webhookEventValues.filter((event) => events.has(event)),
+        events: EVENT_NAMES.filter((event) => events.has(event)),
         apps: [...apps],
         description: description.trim() || undefined,
       }),
@@ -253,11 +254,11 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
           Cancel
         </Button>
         <Button
+          pending={create.isPending}
           type="submit"
           size="sm"
-          disabled={create.isPending || !url.trim() || events.size === 0}
+          disabled={!url.trim() || events.size === 0}
         >
-          {create.isPending ? <Loader2 className="animate-spin" /> : null}
           Add webhook
         </Button>
       </div>
@@ -430,8 +431,14 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
               aria-label={`Send requests to ${webhook.url}`}
               title={enabled ? "Pause" : "Resume"}
             />
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => test.mutate()}>
-              {test.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+            <Button
+              pending={test.isPending}
+              icon={<Send />}
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => test.mutate()}
+            >
               Send test
             </Button>
             <ConfirmButton

@@ -2,25 +2,21 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { activityStart } from "@/lib/activity-window";
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
-import { workloadKindValues } from "@/lib/api/generated/openapi";
 
-import { nextListCursor, selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./workspace-keys";
+import {
+  allPages,
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "./infinite-list";
+import {
+  criticalLiveQueryMeta,
+  type WorkloadRef,
+  workspaceLiveQueryMeta,
+  workspaceQueryKeys,
+} from "./workspace-keys";
 
 /** Every page of a cursor listing, for a list that answers a whole view. */
-export async function allPages<T>(
-  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
-): Promise<T[]> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await read(cursor);
-    items.push(...page.items);
-    cursor = page.next;
-  } while (cursor);
-  return items;
-}
-
 /** Deployed workloads, by app and name, of the workspace or one app. */
 export function listWorkloads(workspace: string, app?: string): Promise<Schemas["Workload"][]> {
   return allPages(async (cursor) => {
@@ -38,7 +34,7 @@ export function workloadsQueryOptions(workspace: string, app?: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.workloads.list(workspace, app ?? null),
     queryFn: async () => newestFirst(await listWorkloads(workspace, app)),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -55,9 +51,17 @@ export function workloadRunning(workload: Schemas["Workload"]): boolean {
   return workload.state === "active" && workload.app_state !== "paused";
 }
 
+const WORKLOAD_KINDS = {
+  function: true,
+  endpoint: true,
+  asgi: true,
+  pod: true,
+  sandbox: true,
+} satisfies Record<Schemas["WorkloadKind"], true>;
+
 /** Whether a route's kind segment names a workload kind the API addresses. */
 export function isWorkloadKind(kind: string): kind is Schemas["WorkloadKind"] {
-  return (workloadKindValues as readonly string[]).includes(kind);
+  return Object.hasOwn(WORKLOAD_KINDS, kind);
 }
 
 /** Whether the app deploys no live workload of that kind and name. */
@@ -84,7 +88,7 @@ export function workloadQueryOptions(workspace: string, workload: WorkloadRef) {
         }),
       ),
     retry: (failures, error) => !workloadNotFound(error) && failures < 2,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -115,7 +119,7 @@ export function versionsInfiniteQueryOptions(workspace: string, workload: Worklo
       return { data: page.versions, next: page.next_cursor ?? "" };
     },
     getNextPageParam: nextListCursor,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -141,7 +145,7 @@ export function performanceQueryOptions(workspace: string, workload: Schemas["Wo
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

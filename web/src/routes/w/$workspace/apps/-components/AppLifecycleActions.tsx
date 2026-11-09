@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { Pause, Play, Trash2 } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { Button } from "@/components/ui/button";
@@ -45,25 +45,27 @@ export function AppLifecycleActions({
     <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
       {app.state === "active" ? (
         <Button
+          pending={pause.isPending}
+          icon={<Pause />}
           type="button"
           variant="outline"
           size="sm"
           disabled={pending}
           onClick={() => pause.mutate()}
         >
-          {pause.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
           Pause
         </Button>
       ) : null}
       {app.state === "paused" ? (
         <Button
+          pending={resume.isPending}
+          icon={<Play />}
           type="button"
           variant="default"
           size="sm"
           disabled={pending}
           onClick={() => resume.mutate()}
         >
-          {resume.isPending ? <Loader2 className="animate-spin" /> : <Play />}
           Resume
         </Button>
       ) : null}

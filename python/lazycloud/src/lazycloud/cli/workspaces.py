@@ -5,9 +5,8 @@ from typing import Annotated, Literal
 import typer
 
 from lazycloud._terminal.cards import notice_card
-from lazycloud._terminal.streams import console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import emit, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings
@@ -26,7 +25,6 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
     set_profile(
         stored.model_copy(update={"workspace": name}),
         activate=False,
-        replace_legacy=True,
     )
 
 
@@ -80,9 +78,6 @@ def _selection_error(
 def workspace_list(ctx: typer.Context) -> None:
     with workspace_client() as client:
         workspaces = client.list_workspaces()
-    if json_output_enabled(ctx):
-        print_payload(ctx, {"workspaces": [ws.model_dump(mode="json") for ws in workspaces]})
-        return
     current = get_profile().workspace
     rows = [
         [
@@ -93,7 +88,11 @@ def workspace_list(ctx: typer.Context) -> None:
         ]
         for workspace in sorted(workspaces, key=lambda item: item.name)
     ]
-    console.print(table("Workspaces", ["name", "current"], rows))
+    emit(
+        ctx,
+        payload={"workspaces": [ws.model_dump(mode="json") for ws in workspaces]},
+        view=table("Workspaces", ["name", "current"], rows),
+    )
 
 
 @workspace_app.command(

@@ -14,7 +14,6 @@ import cloudpickle
 from pydantic import JsonValue
 
 from lazycloud._shared.task_context import current_task_id
-from lazycloud.aio import to_thread
 from lazycloud.clients.api import ApiClient, ApiError, is_transient
 from lazycloud.config import settings
 from lazycloud.contracts.api import (
@@ -158,11 +157,6 @@ class Task:
         running.
         """
         return self._with_result(self.wait_view(timeout_seconds=timeout_seconds))
-
-    async def async_wait(
-        self, *, timeout_seconds: float | None = None
-    ) -> TaskResult[Payload | None]:
-        return await to_thread(self.wait, timeout_seconds=timeout_seconds)
 
     def wait_view(self, *, timeout_seconds: float | None = None) -> TaskView:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds

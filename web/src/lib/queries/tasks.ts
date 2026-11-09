@@ -4,7 +4,11 @@ import { api, ok, type Schemas } from "@/lib/api/client";
 import type { operations } from "@/lib/api/generated/openapi";
 
 import { LIVE_LIST_MAX_PAGES, nextListCursor, selectInfiniteList } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import {
+  criticalLiveQueryMeta,
+  workspaceLiveQueryMeta,
+  workspaceQueryKeys,
+} from "./workspace-keys";
 
 /** A row of a task list: a task, or an endpoint or ASGI request record. */
 export type TaskRow = Schemas["Task"] | Schemas["HttpRequest"];
@@ -136,7 +140,7 @@ export function tasksQueryOptions(
   return queryOptions({
     queryKey: taskListKey(workspace, filter, limit, "page"),
     queryFn: async ({ signal }) => (await listTasks(workspace, filter, limit, "", signal)).data,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -151,7 +155,7 @@ export function tasksInfiniteQueryOptions(
     queryFn: ({ pageParam, signal }) => listTasks(workspace, filter, limit, pageParam, signal),
     getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -179,7 +183,7 @@ export function requestsQueryOptions(workspace: string, app: string, name: strin
           }),
         )
       ).data,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -267,7 +271,7 @@ export function callGraphQueryOptions(workspace: string, rootTaskId: string) {
       }
       return roots;
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -284,6 +288,6 @@ export function taskMetricsQueryOptions(workspace: string, hours = 24, app?: str
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }

@@ -23,210 +23,91 @@ if TYPE_CHECKING:
     from lazycloud.abstractions.queue import Queue
     from lazycloud.abstractions.sandbox import (
         Sandbox,
-        SandboxConnectionError,
         SandboxFileInfo,
         SandboxFilePosition,
         SandboxFileSearchMatch,
         SandboxFileSearchRange,
         SandboxFileSearchResult,
         SandboxFileSystem,
-        SandboxFileSystemError,
         SandboxInstance,
         SandboxProcess,
-        SandboxProcessError,
         SandboxProcessManager,
         SandboxProcessResponse,
         SandboxProcessStream,
-        SandboxProcessTimeoutError,
     )
     from lazycloud.abstractions.secret import Secret
     from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
     from lazycloud.agent_harness import AgentHarness
     from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
+    from lazycloud.exceptions import (
+        SandboxConnectionError,
+        SandboxFileSystemError,
+        SandboxProcessError,
+        SandboxProcessTimeoutError,
+    )
     from lazycloud.progress import PendingProgressCallback
     from lazycloud.session.deployment import Deployment
     from lazycloud.session.task import FunctionCall, Task
     from lazycloud.terminal import output
 
 
+# Each export loads its module on first use, so `import lazycloud` stays cheap.
+_EXPORTS = {
+    "AgentHarness": "lazycloud.agent_harness",
+    "App": "lazycloud.abstractions.app",
+    "Artifact": "lazycloud.abstractions.artifact",
+    "Autoscaler": "lazycloud._shared.autoscaling",
+    "CloudBucket": "lazycloud.abstractions.volume",
+    "CloudBucketConfig": "lazycloud.abstractions.volume",
+    "Container": "lazycloud.abstractions.pod",
+    "Deployment": "lazycloud.session.deployment",
+    "Disk": "lazycloud.abstractions.disk",
+    "FunctionCall": "lazycloud.session.task",
+    "GpuType": "lazycloud._shared.gpu",
+    "Image": "lazycloud.abstractions.image",
+    "LinuxArchitecture": "lazycloud._shared.image_building.authoring",
+    "Map": "lazycloud.abstractions.map",
+    "PendingProgressCallback": "lazycloud.progress",
+    "PythonVersion": "lazycloud._shared.image_building.authoring",
+    "Queue": "lazycloud.abstractions.queue",
+    "RetryBackoff": "lazycloud._shared.tasks",
+    "RetryPolicy": "lazycloud._shared.tasks",
+    "Sandbox": "lazycloud.abstractions.sandbox",
+    "SandboxConnectionError": "lazycloud.exceptions",
+    "SandboxFileInfo": "lazycloud.abstractions.sandbox",
+    "SandboxFilePosition": "lazycloud.abstractions.sandbox",
+    "SandboxFileSearchMatch": "lazycloud.abstractions.sandbox",
+    "SandboxFileSearchRange": "lazycloud.abstractions.sandbox",
+    "SandboxFileSearchResult": "lazycloud.abstractions.sandbox",
+    "SandboxFileSystem": "lazycloud.abstractions.sandbox",
+    "SandboxFileSystemError": "lazycloud.exceptions",
+    "SandboxInstance": "lazycloud.abstractions.sandbox",
+    "SandboxProcess": "lazycloud.abstractions.sandbox",
+    "SandboxProcessError": "lazycloud.exceptions",
+    "SandboxProcessManager": "lazycloud.abstractions.sandbox",
+    "SandboxProcessResponse": "lazycloud.abstractions.sandbox",
+    "SandboxProcessStream": "lazycloud.abstractions.sandbox",
+    "SandboxProcessTimeoutError": "lazycloud.exceptions",
+    "Secret": "lazycloud.abstractions.secret",
+    "Task": "lazycloud.session.task",
+    "TaskPendingProgress": "lazycloud.contracts.api",
+    "TaskPendingReason": "lazycloud.contracts.api",
+    "TaskPolicy": "lazycloud._shared.tasks",
+    "Volume": "lazycloud.abstractions.volume",
+    "current_root_task_id": "lazycloud._shared.task_context",
+    "current_task_id": "lazycloud._shared.task_context",
+    "output": "lazycloud.terminal",
+}
+
+
 @cache
 def __getattr__(name: str):
-    match name:
-        case "FunctionCall":
-            from lazycloud.session.task import FunctionCall
-
-            return FunctionCall
-        case "Autoscaler":
-            from lazycloud._shared.autoscaling import Autoscaler
-
-            return Autoscaler
-        case "GpuType":
-            from lazycloud._shared.gpu import GpuType
-
-            return GpuType
-        case "LinuxArchitecture" | "PythonVersion":
-            from lazycloud._shared.image_building.authoring import LinuxArchitecture, PythonVersion
-
-            if name == "LinuxArchitecture":
-                return LinuxArchitecture
-            if name == "PythonVersion":
-                return PythonVersion
-        case "current_root_task_id" | "current_task_id":
-            from lazycloud._shared.task_context import current_root_task_id, current_task_id
-
-            if name == "current_root_task_id":
-                return current_root_task_id
-            if name == "current_task_id":
-                return current_task_id
-        case "RetryBackoff" | "RetryPolicy" | "TaskPolicy":
-            from lazycloud._shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
-
-            if name == "RetryBackoff":
-                return RetryBackoff
-            if name == "RetryPolicy":
-                return RetryPolicy
-            if name == "TaskPolicy":
-                return TaskPolicy
-        case "env" | "schema":
-            return import_module(f"lazycloud.{name}")
-        case "App":
-            from lazycloud.abstractions.app import App
-
-            return App
-        case "Artifact":
-            from lazycloud.abstractions.artifact import Artifact
-
-            return Artifact
-        case "Disk":
-            from lazycloud.abstractions.disk import Disk
-
-            return Disk
-        case "Image":
-            from lazycloud.abstractions.image import Image
-
-            return Image
-        case "Map":
-            from lazycloud.abstractions.map import Map
-
-            return Map
-        case "Container":
-            from lazycloud.abstractions.pod import Container
-
-            return Container
-        case "Queue":
-            from lazycloud.abstractions.queue import Queue
-
-            return Queue
-        case (
-            "Sandbox"
-            | "SandboxConnectionError"
-            | "SandboxFileInfo"
-            | "SandboxFilePosition"
-            | "SandboxFileSearchMatch"
-            | "SandboxFileSearchRange"
-            | "SandboxFileSearchResult"
-            | "SandboxFileSystem"
-            | "SandboxFileSystemError"
-            | "SandboxInstance"
-            | "SandboxProcess"
-            | "SandboxProcessError"
-            | "SandboxProcessManager"
-            | "SandboxProcessResponse"
-            | "SandboxProcessStream"
-            | "SandboxProcessTimeoutError"
-        ):
-            from lazycloud.abstractions.sandbox import (
-                Sandbox,
-                SandboxConnectionError,
-                SandboxFileInfo,
-                SandboxFilePosition,
-                SandboxFileSearchMatch,
-                SandboxFileSearchRange,
-                SandboxFileSearchResult,
-                SandboxFileSystem,
-                SandboxFileSystemError,
-                SandboxInstance,
-                SandboxProcess,
-                SandboxProcessError,
-                SandboxProcessManager,
-                SandboxProcessResponse,
-                SandboxProcessStream,
-                SandboxProcessTimeoutError,
-            )
-
-            if name == "Sandbox":
-                return Sandbox
-            if name == "SandboxConnectionError":
-                return SandboxConnectionError
-            if name == "SandboxFileInfo":
-                return SandboxFileInfo
-            if name == "SandboxFilePosition":
-                return SandboxFilePosition
-            if name == "SandboxFileSearchMatch":
-                return SandboxFileSearchMatch
-            if name == "SandboxFileSearchRange":
-                return SandboxFileSearchRange
-            if name == "SandboxFileSearchResult":
-                return SandboxFileSearchResult
-            if name == "SandboxFileSystem":
-                return SandboxFileSystem
-            if name == "SandboxFileSystemError":
-                return SandboxFileSystemError
-            if name == "SandboxInstance":
-                return SandboxInstance
-            if name == "SandboxProcess":
-                return SandboxProcess
-            if name == "SandboxProcessError":
-                return SandboxProcessError
-            if name == "SandboxProcessManager":
-                return SandboxProcessManager
-            if name == "SandboxProcessResponse":
-                return SandboxProcessResponse
-            if name == "SandboxProcessStream":
-                return SandboxProcessStream
-            if name == "SandboxProcessTimeoutError":
-                return SandboxProcessTimeoutError
-        case "Secret":
-            from lazycloud.abstractions.secret import Secret
-
-            return Secret
-        case "CloudBucket" | "CloudBucketConfig" | "Volume":
-            from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
-
-            if name == "CloudBucket":
-                return CloudBucket
-            if name == "CloudBucketConfig":
-                return CloudBucketConfig
-            if name == "Volume":
-                return Volume
-        case "AgentHarness":
-            from lazycloud.agent_harness import AgentHarness
-
-            return AgentHarness
-        case "PendingProgressCallback":
-            from lazycloud.progress import PendingProgressCallback
-
-            return PendingProgressCallback
-        case "TaskPendingProgress" | "TaskPendingReason":
-            from lazycloud.contracts.api import TaskPendingProgress, TaskPendingReason
-
-            if name == "TaskPendingProgress":
-                return TaskPendingProgress
-            if name == "TaskPendingReason":
-                return TaskPendingReason
-        case "Deployment":
-            from lazycloud.session.deployment import Deployment
-
-            return Deployment
-        case "Task":
-            from lazycloud.session.task import Task
-
-            return Task
-        case "output":
-            from lazycloud.terminal import output
-
-            return output
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if name in {"env", "schema"}:
+        return import_module(f"lazycloud.{name}")
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(import_module(module), name)
 
 
 def __dir__() -> list[str]:

@@ -16,19 +16,12 @@ from typing import Any
 
 from lazycloud._shared.lifecycle import (
     LifecycleHookName,
-    LifecycleHooks,
     LifecycleStartupContext,
     LifecycleTaskContext,
 )
 
 from runner.handler_loading import load_handler
-from runner.protocol_models import LifecycleHooks as HookFrame
-
-
-def hooks_from_frame(frame: HookFrame | None) -> LifecycleHooks:
-    if frame is None:
-        return LifecycleHooks()
-    return LifecycleHooks.model_validate(frame.model_dump(exclude_none=True))
+from runner.protocol_models import LifecycleHooks
 
 
 def _call(reference: str, context: object) -> None:
@@ -58,7 +51,7 @@ def run_startup_hooks(hooks: LifecycleHooks, handler: str) -> None:
     """Run on_start; the first failure propagates and fails the load."""
 
     context = startup_context(handler)
-    for reference in hooks.on_start:
+    for reference in hooks.on_start or ():
         _call(reference, context)
 
 
@@ -68,7 +61,7 @@ def run_task_hooks(
     """Run one task hook's callables; failures go to the attempt's stderr."""
 
     context = context.model_copy(update={"hook": hook})
-    for reference in hooks.refs(hook):
+    for reference in getattr(hooks, hook.value) or ():
         try:
             _call(reference, context)
         except KeyboardInterrupt:
@@ -81,4 +74,4 @@ def run_task_hooks(
             )
 
 
-__all__ = ["hooks_from_frame", "run_startup_hooks", "run_task_hooks", "startup_context"]
+__all__ = ["run_startup_hooks", "run_task_hooks", "startup_context"]

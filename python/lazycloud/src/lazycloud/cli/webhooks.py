@@ -14,18 +14,13 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.clients.api import ApiClient
-from lazycloud.contracts.api import Webhook, WebhookEvent
-from lazycloud.control import api_client, require_workspace, resolve_control_client_config
+from lazycloud.cli.control import api_session
+from lazycloud.clients.api import pages
+from lazycloud.contracts.api import WebhookEvent
 
 webhook_app = typer.Typer(help="Manage webhooks that receive task and deploy events.")
 
 ALL_APPS = "all apps"
-
-
-def _session(workspace: str | None) -> tuple[ApiClient, str]:
-    config = resolve_control_client_config(workspace=workspace)
-    return api_client(config), require_workspace(config)
 
 
 @webhook_app.command("list", help="List webhooks and the events they receive.")
@@ -33,18 +28,12 @@ def webhook_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
-    webhooks: list[Webhook] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_webhooks(selected, cursor=cursor, limit=100)
-        webhooks.extend(page.webhooks)
-        if not page.next_cursor:
-            break
-        cursor = page.next_cursor
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in webhooks])
-        return
+    client, selected = api_session(workspace=workspace)
+    webhooks = [
+        item
+        for page in pages(lambda cursor: client.list_webhooks(selected, cursor=cursor, limit=100))
+        for item in page.webhooks
+    ]
     rows: list[list[object]] = [
         [
             str(item.id),
@@ -55,7 +44,11 @@ def webhook_list(
         ]
         for item in webhooks
     ]
-    console.print(table("Webhooks", ["id", "url", "apps", "events", "enabled"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in webhooks],
+        view=table("Webhooks", ["id", "url", "apps", "events", "enabled"], rows),
+    )
 
 
 @webhook_app.command("add", help="Add a webhook that receives the given events.")
@@ -76,7 +69,7 @@ def webhook_add(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     webhook = client.create_webhook(
         selected,
         url,
@@ -114,7 +107,7 @@ def webhook_update(
 ) -> None:
     if apps and all_apps:
         raise typer.BadParameter("choose only one of --app or --all-apps")
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     updated = client.update_webhook(
         selected,
         webhook,
@@ -137,7 +130,7 @@ def webhook_remove(
     webhook: UUID,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     client.delete_webhook(selected, webhook)
     emit(
         ctx,
@@ -152,7 +145,7 @@ def webhook_test(
     webhook: UUID,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     delivery = client.test_webhook(selected, webhook)
     emit(
         ctx,
@@ -171,7 +164,7 @@ def webhook_deliveries(
     limit: Annotated[int, typer.Option("--limit", min=1, max=100)] = 50,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     deliveries = client.list_webhook_deliveries(selected, webhook, limit=limit).deliveries
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in deliveries])

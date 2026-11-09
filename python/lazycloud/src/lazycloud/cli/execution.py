@@ -10,7 +10,6 @@ from pydantic import JsonValue
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import short_id
-from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
@@ -241,13 +240,14 @@ def deployment_list(
     deployments = DeploymentClient(workspace=selected_workspace, client=client).list(
         app=selected_app, limit=limit
     )
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in deployments])
-        return
     rows: list[list[Any]] = [
         [item.name, item.kind, item.version, item.state.value] for item in deployments
     ]
-    console.print(table("Deployments", ["name", "kind", "version", "status"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in deployments],
+        view=table("Deployments", ["name", "kind", "version", "status"], rows),
+    )
 
 
 @deployment_app.command("stop", help="Stop one or more deployments.")

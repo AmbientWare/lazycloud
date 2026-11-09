@@ -7,39 +7,33 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import JsonValue, ValidationError
 from typing_extensions import Never, Self
 
 from lazycloud._shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from lazycloud._shared.deployment_records import (
     DEFAULT_CPU,
-    DEFAULT_DISK,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    Resources,
-    VolumeMount,
     request_and_limit,
 )
 from lazycloud._shared.deployments import DeploymentKind
-from lazycloud._shared.gpu import GpuInput, gpu_preference
-from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.gpu import GpuInput
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.abstractions.metadata import MachineInput, check_workload_options
+from lazycloud.abstractions.volume import VolumeExport, VolumeMount, volume_mounts
 from lazycloud.aio import to_thread
-from lazycloud.clients.api import ApiError
+from lazycloud.clients.api import ApiError, pages
 from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
 from lazycloud.contracts.api import (
     CommandItem,
     ContainerFile,
-    ContainerLifecycle,
-    ContainerState,
     CreateInstanceRequest,
     ErrorCode,
     FileMatch,
@@ -51,14 +45,18 @@ from lazycloud.contracts.api import (
     Process,
     ProcessRequest,
     ReplaceInFilesRequest,
-    SandboxStatus,
-    StopReason,
     WorkloadSpec,
 )
 from lazycloud.contracts.api import Sandbox as SandboxRow
 from lazycloud.contracts.api import SandboxStats as SandboxStatsResponse
 from lazycloud.control import ControlClientConfigMixin, workloads_client
-from lazycloud.exceptions import SdkError
+from lazycloud.exceptions import (
+    SandboxConnectionError,
+    SandboxFileSystemError,
+    SandboxProcessError,
+    SandboxProcessTimeoutError,
+    SdkError,
+)
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.session.interrupts import uninterrupted
 from lazycloud.session.task import retry_transient
@@ -73,80 +71,6 @@ SANDBOX_CONTROL_TIMEOUT_SECONDS = 30.0
 SANDBOX_READY_TIMEOUT_SECONDS = 120.0
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.5
 _DOCKER_SANDBOX_SECURITY_OPTIONS = ("systempaths=unconfined",)
-# Stop reasons that mean a sandbox failed rather than was stopped.
-_FAILED_STOP_REASONS = frozenset(
-    {
-        StopReason.load_error,
-        StopReason.start_failed,
-        StopReason.crashed,
-        StopReason.out_of_memory,
-        StopReason.host_lost,
-    }
-)
-
-
-class SandboxOptions(TypedDict, total=False):
-    cpu: CpuRequest | str
-    memory: MemoryRequest
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    image: Image | None
-    keep_warm_seconds: int
-    authorized: bool
-    name: str | None
-    volumes: Iterable[VolumeMount | VolumeExport] | None
-    secrets: Iterable[str] | None
-    env: Mapping[str, str] | None
-    sync_local_dir: bool
-    block_network: bool
-    allow_list: Iterable[str] | None
-    docker_enabled: bool
-    preemptible: bool
-    ports: Iterable[int] | None
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-    metadata: Mapping[str, Any] | None
-    command: Iterable[str] | None
-
-
-class SandboxConnectionError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        container_id: str = "",
-        state: str = "",
-        cleanup_error: Exception | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.container_id = container_id
-        self.state = state
-        self.cleanup_error = cleanup_error
-
-
-class SandboxProcessError(RuntimeError):
-    pass
-
-
-class SandboxProcessTimeoutError(SandboxProcessError):
-    pass
-
-
-class SandboxFileSystemError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        operation: str = "",
-        path: str = "",
-        container_id: str = "",
-    ) -> None:
-        super().__init__(message)
-        self.operation = operation
-        self.path = path
-        self.container_id = container_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,20 +199,6 @@ class _SandboxCombinedStream:
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.read().splitlines())
-
-
-class SandboxTimeline(BaseModel):
-    """When a sandbox container was created, placed, ready and stopped."""
-
-    container_id: str | None = None
-    status: SandboxStatus
-    created_at: datetime
-    scheduled_at: datetime | None = None
-    started_at: datetime | None = None
-    ended_at: datetime | None = None
-    scheduling_ms: int | None = None
-    startup_ms: int | None = None
-    runtime_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -1454,6 +1364,7 @@ class AsyncSandboxInstance:
 
 @dataclass(init=False, slots=True)
 class Sandbox(ControlClientConfigMixin):
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Sandbox
     name: str = "sandbox"
     _app_slug: str = field(init=False, repr=False)
     image: Image = field(default_factory=Image)
@@ -1554,6 +1465,7 @@ class Sandbox(ControlClientConfigMixin):
             ready_timeout_seconds,
         )
         self.terminal = None
+        check_workload_options(self)
 
     @property
     def control_client(self) -> WorkloadsClient:
@@ -1564,41 +1476,6 @@ class Sandbox(ControlClientConfigMixin):
     @property
     def resource_name(self) -> str:
         return self.name
-
-    def spec(self) -> DeploymentSpec:
-        return DeploymentSpec(
-            name=self.name,
-            kind=DeploymentKind.Sandbox,
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                keep_warm=self.keep_warm_seconds,
-                preemptible=self.preemptible,
-            ),
-            command=self.command,
-            ports=_sandbox_port_mapping(self.ports),
-            env=dict(self.env or {}),
-            secrets=self.secrets,
-            volumes=list(self.volumes),
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                authorized=self.authorized,
-                block_network=self.block_network,
-                allow_list=self.allow_list,
-                docker_enabled=self.docker_enabled,
-                machine=self.machine,
-                extra={
-                    **self.metadata,
-                    "sync_local_dir": self.sync_local_dir,
-                },
-            ),
-        )
 
     def handler_reference(self) -> None:
         """A sandbox runs its command, not a handler."""
@@ -1697,17 +1574,16 @@ class Sandbox(ControlClientConfigMixin):
     ) -> builtins.list[SandboxRow]:
         """Sandbox containers, newest first, up to `limit`; `app_id` is an app's name."""
         client = self._client_for(workspace)
-        rows: builtins.list[SandboxRow] = []
-        cursor: str | None = None
-        while len(rows) < limit:
-            page = client.list_sandboxes(
-                app=app_id, limit=min(1000, limit - len(rows)), cursor=cursor
+        rows = (
+            row
+            for page in pages(
+                lambda cursor: client.list_sandboxes(
+                    app=app_id, limit=min(1000, limit), cursor=cursor
+                )
             )
-            rows.extend(page.sandboxes)
-            if page.next_cursor is None:
-                break
-            cursor = page.next_cursor
-        return rows
+            for row in page.sandboxes
+        )
+        return builtins.list(islice(rows, limit))
 
     def stats(
         self,
@@ -1716,29 +1592,6 @@ class Sandbox(ControlClientConfigMixin):
         app_id: str | None = None,
     ) -> SandboxStatsResponse:
         return self._client_for(workspace).sandbox_stats(app=app_id)
-
-    def timeline(
-        self,
-        stub_id: str,
-        *,
-        workspace: str | None = None,
-        container_id: str | None = None,
-    ) -> SandboxTimeline:
-        """When the release's newest sandbox, or `container_id`, was placed, ready and stopped."""
-        client = self._client_for(workspace)
-        selected = container_id or self._newest_container(client, stub_id)
-        return _timeline(client.lifecycle(UUID(selected)))
-
-    def _newest_container(self, client: WorkloadsClient, stub_id: str) -> str:
-        cursor: str | None = None
-        while True:
-            page = client.list_sandboxes(app=self._app_slug, limit=1000, cursor=cursor)
-            for row in page.sandboxes:
-                if str(row.release_id) == stub_id:
-                    return str(row.id)
-            if page.next_cursor is None:
-                raise SandboxConnectionError(f"sandbox release {stub_id} has no container")
-            cursor = page.next_cursor
 
     def _client_for(self, workspace: str | None) -> WorkloadsClient:
         if workspace is None or workspace == self.control_client.workspace:
@@ -1902,38 +1755,6 @@ def _network_policy(policy: NetworkPolicy) -> SandboxNetworkPolicy:
     )
 
 
-def _timeline(lifecycle: ContainerLifecycle) -> SandboxTimeline:
-    return SandboxTimeline(
-        container_id=str(lifecycle.container_id),
-        status=_sandbox_status(lifecycle),
-        created_at=lifecycle.created_at,
-        scheduled_at=lifecycle.assigned_at,
-        started_at=lifecycle.ready_at,
-        ended_at=lifecycle.stopped_at,
-        scheduling_ms=_duration_ms(lifecycle.created_at, lifecycle.assigned_at),
-        startup_ms=_duration_ms(lifecycle.created_at, lifecycle.ready_at),
-        runtime_ms=_duration_ms(lifecycle.ready_at, lifecycle.stopped_at),
-    )
-
-
-def _sandbox_status(lifecycle: ContainerLifecycle) -> SandboxStatus:
-    if lifecycle.state is ContainerState.stopped:
-        if lifecycle.stop_reason in _FAILED_STOP_REASONS:
-            return SandboxStatus.failed
-        return SandboxStatus.stopped
-    if lifecycle.state is ContainerState.ready:
-        return SandboxStatus.running
-    if lifecycle.state is ContainerState.draining:
-        return SandboxStatus.stopping
-    return SandboxStatus.pending
-
-
-def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
-    if start is None or end is None:
-        return None
-    return max(0, int((end - start).total_seconds() * 1000))
-
-
 def _cpu_value(value: CpuRequest | str) -> CpuRequest:
     """CPUs as a number, keeping a `(reserve, throttle at)` pair as a pair."""
     request, limit = request_and_limit(value)
@@ -2088,7 +1909,6 @@ __all__ = [
     "SandboxFileSystem",
     "SandboxFileSystemError",
     "SandboxInstance",
-    "SandboxOptions",
     "SandboxProcess",
     "SandboxProcessError",
     "SandboxProcessInfo",
@@ -2098,5 +1918,4 @@ __all__ = [
     "SandboxProcessTimeoutError",
     "SandboxRow",
     "SandboxStatsResponse",
-    "SandboxTimeline",
 ]

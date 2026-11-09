@@ -5,19 +5,10 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 IMPORTING_USER_CODE_ENV = "IMPORTING_USER_CODE"
 CONTAINER_ID_ENV = "CONTAINER_ID"
-GATEWAY_HTTP_URL_ENV = "GATEWAY_HTTP_URL"
-GATEWAY_TOKEN_ENV = "GATEWAY_TOKEN"
 ROOT_TASK_ID_ENV = "ROOT_TASK_ID"
 TASK_ID_ENV = "TASK_ID"
-WORKSPACE_ID_ENV = "WORKSPACE_ID"
-WORKSPACE_NAME_ENV = "WORKSPACE_NAME"
-
-
-def truthy_env_value(value: str | None) -> bool:
-    return (value or "").strip().lower() in TRUTHY_ENV_VALUES
 
 
 _IMPORTING_USER_CODE: ContextVar[bool] = ContextVar(
@@ -55,20 +46,14 @@ def importing_user_code_now(env: Mapping[str, str] | None = None) -> bool:
     if _IMPORTING_USER_CODE.get():
         return True
     source = env if env is not None else os.environ
-    return truthy_env_value(source.get(IMPORTING_USER_CODE_ENV))
+    return source.get(IMPORTING_USER_CODE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 __all__ = [
     "CONTAINER_ID_ENV",
-    "GATEWAY_HTTP_URL_ENV",
-    "GATEWAY_TOKEN_ENV",
     "IMPORTING_USER_CODE_ENV",
     "ROOT_TASK_ID_ENV",
     "TASK_ID_ENV",
-    "TRUTHY_ENV_VALUES",
-    "WORKSPACE_ID_ENV",
-    "WORKSPACE_NAME_ENV",
     "importing_user_code",
     "importing_user_code_now",
-    "truthy_env_value",
 ]

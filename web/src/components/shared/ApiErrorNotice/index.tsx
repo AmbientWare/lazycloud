@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
@@ -71,13 +71,14 @@ export function ApiErrorNotice({
       </div>
       {onRetry ? (
         <Button
+          pending={retrying}
+          icon={<RotateCcw />}
           variant="outline"
           size="sm"
-          disabled={retrying || waitSeconds > 0}
+          disabled={waitSeconds > 0}
           aria-busy={retrying}
           onClick={onRetry}
         >
-          {retrying ? <Loader2 className="animate-spin" /> : <RotateCcw />}
           {retrying ? "Retrying" : "Retry"}
         </Button>
       ) : null}

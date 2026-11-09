@@ -325,13 +325,7 @@ function ConfirmDialog({ controller }: { controller: AdminSettingsController }) 
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={busy}
-              onClick={controller.confirm}
-            >
-              {busy ? <Loader2 className="animate-spin" /> : null}
+            <Button pending={busy} type="button" variant="destructive" onClick={controller.confirm}>
               {confirmLabel(pending)}
             </Button>
           </AlertDialogFooter>

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from itertools import islice
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from lazycloud.cli.components.output import (
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import api_session
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
+from lazycloud.clients.api import pages
 from lazycloud.clients.compute import ComputeApi
 from lazycloud.contracts.api import (
     AwsConnection,
@@ -37,7 +39,6 @@ from lazycloud.contracts.api import (
     AwsReconnectRequest,
     ComputeInstancePage,
     ComputeWorkloadPage,
-    Container,
     MachineJoinRequest,
     MachineUpdate,
     StopReason,
@@ -129,11 +130,12 @@ def compute_workloads(
 ) -> None:
     compute, selected = _workspace_compute(workspace)
     workloads = compute.workloads(selected)
-    if json_output_enabled(ctx):
-        print_payload(ctx, ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"))
-        return
     rows = [[item.name, item.kind.value, item.machine] for item in workloads]
-    console.print(table("Compute workloads", ["name", "kind", "machine"], rows))
+    emit(
+        ctx,
+        payload=ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"),
+        view=table("Compute workloads", ["name", "kind", "machine"], rows),
+    )
 
 
 @cloud_connect_app.command("aws")
@@ -502,19 +504,14 @@ def container_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
-    containers: list[Container] = []
-    cursor: str | None = None
-    while len(containers) < limit:
-        page = client.list_containers(
-            selected_workspace, limit=limit - len(containers), cursor=cursor
+    found = (
+        item
+        for page in pages(
+            lambda cursor: client.list_containers(selected_workspace, limit=limit, cursor=cursor)
         )
-        containers.extend(page.containers)
-        if page.next_cursor is None:
-            break
-        cursor = page.next_cursor
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in containers])
-        return
+        for item in page.containers
+    )
+    containers = list(islice(found, limit))
     rows: list[list[Any]] = [
         [
             item.function,
@@ -524,7 +521,11 @@ def container_list(
         ]
         for item in containers
     ]
-    console.print(table("Containers", ["name", "status", "exit", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in containers],
+        view=table("Containers", ["name", "status", "exit", "id"], rows),
+    )
 
 
 @container_app.command("attach", help="Attach to a container's output until it exits.")
@@ -630,14 +631,15 @@ def machine_list(
     """List the machines this account has joined."""
     compute, selected = _workspace_compute(workspace)
     machines = compute.machines(selected)
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in machines])
-        return
     rows: list[list[str]] = [
         [item.name, ", ".join(item.workspaces), item.lifecycle.value, item.gpu, str(item.id)]
         for item in machines
     ]
-    console.print(table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in machines],
+        view=table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows),
+    )
 
 
 @machine_app.command("update", help="Change the workspaces a joined machine serves.")

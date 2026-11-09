@@ -6,26 +6,18 @@ import typer
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
-from lazycloud._terminal.streams import console
 from lazycloud.cli.components.output import (
     emit,
     json_default,
-    json_output_enabled,
-    print_payload,
     table,
 )
-from lazycloud.clients.api import ApiClient
+from lazycloud.cli.control import api_session
+from lazycloud.clients.api import pages
 from lazycloud.contracts.api import Secret, SecretValue
-from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
 MASKED_SECRET_VALUE = "********"
 
 secret_app = typer.Typer(help="Manage secrets.")
-
-
-def _session(workspace: str | None) -> tuple[ApiClient, str]:
-    config = resolve_control_client_config(workspace=workspace)
-    return api_client(config), require_workspace(config)
 
 
 @secret_app.command("list", help="List secret names and update times.")
@@ -33,20 +25,18 @@ def secret_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
-    secrets: list[Secret] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_secrets(selected, cursor=cursor, limit=100)
-        secrets.extend(page.secrets)
-        if not page.next_cursor:
-            break
-        cursor = page.next_cursor
-    if json_output_enabled(ctx):
-        print_payload(ctx, [_secret_payload(item) for item in secrets])
-        return
+    client, selected = api_session(workspace=workspace)
+    secrets = [
+        item
+        for page in pages(lambda cursor: client.list_secrets(selected, cursor=cursor, limit=100))
+        for item in page.secrets
+    ]
     rows = [[item.name, timestamp(item.updated_at)] for item in secrets]
-    console.print(table("Secrets", ["name", "updated"], rows))
+    emit(
+        ctx,
+        payload=[_secret_payload(item) for item in secrets],
+        view=table("Secrets", ["name", "updated"], rows),
+    )
 
 
 @secret_app.command("create", help="Create a secret.")
@@ -56,7 +46,7 @@ def secret_create(
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     secret = client.set_secret(selected, name, value, exists=False)
     emit(
         ctx,
@@ -72,7 +62,7 @@ def secret_modify(
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     client.set_secret(selected, name, value, exists=True)
     emit(
         ctx,
@@ -87,7 +77,7 @@ def secret_delete(
     name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     client.delete_secret(selected, name)
     emit(
         ctx,
@@ -106,7 +96,7 @@ def secret_show(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected = _session(workspace)
+    client, selected = api_session(workspace=workspace)
     # The value is fetched only when asked for, so a masked show never
     # transfers it.
     secret: Secret | SecretValue

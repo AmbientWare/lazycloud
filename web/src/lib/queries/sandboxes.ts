@@ -2,7 +2,7 @@ import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
 import { api, ok } from "@/lib/api/client";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { criticalLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /** How many of an app's newest sandboxes its page lists. */
 const APP_SANDBOX_LIMIT = 50;
@@ -19,7 +19,7 @@ export function sandboxesQueryOptions(workspace: string, app: string) {
       );
       return page.sandboxes;
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -33,7 +33,7 @@ export function sandboxStatsQueryOptions(workspace: string, app: string) {
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

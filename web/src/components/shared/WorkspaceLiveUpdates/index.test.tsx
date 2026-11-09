@@ -3,7 +3,7 @@ import { act, render } from "@testing-library/react";
 import { focusManager, QueryClientProvider, useQuery, type QueryKey } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+import { criticalLiveQueryMeta, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { WorkspaceLiveUpdatesProvider } from "./index";
 
@@ -59,7 +59,7 @@ function Watcher({ queryKey, onFetch }: { queryKey: QueryKey; onFetch: () => voi
       return Promise.resolve(null);
     },
     staleTime: 600_000,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
   return null;
 }
