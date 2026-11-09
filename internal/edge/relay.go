@@ -148,7 +148,7 @@ func (r *relaying) closePeers() {
 
 // linkHost records that this edge holds the host's data connection.
 func (e *Edge) linkHost(ctx context.Context, host uuid.UUID) {
-	if err := e.queries.LinkHost(ctx, LinkHostParams{HostID: host, EdgeID: e.id}); err != nil && ctx.Err() == nil {
+	if err := e.queries.LinkHosts(ctx, LinkHostsParams{EdgeID: e.id, HostIds: []uuid.UUID{host}}); err != nil && ctx.Err() == nil {
 		e.logger.WarnContext(ctx, "record the host's data connection", "host_id", host, "error", err)
 	}
 }
