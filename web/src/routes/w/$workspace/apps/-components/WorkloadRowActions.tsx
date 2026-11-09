@@ -1,6 +1,6 @@
 import { useState, type MouseEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { MoreHorizontal, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -82,12 +82,12 @@ export function WorkloadRowActions({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
             <Button
+              pending={remove.isPending}
+              icon={<Trash2 />}
               type="button"
               variant="destructive"
-              disabled={remove.isPending}
               onClick={() => remove.mutate()}
             >
-              {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
               Delete workload
             </Button>
           </AlertDialogFooter>

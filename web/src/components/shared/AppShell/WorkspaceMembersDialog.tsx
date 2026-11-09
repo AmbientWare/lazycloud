@@ -298,14 +298,13 @@ function MemberRow({
         )}
         {removable && self ? (
           <Button
+            pending={remove.isPending}
             aria-label="Leave this workspace"
-            disabled={remove.isPending}
             onClick={() => remove.mutate()}
             size="sm"
             type="button"
             variant="outline"
           >
-            {remove.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
             Leave
           </Button>
         ) : removable ? (

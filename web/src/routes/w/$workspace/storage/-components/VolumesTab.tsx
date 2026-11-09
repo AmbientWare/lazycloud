@@ -209,12 +209,12 @@ function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schem
           }}
         />
         <Button
+          pending={upload.isPending}
+          icon={<Upload />}
           size="sm"
           variant="outline"
-          disabled={upload.isPending}
           onClick={() => inputRef.current?.click()}
         >
-          {upload.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
           Upload
         </Button>
       </div>

@@ -268,13 +268,14 @@ function ConnectionActions({
         {error ? <ErrorNotice error={error} /> : null}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-4">
           <Button
+            pending={checking}
+            icon={<RefreshCw />}
             type="button"
             variant="outline"
             size="sm"
             disabled={pending || checking}
             onClick={onValidate}
           >
-            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             Check now
           </Button>
           <span className="text-xs text-muted-foreground">
@@ -290,6 +291,8 @@ function ConnectionActions({
           </span>
           {actionPlan.recovery.includes("cancel_reconnect") ? (
             <Button
+              pending={pendingAction === "cancel_reconnect"}
+              icon={<X />}
               type="button"
               variant="ghost"
               size="sm"
@@ -297,7 +300,6 @@ function ConnectionActions({
               disabled={pending}
               onClick={onCancelReconnect}
             >
-              {pendingAction === "cancel_reconnect" ? <Loader2 className="animate-spin" /> : <X />}
               Cancel reconnect
             </Button>
           ) : actionPlan.remove ? (
@@ -644,8 +646,14 @@ function ConnectionRecoveryButton({
   const isPending = pendingAction === action;
 
   return (
-    <Button type="button" variant={variant} disabled={disabled} onClick={control.onClick}>
-      {isPending ? <Loader2 className="animate-spin" /> : <Icon />}
+    <Button
+      pending={isPending}
+      icon={<Icon />}
+      type="button"
+      variant={variant}
+      disabled={disabled}
+      onClick={control.onClick}
+    >
       {control.label}
     </Button>
   );
@@ -692,11 +700,11 @@ function ConfirmConnectionDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>{confirmation.cancelLabel}</AlertDialogCancel>
           <Button
+            pending={pending}
+            icon={<Icon />}
             variant="destructive"
-            disabled={pending}
             onClick={forgetting ? onForget : onRemove}
           >
-            {pending ? <Loader2 className="animate-spin" /> : <Icon />}
             {confirmation.confirmLabel}
           </Button>
         </AlertDialogFooter>

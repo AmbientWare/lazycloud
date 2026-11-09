@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { CopyButton } from "@/components/shared/CopyButton";
@@ -303,8 +303,7 @@ function CreateTokenForm({ controller }: { controller: AccessTokensController })
         >
           Cancel
         </Button>
-        <Button type="submit" size="sm" disabled={creating || !name.trim()}>
-          {creating ? <Loader2 className="animate-spin" /> : null}
+        <Button pending={creating} type="submit" size="sm" disabled={!name.trim()}>
           Create token
         </Button>
       </div>

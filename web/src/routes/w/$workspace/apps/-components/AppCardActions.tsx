@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -83,12 +83,12 @@ export function AppCardActions({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>Keep app</AlertDialogCancel>
             <Button
+              pending={remove.isPending}
+              icon={<Trash2 />}
               type="button"
               variant="destructive"
-              disabled={remove.isPending}
               onClick={() => remove.mutate()}
             >
-              {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
               Delete app
             </Button>
           </AlertDialogFooter>

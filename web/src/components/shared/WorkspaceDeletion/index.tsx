@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useRouter } from "@tanstack/react-router";
-import { Loader2, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 
 import { useSession } from "@/components/shared/AuthGate/session";
 import {
@@ -81,6 +81,8 @@ function WorkspaceDeletionDialog({ controller }: { controller: WorkspaceDeletion
         <AlertDialogFooter>
           <AlertDialogCancel disabled={controller.isPending}>Keep workspace</AlertDialogCancel>
           <Button
+            pending={controller.isPending}
+            icon={<Trash2 />}
             type="button"
             variant="destructive"
             disabled={
@@ -90,7 +92,6 @@ function WorkspaceDeletionDialog({ controller }: { controller: WorkspaceDeletion
             }
             onClick={controller.submit}
           >
-            {controller.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
             Delete permanently
           </Button>
         </AlertDialogFooter>

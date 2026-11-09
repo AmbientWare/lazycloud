@@ -7,7 +7,7 @@ import {
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Plus, Send, Trash2, X } from "lucide-react";
+import { ChevronRight, Plus, Send, Trash2, X } from "lucide-react";
 
 import { ConfirmButton } from "@/components/shared/ConfirmButton";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
@@ -253,11 +253,11 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
           Cancel
         </Button>
         <Button
+          pending={create.isPending}
           type="submit"
           size="sm"
-          disabled={create.isPending || !url.trim() || events.size === 0}
+          disabled={!url.trim() || events.size === 0}
         >
-          {create.isPending ? <Loader2 className="animate-spin" /> : null}
           Add webhook
         </Button>
       </div>
@@ -430,8 +430,14 @@ function WebhookRow({ workspace, webhook }: { workspace: string; webhook: Webhoo
               aria-label={`Send requests to ${webhook.url}`}
               title={enabled ? "Pause" : "Resume"}
             />
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => test.mutate()}>
-              {test.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+            <Button
+              pending={test.isPending}
+              icon={<Send />}
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => test.mutate()}
+            >
               Send test
             </Button>
             <ConfirmButton
