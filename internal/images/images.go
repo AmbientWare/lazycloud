@@ -120,6 +120,9 @@ func (c Config) Validate() error {
 	if c.PlatformTransferBackoff <= 0 {
 		return fmt.Errorf("images: the platform transfer backoff must be positive, not %s", c.PlatformTransferBackoff)
 	}
+	if c.ECR != nil && c.HostRole == "" {
+		return errors.New("images: an ECR image registry needs LAZYCLOUD_IMAGE_REGISTRY_HOST_ROLE_ARN, the role host logins are scoped from")
+	}
 	return nil
 }
 
