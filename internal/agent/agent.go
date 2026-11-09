@@ -499,7 +499,7 @@ func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.Prefligh
 		if err == nil {
 			return check("docker", true, "Docker is reachable", "")
 		}
-		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
+		if time.Now().After(deadline) || !hostproto.Sleep(ctx, time.Second) {
 			return check("docker", false, "Docker is not reachable: "+err.Error(),
 				"start Docker and check that docker info works")
 		}
@@ -666,18 +666,6 @@ func trimNewline(b []byte) []byte {
 		b = b[:len(b)-1]
 	}
 	return b
-}
-
-// sleep waits for d or ctx and reports whether ctx is still live.
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }
 
 // Errors that end Run for good: restarting the agent cannot fix them, so its

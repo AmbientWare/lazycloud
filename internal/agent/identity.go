@@ -95,7 +95,7 @@ func loadOrEnroll(ctx context.Context, cfg Config, offered offer, metadata *imds
 			return identity{}, fmt.Errorf("enroll: %w", err)
 		}
 		cfg.Logger.Warn("server unavailable for enrollment", "error", err)
-		if !sleep(ctx, delay) {
+		if !hostproto.Sleep(ctx, delay) {
 			return identity{}, fmt.Errorf("enroll: %w", ctx.Err())
 		}
 		delay = min(2*delay, 10*time.Second)

@@ -31,31 +31,44 @@ type sessionOut struct {
 	cancel context.CancelFunc
 }
 
-// sessions keeps a session open, reconnecting with backoff, until ctx ends
-// or the server refuses the host's credential.
+// sessions keeps a session open until ctx ends or the server refuses the
+// host's credential. A resume reconnects at once: the server has been
+// away, not refusing.
 func (a *Agent) sessions(ctx context.Context) error {
+	return a.reconnect(ctx, "session", a.reconnectNow, func(ctx context.Context) error {
+		err := a.runSession(ctx)
+		if status.Code(err) == codes.Unauthenticated && ctx.Err() == nil {
+			a.log.Error("host credential revoked; the machine was removed or its token replaced", "error", err)
+			return errors.Join(ErrCredentialRevoked, forgetIdentity(a.cfg.StateDir))
+		}
+		return err
+	})
+}
+
+// reconnect runs connect again after each end until ctx ends or connect
+// returns ErrCredentialRevoked, waiting a jittered delay that doubles up to
+// maxSessionBackoff. A connection that lasted a minute, or a signal on now,
+// resets the delay.
+func (a *Agent) reconnect(ctx context.Context, what string, now <-chan struct{}, connect func(context.Context) error) error {
 	delay := minSessionBackoff
 	for ctx.Err() == nil {
 		began := time.Now()
-		err := a.runSession(ctx)
-		if ctx.Err() != nil {
-			return nil //nolint:nilerr // the session ended because the agent is stopping
+		err := connect(ctx)
+		if errors.Is(err, ErrCredentialRevoked) {
+			return err
 		}
-		if status.Code(err) == codes.Unauthenticated {
-			a.log.Error("host credential revoked; the machine was removed or its token replaced", "error", err)
-			return errors.Join(ErrCredentialRevoked, forgetIdentity(a.cfg.StateDir))
+		if ctx.Err() != nil {
+			return nil
 		}
 		if time.Since(began) > time.Minute {
 			delay = minSessionBackoff
 		}
-		a.log.Warn("session ended", "error", err, "retry_in", delay)
+		a.log.Warn(what+" ended", "error", err, "retry_in", delay)
 		backoff := time.NewTimer(delay/2 + rand.N(delay/2+1)) //nolint:gosec // jitter needs no cryptographic randomness
 		select {
 		case <-ctx.Done():
 			backoff.Stop()
-			return nil
-		case <-a.reconnectNow:
-			// A resume: the server has been away, not refusing.
+		case <-now:
 			backoff.Stop()
 			delay = minSessionBackoff
 			continue

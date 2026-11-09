@@ -58,7 +58,7 @@ func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.
 		return false, fmt.Errorf("serve requests: %w", ctx.Err())
 	case <-p.done:
 		sl.http.stopAccepting()
-		if !sleepCtx(ctx, time.Second-time.Since(loaded)) {
+		if !hostproto.Sleep(ctx, time.Second-time.Since(loaded)) {
 			return false, fmt.Errorf("restart runner: %w", ctx.Err())
 		}
 		return true, nil

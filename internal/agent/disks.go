@@ -210,7 +210,7 @@ func (c *container) acquire(ctx context.Context, name string) (*hostproto.Acquir
 			return nil, fmt.Errorf("acquire disk %s: %w", name, err)
 		}
 		c.log.Info("disk is held elsewhere; waiting", "disk", name, "error", err)
-		if !sleep(ctx, delay) {
+		if !hostproto.Sleep(ctx, delay) {
 			return nil, fmt.Errorf("acquire disk %s: %w", name, ctx.Err())
 		}
 		delay = min(2*delay, 15*time.Second)

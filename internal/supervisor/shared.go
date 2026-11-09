@@ -50,7 +50,7 @@ func (s *Supervisor) runShared(ctx context.Context, cfg *hostproto.Configure, sl
 			return err
 		}
 		s.log.Info("restarting shared runner", "exit", describeExit(p.waitErr))
-		if !sleepCtx(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return fmt.Errorf("restart shared runner: %w", ctx.Err())
 		}
 	}

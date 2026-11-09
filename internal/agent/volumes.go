@@ -999,7 +999,7 @@ func (v *volumes) watch(ctx context.Context, m *mounter) {
 			return
 		}
 		v.a.log.Warn("watching a volume mount failed", "mount", m.name, "error", err)
-		if !sleep(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return
 		}
 	}

@@ -252,10 +252,8 @@ func (s *Supervisor) link(ctx context.Context, client hostproto.ContainerLinkCli
 			delay = minBackoff
 		}
 		s.log.Warn("agent link lost", "error", err)
-		select {
-		case <-ctx.Done():
+		if !hostproto.Sleep(ctx, delay) {
 			return fmt.Errorf("agent link: %w", ctx.Err())
-		case <-time.After(delay):
 		}
 		delay = min(delay*2, maxBackoff)
 	}

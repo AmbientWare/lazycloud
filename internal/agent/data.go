@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -54,22 +53,7 @@ type dataLink struct {
 // while it is open.
 func (d *dataLink) run(ctx context.Context) {
 	defer d.streams.Wait()
-	delay := minSessionBackoff
-	for ctx.Err() == nil {
-		began := time.Now()
-		err := d.listen(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if time.Since(began) > time.Minute {
-			delay = minSessionBackoff
-		}
-		d.a.log.Warn("data connection ended", "error", err, "retry_in", delay)
-		if !sleep(ctx, delay/2+rand.N(delay/2+1)) { //nolint:gosec // jitter needs no cryptographic randomness
-			return
-		}
-		delay = min(2*delay, maxSessionBackoff)
-	}
+	_ = d.a.reconnect(ctx, "data connection", nil, d.listen)
 }
 
 func (d *dataLink) listen(ctx context.Context) error {

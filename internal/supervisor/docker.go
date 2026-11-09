@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 const (
@@ -103,7 +105,7 @@ func (d *dockerDaemon) supervise(ctx context.Context, started chan<- error) {
 				return
 			}
 		}
-		if !sleepCtx(ctx, backoff) {
+		if !hostproto.Sleep(ctx, backoff) {
 			return
 		}
 		backoff = min(backoff*2, dockerMaxBackoff)

@@ -526,7 +526,7 @@ func (c *container) watch(ctx context.Context) {
 			return
 		}
 		c.log.Warn("waiting for container exit failed", "error", err)
-		if !sleep(ctx, time.Second) {
+		if !hostproto.Sleep(ctx, time.Second) {
 			return
 		}
 	}
@@ -901,7 +901,7 @@ func (c *container) claimLoop(ctx context.Context) {
 				level = slog.LevelDebug
 			}
 			c.log.Log(ctx, level, "claim failed", "error", err, "retry_in", delay)
-			if !sleep(ctx, delay) {
+			if !hostproto.Sleep(ctx, delay) {
 				return
 			}
 			delay = min(2*delay, 5*time.Second)
@@ -1047,7 +1047,7 @@ func deliverOutcome(ctx, until context.Context, log *slog.Logger, what string, t
 			return
 		}
 		log.Warn("delivering an outcome failed; retrying", "outcome", what, "error", err, "retry_in", delay)
-		sleep(ctx, delay)
+		hostproto.Sleep(ctx, delay)
 		delay = min(2*delay, maxCompleteBackoff)
 	}
 }

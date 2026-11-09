@@ -349,7 +349,7 @@ const DefaultCommitAfter = 10 * time.Second
 // commitAfterSession commits the release on trial once a session has
 // stayed open for Config.CommitAfter.
 func (a *Agent) commitAfterSession(ctx context.Context) {
-	if !sleep(ctx, a.cfg.CommitAfter) {
+	if !hostproto.Sleep(ctx, a.cfg.CommitAfter) {
 		return
 	}
 	a.mu.Lock()
