@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
-	"slices"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -24,22 +22,6 @@ const (
 	// enforces.
 	maxContainerAPIBody = 32 << 20
 )
-
-// containerRuntime is how a container's supervisor runs its slots.
-type containerRuntime struct {
-	InProcess bool                      `json:"in_process,omitempty"`
-	Hooks     *hostproto.LifecycleHooks `json:"hooks,omitempty"`
-	// SecretEnv names the environment variables holding secret values.
-	SecretEnv []string `json:"secret_env,omitempty"`
-}
-
-func runtimeOf(spec *hostproto.StartContainer) containerRuntime {
-	return containerRuntime{
-		InProcess: spec.GetFunction().GetInProcess(),
-		Hooks:     spec.GetFunction().GetHooks(),
-		SecretEnv: slices.Sorted(maps.Keys(spec.GetSecrets())),
-	}
-}
 
 // API relays one container API call to the server on the payload
 // connection. The supervisor is untrusted, so the agent names the container

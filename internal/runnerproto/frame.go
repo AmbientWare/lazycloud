@@ -20,18 +20,19 @@ const (
 // ErrFrameTooLarge reports a header or payload over its limit.
 var ErrFrameTooLarge = errors.New("runner frame exceeds its size limit")
 
-// FrameType is the `type` field that selects a header's schema.
+// FrameType is the `type` field that selects a header's schema, one per
+// generated message.
 type FrameType string
 
 const (
-	FrameLoad       FrameType = "load"
-	FrameLoaded     FrameType = "loaded"
-	FrameLoadFailed FrameType = "load_failed"
-	FrameDependency FrameType = "dependency"
-	FrameInvoke     FrameType = "invoke"
-	FrameSucceeded  FrameType = "succeeded"
-	FrameFailed     FrameType = "failed"
-	FrameOutput     FrameType = "output"
+	FrameLoad       = FrameType(LoadTypeLoad)
+	FrameLoaded     = FrameType(LoadedTypeLoaded)
+	FrameLoadFailed = FrameType(LoadFailedTypeLoadFailed)
+	FrameDependency = FrameType(DependencyTypeDependency)
+	FrameInvoke     = FrameType(InvokeTypeInvoke)
+	FrameSucceeded  = FrameType(SucceededTypeSucceeded)
+	FrameFailed     = FrameType(FailedTypeFailed)
+	FrameOutput     = FrameType(OutputTypeOutput)
 )
 
 // Frame is one decoded frame: its JSON header and raw payload.

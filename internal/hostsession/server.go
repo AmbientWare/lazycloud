@@ -172,13 +172,6 @@ func hostFrom(ctx context.Context) compute.HostID {
 	return host
 }
 
-// HostFrom is the host that authenticated a call on the server's connection,
-// for other services registered with ServerOptions.
-func HostFrom(ctx context.Context) (compute.HostID, bool) {
-	host, ok := ctx.Value(hostKey{}).(compute.HostID)
-	return host, ok
-}
-
 func (s *Server) authenticate(ctx context.Context) (context.Context, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	values := md.Get("authorization")

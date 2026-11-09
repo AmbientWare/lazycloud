@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,6 +44,22 @@ const (
 	// has run out of grace.
 	stopKillSeconds = 5
 )
+
+// containerRuntime is how a container's supervisor runs its slots.
+type containerRuntime struct {
+	InProcess bool                      `json:"in_process,omitempty"`
+	Hooks     *hostproto.LifecycleHooks `json:"hooks,omitempty"`
+	// SecretEnv names the environment variables holding secret values.
+	SecretEnv []string `json:"secret_env,omitempty"`
+}
+
+func runtimeOf(spec *hostproto.StartContainer) containerRuntime {
+	return containerRuntime{
+		InProcess: spec.GetFunction().GetInProcess(),
+		Hooks:     spec.GetFunction().GetHooks(),
+		SecretEnv: slices.Sorted(maps.Keys(spec.GetSecrets())),
+	}
+}
 
 // container is one workload container on this host. Its state is what the
 // agent observed; the server's durable state decides what should happen.
