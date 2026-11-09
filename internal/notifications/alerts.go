@@ -28,7 +28,7 @@ func (n *Notifications) AdminAlerts(ctx context.Context) (AdminAlerts, error) {
 	if err != nil {
 		return AdminAlerts{}, fmt.Errorf("read admin alerts: %w", err)
 	}
-	return AdminAlerts{Email: row.Email, HourlyLimitMicros: row.HourlyLimitMicros, DailyLimitMicros: row.DailyLimitMicros}, nil
+	return AdminAlerts(row), nil
 }
 
 // SetAdminAlerts replaces the alert settings. Spend already over a changed
@@ -94,7 +94,7 @@ func enqueueAlert(ctx context.Context, tx pgx.Tx, to string, a Alert) error {
 func (n *Notifications) AlertSpend(ctx context.Context, hourlyMicros, dailyMicros int64) error {
 	err := pgx.BeginFunc(ctx, n.pool, func(tx pgx.Tx) error {
 		q := n.queries.WithTx(tx)
-		row, err := q.AdminAlerts(ctx)
+		row, err := q.LockAdminAlerts(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

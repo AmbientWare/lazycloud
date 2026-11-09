@@ -448,15 +448,10 @@ func (q *Queries) ReplicasPending(ctx context.Context, arg ReplicasPendingParams
 	return column_1, err
 }
 
-const retireLayers = `-- name: RetireLayers :exec
+const retireLayer = `-- name: RetireLayer :exec
 with gone as (
     delete from image_layers
-    where image_layers.id = any(array(
-        select u.id from image_layers u
-        where u.unreferenced_since < now() - make_interval(secs => $1::float8)
-        order by u.unreferenced_since
-        limit $2))
-      and unreferenced_since < now() - make_interval(secs => $1::float8)
+    where image_layers.id = $1 and unreferenced_since < now() - make_interval(secs => $2::float8)
     returning image_layers.id, image_layers.blob_digest
 ), refs as (
     delete from image_reference_layers
@@ -469,19 +464,18 @@ insert into image_layer_uploads (id, blob_digest, expires_at)
 select g.id, g.blob_digest, now() from gone g
 `
 
-type RetireLayersParams struct {
+type RetireLayerParams struct {
+	ID           uuid.UUID
 	GraceSeconds float64
-	BatchSize    int32
 }
 
-// Moves a batch of pairs unused through the grace period to
-// image_layer_uploads for deletion, and unconverts every reference that used
-// one, dropping their startup traces: a reference is converted as a whole or
-// not at all. A reference recorded with a pair meanwhile fails the
-// statement's foreign key check, and a publish that touched one ends its
-// grace period first, so the next pass retires the rest.
-func (q *Queries) RetireLayers(ctx context.Context, arg RetireLayersParams) error {
-	_, err := q.db.Exec(ctx, retireLayers, arg.GraceSeconds, arg.BatchSize)
+// Moves a pair unused through the grace period to image_layer_uploads for
+// deletion, and unconverts every reference that used it, dropping their
+// startup traces: a reference is converted as a whole or not at all. A
+// reference recorded with it meanwhile fails the statement's foreign key
+// check, and a publish that touched it ends the grace period first.
+func (q *Queries) RetireLayer(ctx context.Context, arg RetireLayerParams) error {
+	_, err := q.db.Exec(ctx, retireLayer, arg.ID, arg.GraceSeconds)
 	return err
 }
 
@@ -513,6 +507,38 @@ func (q *Queries) StartUpload(ctx context.Context, arg StartUploadParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const unreferencedLayers = `-- name: UnreferencedLayers :many
+select id from image_layers
+where unreferenced_since < now() - make_interval(secs => $1::float8)
+order by unreferenced_since
+limit $2
+`
+
+type UnreferencedLayersParams struct {
+	GraceSeconds float64
+	BatchSize    int32
+}
+
+func (q *Queries) UnreferencedLayers(ctx context.Context, arg UnreferencedLayersParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, unreferencedLayers, arg.GraceSeconds, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const uploadsOf = `-- name: UploadsOf :many

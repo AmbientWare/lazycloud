@@ -83,7 +83,7 @@ func TestATraceRacingItsLayersRetirementIsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := images.New(tx).RetireLayers(ctx, images.RetireLayersParams{GraceSeconds: (24 * time.Hour).Seconds(), BatchSize: 1}); err != nil {
+	if err := images.New(tx).RetireLayer(ctx, images.RetireLayerParams{ID: layer, GraceSeconds: (24 * time.Hour).Seconds()}); err != nil {
 		t.Fatal(err)
 	}
 	recorded := make(chan error, 1)
