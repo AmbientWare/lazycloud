@@ -190,7 +190,9 @@ returning id, host_id;
 -- name: LockPodWorkload :one
 -- A pod in the workspace with its app, locked so a scale, wake or park is
 -- decided against its current state.
-select w.id, w.kind, w.name, w.desired_state, a.state as app_state, w.active_release_id, r.spec
+select w.id, w.kind, w.desired_state, a.state as app_state, w.active_release_id,
+       (jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb)) > 0)::bool as has_disks,
+       coalesce((r.spec ->> 'keep_warm_seconds')::int = -1, false)::bool as always_on
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id

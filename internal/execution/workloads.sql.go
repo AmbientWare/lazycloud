@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
@@ -85,7 +86,7 @@ type ContainerRouteRow struct {
 	Kind               string
 	AppState           string
 	DesiredState       string
-	Spec               []byte
+	Spec               apitypes.WorkloadSpec
 	CreatedByContainer *uuid.UUID
 }
 
@@ -415,7 +416,7 @@ type InstanceReleaseRow struct {
 	AppName     string
 	WorkspaceID uuid.UUID
 	Version     *int32
-	Spec        []byte
+	Spec        apitypes.WorkloadSpec
 	Mounters    int32
 	Live        bool
 }
@@ -472,7 +473,7 @@ type InstanceViewRow struct {
 	ReadyAt         *time.Time
 	HostID          *uuid.UUID
 	ExposedPorts    []int32
-	Spec            []byte
+	Spec            apitypes.WorkloadSpec
 }
 
 // A container as an instance: its release, workload and lifetime.
@@ -536,7 +537,7 @@ type ListSandboxesRow struct {
 	CreatedAt    time.Time
 	ReadyAt      *time.Time
 	StoppedAt    *time.Time
-	Spec         []byte
+	Spec         apitypes.WorkloadSpec
 }
 
 // Sandbox containers newest first below the cursor.
@@ -578,7 +579,9 @@ func (q *Queries) ListSandboxes(ctx context.Context, arg ListSandboxesParams) ([
 }
 
 const lockPodWorkload = `-- name: LockPodWorkload :one
-select w.id, w.kind, w.name, w.desired_state, a.state as app_state, w.active_release_id, r.spec
+select w.id, w.kind, w.desired_state, a.state as app_state, w.active_release_id,
+       (jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb)) > 0)::bool as has_disks,
+       coalesce((r.spec ->> 'keep_warm_seconds')::int = -1, false)::bool as always_on
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id
@@ -594,11 +597,11 @@ type LockPodWorkloadParams struct {
 type LockPodWorkloadRow struct {
 	ID              uuid.UUID
 	Kind            string
-	Name            string
 	DesiredState    string
 	AppState        string
 	ActiveReleaseID *uuid.UUID
-	Spec            []byte
+	HasDisks        bool
+	AlwaysOn        bool
 }
 
 // A pod in the workspace with its app, locked so a scale, wake or park is
@@ -609,11 +612,11 @@ func (q *Queries) LockPodWorkload(ctx context.Context, arg LockPodWorkloadParams
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
-		&i.Name,
 		&i.DesiredState,
 		&i.AppState,
 		&i.ActiveReleaseID,
-		&i.Spec,
+		&i.HasDisks,
+		&i.AlwaysOn,
 	)
 	return i, err
 }
@@ -685,7 +688,7 @@ type PodReleaseRow struct {
 	Kind          string
 	WorkspaceID   uuid.UUID
 	WorkspaceName string
-	Spec          []byte
+	Spec          apitypes.WorkloadSpec
 	Accepting     bool
 }
 

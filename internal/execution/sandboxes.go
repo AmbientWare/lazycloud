@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -74,10 +73,7 @@ func (e *Execution) ListSandboxes(ctx context.Context, workspace identity.Worksp
 	}
 	page.Sandboxes = make([]apitypes.Sandbox, len(rows))
 	for n, row := range rows {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return SandboxPage{}, fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		gpu := []apitypes.GpuType{}
 		if spec.Resources.Gpu != nil {
 			gpu = *spec.Resources.Gpu

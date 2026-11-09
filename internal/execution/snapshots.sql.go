@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
 
@@ -316,7 +317,7 @@ type LockSnapshotSourceRow struct {
 	State     string
 	Purpose   string
 	Kind      string
-	Spec      []byte
+	Spec      apitypes.WorkloadSpec
 }
 
 // A container that can be snapshotted: ready, on a host, in the workspace.
@@ -390,7 +391,7 @@ type PendingSnapshotsOnHostRow struct {
 	ContainerID uuid.UUID
 	Automatic   bool
 	CreatedAt   time.Time
-	Spec        []byte
+	Spec        apitypes.WorkloadSpec
 	Traceparent *string
 }
 

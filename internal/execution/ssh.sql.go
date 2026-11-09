@@ -45,7 +45,7 @@ func (q *Queries) InsertSSHHostKey(ctx context.Context, arg InsertSSHHostKeyPara
 }
 
 const podByName = `-- name: PodByName :one
-select w.id, w.desired_state, a.state as app_state, r.spec
+select w.id, w.desired_state, a.state as app_state, (r.id is not null)::bool as released, coalesce(r.spec, 'null')::jsonb as spec
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id
@@ -63,6 +63,7 @@ type PodByNameRow struct {
 	ID           uuid.UUID
 	DesiredState string
 	AppState     string
+	Released     bool
 	Spec         []byte
 }
 
@@ -74,6 +75,7 @@ func (q *Queries) PodByName(ctx context.Context, arg PodByNameParams) (PodByName
 		&i.ID,
 		&i.DesiredState,
 		&i.AppState,
+		&i.Released,
 		&i.Spec,
 	)
 	return i, err

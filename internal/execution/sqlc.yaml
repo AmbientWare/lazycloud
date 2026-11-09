@@ -19,6 +19,8 @@ sql:
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
           - column: "ledger_entries.cpu_millis"
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "releases.spec"
+            go_type: github.com/AmbientWare/lazycloud/internal/apitypes.WorkloadSpec
           - column: "release_shapes.cpu_millis"
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
           - column: "release_shapes.last_stopped_at"

@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -143,11 +142,7 @@ func (c *Control) Release(ctx context.Context, workspace identity.WorkspaceID, i
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("read release: %w", err)
 	}
-	var spec apitypes.WorkloadSpec
-	if err := json.Unmarshal(row.Spec, &spec); err != nil {
-		return apitypes.Release{}, fmt.Errorf("decode release spec: %w", err)
-	}
-	return apitypes.Release{Id: row.ID, Name: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
+	return apitypes.Release{Id: row.ID, Name: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: row.Spec}, nil
 }
 
 // StopWorkload stops admission to the workload. Planning drains its

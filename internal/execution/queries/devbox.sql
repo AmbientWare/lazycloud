@@ -1,7 +1,7 @@
 -- name: DevboxWorkload :one
 -- A pod deployment with its active release and app, in the workspace.
 select w.id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state, a.id as app_id,
-       w.active_release_id, r.spec, coalesce(r.start_failures, 0)::int as start_failures,
+       w.active_release_id, coalesce(r.spec, 'null')::jsonb as spec, coalesce(r.start_failures, 0)::int as start_failures,
        (r.load_error is not null)::bool as load_failed,
        (select count(*) from workloads o join apps oa on oa.id = o.app_id
         where oa.workspace_id = a.workspace_id and o.kind = 'pod' and o.name = w.name

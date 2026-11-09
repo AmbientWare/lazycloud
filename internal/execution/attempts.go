@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
@@ -265,11 +264,7 @@ func (e *Execution) retryPolicies(ctx context.Context, q *Queries, live []liveOu
 	}
 	policies := make(map[uuid.UUID]RetryPolicy, len(rows))
 	for _, row := range rows {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return nil, fmt.Errorf("decode release spec: %w", err)
-		}
-		policies[row.ID] = RetryPolicyOf(spec)
+		policies[row.ID] = RetryPolicyOf(row.Spec)
 	}
 	return policies, nil
 }

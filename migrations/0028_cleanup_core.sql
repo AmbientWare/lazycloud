@@ -21,3 +21,9 @@ select r.id,
            order by lc.id desc limit 1
        ) end::timestamptz as last_stopped_at
 from releases r;
+
+-- Whether a preview serves: not stopped, its lease renewed and its deadline
+-- not passed.
+create function preview_live(p previews) returns boolean
+language sql stable
+return p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now());

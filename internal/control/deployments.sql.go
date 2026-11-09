@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
 
@@ -323,7 +324,7 @@ type WorkloadReleaseRow struct {
 	Name      string
 	Version   *int32
 	CreatedAt time.Time
-	Spec      []byte
+	Spec      apitypes.WorkloadSpec
 }
 
 // The release of the workload's active version, or of the given version.

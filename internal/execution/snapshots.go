@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -68,10 +67,7 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
 			return &ConflictError{Reason: "only a running container can be snapshotted"}
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		if !Checkpointable(apitypes.WorkloadKind(row.Kind), ContainerPurpose(row.Purpose), spec) {
 			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
 		}
@@ -238,11 +234,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 			Deadline: row.CreatedAt.Add(SnapshotDeadline), Traceparent: deref(row.Traceparent),
 		}
 		if row.Automatic {
-			var spec apitypes.WorkloadSpec
-			if err := json.Unmarshal(row.Spec, &spec); err != nil {
-				return fmt.Errorf("decode release spec: %w", err)
-			}
-			if spec.Checkpoint != nil && spec.Pod != nil && spec.Checkpoint.ReadinessPath != nil {
+			if spec := row.Spec; spec.Checkpoint != nil && spec.Pod != nil && spec.Checkpoint.ReadinessPath != nil {
 				cmd.Ready = spec.Checkpoint
 			}
 		}

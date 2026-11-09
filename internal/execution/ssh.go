@@ -268,7 +268,7 @@ func (e *Execution) PodForSSH(ctx context.Context, workspace identity.WorkspaceI
 	if err != nil {
 		return SSHPod{}, fmt.Errorf("read pod: %w", err)
 	}
-	if row.DesiredState != "active" || row.AppState != "active" || row.Spec == nil {
+	if row.DesiredState != "active" || row.AppState != "active" || !row.Released {
 		return SSHPod{}, ErrPodStopped
 	}
 	out := SSHPod{Workload: row.ID}

@@ -39,7 +39,7 @@ select a.workspace_id,
        sqlc.embed(shape),
        demand.current::int as demand,
        demand.peak::int as peak,
-       coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
+       coalesce(preview_live(p), false)::bool as preview_live,
        exists (
            select 1 from containers ac
            where ac.release_id = w.active_release_id and ac.state = 'ready' and ac.purpose = 'serve'

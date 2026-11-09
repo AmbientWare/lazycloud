@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
-	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
 // PreviewLease is how long a preview lives without a renewal. Following its
@@ -53,18 +51,11 @@ func (c *Control) CreatePreview(ctx context.Context, workspace identity.Workspac
 	if spec.Pod != nil {
 		return Preview{}, &InvalidSpecError{Function: spec.Name, Reason: "pods, devboxes and sandboxes are not served; deploy or create them"}
 	}
-	resolved, err := Resolve(spec)
+	f, err := resolveFunction(spec)
 	if err != nil {
 		return Preview{}, err
 	}
-	encoded, digest, err := Digest(resolved)
-	if err != nil {
-		return Preview{}, err
-	}
-	source, err := storage.ParseDigest(spec.Source.Sha256)
-	if err != nil {
-		return Preview{}, &InvalidSpecError{Function: spec.Name, Reason: "source.sha256 is not a lowercase hex digest"}
-	}
+	resolved := f.spec
 	out := Preview{App: app, Name: spec.Name, Kind: PreviewKind(resolved), Spec: resolved, Live: true}
 	err = pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
@@ -72,25 +63,21 @@ func (c *Control) CreatePreview(ctx context.Context, workspace identity.Workspac
 		if err != nil {
 			return fmt.Errorf("upsert app: %w", err)
 		}
-		registered, err := q.RegisteredSources(ctx, RegisteredSourcesParams{WorkspaceID: uuid.UUID(workspace), Digests: [][]byte{source[:]}})
-		if err != nil {
-			return fmt.Errorf("read registered sources: %w", err)
-		}
-		if len(registered) == 0 {
-			return &SourceMissingError{Function: spec.Name, Sha256: source.String()}
+		if err := requireSources(ctx, q, workspace, []resolvedFunction{f}); err != nil {
+			return err
 		}
 		if err := checkDeploy(ctx, tx, uuid.UUID(workspace), []apitypes.WorkloadSpec{resolved}); err != nil {
 			return err
 		}
-		workload, err := q.EnsurePreviewWorkload(ctx, EnsurePreviewWorkloadParams{AppID: appRow.ID, Kind: string(resolved.Kind), Name: spec.Name})
+		workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{
+			AppID: appRow.ID, Kind: string(resolved.Kind), Name: spec.Name, State: string(WorkloadStopped),
+		})
 		if err != nil {
 			return fmt.Errorf("ensure workload: %w", err)
 		}
-		release, err := q.InsertPreviewRelease(ctx, InsertPreviewReleaseParams{
-			WorkloadID: workload, Spec: encoded, SpecDigest: digest, SourceSha256: source[:], Traceparent: traceparent(ctx),
-		})
+		release, err := addRelease(ctx, q, workload.ID, f, nil, true)
 		if err != nil {
-			return fmt.Errorf("insert preview release: %w", err)
+			return err
 		}
 		lease, err := q.InsertPreview(ctx, InsertPreviewParams{
 			ReleaseID: release.ID, WorkspaceID: uuid.UUID(workspace), UserID: uuid.UUID(user), Kind: string(out.Kind),
@@ -120,9 +107,7 @@ func (c *Control) GetPreview(ctx context.Context, workspace identity.WorkspaceID
 	out := Preview{
 		Release: row.ReleaseID, App: row.AppName, Name: row.Name, Kind: apitypes.PreviewKind(row.Kind), Live: row.Live,
 		LeaseExpiresAt: row.LeaseExpiresAt, DeadlineAt: row.DeadlineAt, CreatedAt: row.CreatedAt, LoadError: row.LoadError,
-	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return Preview{}, fmt.Errorf("decode preview spec: %w", err)
+		Spec: row.Spec,
 	}
 	return out, nil
 }

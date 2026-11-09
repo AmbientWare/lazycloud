@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -143,10 +142,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		if !row.Live {
 			return &ConflictError{Reason: "the workload is deleted or its app is paused"}
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		params, err := instanceParams(workspace, row, spec, req)
 		if err != nil {
 			return err
@@ -247,9 +243,7 @@ func (e *Execution) Instance(ctx context.Context, workspace identity.WorkspaceID
 		reason := StopReason(*row.StopReason)
 		out.StopReason = &reason
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return Instance{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -568,9 +562,7 @@ func (e *Execution) Route(ctx context.Context, container ContainerID) (Container
 		by := ContainerID(*row.CreatedByContainer)
 		out.CreatedBy = &by
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return ContainerRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -600,9 +592,7 @@ func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute
 		Release: row.ID, Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.Kind),
 		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Accepting: row.Accepting,
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return PodRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	return out, nil
 }
 

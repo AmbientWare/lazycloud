@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
 
@@ -166,7 +167,7 @@ type LockContainerForClaimRow struct {
 	Slots       int32
 	Purpose     string
 	ReleaseID   uuid.UUID
-	Spec        []byte
+	Spec        apitypes.WorkloadSpec
 	Traceparent *string
 }
 

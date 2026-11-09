@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -94,28 +93,22 @@ func billingModels(models []string) []billing.GPUType {
 	return out
 }
 
-func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.WorkspaceID, workload uuid.UUID) (LockPodWorkloadRow, apitypes.WorkloadSpec, error) {
+func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.WorkspaceID, workload uuid.UUID) (LockPodWorkloadRow, error) {
 	row, err := q.LockPodWorkload(ctx, LockPodWorkloadParams{ID: workload, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return row, apitypes.WorkloadSpec{}, ErrNotFound
+		return row, ErrNotFound
 	}
 	if err != nil {
-		return row, apitypes.WorkloadSpec{}, fmt.Errorf("lock pod: %w", err)
+		return row, fmt.Errorf("lock pod: %w", err)
 	}
-	var spec apitypes.WorkloadSpec
-	if row.Spec != nil {
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return row, spec, fmt.Errorf("decode release spec: %w", err)
-		}
-	}
-	return row, spec, nil
+	return row, nil
 }
 
 // ScalePod holds an active pod at containers.
 func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, containers int) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
-		row, spec, err := e.lockPod(ctx, q, workspace, workload)
+		row, err := e.lockPod(ctx, q, workspace, workload)
 		if err != nil {
 			return err
 		}
@@ -126,9 +119,9 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 			return &ConflictError{Reason: "the app is paused"}
 		case row.DesiredState != "active":
 			return &ConflictError{Reason: "cannot scale an inactive deployment"}
-		case spec.Disks != nil && len(*spec.Disks) > 0 && containers > 1:
+		case row.HasDisks && containers > 1:
 			return &InvalidError{Reason: "a pod with a disk runs one container; scale it to 0 or 1"}
-		case containers == 0 && spec.KeepWarmSeconds != nil && *spec.KeepWarmSeconds == -1:
+		case containers == 0 && row.AlwaysOn:
 			return &InvalidError{Reason: "always-on pod deployments cannot be scaled to zero"}
 		}
 		if err := q.SetPodReplicas(ctx, SetPodReplicasParams{WorkloadID: workload, Replicas: ptr(int32(containers))}); err != nil { //nolint:gosec // The schema bounds containers.
@@ -152,7 +145,7 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 	var held *Failure
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
-		row, _, err := e.lockPod(ctx, q, workspace, workload)
+		row, err := e.lockPod(ctx, q, workspace, workload)
 		if err != nil {
 			return err
 		}
@@ -185,7 +178,7 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 func (e *Execution) ParkPod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
-		if _, _, err := e.lockPod(ctx, q, workspace, workload); err != nil {
+		if _, err := e.lockPod(ctx, q, workspace, workload); err != nil {
 			return err
 		}
 		if err := q.ParkPod(ctx, workload); err != nil {

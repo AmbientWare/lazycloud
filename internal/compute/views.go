@@ -2,13 +2,11 @@ package compute
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -79,10 +77,7 @@ func (c *Compute) Workloads(ctx context.Context, workspace identity.WorkspaceID,
 	}
 	out := make([]Workload, 0, len(rows))
 	for _, row := range rows {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return nil, fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		w := Workload{
 			ID: row.ID, App: row.App, Name: row.Name, Kind: row.Kind,
 			CPUMillis: cpu.Millis(spec.Resources.CpuMillis), MemoryBytes: int64(spec.Resources.MemoryMib) << 20,

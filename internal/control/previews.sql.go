@@ -9,30 +9,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
-
-const ensurePreviewWorkload = `-- name: EnsurePreviewWorkload :one
-insert into workloads (app_id, kind, name, desired_state)
-values ($1, $2, $3, 'stopped')
-on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
-returning id
-`
-
-type EnsurePreviewWorkloadParams struct {
-	AppID uuid.UUID
-	Kind  string
-	Name  string
-}
-
-// A preview of a workload never deployed creates it stopped, so it is not
-// served until a deploy. An existing workload keeps its state.
-func (q *Queries) EnsurePreviewWorkload(ctx context.Context, arg EnsurePreviewWorkloadParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, ensurePreviewWorkload, arg.AppID, arg.Kind, arg.Name)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
 
 const insertPreview = `-- name: InsertPreview :one
 insert into previews (release_id, workspace_id, user_id, kind, lease_expires_at, deadline_at)
@@ -70,42 +49,9 @@ func (q *Queries) InsertPreview(ctx context.Context, arg InsertPreviewParams) (I
 	return i, err
 }
 
-const insertPreviewRelease = `-- name: InsertPreviewRelease :one
-insert into releases (workload_id, version, spec, spec_digest, source_sha256, traceparent)
-values ($1, -nextval('preview_versions'), $2, $3, $4, $5::text)
-returning id, version, created_at
-`
-
-type InsertPreviewReleaseParams struct {
-	WorkloadID   uuid.UUID
-	Spec         []byte
-	SpecDigest   []byte
-	SourceSha256 []byte
-	Traceparent  *string
-}
-
-type InsertPreviewReleaseRow struct {
-	ID        uuid.UUID
-	Version   *int32
-	CreatedAt time.Time
-}
-
-func (q *Queries) InsertPreviewRelease(ctx context.Context, arg InsertPreviewReleaseParams) (InsertPreviewReleaseRow, error) {
-	row := q.db.QueryRow(ctx, insertPreviewRelease,
-		arg.WorkloadID,
-		arg.Spec,
-		arg.SpecDigest,
-		arg.SourceSha256,
-		arg.Traceparent,
-	)
-	var i InsertPreviewReleaseRow
-	err := row.Scan(&i.ID, &i.Version, &i.CreatedAt)
-	return i, err
-}
-
 const previewRow = `-- name: PreviewRow :one
 select p.release_id, p.kind, p.lease_expires_at, p.deadline_at, p.created_at,
-       (p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()))::bool as live,
+       preview_live(p)::bool as live,
        w.name, a.name as app_name, rel.spec, rel.load_error
 from previews p
 join releases rel on rel.id = p.release_id
@@ -128,7 +74,7 @@ type PreviewRowRow struct {
 	Live           bool
 	Name           string
 	AppName        string
-	Spec           []byte
+	Spec           apitypes.WorkloadSpec
 	LoadError      *string
 }
 
@@ -151,11 +97,10 @@ func (q *Queries) PreviewRow(ctx context.Context, arg PreviewRowParams) (Preview
 }
 
 const renewPreview = `-- name: RenewPreview :one
-update previews
+update previews p
 set lease_expires_at = now() + make_interval(secs => $1::float8)
-where release_id = $2 and stopped_at is null and lease_expires_at > now()
-  and (deadline_at is null or deadline_at > now())
-returning lease_expires_at
+where p.release_id = $2 and preview_live(p)
+returning p.lease_expires_at
 `
 
 type RenewPreviewParams struct {
