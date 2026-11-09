@@ -83,7 +83,7 @@ func warnUnfunded(ctx context.Context, tx pgx.Tx, q *Queries, user uuid.UUID, st
 		". Restore a positive credit balance before that date to keep your data. Otherwise, platform-managed files," +
 		" volumes and disks will be permanently deleted. Workspaces in your connected AWS account are unaffected."
 	id, err := notifications.Enqueue(ctx, tx, notifications.Email{
-		To: *email, Subject: unfundedSubject, Text: body, HTML: "<p>" + html.EscapeString(body) + "</p>",
+		To: *email, Subject: unfundedSubject, Text: body, HTML: notifications.Page(unfundedSubject, "<p>"+html.EscapeString(body)+"</p>"),
 	})
 	if err != nil {
 		return err

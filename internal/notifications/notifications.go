@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"time"
 
@@ -56,6 +57,14 @@ type Email struct {
 	Subject string
 	HTML    string
 	Text    string
+}
+
+// Page is the HTML body every message shares: an escaped heading over inner,
+// which the caller has escaped.
+func Page(heading, inner string) string {
+	return `<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;` +
+		`max-width:560px;margin:0 auto;padding:32px 24px;color:#1a1a1a;line-height:1.5">` +
+		`<h1 style="font-size:20px;font-weight:600;margin:0 0 16px">` + html.EscapeString(heading) + `</h1>` + inner + `</div>`
 }
 
 // Delivery policy. With these values a message gets about 20 minutes of

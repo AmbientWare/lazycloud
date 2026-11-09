@@ -429,12 +429,7 @@ func invitationEmail(to string, role Role, expires time.Time, workspace, inviter
 		"It expires on %s. If you were not expecting this, you can ignore this message.",
 		who, workspace, displayName, described, link, date)
 	h := html.EscapeString
-	body := `<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,` +
-		`Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;` +
-		`color:#1a1a1a;line-height:1.5">` +
-		`<h1 style="font-size:20px;margin:0 0 16px">` +
-		`You have been invited to ` + h(workspace) + `</h1>` +
-		`<p><strong>` + h(who) + `</strong> invited you to join the workspace ` +
+	body := `<p><strong>` + h(who) + `</strong> invited you to join the workspace ` +
 		`<strong>` + h(workspace) + `</strong> on ` + h(displayName) + ` as ` + described + `.</p>` +
 		`<p style="margin:24px 0"><a href="` + h(link) + `" style="display:inline-block;` +
 		`background:#1a1a1a;color:#ffffff;padding:12px 20px;border-radius:6px;` +
@@ -443,11 +438,11 @@ func invitationEmail(to string, role Role, expires time.Time, workspace, inviter
 		`are not already. The link joins as whichever account you are signed in as, so ` +
 		`keep it to yourself. It expires on ` + h(date) + `.</p>` +
 		`<p style="color:#888;font-size:13px">If you were not expecting this, you can ignore ` +
-		`this message.</p></div>`
+		`this message.</p>`
 	return notifications.Email{
 		To:      to,
 		Subject: fmt.Sprintf("%s invited you to %s on %s", who, workspace, displayName),
-		HTML:    body,
+		HTML:    notifications.Page("You have been invited to "+workspace, body),
 		Text:    text,
 	}
 }
