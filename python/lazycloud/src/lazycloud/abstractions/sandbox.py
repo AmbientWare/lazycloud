@@ -53,7 +53,13 @@ from lazycloud.contracts.api import (
 from lazycloud.contracts.api import Sandbox as SandboxRow
 from lazycloud.contracts.api import SandboxStats as SandboxStatsResponse
 from lazycloud.control import ControlClientConfigMixin, workloads_client
-from lazycloud.exceptions import SdkError
+from lazycloud.exceptions import (
+    SandboxConnectionError,
+    SandboxFileSystemError,
+    SandboxProcessError,
+    SandboxProcessTimeoutError,
+    SdkError,
+)
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.session.interrupts import uninterrupted
 from lazycloud.session.task import retry_transient
@@ -78,44 +84,6 @@ _FAILED_STOP_REASONS = frozenset(
         StopReason.host_lost,
     }
 )
-
-
-class SandboxConnectionError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        container_id: str = "",
-        state: str = "",
-        cleanup_error: Exception | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.container_id = container_id
-        self.state = state
-        self.cleanup_error = cleanup_error
-
-
-class SandboxProcessError(RuntimeError):
-    pass
-
-
-class SandboxProcessTimeoutError(SandboxProcessError):
-    pass
-
-
-class SandboxFileSystemError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        operation: str = "",
-        path: str = "",
-        container_id: str = "",
-    ) -> None:
-        super().__init__(message)
-        self.operation = operation
-        self.path = path
-        self.container_id = container_id
 
 
 @dataclass(frozen=True, slots=True)

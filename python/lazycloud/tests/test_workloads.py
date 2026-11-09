@@ -25,6 +25,7 @@ from lazycloud.clients.workloads import WorkloadsClient
 from typer.testing import CliRunner, Result
 
 import lazycloud
+from lazycloud import exceptions
 from tests.api_server import (
     TOKEN,
     ApiRequest,
@@ -570,6 +571,13 @@ def test_sandbox_processes_start_poll_stream_and_kill(fake_api: FakeApi) -> None
     assert len(fake_api.calls("POST", f"{BOX}/processes/p1/kill")) == 1
     assert [(item.pid, item.command) for item in listed] == [(42, "echo hi")]
     assert sandbox.process.list_processes()[42].cwd == "/tmp"
+
+
+def test_sandbox_process_errors_are_caught_as_lazycloud_exceptions(fake_api: FakeApi) -> None:
+    sandbox = _sandbox(fake_api)
+
+    with pytest.raises(exceptions.SandboxProcessError, match="at least one command argument"):
+        sandbox.process.exec()
 
 
 def test_sandbox_file_operations_map_to_the_container_file_routes(

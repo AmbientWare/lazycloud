@@ -14,14 +14,6 @@ class ConfigurationError(SdkError):
     pass
 
 
-class RunnerError(SdkError):
-    pass
-
-
-class InvalidFunctionArgumentsError(RunnerError):
-    pass
-
-
 class UnsupportedFeatureError(SdkError):
     """A declared option the platform cannot run yet."""
 
@@ -114,30 +106,30 @@ class WorkspaceNotFoundError(SdkError):
         super().__init__(f"workspace not found: {workspace}")
 
 
-class ObjectUploadError(SdkError):
+class SandboxConnectionError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        container_id: str = "",
+        state: str = "",
+        cleanup_error: Exception | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.container_id = container_id
+        self.state = state
+        self.cleanup_error = cleanup_error
+
+
+class SandboxProcessError(RuntimeError):
     pass
 
 
-class VolumeUploadError(ObjectUploadError):
+class SandboxProcessTimeoutError(SandboxProcessError):
     pass
 
 
-class RetryableError(SdkError):
-    def __init__(self, tries: int, message: str) -> None:
-        self.tries = tries
-        self.message = message
-        super().__init__(f"retryable error after {tries} attempts: {message}")
-
-
-class SandboxConnectionError(SdkError):
-    pass
-
-
-class SandboxProcessError(SdkError):
-    pass
-
-
-class SandboxFileSystemError(SdkError):
+class SandboxFileSystemError(RuntimeError):
     def __init__(
         self,
         message: str,
@@ -146,10 +138,10 @@ class SandboxFileSystemError(SdkError):
         path: str = "",
         container_id: str = "",
     ) -> None:
+        super().__init__(message)
         self.operation = operation
         self.path = path
         self.container_id = container_id
-        super().__init__(message)
 
 
 __all__ = [
@@ -158,20 +150,16 @@ __all__ = [
     "DeploymentNotFoundError",
     "FunctionNotDeployedError",
     "HttpApiError",
-    "InvalidFunctionArgumentsError",
     "MapSubmissionError",
-    "ObjectUploadError",
     "RemoteTaskError",
-    "RetryableError",
-    "RunnerError",
     "SandboxConnectionError",
     "SandboxFileSystemError",
     "SandboxProcessError",
+    "SandboxProcessTimeoutError",
     "SdkError",
     "TaskCancelledError",
     "TaskNotFoundError",
     "UnsupportedFeatureError",
-    "VolumeUploadError",
     "WorkspaceNotFoundError",
     "http_api_error_from_body",
 ]
