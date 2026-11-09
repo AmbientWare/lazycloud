@@ -30,7 +30,7 @@ const secretPath = (workspace: string, secret: string) => ({
 
 /** Store a secret's value; `exists` false only creates it, true only replaces it. */
 export function setSecret(workspace: string, name: string, value: string, exists: boolean) {
-  const header = exists ? { "If-Match": "*" } : { "If-None-Match": "*" };
+  const header = exists ? { "If-Match": "*" as const } : { "If-None-Match": "*" as const };
   return ok(
     api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
       params: { path: { workspace, secret: name }, header },
