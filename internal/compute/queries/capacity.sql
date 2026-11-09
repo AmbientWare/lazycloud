@@ -26,7 +26,7 @@ select h.id,
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
+           sum(c.gpu_count) as gpus,
            sum(jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb))) as disks,
            sum(c.cpu_millis) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_cpu,
            sum(c.memory_bytes) filter (where packed(h.provider, h.gpu_count, c.gpu_count)) as packed_memory

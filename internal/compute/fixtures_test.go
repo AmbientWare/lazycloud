@@ -123,8 +123,8 @@ select id from rel`, workspace, app, spec)
 func pendingContainer(t *testing.T, pool *pgxpool.Pool, workspace, release uuid.UUID, cpu, memory int64) uuid.UUID {
 	t.Helper()
 	return scan[uuid.UUID](t, pool, `
-insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes)
-values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, $3, $4) returning id`, workspace, release, cpu, memory)
+insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count)
+select $1, $2, workload_id, 'pending', 1, $3, $4, release_gpus(spec) from releases where id = $2 returning id`, workspace, release, cpu, memory)
 }
 
 // hostSpec is a host row; zero fields take the column defaults of an online,
