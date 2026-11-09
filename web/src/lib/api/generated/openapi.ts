@@ -5419,10 +5419,7 @@ export interface components {
         };
         ComputeSummary: {
             /** @description The connected account the workspace lives in; absent on platform compute. */
-            connection?: {
-                account_id: string;
-                phase: components["schemas"]["AwsConnectionPhase"];
-            };
+            connection?: components["schemas"]["ComputeConnection"];
             instances: {
                 total: number;
                 ready: number;
@@ -5439,6 +5436,10 @@ export interface components {
                 estimated: boolean;
             };
             workload_count: number;
+        };
+        ComputeConnection: {
+            account_id: string;
+            phase: components["schemas"]["AwsConnectionPhase"];
         };
         ComputeWorkload: {
             /**
@@ -5470,18 +5471,19 @@ export interface components {
         AwsAuthorizationPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "retiring" | "retired";
         /** @enum {string} */
         AwsAuthorizationError: "assume_role_denied" | "external_id_not_enforced" | "account_mismatch" | "permission_drift" | "stack_drift" | "upstream_unavailable";
+        AwsManagedAuthorization: {
+            stack_name: string;
+            region: string;
+            generation: number;
+            stack_id?: string;
+            template_version: string;
+            template_sha256: string;
+        };
         AwsAuthorizationGeneration: {
             generation: number;
             /** @enum {string} */
             authorization_mode: "managed_stack" | "existing_role";
-            managed_authorization?: {
-                stack_name: string;
-                region: string;
-                generation: number;
-                stack_id?: string;
-                template_version: string;
-                template_sha256: string;
-            };
+            managed_authorization?: components["schemas"]["AwsManagedAuthorization"];
             phase: components["schemas"]["AwsAuthorizationPhase"];
             /** Format: date-time */
             last_validation_started_at?: string;
@@ -5627,23 +5629,23 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
             /** @description The planner's last published plan; absent once it expires. */
-            plan?: {
-                /** Format: date-time */
-                generated_at: string;
-                /** Format: date-time */
-                expires_at: string;
-                markets: components["schemas"]["FleetMarket"][];
-            };
+            plan?: components["schemas"]["FleetPlan"];
             /** @description The agent release platform hosts move to. */
-            release?: {
-                version: string;
-                generation: number;
-                /** @description Every connected platform host runs the release. */
-                complete: boolean;
-                phases: {
-                    [key: string]: number;
-                };
-                pending_capacity_owners: number;
+            release?: components["schemas"]["FleetRelease"];
+        };
+        FleetPlan: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            markets: components["schemas"]["FleetMarket"][];
+        };
+        FleetRelease: {
+            version: string;
+            /** @description Every connected platform host runs the release. */
+            complete: boolean;
+            phases: {
+                [key: string]: number;
             };
         };
         FleetNode: {

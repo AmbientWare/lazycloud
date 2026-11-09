@@ -14,7 +14,7 @@ import (
 )
 
 // GetPricing returns the public pricing catalog.
-func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
+func (s *server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
 	catalog, err := s.owners.Billing.Catalog(valueOr(req.Params.At, time.Now()))
 	if err != nil {
 		return nil, err
@@ -24,7 +24,7 @@ func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (Get
 }
 
 // GetBilling returns the caller's billing account.
-func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (GetBillingResponseObject, error) {
+func (s *server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (GetBillingResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -37,7 +37,7 @@ func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (Get
 }
 
 // SetBillingPreferences sets the monthly usage limit and automatic reload.
-func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPreferencesRequestObject) (SetBillingPreferencesResponseObject, error) {
+func (s *server) SetBillingPreferences(ctx context.Context, req SetBillingPreferencesRequestObject) (SetBillingPreferencesResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPrefer
 }
 
 // ResumeAutomaticReload resumes reload after a failed payment.
-func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticReloadRequestObject) (ResumeAutomaticReloadResponseObject, error) {
+func (s *server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticReloadRequestObject) (ResumeAutomaticReloadResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticRel
 }
 
 // ChangePlan moves the account onto published plan terms.
-func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (ChangePlanResponseObject, error) {
+func (s *server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (ChangePlanResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (C
 }
 
 // StartPaymentMethodSetup opens Stripe's card page.
-func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMethodSetupRequestObject) (StartPaymentMethodSetupResponseObject, error) {
+func (s *server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMethodSetupRequestObject) (StartPaymentMethodSetupResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMe
 }
 
 // StartBillingPortal opens Stripe's invoices page.
-func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalRequestObject) (StartBillingPortalResponseObject, error) {
+func (s *server) StartBillingPortal(ctx context.Context, req StartBillingPortalRequestObject) (StartBillingPortalResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalR
 }
 
 // CreateCreditPurchase starts a credit purchase through Checkout.
-func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurchaseRequestObject) (CreateCreditPurchaseResponseObject, error) {
+func (s *server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurchaseRequestObject) (CreateCreditPurchaseResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurch
 }
 
 // ListCosts pages through the account's usage cost.
-func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
+func (s *server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 }
 
 // GetCostSeries returns the account's spend interval by interval.
-func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObject) (GetCostSeriesResponseObject, error) {
+func (s *server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObject) (GetCostSeriesResponseObject, error) {
 	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObje
 
 // ListBillingAccounts lists every user's billing standing for
 // administrators.
-func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccountsRequestObject) (ListBillingAccountsResponseObject, error) {
+func (s *server) ListBillingAccounts(ctx context.Context, req ListBillingAccountsRequestObject) (ListBillingAccountsResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccount
 }
 
 // SetComplimentary waives a user's usage charges or stops waiving them.
-func (s *Server) SetComplimentary(ctx context.Context, req SetComplimentaryRequestObject) (SetComplimentaryResponseObject, error) {
+func (s *server) SetComplimentary(ctx context.Context, req SetComplimentaryRequestObject) (SetComplimentaryResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (s *Server) SetComplimentary(ctx context.Context, req SetComplimentaryReque
 // receiveStripeWebhook stores a verified Stripe delivery; the scheduler
 // processes it. The caller is Stripe, which holds no token: the signature
 // stands in for one.
-func (s *Server) receiveStripeWebhook(w http.ResponseWriter, r *http.Request) {
+func (s *server) receiveStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBytes))
 	if err != nil {
 		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "the delivery is too large")

@@ -55,7 +55,7 @@ func requestFrom(ctx context.Context) *http.Request {
 }
 
 // liveContainer authorizes a call on a ready container of the workspace.
-func (s *Server) liveContainer(ctx context.Context, container uuid.UUID) (execution.ContainerRoute, error) {
+func (s *server) liveContainer(ctx context.Context, container uuid.UUID) (execution.ContainerRoute, error) {
 	route, err := s.owners.Execution.Route(ctx, execution.ContainerID(container))
 	if err != nil {
 		return execution.ContainerRoute{}, err
@@ -75,7 +75,7 @@ func (s *Server) liveContainer(ctx context.Context, container uuid.UUID) (execut
 // forward sends the operation's request to the container's control API and
 // answers with the supervisor's status and body. body replaces a request
 // body the strict handler already decoded.
-func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (written, error) {
+func (s *server) forward(ctx context.Context, container uuid.UUID, body any) (written, error) {
 	route, err := s.liveContainer(ctx, container)
 	if err != nil {
 		return nil, err
@@ -140,22 +140,22 @@ func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (wr
 }
 
 // ListProcesses lists the container's API processes.
-func (s *Server) ListProcesses(ctx context.Context, req ListProcessesRequestObject) (ListProcessesResponseObject, error) {
+func (s *server) ListProcesses(ctx context.Context, req ListProcessesRequestObject) (ListProcessesResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // StartProcess starts a process in the container.
-func (s *Server) StartProcess(ctx context.Context, req StartProcessRequestObject) (StartProcessResponseObject, error) {
+func (s *server) StartProcess(ctx context.Context, req StartProcessRequestObject) (StartProcessResponseObject, error) {
 	return s.forward(ctx, req.Container, req.Body)
 }
 
 // GetProcess reads a process's result.
-func (s *Server) GetProcess(ctx context.Context, req GetProcessRequestObject) (GetProcessResponseObject, error) {
+func (s *server) GetProcess(ctx context.Context, req GetProcessRequestObject) (GetProcessResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // KillProcess signals a process's group.
-func (s *Server) KillProcess(ctx context.Context, req KillProcessRequestObject) (KillProcessResponseObject, error) {
+func (s *server) KillProcess(ctx context.Context, req KillProcessRequestObject) (KillProcessResponseObject, error) {
 	body := req.Body
 	if body == nil {
 		body = &apitypes.KillRequest{}
@@ -164,52 +164,52 @@ func (s *Server) KillProcess(ctx context.Context, req KillProcessRequestObject) 
 }
 
 // ListContainerFiles lists a directory.
-func (s *Server) ListContainerFiles(ctx context.Context, req ListContainerFilesRequestObject) (ListContainerFilesResponseObject, error) {
+func (s *server) ListContainerFiles(ctx context.Context, req ListContainerFilesRequestObject) (ListContainerFilesResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerFile deletes a file.
-func (s *Server) DeleteContainerFile(ctx context.Context, req DeleteContainerFileRequestObject) (DeleteContainerFileResponseObject, error) {
+func (s *server) DeleteContainerFile(ctx context.Context, req DeleteContainerFileRequestObject) (DeleteContainerFileResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // StatContainerFile reads a file's metadata.
-func (s *Server) StatContainerFile(ctx context.Context, req StatContainerFileRequestObject) (StatContainerFileResponseObject, error) {
+func (s *server) StatContainerFile(ctx context.Context, req StatContainerFileRequestObject) (StatContainerFileResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // DownloadContainerFile streams a file's bytes.
-func (s *Server) DownloadContainerFile(ctx context.Context, req DownloadContainerFileRequestObject) (DownloadContainerFileResponseObject, error) {
+func (s *server) DownloadContainerFile(ctx context.Context, req DownloadContainerFileRequestObject) (DownloadContainerFileResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // UploadContainerFile streams a file into the container.
-func (s *Server) UploadContainerFile(ctx context.Context, req UploadContainerFileRequestObject) (UploadContainerFileResponseObject, error) {
+func (s *server) UploadContainerFile(ctx context.Context, req UploadContainerFileRequestObject) (UploadContainerFileResponseObject, error) {
 	return s.forward(ctx, req.Container, req.Body)
 }
 
 // FindInContainerFiles searches files.
-func (s *Server) FindInContainerFiles(ctx context.Context, req FindInContainerFilesRequestObject) (FindInContainerFilesResponseObject, error) {
+func (s *server) FindInContainerFiles(ctx context.Context, req FindInContainerFilesRequestObject) (FindInContainerFilesResponseObject, error) {
 	return s.forward(ctx, req.Container, req.Body)
 }
 
 // ReplaceInContainerFiles replaces text in files.
-func (s *Server) ReplaceInContainerFiles(ctx context.Context, req ReplaceInContainerFilesRequestObject) (ReplaceInContainerFilesResponseObject, error) {
+func (s *server) ReplaceInContainerFiles(ctx context.Context, req ReplaceInContainerFilesRequestObject) (ReplaceInContainerFilesResponseObject, error) {
 	return s.forward(ctx, req.Container, req.Body)
 }
 
 // CreateContainerDirectory creates a directory.
-func (s *Server) CreateContainerDirectory(ctx context.Context, req CreateContainerDirectoryRequestObject) (CreateContainerDirectoryResponseObject, error) {
+func (s *server) CreateContainerDirectory(ctx context.Context, req CreateContainerDirectoryRequestObject) (CreateContainerDirectoryResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerDirectory deletes a directory.
-func (s *Server) DeleteContainerDirectory(ctx context.Context, req DeleteContainerDirectoryRequestObject) (DeleteContainerDirectoryResponseObject, error) {
+func (s *server) DeleteContainerDirectory(ctx context.Context, req DeleteContainerDirectoryRequestObject) (DeleteContainerDirectoryResponseObject, error) {
 	return s.forward(ctx, req.Container, nil)
 }
 
 // StreamContainerOutput writes the container's output as NDJSON.
-func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerOutputRequestObject) (StreamContainerOutputResponseObject, error) {
+func (s *server) StreamContainerOutput(ctx context.Context, req StreamContainerOutputRequestObject) (StreamContainerOutputResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
@@ -229,7 +229,7 @@ func containerLogOut(e execution.ContainerLogEntry) apitypes.ContainerLogEntry {
 
 // acceptSocket accepts a WebSocket after checking a browser session's
 // Origin, since WebSocket upgrades are GETs that the cookie check skips.
-func (s *Server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+func (s *server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 	if p, ok := principalFrom(ctx); ok && p.Session != nil && (s.cfg.PublicURL == "" || r.Header.Get("Origin") != s.cfg.PublicURL) {
 		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "a browser request must come from the dashboard")
 		return nil, errors.New("cross-origin socket refused")
@@ -243,7 +243,7 @@ func (s *Server) acceptSocket(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 // holdWhile keeps a lease on container until ctx ends.
-func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID) func() {
+func (s *server) holdWhile(ctx context.Context, container execution.ContainerID) func() {
 	holder := uuid.New()
 	ids := []execution.ContainerID{container}
 	_ = s.owners.Execution.HoldContainers(ctx, holder, ids)
@@ -271,7 +271,7 @@ func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID)
 
 // OpenContainerShell opens a login shell in the container over a
 // WebSocket.
-func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
+func (s *server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
@@ -281,7 +281,7 @@ func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellR
 
 type shellSocket struct {
 	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
+	server    *server
 	workspace identity.WorkspaceID
 	container execution.ContainerID
 	params    apitypes.OpenContainerShellParams
@@ -327,7 +327,7 @@ const containerWaitBackstop = 2 * time.Second
 
 // waitReady waits for a container to become ready, as a shell to a new
 // container does.
-func (s *Server) waitReady(ctx context.Context, container execution.ContainerID) (execution.ContainerRoute, error) {
+func (s *server) waitReady(ctx context.Context, container execution.ContainerID) (execution.ContainerRoute, error) {
 	deadline := time.Now().Add(shellReadyWait)
 	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, container.String())
 	defer cancel()
@@ -405,14 +405,14 @@ func (t containerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // OpenSshTunnel carries an SSH connection to a pod over a WebSocket.
-func (s *Server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
+func (s *server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	return sshTunnel{ctx: ctx, server: s, workspace: ws.ID, app: req.App, pod: req.Name}, nil
 }
 
 type sshTunnel struct {
 	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
+	server    *server
 	workspace identity.WorkspaceID
 	app, pod  string
 }

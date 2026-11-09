@@ -15,7 +15,7 @@ import (
 //
 // The edge forwards them like its own hosts. They stream, so the API's body
 // limit and operation router do not apply.
-func (s *Server) workloadRoutes(mux *http.ServeMux) {
+func (s *server) workloadRoutes(mux *http.ServeMux) {
 	for _, kind := range []apitypes.WorkloadKind{apitypes.WorkloadKindEndpoint, apitypes.WorkloadKindAsgi} {
 		base := "/v1/workspaces/{workspace}/apps/{app}/workloads/" + string(kind) + "/{name}/invoke"
 		handler := s.authenticate(s.serveWorkload(kind))
@@ -24,7 +24,7 @@ func (s *Server) workloadRoutes(mux *http.ServeMux) {
 	}
 }
 
-func (s *Server) serveWorkload(kind apitypes.WorkloadKind) http.HandlerFunc {
+func (s *server) serveWorkload(kind apitypes.WorkloadKind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ws, err := s.workspace(r.Context(), r.PathValue("workspace"))
 		if err != nil {

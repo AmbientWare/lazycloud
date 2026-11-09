@@ -15,7 +15,7 @@ import (
 // Handlers for apps, workloads, task listing, containers and logs.
 
 // ListApps lists apps with a deployed workload.
-func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListAppsResponseObject, error) {
+func (s *server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListAppsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	var state *control.AppState
 	if req.Params.State != nil {
@@ -31,7 +31,7 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 }
 
 // GetApp reads an app by name or id.
-func (s *Server) GetApp(ctx context.Context, req GetAppRequestObject) (GetAppResponseObject, error) {
+func (s *server) GetApp(ctx context.Context, req GetAppRequestObject) (GetAppResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	app, err := s.owners.Control.GetApp(ctx, ws.ID, req.App)
 	if err != nil {
@@ -41,7 +41,7 @@ func (s *Server) GetApp(ctx context.Context, req GetAppRequestObject) (GetAppRes
 }
 
 // UpdateApp pauses or resumes an app.
-func (s *Server) UpdateApp(ctx context.Context, req UpdateAppRequestObject) (UpdateAppResponseObject, error) {
+func (s *server) UpdateApp(ctx context.Context, req UpdateAppRequestObject) (UpdateAppResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	update := s.owners.Control.ResumeApp
 	if req.Body.Paused {
@@ -55,7 +55,7 @@ func (s *Server) UpdateApp(ctx context.Context, req UpdateAppRequestObject) (Upd
 }
 
 // DeleteApp deletes an app.
-func (s *Server) DeleteApp(ctx context.Context, req DeleteAppRequestObject) (DeleteAppResponseObject, error) {
+func (s *server) DeleteApp(ctx context.Context, req DeleteAppRequestObject) (DeleteAppResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	app, err := s.owners.Control.DeleteApp(ctx, ws.ID, req.App)
 	if err != nil {
@@ -65,7 +65,7 @@ func (s *Server) DeleteApp(ctx context.Context, req DeleteAppRequestObject) (Del
 }
 
 // PlanDeployment previews a deploy.
-func (s *Server) PlanDeployment(ctx context.Context, req PlanDeploymentRequestObject) (PlanDeploymentResponseObject, error) {
+func (s *server) PlanDeployment(ctx context.Context, req PlanDeploymentRequestObject) (PlanDeploymentResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	plan, err := s.owners.Control.PlanDeployment(ctx, ws.ID, req.App, *req.Body)
 	if err != nil {
@@ -75,7 +75,7 @@ func (s *Server) PlanDeployment(ctx context.Context, req PlanDeploymentRequestOb
 }
 
 // PrepareRelease returns a release for working-tree calls.
-func (s *Server) PrepareRelease(ctx context.Context, req PrepareReleaseRequestObject) (PrepareReleaseResponseObject, error) {
+func (s *server) PrepareRelease(ctx context.Context, req PrepareReleaseRequestObject) (PrepareReleaseResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	// A working-tree release runs its image by the same pinned digest
 	// reference as a deployed one.
@@ -90,7 +90,7 @@ func (s *Server) PrepareRelease(ctx context.Context, req PrepareReleaseRequestOb
 }
 
 // ListWorkloads lists deployed workloads.
-func (s *Server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObject) (ListWorkloadsResponseObject, error) {
+func (s *server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObject) (ListWorkloadsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	p := req.Params
 	page, err := s.owners.Control.ListWorkloads(ctx, ws.ID, control.WorkloadFilter{App: p.App, Kind: p.Kind, Name: p.Name, ID: p.Id, Search: p.Search},
@@ -108,7 +108,7 @@ func (s *Server) ListWorkloads(ctx context.Context, req ListWorkloadsRequestObje
 
 // findWorkload resolves the workload a path addresses by app, kind and name
 // in the authorized workspace.
-func (s *Server) findWorkload(ctx context.Context, app string, kind apitypes.WorkloadKind, name string) (identity.Workspace, control.WorkloadID, error) {
+func (s *server) findWorkload(ctx context.Context, app string, kind apitypes.WorkloadKind, name string) (identity.Workspace, control.WorkloadID, error) {
 	ws := workspaceFrom(ctx)
 	id, err := s.owners.Control.FindWorkload(ctx, ws.ID, control.WorkloadRef{App: app, Kind: kind, Name: name})
 	return ws, id, err
@@ -116,14 +116,14 @@ func (s *Server) findWorkload(ctx context.Context, app string, kind apitypes.Wor
 
 // invokeURLs are where a deployed workload answers on its own host and on
 // the API host.
-func (s *Server) invokeURLs(ws identity.Workspace, app string, spec apitypes.WorkloadSpec) (*string, *string) {
+func (s *server) invokeURLs(ws identity.Workspace, app string, spec apitypes.WorkloadSpec) (*string, *string) {
 	url := s.owners.Edge.DeployedURL(ws.ID, app, spec)
 	path := edge.InvokePath(ws.Name, app, spec.Kind, spec.Name)
 	return &url, &path
 }
 
 // workloadOut reads a workload with a pod's role, count and URL.
-func (s *Server) workloadOut(ctx context.Context, ws identity.Workspace, id control.WorkloadID) (apitypes.Workload, error) {
+func (s *server) workloadOut(ctx context.Context, ws identity.Workspace, id control.WorkloadID) (apitypes.Workload, error) {
 	w, err := s.owners.Control.GetWorkload(ctx, ws.ID, id)
 	if err != nil {
 		return apitypes.Workload{}, err
@@ -133,7 +133,7 @@ func (s *Server) workloadOut(ctx context.Context, ws identity.Workspace, id cont
 
 // GetWorkload describes a workload: the release its active version, or the
 // named one, runs, where an HTTP workload answers and a function's schedule.
-func (s *Server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) (GetWorkloadResponseObject, error) {
+func (s *server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) (GetWorkloadResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -172,7 +172,7 @@ func (s *Server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) 
 }
 
 // StopWorkload stops a workload.
-func (s *Server) StopWorkload(ctx context.Context, req StopWorkloadRequestObject) (StopWorkloadResponseObject, error) {
+func (s *server) StopWorkload(ctx context.Context, req StopWorkloadRequestObject) (StopWorkloadResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func (s *Server) StopWorkload(ctx context.Context, req StopWorkloadRequestObject
 }
 
 // StartWorkload starts a workload, optionally on another version.
-func (s *Server) StartWorkload(ctx context.Context, req StartWorkloadRequestObject) (StartWorkloadResponseObject, error) {
+func (s *server) StartWorkload(ctx context.Context, req StartWorkloadRequestObject) (StartWorkloadResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -202,7 +202,7 @@ func (s *Server) StartWorkload(ctx context.Context, req StartWorkloadRequestObje
 }
 
 // DeleteWorkload deletes a workload.
-func (s *Server) DeleteWorkload(ctx context.Context, req DeleteWorkloadRequestObject) (DeleteWorkloadResponseObject, error) {
+func (s *server) DeleteWorkload(ctx context.Context, req DeleteWorkloadRequestObject) (DeleteWorkloadResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -215,7 +215,7 @@ func (s *Server) DeleteWorkload(ctx context.Context, req DeleteWorkloadRequestOb
 }
 
 // ListWorkloadVersions lists a workload's deployed versions.
-func (s *Server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersionsRequestObject) (ListWorkloadVersionsResponseObject, error) {
+func (s *server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersionsRequestObject) (ListWorkloadVersionsResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func (s *Server) ListWorkloadVersions(ctx context.Context, req ListWorkloadVersi
 }
 
 // StreamWorkloadLogs writes the workload's log entries as NDJSON.
-func (s *Server) StreamWorkloadLogs(ctx context.Context, req StreamWorkloadLogsRequestObject) (StreamWorkloadLogsResponseObject, error) {
+func (s *server) StreamWorkloadLogs(ctx context.Context, req StreamWorkloadLogsRequestObject) (StreamWorkloadLogsResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -238,7 +238,7 @@ func (s *Server) StreamWorkloadLogs(ctx context.Context, req StreamWorkloadLogsR
 }
 
 // ListTasks lists tasks newest first.
-func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (ListTasksResponseObject, error) {
+func (s *server) ListTasks(ctx context.Context, req ListTasksRequestObject) (ListTasksResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	filter := execution.TaskFilter{
 		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search, Version: req.Params.Version,
@@ -254,13 +254,13 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	}
 	out := ListTasks200JSONResponse{Tasks: make([]apitypes.Task, len(page.Tasks)), NextCursor: optional(page.Next)}
 	for n, task := range page.Tasks {
-		out.Tasks[n] = taskOut(task)
+		out.Tasks[n] = execution.APITask(task)
 	}
 	return out, nil
 }
 
 // StopTasks cancels each listed queued or running task.
-func (s *Server) StopTasks(ctx context.Context, req StopTasksRequestObject) (StopTasksResponseObject, error) {
+func (s *server) StopTasks(ctx context.Context, req StopTasksRequestObject) (StopTasksResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	ids := make([]execution.TaskID, len(req.Body.TaskIds))
 	for n, id := range req.Body.TaskIds {
@@ -282,17 +282,17 @@ func taskUUIDs(ids []execution.TaskID) []uuid.UUID {
 }
 
 // RerunTask submits a task's input again.
-func (s *Server) RerunTask(ctx context.Context, req RerunTaskRequestObject) (RerunTaskResponseObject, error) {
+func (s *server) RerunTask(ctx context.Context, req RerunTaskRequestObject) (RerunTaskResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	task, err := s.owners.Execution.RerunTask(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
 	}
-	return RerunTask201JSONResponse(taskOut(task)), nil
+	return RerunTask201JSONResponse(execution.APITask(task)), nil
 }
 
 // ListContainers lists containers newest first.
-func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestObject) (ListContainersResponseObject, error) {
+func (s *server) ListContainers(ctx context.Context, req ListContainersRequestObject) (ListContainersResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	p := req.Params
 	filter := execution.ContainerFilter{Live: valueOr(p.Live, false), App: p.App, Workload: p.WorkloadId}
@@ -308,7 +308,7 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 }
 
 // GetContainer reads a container.
-func (s *Server) GetContainer(ctx context.Context, req GetContainerRequestObject) (GetContainerResponseObject, error) {
+func (s *server) GetContainer(ctx context.Context, req GetContainerRequestObject) (GetContainerResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	c, err := s.owners.Execution.GetContainer(ctx, ws.ID, execution.ContainerID(req.Container))
 	if err != nil {
@@ -318,7 +318,7 @@ func (s *Server) GetContainer(ctx context.Context, req GetContainerRequestObject
 }
 
 // StopContainer stops a container now.
-func (s *Server) StopContainer(ctx context.Context, req StopContainerRequestObject) (StopContainerResponseObject, error) {
+func (s *server) StopContainer(ctx context.Context, req StopContainerRequestObject) (StopContainerResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if err := s.ownsContainer(ctx, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
@@ -331,7 +331,7 @@ func (s *Server) StopContainer(ctx context.Context, req StopContainerRequestObje
 }
 
 // StreamContainerLogs writes the container's log entries as NDJSON.
-func (s *Server) StreamContainerLogs(ctx context.Context, req StreamContainerLogsRequestObject) (StreamContainerLogsResponseObject, error) {
+func (s *server) StreamContainerLogs(ctx context.Context, req StreamContainerLogsRequestObject) (StreamContainerLogsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfContainer, ID: req.Container},
 		req.Params.After, req.Params.Tail, req.Params.Follow)

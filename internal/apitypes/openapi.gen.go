@@ -2674,15 +2674,8 @@ type AwsAuthorizationGeneration struct {
 	Generation              int                                         `json:"generation"`
 	LastValidatedAt         *time.Time                                  `json:"last_validated_at,omitempty"`
 	LastValidationStartedAt *time.Time                                  `json:"last_validation_started_at,omitempty"`
-	ManagedAuthorization    *struct {
-		Generation      int     `json:"generation"`
-		Region          string  `json:"region"`
-		StackId         *string `json:"stack_id,omitempty"`
-		StackName       string  `json:"stack_name"`
-		TemplateSha256  string  `json:"template_sha256"`
-		TemplateVersion string  `json:"template_version"`
-	} `json:"managed_authorization,omitempty"`
-	Phase AwsAuthorizationPhase `json:"phase"`
+	ManagedAuthorization    *AwsManagedAuthorization                    `json:"managed_authorization,omitempty"`
+	Phase                   AwsAuthorizationPhase                       `json:"phase"`
 
 	// SetupStep Where the customer's creation of a managed authorization's stack stands while the authorization has never validated.
 	SetupStep *AwsSetupStep `json:"setup_step,omitempty"`
@@ -2804,6 +2797,16 @@ type AwsLeftover struct {
 
 // AwsLeftoverKind defines model for AwsLeftover.Kind.
 type AwsLeftoverKind string
+
+// AwsManagedAuthorization defines model for AwsManagedAuthorization.
+type AwsManagedAuthorization struct {
+	Generation      int     `json:"generation"`
+	Region          string  `json:"region"`
+	StackId         *string `json:"stack_id,omitempty"`
+	StackName       string  `json:"stack_name"`
+	TemplateSha256  string  `json:"template_sha256"`
+	TemplateVersion string  `json:"template_version"`
+}
 
 // AwsReconnectRequest defines model for AwsReconnectRequest.
 type AwsReconnectRequest struct {
@@ -3006,6 +3009,12 @@ type ComplimentaryRequest struct {
 	Complimentary bool `json:"complimentary"`
 }
 
+// ComputeConnection defines model for ComputeConnection.
+type ComputeConnection struct {
+	AccountId string             `json:"account_id"`
+	Phase     AwsConnectionPhase `json:"phase"`
+}
+
 // ComputeInstance defines model for ComputeInstance.
 type ComputeInstance struct {
 	AvailabilityZone string `json:"availability_zone"`
@@ -3065,11 +3074,8 @@ type ComputeRate struct {
 // ComputeSummary defines model for ComputeSummary.
 type ComputeSummary struct {
 	// Connection The connected account the workspace lives in; absent on platform compute.
-	Connection *struct {
-		AccountId string             `json:"account_id"`
-		Phase     AwsConnectionPhase `json:"phase"`
-	} `json:"connection,omitempty"`
-	Cost struct {
+	Connection *ComputeConnection `json:"connection,omitempty"`
+	Cost       struct {
 		Currency     ComputeSummaryCostCurrency `json:"currency"`
 		DailyMicros  *int64                     `json:"daily_micros,omitempty"`
 		Estimated    bool                       `json:"estimated"`
@@ -3856,6 +3862,21 @@ type FleetNodePage struct {
 	ObservedAt time.Time   `json:"observed_at"`
 }
 
+// FleetPlan defines model for FleetPlan.
+type FleetPlan struct {
+	ExpiresAt   time.Time     `json:"expires_at"`
+	GeneratedAt time.Time     `json:"generated_at"`
+	Markets     []FleetMarket `json:"markets"`
+}
+
+// FleetRelease defines model for FleetRelease.
+type FleetRelease struct {
+	// Complete Every connected platform host runs the release.
+	Complete bool           `json:"complete"`
+	Phases   map[string]int `json:"phases"`
+	Version  string         `json:"version"`
+}
+
 // FleetSpend defines model for FleetSpend.
 type FleetSpend struct {
 	// HourlyMicros The fleet's cost an hour now
@@ -3896,21 +3917,10 @@ type FleetSummary struct {
 	ObservedAt time.Time `json:"observed_at"`
 
 	// Plan The planner's last published plan; absent once it expires.
-	Plan *struct {
-		ExpiresAt   time.Time     `json:"expires_at"`
-		GeneratedAt time.Time     `json:"generated_at"`
-		Markets     []FleetMarket `json:"markets"`
-	} `json:"plan,omitempty"`
+	Plan *FleetPlan `json:"plan,omitempty"`
 
 	// Release The agent release platform hosts move to.
-	Release *struct {
-		// Complete Every connected platform host runs the release.
-		Complete              bool           `json:"complete"`
-		Generation            int            `json:"generation"`
-		PendingCapacityOwners int            `json:"pending_capacity_owners"`
-		Phases                map[string]int `json:"phases"`
-		Version               string         `json:"version"`
-	} `json:"release,omitempty"`
+	Release *FleetRelease `json:"release,omitempty"`
 }
 
 // GpuRate defines model for GpuRate.

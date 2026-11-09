@@ -38,7 +38,7 @@ func decodeCursor(cursor *string, v any) error {
 }
 
 // GetComputeSummary summarizes a workspace's compute.
-func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryRequestObject) (GetComputeSummaryResponseObject, error) {
+func (s *server) GetComputeSummary(ctx context.Context, req GetComputeSummaryRequestObject) (GetComputeSummaryResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	sum, err := s.owners.Compute.WorkspaceSummary(ctx, ws.ID)
 	if err != nil {
@@ -48,10 +48,7 @@ func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryReq
 	out.Instances.Total, out.Instances.Ready, out.Instances.Pending, out.Instances.Degraded = sum.Total, sum.Ready, sum.Pending, sum.Degraded
 	out.Cost.Currency, out.Cost.Estimated = apitypes.USD, true
 	if sum.AWSAccountID != "" {
-		out.Connection = &struct {
-			AccountId string                      `json:"account_id"`
-			Phase     apitypes.AwsConnectionPhase `json:"phase"`
-		}{AccountId: sum.AWSAccountID, Phase: apitypes.AwsConnectionPhase(sum.ConnectionPhase)}
+		out.Connection = &apitypes.ComputeConnection{AccountId: sum.AWSAccountID, Phase: apitypes.AwsConnectionPhase(sum.ConnectionPhase)}
 		if sum.HourlyMicros != nil {
 			daily := *sum.HourlyMicros * 24
 			out.Cost.HourlyMicros, out.Cost.DailyMicros = sum.HourlyMicros, &daily
@@ -62,7 +59,7 @@ func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryReq
 
 // ListComputeWorkloads lists a workspace's deployed workloads with their
 // sizes and machine pins.
-func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorkloadsRequestObject) (ListComputeWorkloadsResponseObject, error) {
+func (s *server) ListComputeWorkloads(ctx context.Context, req ListComputeWorkloadsRequestObject) (ListComputeWorkloadsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	var after compute.WorkloadCursor
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
@@ -123,7 +120,7 @@ func machinePage(rows []compute.Machine, limit int) apitypes.MachinePage {
 }
 
 // ListWorkspaceMachines lists the joined machines that serve a workspace.
-func (s *Server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMachinesRequestObject) (ListWorkspaceMachinesResponseObject, error) {
+func (s *server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMachinesRequestObject) (ListWorkspaceMachinesResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	var after string
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
@@ -138,7 +135,7 @@ func (s *Server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMac
 }
 
 // ListMachines lists the machines the caller's account joined.
-func (s *Server) ListMachines(ctx context.Context, req ListMachinesRequestObject) (ListMachinesResponseObject, error) {
+func (s *server) ListMachines(ctx context.Context, req ListMachinesRequestObject) (ListMachinesResponseObject, error) {
 	p, err := s.account(ctx, "list machines")
 	if err != nil {
 		return nil, err
@@ -156,7 +153,7 @@ func (s *Server) ListMachines(ctx context.Context, req ListMachinesRequestObject
 }
 
 // ownedWorkspaces resolves names to workspaces the caller owns.
-func (s *Server) ownedWorkspaces(ctx context.Context, p identity.Principal, names []apitypes.Name) ([]uuid.UUID, error) {
+func (s *server) ownedWorkspaces(ctx context.Context, p identity.Principal, names []apitypes.Name) ([]uuid.UUID, error) {
 	if len(names) == 0 {
 		return nil, &compute.InvalidError{Message: "a machine must serve at least one named workspace"}
 	}
@@ -189,7 +186,7 @@ func containsID(ids []uuid.UUID, id uuid.UUID) bool {
 
 // CreateMachineJoinCommand mints the command that joins a host as a named
 // machine.
-func (s *Server) CreateMachineJoinCommand(ctx context.Context, req CreateMachineJoinCommandRequestObject) (CreateMachineJoinCommandResponseObject, error) {
+func (s *server) CreateMachineJoinCommand(ctx context.Context, req CreateMachineJoinCommandRequestObject) (CreateMachineJoinCommandResponseObject, error) {
 	p, err := s.account(ctx, "join machines")
 	if err != nil {
 		return nil, err
@@ -213,7 +210,7 @@ func (s *Server) CreateMachineJoinCommand(ctx context.Context, req CreateMachine
 }
 
 // UpdateMachine changes the workspaces a machine serves.
-func (s *Server) UpdateMachine(ctx context.Context, req UpdateMachineRequestObject) (UpdateMachineResponseObject, error) {
+func (s *server) UpdateMachine(ctx context.Context, req UpdateMachineRequestObject) (UpdateMachineResponseObject, error) {
 	p, err := s.account(ctx, "update machines")
 	if err != nil {
 		return nil, err
@@ -230,7 +227,7 @@ func (s *Server) UpdateMachine(ctx context.Context, req UpdateMachineRequestObje
 }
 
 // RemoveMachine retires a machine.
-func (s *Server) RemoveMachine(ctx context.Context, req RemoveMachineRequestObject) (RemoveMachineResponseObject, error) {
+func (s *server) RemoveMachine(ctx context.Context, req RemoveMachineRequestObject) (RemoveMachineResponseObject, error) {
 	p, err := s.account(ctx, "remove machines")
 	if err != nil {
 		return nil, err
@@ -243,7 +240,7 @@ func (s *Server) RemoveMachine(ctx context.Context, req RemoveMachineRequestObje
 
 // ListComputeInstances lists the instances of the caller's connected AWS
 // account.
-func (s *Server) ListComputeInstances(ctx context.Context, req ListComputeInstancesRequestObject) (ListComputeInstancesResponseObject, error) {
+func (s *server) ListComputeInstances(ctx context.Context, req ListComputeInstancesRequestObject) (ListComputeInstancesResponseObject, error) {
 	p, err := s.account(ctx, "list compute instances")
 	if err != nil {
 		return nil, err
@@ -302,14 +299,7 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 		out.SetupStep = &step
 	}
 	if a.Mode == compute.ModeManagedStack {
-		out.ManagedAuthorization = &struct {
-			Generation      int     `json:"generation"`
-			Region          string  `json:"region"`
-			StackId         *string `json:"stack_id,omitempty"`
-			StackName       string  `json:"stack_name"`
-			TemplateSha256  string  `json:"template_sha256"`
-			TemplateVersion string  `json:"template_version"`
-		}{Generation: a.Generation, Region: a.Region, StackName: a.StackName, TemplateSha256: a.TemplateSHA256, TemplateVersion: a.TemplateVersion}
+		out.ManagedAuthorization = &apitypes.AwsManagedAuthorization{Generation: a.Generation, Region: a.Region, StackName: a.StackName, TemplateSha256: a.TemplateSHA256, TemplateVersion: a.TemplateVersion}
 		if a.StackID != "" {
 			out.ManagedAuthorization.StackId = &a.StackID
 		}
@@ -317,7 +307,7 @@ func authorizationOut(a *compute.Authorization) *apitypes.AwsAuthorizationGenera
 	return out
 }
 
-func (s *Server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
+func (s *server) connectionOut(conn compute.Connection) apitypes.AwsConnection {
 	return connectionView(s.owners.Compute.View(conn))
 }
 
@@ -343,7 +333,7 @@ func connectionView(conn compute.Connection) apitypes.AwsConnection {
 	return out
 }
 
-func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConnectionAuthorization {
+func (s *server) authorizationResponse(conn compute.Connection) apitypes.AwsConnectionAuthorization {
 	view := s.owners.Compute.View(conn)
 	out := apitypes.AwsConnectionAuthorization{Connection: connectionView(view)}
 	if view.Pending != nil {
@@ -358,7 +348,7 @@ func (s *Server) authorizationResponse(conn compute.Connection) apitypes.AwsConn
 }
 
 // GetAwsConnection returns the account's AWS connection.
-func (s *Server) GetAwsConnection(ctx context.Context, _ GetAwsConnectionRequestObject) (GetAwsConnectionResponseObject, error) {
+func (s *server) GetAwsConnection(ctx context.Context, _ GetAwsConnectionRequestObject) (GetAwsConnectionResponseObject, error) {
 	p, err := s.account(ctx, "read the AWS connection")
 	if err != nil {
 		return nil, err
@@ -388,7 +378,7 @@ func (s *Server) GetAwsConnection(ctx context.Context, _ GetAwsConnectionRequest
 }
 
 // ConnectAws starts an AWS connection.
-func (s *Server) ConnectAws(ctx context.Context, req ConnectAwsRequestObject) (ConnectAwsResponseObject, error) {
+func (s *server) ConnectAws(ctx context.Context, req ConnectAwsRequestObject) (ConnectAwsResponseObject, error) {
 	p, err := s.account(ctx, "connect an AWS account")
 	if err != nil {
 		return nil, err
@@ -408,7 +398,7 @@ func (s *Server) ConnectAws(ctx context.Context, req ConnectAwsRequestObject) (C
 }
 
 // DisconnectAws removes the account's AWS connection.
-func (s *Server) DisconnectAws(ctx context.Context, _ DisconnectAwsRequestObject) (DisconnectAwsResponseObject, error) {
+func (s *server) DisconnectAws(ctx context.Context, _ DisconnectAwsRequestObject) (DisconnectAwsResponseObject, error) {
 	p, err := s.account(ctx, "disconnect the AWS account")
 	if err != nil {
 		return nil, err
@@ -426,7 +416,7 @@ func (s *Server) DisconnectAws(ctx context.Context, _ DisconnectAwsRequestObject
 }
 
 // ValidateAwsConnection checks the connection's authorization now.
-func (s *Server) ValidateAwsConnection(ctx context.Context, _ ValidateAwsConnectionRequestObject) (ValidateAwsConnectionResponseObject, error) {
+func (s *server) ValidateAwsConnection(ctx context.Context, _ ValidateAwsConnectionRequestObject) (ValidateAwsConnectionResponseObject, error) {
 	p, err := s.account(ctx, "validate the AWS connection")
 	if err != nil {
 		return nil, err
@@ -439,7 +429,7 @@ func (s *Server) ValidateAwsConnection(ctx context.Context, _ ValidateAwsConnect
 }
 
 // ReconnectAws starts a replacement authorization.
-func (s *Server) ReconnectAws(ctx context.Context, req ReconnectAwsRequestObject) (ReconnectAwsResponseObject, error) {
+func (s *server) ReconnectAws(ctx context.Context, req ReconnectAwsRequestObject) (ReconnectAwsResponseObject, error) {
 	p, err := s.account(ctx, "reconnect the AWS account")
 	if err != nil {
 		return nil, err
@@ -456,7 +446,7 @@ func (s *Server) ReconnectAws(ctx context.Context, req ReconnectAwsRequestObject
 }
 
 // CancelAwsReconnect cancels a replacement authorization.
-func (s *Server) CancelAwsReconnect(ctx context.Context, _ CancelAwsReconnectRequestObject) (CancelAwsReconnectResponseObject, error) {
+func (s *server) CancelAwsReconnect(ctx context.Context, _ CancelAwsReconnectRequestObject) (CancelAwsReconnectResponseObject, error) {
 	p, err := s.account(ctx, "reconnect the AWS account")
 	if err != nil {
 		return nil, err
@@ -469,7 +459,7 @@ func (s *Server) CancelAwsReconnect(ctx context.Context, _ CancelAwsReconnectReq
 }
 
 // RetryAwsConnection retries the connection's pending step.
-func (s *Server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionRequestObject) (RetryAwsConnectionResponseObject, error) {
+func (s *server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionRequestObject) (RetryAwsConnectionResponseObject, error) {
 	p, err := s.account(ctx, "retry the AWS connection")
 	if err != nil {
 		return nil, err
@@ -483,7 +473,7 @@ func (s *Server) RetryAwsConnection(ctx context.Context, _ RetryAwsConnectionReq
 
 // ForgetAwsConnection stops managing an account whose disconnect needs
 // attention, and returns what remains in AWS.
-func (s *Server) ForgetAwsConnection(ctx context.Context, _ ForgetAwsConnectionRequestObject) (ForgetAwsConnectionResponseObject, error) {
+func (s *server) ForgetAwsConnection(ctx context.Context, _ ForgetAwsConnectionRequestObject) (ForgetAwsConnectionResponseObject, error) {
 	p, err := s.account(ctx, "forget the AWS connection")
 	if err != nil {
 		return nil, err

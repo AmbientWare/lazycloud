@@ -1849,18 +1849,18 @@ class AwsAuthorizationError(str, Enum):
     upstream_unavailable = "upstream_unavailable"
 
 
-class AuthorizationMode(str, Enum):
-    managed_stack = "managed_stack"
-    existing_role = "existing_role"
-
-
-class ManagedAuthorization(APIModel):
+class AwsManagedAuthorization(APIModel):
     stack_name: str
     region: str
     generation: int
     stack_id: str | None = None
     template_version: str
     template_sha256: str
+
+
+class AuthorizationMode(str, Enum):
+    managed_stack = "managed_stack"
+    existing_role = "existing_role"
 
 
 class AwsSetupStep(str, Enum):
@@ -2006,28 +2006,16 @@ class FleetMarket(APIModel):
     reason: Annotated[str, Field(description="Why the market cannot grow, when it cannot.")]
 
 
-class Plan(APIModel):
+class FleetPlan(APIModel):
     generated_at: AwareDatetime
     expires_at: AwareDatetime
     markets: list[FleetMarket]
 
 
-class Release1(APIModel):
+class FleetRelease(APIModel):
     version: str
-    generation: int
     complete: Annotated[bool, Field(description="Every connected platform host runs the release.")]
     phases: dict[str, int]
-    pending_capacity_owners: int
-
-
-class FleetSummary(APIModel):
-    observed_at: AwareDatetime
-    plan: Annotated[
-        Plan | None, Field(description="The planner's last published plan; absent once it expires.")
-    ] = None
-    release: Annotated[
-        Release1 | None, Field(description="The agent release platform hosts move to.")
-    ] = None
 
 
 class Provider(str, Enum):
@@ -3208,27 +3196,15 @@ class ContainerMetrics(APIModel):
     points: list[ContainerMetricPoint]
 
 
-class Connection(APIModel):
+class ComputeConnection(APIModel):
     account_id: str
     phase: AwsConnectionPhase
-
-
-class ComputeSummary(APIModel):
-    connection: Annotated[
-        Connection | None,
-        Field(
-            description="The connected account the workspace lives in; absent on platform compute."
-        ),
-    ] = None
-    instances: Instances
-    cost: Cost
-    workload_count: int
 
 
 class AwsAuthorizationGeneration(APIModel):
     generation: int
     authorization_mode: AuthorizationMode
-    managed_authorization: ManagedAuthorization | None = None
+    managed_authorization: AwsManagedAuthorization | None = None
     phase: AwsAuthorizationPhase
     last_validation_started_at: AwareDatetime | None = None
     last_validated_at: AwareDatetime | None = None
@@ -3273,6 +3249,17 @@ class AwsConnectionEnvelope(APIModel):
 class AwsConnectionAuthorization(APIModel):
     connection: AwsConnection
     authorization: Authorization
+
+
+class FleetSummary(APIModel):
+    observed_at: AwareDatetime
+    plan: Annotated[
+        FleetPlan | None,
+        Field(description="The planner's last published plan; absent once it expires."),
+    ] = None
+    release: Annotated[
+        FleetRelease | None, Field(description="The agent release platform hosts move to.")
+    ] = None
 
 
 class GpuRate(APIModel):
@@ -3657,6 +3644,18 @@ class PreviewRequest(APIModel):
     timeout_seconds: Annotated[
         int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
     ] = 0
+
+
+class ComputeSummary(APIModel):
+    connection: Annotated[
+        ComputeConnection | None,
+        Field(
+            description="The connected account the workspace lives in; absent on platform compute."
+        ),
+    ] = None
+    instances: Instances
+    cost: Cost
+    workload_count: int
 
 
 class DeploymentRequest(APIModel):

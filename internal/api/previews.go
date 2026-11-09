@@ -20,7 +20,7 @@ var errPreviewNotRunning = errors.New("the preview has no ready container")
 // renewEvery paces lease renewals while a follower reads a preview's output.
 const renewEvery = 15 * time.Second
 
-func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Preview, error) {
+func (s *server) previewOut(ctx context.Context, p control.Preview) (apitypes.Preview, error) {
 	out := apitypes.Preview{
 		Id: p.Release, App: p.App, Name: p.Name, Kind: p.Kind, State: apitypes.PreviewStateStarting,
 		Url: s.owners.Edge.PreviewURL(p.Release, p.Spec), CreatedAt: p.CreatedAt,
@@ -56,7 +56,7 @@ func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Pr
 }
 
 // CreatePreview starts a preview of one workload definition.
-func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObject) (CreatePreviewResponseObject, error) {
+func (s *server) CreatePreview(ctx context.Context, req CreatePreviewRequestObject) (CreatePreviewResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	caller, err := s.principal(ctx)
 	if err != nil {
@@ -76,14 +76,14 @@ func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObje
 	return CreatePreview201JSONResponse(out), nil
 }
 
-func (s *Server) preview(ctx context.Context, id uuid.UUID) (identity.Workspace, control.Preview, error) {
+func (s *server) preview(ctx context.Context, id uuid.UUID) (identity.Workspace, control.Preview, error) {
 	ws := workspaceFrom(ctx)
 	p, err := s.owners.Control.GetPreview(ctx, ws.ID, id)
 	return ws, p, err
 }
 
 // GetPreview reads a preview, waiting for its container when asked.
-func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (GetPreviewResponseObject, error) {
+func (s *server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (GetPreviewResponseObject, error) {
 	ws, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (G
 }
 
 // StopPreview stops a preview and its container.
-func (s *Server) StopPreview(ctx context.Context, req StopPreviewRequestObject) (StopPreviewResponseObject, error) {
+func (s *server) StopPreview(ctx context.Context, req StopPreviewRequestObject) (StopPreviewResponseObject, error) {
 	ws, _, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (s *Server) StopPreview(ctx context.Context, req StopPreviewRequestObject) 
 
 // SyncPreviewFiles applies a tar of source changes to the preview's
 // container.
-func (s *Server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesRequestObject) (SyncPreviewFilesResponseObject, error) {
+func (s *server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesRequestObject) (SyncPreviewFilesResponseObject, error) {
 	_, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func (s *Server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesReque
 
 // StreamPreviewOutput writes the preview container's output as NDJSON. A
 // follower keeps the preview alive; the stream ends when it stops.
-func (s *Server) StreamPreviewOutput(ctx context.Context, req StreamPreviewOutputRequestObject) (StreamPreviewOutputResponseObject, error) {
+func (s *server) StreamPreviewOutput(ctx context.Context, req StreamPreviewOutputRequestObject) (StreamPreviewOutputResponseObject, error) {
 	_, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err

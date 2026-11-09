@@ -12,7 +12,7 @@ import (
 
 // UpdateUser changes an account's platform role or status; the schema
 // admits exactly one.
-func (s *Server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (UpdateUserResponseObject, error) {
+func (s *server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (UpdateUserResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func (s *Server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (U
 }
 
 // ListFeedback pages through every account's feedback for administrators.
-func (s *Server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject) (ListFeedbackResponseObject, error) {
+func (s *server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject) (ListFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (s *Server) ListFeedback(ctx context.Context, req ListFeedbackRequestObject
 }
 
 // DeleteFeedback removes a piece of feedback for administrators.
-func (s *Server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestObject) (DeleteFeedbackResponseObject, error) {
+func (s *server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestObject) (DeleteFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func (s *Server) DeleteFeedback(ctx context.Context, req DeleteFeedbackRequestOb
 }
 
 // SubmitFeedback records the caller's feedback.
-func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestObject) (SubmitFeedbackResponseObject, error) {
+func (s *server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestObject) (SubmitFeedbackResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestOb
 
 // GetAdminAlerts returns where administrator alerts go and the spend
 // limits that raise them.
-func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
+func (s *server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObje
 }
 
 // SetAdminAlerts replaces the alert settings.
-func (s *Server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
+func (s *server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}

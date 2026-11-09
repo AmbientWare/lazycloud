@@ -7159,11 +7159,7 @@ components:
       properties:
         connection:
           description: The connected account the workspace lives in; absent on platform compute.
-          type: object
-          required: [account_id, phase]
-          properties:
-            account_id: { type: string }
-            phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
+          allOf: [{ $ref: "#/components/schemas/ComputeConnection" }]
         instances:
           type: object
           required: [total, ready, pending, degraded]
@@ -7181,6 +7177,13 @@ components:
             currency: { type: string, enum: [USD] }
             estimated: { type: boolean }
         workload_count: { type: integer }
+
+    ComputeConnection:
+      type: object
+      required: [account_id, phase]
+      properties:
+        account_id: { type: string }
+        phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
 
     ComputeWorkload:
       type: object
@@ -7232,22 +7235,24 @@ components:
       enum: [assume_role_denied, external_id_not_enforced, account_mismatch, permission_drift, stack_drift,
              upstream_unavailable]
 
+    AwsManagedAuthorization:
+      type: object
+      required: [stack_name, region, generation, template_version, template_sha256]
+      properties:
+        stack_name: { type: string }
+        region: { type: string }
+        generation: { type: integer }
+        stack_id: { type: string }
+        template_version: { type: string }
+        template_sha256: { type: string }
+
     AwsAuthorizationGeneration:
       type: object
       required: [generation, authorization_mode, phase, created_at, updated_at]
       properties:
         generation: { type: integer }
         authorization_mode: { type: string, enum: [managed_stack, existing_role] }
-        managed_authorization:
-          type: object
-          required: [stack_name, region, generation, template_version, template_sha256]
-          properties:
-            stack_name: { type: string }
-            region: { type: string }
-            generation: { type: integer }
-            stack_id: { type: string }
-            template_version: { type: string }
-            template_sha256: { type: string }
+        managed_authorization: { $ref: "#/components/schemas/AwsManagedAuthorization" }
         phase: { $ref: "#/components/schemas/AwsAuthorizationPhase" }
         last_validation_started_at: { type: string, format: date-time }
         last_validated_at: { type: string, format: date-time }
@@ -7459,28 +7464,32 @@ components:
         observed_at: { type: string, format: date-time }
         plan:
           description: The planner's last published plan; absent once it expires.
-          type: object
-          required: [generated_at, expires_at, markets]
-          properties:
-            generated_at: { type: string, format: date-time }
-            expires_at: { type: string, format: date-time }
-            markets:
-              type: array
-              items: { $ref: "#/components/schemas/FleetMarket" }
+          allOf: [{ $ref: "#/components/schemas/FleetPlan" }]
         release:
           description: The agent release platform hosts move to.
+          allOf: [{ $ref: "#/components/schemas/FleetRelease" }]
+
+    FleetPlan:
+      type: object
+      required: [generated_at, expires_at, markets]
+      properties:
+        generated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        markets:
+          type: array
+          items: { $ref: "#/components/schemas/FleetMarket" }
+
+    FleetRelease:
+      type: object
+      required: [version, complete, phases]
+      properties:
+        version: { type: string }
+        complete:
+          description: Every connected platform host runs the release.
+          type: boolean
+        phases:
           type: object
-          required: [version, generation, complete, phases, pending_capacity_owners]
-          properties:
-            version: { type: string }
-            generation: { type: integer }
-            complete:
-              description: Every connected platform host runs the release.
-              type: boolean
-            phases:
-              type: object
-              additionalProperties: { type: integer }
-            pending_capacity_owners: { type: integer }
+          additionalProperties: { type: integer }
 
     FleetNode:
       type: object

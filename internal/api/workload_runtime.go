@@ -44,7 +44,7 @@ func optional(s string) *string {
 }
 
 // ListSecrets returns one page of secret names.
-func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
+func (s *server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	page, next, err := s.owners.Secrets.List(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
@@ -58,7 +58,7 @@ func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) 
 }
 
 // GetSecret returns a secret's metadata.
-func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
+func (s *server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	secret, err := s.owners.Secrets.Get(ctx, ws.ID, req.Secret)
 	if err != nil {
@@ -69,7 +69,7 @@ func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (Get
 
 // SetSecret stores a secret's value: If-None-Match: * only creates it and
 // If-Match: * only replaces an existing one.
-func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
+func (s *server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	store := s.owners.Secrets.Set
 	switch {
@@ -86,7 +86,7 @@ func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (Set
 }
 
 // DeleteSecret removes a secret.
-func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject) (DeleteSecretResponseObject, error) {
+func (s *server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject) (DeleteSecretResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if err := s.owners.Secrets.Delete(ctx, ws.ID, req.Secret); err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject
 
 // GetSecretValue reveals a secret's value to every principal that reaches
 // the workspace; tokens carry no narrower scope.
-func (s *Server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
+func (s *server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	secret, value, err := s.owners.Secrets.Reveal(ctx, ws.ID, req.Secret)
 	if err != nil {

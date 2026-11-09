@@ -17,7 +17,7 @@ import (
 // RunTask admits one task and streams it: the admitted task, its log
 // entries as they commit, then its state once it finishes or the wait
 // passes. Admission fails as an error response, before the stream starts.
-func (s *Server) RunTask(ctx context.Context, req RunTaskRequestObject) (RunTaskResponseObject, error) {
+func (s *server) RunTask(ctx context.Context, req RunTaskRequestObject) (RunTaskResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	submit, err := submitRequest(ctx, ws, req.App, req.Name, []apitypes.TaskInput{req.Body.Input}, req.Body.ReleaseId, req.Body.ParentTaskId)
 	if err != nil {
@@ -39,7 +39,7 @@ const runWriteTimeout = 30 * time.Second
 type taskRun struct {
 	// ctx is the request's context; the generated visitor does not pass one.
 	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
+	server    *server
 	workspace identity.WorkspaceID
 	task      execution.Task
 	wait      time.Duration
@@ -62,7 +62,7 @@ func (t taskRun) VisitRunTaskResponse(w http.ResponseWriter) error {
 		}
 		return nil
 	}
-	admitted := taskOut(t.task)
+	admitted := execution.APITask(t.task)
 	if err := write(apitypes.TaskRunEvent{Task: &admitted}); err != nil {
 		return nil //nolint:nilerr // The client is gone.
 	}
@@ -104,7 +104,7 @@ func (t taskRun) VisitRunTaskResponse(w http.ResponseWriter) error {
 		}
 		return nil
 	}
-	final := apitypes.TaskRunEvent{Task: new(taskOut(task))}
+	final := apitypes.TaskRunEvent{Task: new(execution.APITask(task))}
 	if task.Status == execution.TaskSucceeded {
 		result, err := exec.TaskResult(t.ctx, t.workspace, task.ID)
 		if err != nil {

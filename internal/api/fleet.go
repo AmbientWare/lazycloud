@@ -16,7 +16,7 @@ func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 
 // GetFleet returns the platform fleet's published plan and agent rollout
 // for administrators. The plan is absent while none is current.
-func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
+func (s *server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
@@ -26,11 +26,7 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 	}
 	out := GetFleet200JSONResponse{ObservedAt: fleet.ObservedAt}
 	if p := fleet.Plan; p != nil {
-		plan := &struct {
-			ExpiresAt   time.Time              `json:"expires_at"`
-			GeneratedAt time.Time              `json:"generated_at"`
-			Markets     []apitypes.FleetMarket `json:"markets"`
-		}{GeneratedAt: p.GeneratedAt, ExpiresAt: p.ExpiresAt, Markets: []apitypes.FleetMarket{}}
+		plan := &apitypes.FleetPlan{GeneratedAt: p.GeneratedAt, ExpiresAt: p.ExpiresAt, Markets: []apitypes.FleetMarket{}}
 		for _, m := range p.Markets {
 			market := apitypes.FleetMarket{
 				Preemptible: m.Preemptible, GpuType: m.GPUType, WarmFree: fleetCapacityOut(m.WarmFree),
@@ -53,20 +49,14 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 		out.Plan = plan
 	}
 	if r := fleet.Release; r != nil {
-		out.Release = &struct {
-			Complete              bool           `json:"complete"`
-			Generation            int            `json:"generation"`
-			PendingCapacityOwners int            `json:"pending_capacity_owners"`
-			Phases                map[string]int `json:"phases"`
-			Version               string         `json:"version"`
-		}{Complete: r.Complete, Generation: 1, Phases: r.Phases, Version: r.Version}
+		out.Release = &apitypes.FleetRelease{Complete: r.Complete, Phases: r.Phases, Version: r.Version}
 	}
 	return out, nil
 }
 
 // ListFleetNodes lists the platform's hosts with an instance for
 // administrators.
-func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestObject) (ListFleetNodesResponseObject, error) {
+func (s *server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestObject) (ListFleetNodesResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
@@ -99,7 +89,7 @@ func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestOb
 
 // GetFleetSpend returns what the platform's cloud hosts cost for
 // administrators.
-func (s *Server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
+func (s *server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
 	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}

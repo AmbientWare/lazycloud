@@ -17,15 +17,15 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-// Server implements the public operations. Each invokes one owner for the
+// server implements the public operations. Each invokes one owner for the
 // workspace authorizeWorkspace authorized and maps its result.
-type Server struct {
+type server struct {
 	owners Owners
 	cfg    Config
 	logger *slog.Logger
 }
 
-var _ StrictServerInterface = (*Server)(nil)
+var _ StrictServerInterface = (*server)(nil)
 
 // refusedToContainers are the operations a container may not call: a
 // function may drive the instances it started, nothing more.
@@ -49,7 +49,7 @@ type workspaceKey struct{}
 // authorizeWorkspace refuses a container the operations refusedToContainers
 // names, then authorizes the workspace the operation's path names for its
 // handler, which reads it with workspaceFrom.
-func (s *Server) authorizeWorkspace(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
+func (s *server) authorizeWorkspace(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
 		if _, ok := containerFrom(ctx); ok && refusedToContainers[operationID] {
 			return nil, errFromContainer
@@ -71,7 +71,7 @@ func workspaceFrom(ctx context.Context) identity.Workspace {
 	return ws
 }
 
-func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
+func (s *server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
 	if c, ok := containerFrom(ctx); ok {
 		return c.AuthorizeWorkspace(name)
 	}
@@ -83,7 +83,7 @@ func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace
 }
 
 // CreateSourceUpload registers a source archive or returns where to upload it.
-func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error) {
+func (s *server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	digest, err := storage.ParseDigest(req.Body.Sha256)
 	if err != nil {
@@ -104,7 +104,7 @@ func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadR
 }
 
 // DeployApp makes the app's workloads match the request.
-func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
+func (s *server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if err := s.checkImages(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 }
 
 // SubmitTasks admits one task per input.
-func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) (SubmitTasksResponseObject, error) {
+func (s *server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) (SubmitTasksResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	submit, err := submitRequest(ctx, ws, req.App, req.Name, req.Body.Inputs, req.Body.ReleaseId, req.Body.ParentTaskId)
 	if err != nil {
@@ -137,7 +137,7 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 	}
 	out := SubmitTasks201JSONResponse{Tasks: make([]apitypes.Task, len(tasks))}
 	for n, task := range tasks {
-		out.Tasks[n] = taskOut(task)
+		out.Tasks[n] = execution.APITask(task)
 	}
 	return out, nil
 }
@@ -171,18 +171,18 @@ func submitRequest(ctx context.Context, ws identity.Workspace, app, function str
 }
 
 // GetTask reads a task, waiting for it to finish when asked.
-func (s *Server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
+func (s *server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	wait := time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second
 	task, err := s.owners.Execution.GetTask(ctx, s.owners.Listener, ws.ID, execution.TaskID(req.Task), wait)
 	if err != nil {
 		return nil, err
 	}
-	return GetTask200JSONResponse(taskOut(task)), nil
+	return GetTask200JSONResponse(execution.APITask(task)), nil
 }
 
 // GetTaskResult returns a succeeded task's value.
-func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObject) (GetTaskResultResponseObject, error) {
+func (s *server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObject) (GetTaskResultResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	result, err := s.owners.Execution.TaskResult(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
@@ -194,7 +194,7 @@ func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObje
 // WaitTasks returns the listed tasks that have finished and those the
 // workspace does not have, waiting for either when asked. The schema bounds
 // the ids and the wait.
-func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
+func (s *server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	ids := make([]execution.TaskID, len(req.Body.TaskIds))
 	for n, id := range req.Body.TaskIds {
@@ -209,7 +209,7 @@ func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (Wai
 		Tasks: make([]apitypes.FinishedTask, len(found.Finished)), MissingTaskIds: taskUUIDs(found.Missing),
 	}
 	for n, f := range found.Finished {
-		out.Tasks[n] = apitypes.FinishedTask{Task: taskOut(f.Task), ResultOmitted: f.ResultOmitted}
+		out.Tasks[n] = apitypes.FinishedTask{Task: execution.APITask(f.Task), ResultOmitted: f.ResultOmitted}
 		if f.Result != nil {
 			result := payloadOut(*f.Result)
 			out.Tasks[n].Result = &result
@@ -237,13 +237,13 @@ func (r waitTasksResponse) VisitWaitTasksResponse(w http.ResponseWriter) error {
 }
 
 // CancelTask cancels a queued or running task.
-func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
+func (s *server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	task, err := s.owners.Execution.CancelTask(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
 	}
-	return CancelTask200JSONResponse(taskOut(task)), nil
+	return CancelTask200JSONResponse(execution.APITask(task)), nil
 }
 
 // logHeartbeat is the longest a followed log stream stays silent: it writes a
@@ -251,7 +251,7 @@ func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (C
 const logHeartbeat = 15 * time.Second
 
 // StreamTaskLogs writes the task's log entries as NDJSON.
-func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
+func (s *server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
@@ -259,7 +259,7 @@ func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestOb
 
 // logStream checks the source before the response starts, so an unknown one
 // is an error response rather than an empty stream.
-func (s *Server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (written, error) {
+func (s *server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (written, error) {
 	if err := s.owners.Execution.CheckLogSource(ctx, ws.ID, source); err != nil {
 		return nil, err
 	}
@@ -311,7 +311,7 @@ func (f written) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter) er
 // line, an empty batch is a blank heartbeat line, and each batch is flushed.
 // The status is sent first, so a failure only ends the stream early, which
 // is logged as what with attrs.
-func ndjson[E, L any](s *Server, ctx context.Context, line func(E) L, stream func(emit func([]E) error) error, what string, attrs ...any) written {
+func ndjson[E, L any](s *server, ctx context.Context, line func(E) L, stream func(emit func([]E) error) error, what string, attrs ...any) written {
 	return func(w http.ResponseWriter) error {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
@@ -384,5 +384,3 @@ func payloadOut(p execution.Payload) apitypes.Payload {
 	}
 	return apitypes.Payload{Encoding: apitypes.PayloadEncoding(p.Encoding)}
 }
-
-func taskOut(t execution.Task) apitypes.Task { return execution.APITask(t) }

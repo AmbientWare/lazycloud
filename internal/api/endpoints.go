@@ -46,7 +46,7 @@ func invokeWait(wait *int) time.Duration {
 }
 
 // invoke runs the function's release, or its active one without a release.
-func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, function string, release *uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
+func (s *server) invoke(ctx context.Context, ws identity.Workspace, app, function string, release *uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
 	var raw []byte
 	if body != nil {
 		raw = *body
@@ -60,7 +60,7 @@ func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, functio
 }
 
 // InvokeFunction runs the function's active release with JSON arguments.
-func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestObject) (InvokeFunctionResponseObject, error) {
+func (s *server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestObject) (InvokeFunctionResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	out, err := s.invoke(ctx, ws, req.App, req.Name, nil, req.Body, req.Params.WaitSeconds)
 	if err != nil {
@@ -70,7 +70,7 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 }
 
 // ListDomains lists the caller's custom domains.
-func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) (ListDomainsResponseObject, error) {
+func (s *server) ListDomains(ctx context.Context, req ListDomainsRequestObject) (ListDomainsResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) 
 }
 
 // RegisterDomain registers a custom domain for the caller.
-func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestObject) (RegisterDomainResponseObject, error) {
+func (s *server) RegisterDomain(ctx context.Context, req RegisterDomainRequestObject) (RegisterDomainResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestOb
 }
 
 // GetDomain reads one custom domain.
-func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (GetDomainResponseObject, error) {
+func (s *server) GetDomain(ctx context.Context, req GetDomainRequestObject) (GetDomainResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (Get
 }
 
 // RemoveDomain retires a custom domain.
-func (s *Server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject) (RemoveDomainResponseObject, error) {
+func (s *server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject) (RemoveDomainResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err

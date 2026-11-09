@@ -23,7 +23,7 @@ import (
 // reach the supervisor are in container_proxy.go.
 
 // podWorkload adds a pod's role, count and URL to its workload.
-func (s *Server) podWorkload(ctx context.Context, d *apitypes.Workload) error {
+func (s *server) podWorkload(ctx context.Context, d *apitypes.Workload) error {
 	if d.Kind != apitypes.WorkloadKindPod || d.ReleaseId == nil {
 		return nil
 	}
@@ -59,7 +59,7 @@ func (s *Server) podWorkload(ctx context.Context, d *apitypes.Workload) error {
 }
 
 // ScaleWorkload holds a pod at a number of containers.
-func (s *Server) ScaleWorkload(ctx context.Context, req ScaleWorkloadRequestObject) (ScaleWorkloadResponseObject, error) {
+func (s *server) ScaleWorkload(ctx context.Context, req ScaleWorkloadRequestObject) (ScaleWorkloadResponseObject, error) {
 	ws, id, err := s.findWorkload(ctx, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (s *Server) ScaleWorkload(ctx context.Context, req ScaleWorkloadRequestObje
 }
 
 // findDevbox resolves the pod a devbox route names and reads the devbox.
-func (s *Server) findDevbox(ctx context.Context, app, name string) (identity.Workspace, control.WorkloadID, apitypes.Devbox, error) {
+func (s *server) findDevbox(ctx context.Context, app, name string) (identity.Workspace, control.WorkloadID, apitypes.Devbox, error) {
 	ws, id, err := s.findWorkload(ctx, app, apitypes.WorkloadKindPod, name)
 	if err != nil {
 		return ws, id, apitypes.Devbox{}, err
@@ -84,7 +84,7 @@ func (s *Server) findDevbox(ctx context.Context, app, name string) (identity.Wor
 	return ws, id, box, err
 }
 
-func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment uuid.UUID) (apitypes.Devbox, error) {
+func (s *server) devbox(ctx context.Context, ws identity.Workspace, deployment uuid.UUID) (apitypes.Devbox, error) {
 	var disk *apitypes.Disk
 	saving := func(spec apitypes.WorkloadSpec) (bool, error) {
 		d, err := s.rootDisk(ctx, ws.ID, spec)
@@ -134,7 +134,7 @@ func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment u
 }
 
 // rootDisk is a devbox's root disk, nil before its first start.
-func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec apitypes.WorkloadSpec) (*apitypes.Disk, error) {
+func (s *server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec apitypes.WorkloadSpec) (*apitypes.Disk, error) {
 	if spec.Disks == nil {
 		return nil, nil //nolint:nilnil // A pod without disks has no root disk.
 	}
@@ -155,7 +155,7 @@ func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec api
 }
 
 // GetDevbox reads a devbox.
-func (s *Server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (GetDevboxResponseObject, error) {
+func (s *server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (GetDevboxResponseObject, error) {
 	_, _, box, err := s.findDevbox(ctx, req.App, req.Name)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func (s *Server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (Get
 }
 
 // StartDevbox starts a devbox now, activating a stopped workload first.
-func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) (StartDevboxResponseObject, error) {
+func (s *server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) (StartDevboxResponseObject, error) {
 	ws, id, _, err := s.findDevbox(ctx, req.App, req.Name)
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) 
 }
 
 // StopDevbox stops a devbox until its next connection or start.
-func (s *Server) StopDevbox(ctx context.Context, req StopDevboxRequestObject) (StopDevboxResponseObject, error) {
+func (s *server) StopDevbox(ctx context.Context, req StopDevboxRequestObject) (StopDevboxResponseObject, error) {
 	ws, id, _, err := s.findDevbox(ctx, req.App, req.Name)
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func (s *Server) StopDevbox(ctx context.Context, req StopDevboxRequestObject) (S
 	return StopDevbox200JSONResponse(out), nil
 }
 
-func (s *Server) instanceOut(i execution.Instance) apitypes.Instance {
+func (s *server) instanceOut(i execution.Instance) apitypes.Instance {
 	out := apitypes.Instance{
 		Id: uuid.UUID(i.ID), ReleaseId: i.Release, App: i.App, Name: i.Name, Kind: i.Kind,
 		State: apitypes.ContainerState(i.State), ExitMessage: i.ExitMessage, ExitCode: i.ExitCode,
@@ -224,7 +224,7 @@ func (s *Server) instanceOut(i execution.Instance) apitypes.Instance {
 }
 
 // CreateInstance starts an instance, shell container or restored sandbox.
-func (s *Server) CreateInstance(ctx context.Context, req CreateInstanceRequestObject) (CreateInstanceResponseObject, error) {
+func (s *server) CreateInstance(ctx context.Context, req CreateInstanceRequestObject) (CreateInstanceResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	b := req.Body
 	in := execution.InstanceRequest{Release: b.ReleaseId, Snapshot: b.SnapshotId, Timeout: b.TimeoutSeconds, Shell: valueOr(b.Shell, false)}
@@ -248,7 +248,7 @@ func (s *Server) CreateInstance(ctx context.Context, req CreateInstanceRequestOb
 var errStillStarting = errors.New("the container is still starting")
 
 // ConnectContainer waits until the container is ready.
-func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerRequestObject) (ConnectContainerResponseObject, error) {
+func (s *server) ConnectContainer(ctx context.Context, req ConnectContainerRequestObject) (ConnectContainerResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	deadline := time.Now().Add(time.Duration(valueOr(req.Params.WaitSeconds, 0)) * time.Second)
 	wake, cancel := s.owners.Listener.Subscribe(database.ChannelContainerOp, req.Container.String())
@@ -284,7 +284,7 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 }
 
 // ListSandboxes lists sandbox containers.
-func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObject) (ListSandboxesResponseObject, error) {
+func (s *server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObject) (ListSandboxesResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	page, err := s.owners.Execution.ListSandboxes(ctx, ws.ID, execution.SandboxFilter{App: req.Params.App, Search: req.Params.Search},
 		valueOr(req.Params.Limit, 0), valueOr(req.Params.Cursor, ""))
@@ -295,7 +295,7 @@ func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObje
 }
 
 // GetSandboxStats counts sandboxes.
-func (s *Server) GetSandboxStats(ctx context.Context, req GetSandboxStatsRequestObject) (GetSandboxStatsResponseObject, error) {
+func (s *server) GetSandboxStats(ctx context.Context, req GetSandboxStatsRequestObject) (GetSandboxStatsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	stats, err := s.owners.Execution.SandboxStats(ctx, ws.ID, req.Params.App)
 	if err != nil {
@@ -305,7 +305,7 @@ func (s *Server) GetSandboxStats(ctx context.Context, req GetSandboxStatsRequest
 }
 
 // CreateSshCertificate signs a public key for the workspace's pods.
-func (s *Server) CreateSshCertificate(ctx context.Context, req CreateSshCertificateRequestObject) (CreateSshCertificateResponseObject, error) {
+func (s *server) CreateSshCertificate(ctx context.Context, req CreateSshCertificateRequestObject) (CreateSshCertificateResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	p, _ := principalFrom(ctx)
 	holder := "user:" + uuid.UUID(p.User).String()
@@ -320,7 +320,7 @@ func (s *Server) CreateSshCertificate(ctx context.Context, req CreateSshCertific
 }
 
 // ListSshHosts lists pods that serve SSH.
-func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject) (ListSshHostsResponseObject, error) {
+func (s *server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject) (ListSshHostsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	hosts, next, err := s.owners.SSH.Hosts(ctx, ws, execution.SSHHostFilter{App: req.Params.App, Pod: req.Params.Pod, Role: req.Params.Role},
 		valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, 0))
@@ -335,7 +335,7 @@ func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject
 }
 
 // SetContainerTtl changes an instance's idle lifetime.
-func (s *Server) SetContainerTtl(ctx context.Context, req SetContainerTtlRequestObject) (SetContainerTtlResponseObject, error) {
+func (s *server) SetContainerTtl(ctx context.Context, req SetContainerTtlRequestObject) (SetContainerTtlResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	ttl, err := s.owners.Execution.SetTTL(ctx, ws.ID, execution.ContainerID(req.Container), req.Body.Ttl)
 	if err != nil {
@@ -345,7 +345,7 @@ func (s *Server) SetContainerTtl(ctx context.Context, req SetContainerTtlRequest
 }
 
 // GetContainerNetwork reads a container's outbound policy.
-func (s *Server) GetContainerNetwork(ctx context.Context, req GetContainerNetworkRequestObject) (GetContainerNetworkResponseObject, error) {
+func (s *server) GetContainerNetwork(ctx context.Context, req GetContainerNetworkRequestObject) (GetContainerNetworkResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	p, err := s.owners.Execution.Network(ctx, ws.ID, execution.ContainerID(req.Container))
 	if err != nil {
@@ -355,7 +355,7 @@ func (s *Server) GetContainerNetwork(ctx context.Context, req GetContainerNetwor
 }
 
 // SetContainerNetwork replaces a container's outbound policy.
-func (s *Server) SetContainerNetwork(ctx context.Context, req SetContainerNetworkRequestObject) (SetContainerNetworkResponseObject, error) {
+func (s *server) SetContainerNetwork(ctx context.Context, req SetContainerNetworkRequestObject) (SetContainerNetworkResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	policy, err := execution.ParseNetworkPolicy(req.Body.BlockNetwork, req.Body.AllowList)
 	if err != nil {
@@ -369,7 +369,7 @@ func (s *Server) SetContainerNetwork(ctx context.Context, req SetContainerNetwor
 }
 
 // ListContainerPorts lists a container's exposed ports.
-func (s *Server) ListContainerPorts(ctx context.Context, req ListContainerPortsRequestObject) (ListContainerPortsResponseObject, error) {
+func (s *server) ListContainerPorts(ctx context.Context, req ListContainerPortsRequestObject) (ListContainerPortsResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	i, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container))
 	if err != nil {
@@ -386,7 +386,7 @@ func (s *Server) ListContainerPorts(ctx context.Context, req ListContainerPortsR
 }
 
 // ExposeContainerPort makes a port answer through the edge.
-func (s *Server) ExposeContainerPort(ctx context.Context, req ExposeContainerPortRequestObject) (ExposeContainerPortResponseObject, error) {
+func (s *server) ExposeContainerPort(ctx context.Context, req ExposeContainerPortRequestObject) (ExposeContainerPortResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	container := execution.ContainerID(req.Container)
 	if err := s.ownsContainer(ctx, container); err != nil {
@@ -403,7 +403,7 @@ func (s *Server) ExposeContainerPort(ctx context.Context, req ExposeContainerPor
 
 // SnapshotContainer checkpoints a running container and waits for the
 // snapshot.
-func (s *Server) SnapshotContainer(ctx context.Context, req SnapshotContainerRequestObject) (SnapshotContainerResponseObject, error) {
+func (s *server) SnapshotContainer(ctx context.Context, req SnapshotContainerRequestObject) (SnapshotContainerResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	var id *uuid.UUID
 	if req.Body != nil {
@@ -429,7 +429,7 @@ func (s *Server) SnapshotContainer(ctx context.Context, req SnapshotContainerReq
 
 // CreateFilesystemImage publishes a container's filesystem and waits for
 // the image.
-func (s *Server) CreateFilesystemImage(ctx context.Context, req CreateFilesystemImageRequestObject) (CreateFilesystemImageResponseObject, error) {
+func (s *server) CreateFilesystemImage(ctx context.Context, req CreateFilesystemImageRequestObject) (CreateFilesystemImageResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	id, err := s.owners.Execution.CreateFilesystemImage(ctx, ws.ID, execution.ContainerID(req.Container))
 	if err != nil {
@@ -499,7 +499,7 @@ func workloadError(w http.ResponseWriter, err error) bool {
 }
 
 // ownsContainer applies ownsInstance to a container by id.
-func (s *Server) ownsContainer(ctx context.Context, container execution.ContainerID) error {
+func (s *server) ownsContainer(ctx context.Context, container execution.ContainerID) error {
 	if _, ok := containerFrom(ctx); !ok {
 		return nil
 	}

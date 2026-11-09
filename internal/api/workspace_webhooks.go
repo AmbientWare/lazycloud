@@ -5,7 +5,7 @@ import (
 )
 
 // ListWebhooks returns a page of the workspace's webhooks.
-func (s *Server) ListWebhooks(ctx context.Context, req ListWebhooksRequestObject) (ListWebhooksResponseObject, error) {
+func (s *server) ListWebhooks(ctx context.Context, req ListWebhooksRequestObject) (ListWebhooksResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	page, err := s.owners.Webhooks.List(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
@@ -15,7 +15,7 @@ func (s *Server) ListWebhooks(ctx context.Context, req ListWebhooksRequestObject
 }
 
 // CreateWebhook registers a webhook.
-func (s *Server) CreateWebhook(ctx context.Context, req CreateWebhookRequestObject) (CreateWebhookResponseObject, error) {
+func (s *server) CreateWebhook(ctx context.Context, req CreateWebhookRequestObject) (CreateWebhookResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	webhook, err := s.owners.Webhooks.Create(ctx, ws.ID, *req.Body)
 	if err != nil {
@@ -25,7 +25,7 @@ func (s *Server) CreateWebhook(ctx context.Context, req CreateWebhookRequestObje
 }
 
 // UpdateWebhook changes the fields the body names.
-func (s *Server) UpdateWebhook(ctx context.Context, req UpdateWebhookRequestObject) (UpdateWebhookResponseObject, error) {
+func (s *server) UpdateWebhook(ctx context.Context, req UpdateWebhookRequestObject) (UpdateWebhookResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	webhook, err := s.owners.Webhooks.Update(ctx, ws.ID, req.Webhook, *req.Body)
 	if err != nil {
@@ -35,7 +35,7 @@ func (s *Server) UpdateWebhook(ctx context.Context, req UpdateWebhookRequestObje
 }
 
 // DeleteWebhook deletes a webhook.
-func (s *Server) DeleteWebhook(ctx context.Context, req DeleteWebhookRequestObject) (DeleteWebhookResponseObject, error) {
+func (s *server) DeleteWebhook(ctx context.Context, req DeleteWebhookRequestObject) (DeleteWebhookResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	if err := s.owners.Webhooks.Delete(ctx, ws.ID, req.Webhook); err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func (s *Server) DeleteWebhook(ctx context.Context, req DeleteWebhookRequestObje
 }
 
 // TestWebhook queues a webhook.test event for the webhook.
-func (s *Server) TestWebhook(ctx context.Context, req TestWebhookRequestObject) (TestWebhookResponseObject, error) {
+func (s *server) TestWebhook(ctx context.Context, req TestWebhookRequestObject) (TestWebhookResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	delivery, err := s.owners.Webhooks.Test(ctx, ws.ID, req.Webhook)
 	if err != nil {
@@ -54,7 +54,7 @@ func (s *Server) TestWebhook(ctx context.Context, req TestWebhookRequestObject) 
 }
 
 // ListWebhookDeliveries returns a page of the webhook's deliveries.
-func (s *Server) ListWebhookDeliveries(ctx context.Context, req ListWebhookDeliveriesRequestObject) (ListWebhookDeliveriesResponseObject, error) {
+func (s *server) ListWebhookDeliveries(ctx context.Context, req ListWebhookDeliveriesRequestObject) (ListWebhookDeliveriesResponseObject, error) {
 	ws := workspaceFrom(ctx)
 	page, err := s.owners.Webhooks.Deliveries(ctx, ws.ID, req.Webhook, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
