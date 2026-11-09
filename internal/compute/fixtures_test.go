@@ -239,13 +239,15 @@ func containerHost(t *testing.T, pool *pgxpool.Pool, container uuid.UUID) *uuid.
 	return scan[*uuid.UUID](t, pool, "select host_id from containers where id = $1", container)
 }
 
+// place runs a placement pass and returns how many containers it assigned.
 func place(t *testing.T, o owners) int {
 	t.Helper()
-	result, err := o.scheduling.Place(t.Context())
-	if err != nil {
+	const assigned = "select count(*) from containers where assigned_at is not null"
+	before := scan[int](t, o.pool, assigned)
+	if _, err := o.scheduling.Place(t.Context()); err != nil {
 		t.Fatalf("place: %v", err)
 	}
-	return result.Assigned
+	return scan[int](t, o.pool, assigned) - before
 }
 
 // publish makes agent 1.0.0 the target release.

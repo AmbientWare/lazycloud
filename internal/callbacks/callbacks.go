@@ -266,16 +266,14 @@ func (c *Callbacks) claimCallbacks(ctx context.Context, n int) ([]claimedCallbac
 
 // Purge deletes callbacks and webhook deliveries that finished more than a
 // week ago.
-func (c *Callbacks) Purge(ctx context.Context) (int64, error) {
-	n, err := c.queries.PurgeFinishedCallbacks(ctx, PurgeFinishedCallbacksParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
-	if err != nil {
-		return 0, fmt.Errorf("purge callbacks: %w", err)
+func (c *Callbacks) Purge(ctx context.Context) error {
+	if _, err := c.queries.PurgeFinishedCallbacks(ctx, PurgeFinishedCallbacksParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch}); err != nil {
+		return fmt.Errorf("purge callbacks: %w", err)
 	}
-	m, err := c.queries.PurgeFinishedWebhookDeliveries(ctx, PurgeFinishedWebhookDeliveriesParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch})
-	if err != nil {
-		return n, fmt.Errorf("purge webhook deliveries: %w", err)
+	if _, err := c.queries.PurgeFinishedWebhookDeliveries(ctx, PurgeFinishedWebhookDeliveriesParams{RetainSeconds: retainSeconds, BatchSize: purgeBatch}); err != nil {
+		return fmt.Errorf("purge webhook deliveries: %w", err)
 	}
-	return n + m, nil
+	return nil
 }
 
 // deliverOne sends one callback and records the outcome under its lease.

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -63,35 +62,24 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 	return loops, func() { cancelEmail(); cancelDeletion() }
 }
 
-func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace, beats *heartbeats, t ticks) {
-	if a.deliver {
-		group.Go(func() error {
-			return p.loop(ctx, cadence{every: t.email}, a.emailWake, nil, beats.track("email delivery", t.email, func(ctx context.Context) bool {
-				result, err := a.notifications.Deliver(ctx)
-				if err != nil {
-					a.logger.ErrorContext(ctx, "email delivery pass", "error", err)
-				}
-				return result.More
-			}))
-		})
+func (a *accountLoops) loops(t ticks) []loop {
+	out := []loop{
+		{name: "housekeeping", cadence: cadence{every: t.housekeeping}, watch: tracked, pass: steps(a.logger,
+			step{what: "identity housekeeping", do: a.identity.Housekeeping},
+			step{what: "email purge", do: discardContext(a.notifications.Purge)})},
+		// A workspace with objects left reruns the pass at once.
+		{name: "workspace deletion", cadence: cadence{every: t.deletion, quiet: true}, wake: a.deletionWake, watch: tracked, pass: a.deleteWorkspaces},
 	}
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.housekeeping}, nil, nil, beats.track("housekeeping", t.housekeeping, func(ctx context.Context) bool {
-			if err := a.identity.Housekeeping(ctx, a.logger); err != nil {
-				a.logger.ErrorContext(ctx, "identity housekeeping", "error", err)
+	if a.deliver {
+		out = append(out, loop{name: "email delivery", cadence: cadence{every: t.email}, wake: a.emailWake, watch: tracked, pass: func(ctx context.Context) bool {
+			result, err := a.notifications.Deliver(ctx)
+			if err != nil {
+				a.logger.ErrorContext(ctx, "email delivery pass", "error", err)
 			}
-			if _, err := a.notifications.Purge(ctx); err != nil {
-				a.logger.ErrorContext(ctx, "email purge", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.deletion, quiet: true}, a.deletionWake, nil, beats.track("workspace deletion", t.deletion, func(ctx context.Context) bool {
-			// A workspace with objects left reruns the pass at once.
-			return a.deleteWorkspaces(ctx)
-		}))
-	})
+			return result.More
+		}})
+	}
+	return out
 }
 
 // deleteWorkspaces advances each deleting workspace: images fails the

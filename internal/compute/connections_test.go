@@ -677,7 +677,7 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	alice := newUser(t, o.pool, "alice@example.com")
 	conn := connected(t, o, customer, alice)
 	run(t, o.pool, "delete from fleet_networks where owner = $1", conn.ID.String())
-	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+	if err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
 	if creates := emulator.calls("CreateVpc"); len(creates) != 1 || creates[0].AccessKey != assumedKey(conn.Active.RoleARN) {
@@ -722,7 +722,7 @@ values ($1::text || '/spot', '{}', now(), now() + interval '1 hour')`, conn.ID)
 	if phase := phaseOf(t, o, alice); phase != compute.ConnDraining {
 		t.Fatalf("with an instance left the connection is %s, want still draining", phase)
 	}
-	if _, err := o.compute.Retire(ctx, discard()); err != nil {
+	if err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
 	if phase, _ := hostPhase(t, o.pool, stopped); phase != string(compute.PhaseTerminating) {
@@ -788,7 +788,7 @@ func TestRemovingOneOfTwoConnectionsToAnAccountKeepsItsNetworks(t *testing.T) {
 	gone := connected(t, o, customer, alice)
 	connected(t, o, customer, bob)
 	run(t, o.pool, "delete from fleet_networks where owner <> 'platform'")
-	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+	if err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
@@ -819,11 +819,11 @@ func TestARefusedNetworkWaitsBeforeTheNextTry(t *testing.T) {
 	emulator.on("CreateVpc", func(awsCall) awsReply {
 		return ec2Error(http.StatusBadRequest, "VpcLimitExceeded", "The maximum number of VPCs has been reached.")
 	})
-	if _, err := o.compute.EnsureNetworks(ctx, discard()); err == nil {
+	if err := o.compute.EnsureNetworks(ctx, discard()); err == nil {
 		t.Fatal("ensure with VPCs refused succeeded")
 	}
 	tries := len(emulator.calls("CreateVpc"))
-	if _, err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
+	if err := o.compute.EnsureNetworks(ctx, discard()); err != nil {
 		t.Fatalf("second pass: %v, want the refused regions left to wait", err)
 	}
 	if n := len(emulator.calls("CreateVpc")); n != tries {
@@ -922,7 +922,7 @@ func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 	if _, err := o.compute.Forget(ctx, alice); !errors.As(err, &conflict) {
 		t.Fatalf("forget while draining: %v, want ConflictError", err)
 	}
-	if _, err := o.compute.Retire(ctx, discard()); err != nil {
+	if err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
 	}
 	advance(t, o)

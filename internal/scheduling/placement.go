@@ -50,8 +50,6 @@ func NewScheduling(pool *pgxpool.Pool, exec *execution.Execution, logger *slog.L
 type PlacementResult struct {
 	// Skipped means another placer held the placement lock.
 	Skipped bool
-	// Assigned counts containers moved to starting on a host.
-	Assigned int
 }
 
 // Place assigns pending containers to online hosts until nothing more fits.
@@ -71,7 +69,6 @@ func (s *Scheduling) Place(ctx context.Context) (PlacementResult, error) {
 			result.Skipped = true
 			return result, nil
 		}
-		result.Assigned += len(batch.assigned)
 		for _, a := range batch.assigned {
 			s.logger.InfoContext(ctx, "container assigned", "container_id", a.ID, "release_id", a.ReleaseID, "host_id", a.HostID)
 			traceAssignment(ctx, a)

@@ -156,29 +156,27 @@ const (
 // account that takes new hosts, unless it was found within networkRecheck
 // or failed within networkRetry, and records the network or why it failed.
 // It holds the networks lock, so no removal deletes an account's network
-// while it runs, and rereads each account under it. It reports how many
-// networks it ensured.
-func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int, error) {
+// while it runs, and rereads each account under it.
+func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) error {
 	release, locked, err := c.networksLock(ctx)
 	if err != nil || !locked {
-		return 0, err
+		return err
 	}
 	defer release()
 	accounts, err := c.accounts(ctx, c.queries)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	checked, err := c.queries.CheckedNetworks(ctx, CheckedNetworksParams{
 		EnsuredSeconds: networkRecheck.Seconds(), FailedSeconds: networkRetry.Seconds(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("read checked networks: %w", err)
+		return fmt.Errorf("read checked networks: %w", err)
 	}
 	done := map[CheckedNetworksRow]bool{}
 	for _, row := range checked {
 		done[row] = true
 	}
-	ensured := 0
 	var failed error
 	for _, a := range accounts {
 		for _, region := range c.fleet.Regions {
@@ -187,16 +185,15 @@ func (c *Compute) EnsureNetworks(ctx context.Context, logger *slog.Logger) (int,
 			}
 			if err := c.ensureAccountNetwork(ctx, a, region); err != nil {
 				if ctx.Err() != nil {
-					return ensured, err
+					return err
 				}
 				logger.WarnContext(ctx, "fleet network unavailable", "owner", a.key(), "region", region, "error", err)
 				failed = errors.Join(failed, fmt.Errorf("%s %s: %w", a.key(), region, err))
 				continue
 			}
-			ensured++
 		}
 	}
-	return ensured, failed
+	return failed
 }
 
 // ensureAccountNetwork finds or makes a's network in region, if a still
