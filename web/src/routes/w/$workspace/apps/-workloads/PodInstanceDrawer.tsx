@@ -15,12 +15,11 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { StopCause } from "@/components/shared/StopCause";
-import { resourceAllocation } from "@/lib/format";
 import { containerMetricsQueryOptions, containerQueryOptions } from "@/lib/queries/containers";
 import { workloadQueryOptions } from "@/lib/queries/deployments";
 
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
-import { cpuRequest, memoryRequest } from "./WorkloadConfiguration";
+import { cpuAllocation, memoryAllocation } from "./WorkloadConfiguration";
 
 export function PodInstanceDrawer({
   workspace,
@@ -139,16 +138,8 @@ function PodInstanceDrawerBody({
           <FactGrid columns={4} className="gap-x-5 p-4">
             <Fact label="Placement" value={podInstancePlacement(record)} title={record.host} />
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
-            <Fact
-              label="CPU allocation"
-              value={resourceAllocation(cpuRequest(resources), "CPU")}
-              mono
-            />
-            <Fact
-              label="Memory allocation"
-              value={resourceAllocation(memoryRequest(resources), "MiB")}
-              mono
-            />
+            <Fact label="CPU allocation" value={cpuAllocation(resources)} mono />
+            <Fact label="Memory allocation" value={memoryAllocation(resources, "MiB")} mono />
             {gpus.length > 0 ? (
               <Fact
                 label="GPU allocation"

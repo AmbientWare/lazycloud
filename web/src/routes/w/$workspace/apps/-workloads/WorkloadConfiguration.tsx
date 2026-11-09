@@ -15,8 +15,8 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
     <div className="@container min-w-0 space-y-5 p-4">
       <div className="grid min-w-0 gap-x-8 gap-y-5 @xl:grid-cols-2">
         <ConfigurationGroup title="Runtime">
-          <ConfigurationFact label="CPU" value={resourceAllocation(cpuRequest(resources), "CPU")} />
-          <ConfigurationFact label="Memory" value={resourceAllocation(memoryRequest(resources))} />
+          <ConfigurationFact label="CPU" value={cpuAllocation(resources)} />
+          <ConfigurationFact label="Memory" value={memoryAllocation(resources)} />
           {gpu.length > 0 ? (
             <ConfigurationFact
               label="GPU"
@@ -50,15 +50,14 @@ export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] 
 }
 
 /** CPUs requested, with the ceiling when one is set. */
-export function cpuRequest(resources: Schemas["Resources"]): number | [number, number] {
-  const cpu = resources.cpu_millis / 1000;
-  return resources.cpu_limit_millis ? [cpu, resources.cpu_limit_millis / 1000] : cpu;
+export function cpuAllocation(resources: Schemas["Resources"]): string {
+  const limit = resources.cpu_limit_millis;
+  return resourceAllocation(resources.cpu_millis / 1000, limit ? limit / 1000 : null, "CPU");
 }
 
 /** MiB requested, with the ceiling when one is set. */
-export function memoryRequest(resources: Schemas["Resources"]): number | [number, number] {
-  const memory = resources.memory_mib;
-  return resources.memory_limit_mib ? [memory, resources.memory_limit_mib] : memory;
+export function memoryAllocation(resources: Schemas["Resources"], unit = ""): string {
+  return resourceAllocation(resources.memory_mib, resources.memory_limit_mib, unit);
 }
 
 function ConfigurationGroup({ title, children }: { title: string; children: ReactNode }) {

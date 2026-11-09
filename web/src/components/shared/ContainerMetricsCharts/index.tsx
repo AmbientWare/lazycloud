@@ -11,12 +11,11 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { Schemas } from "@/lib/api/client";
-import { formatCpu } from "@/lib/format";
+import { formatBytes, formatCpu } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import {
   buildMetricData,
-  formatBytes,
   formatBytesPerSecond,
   latestComputeReadout,
   type MetricDatum,
