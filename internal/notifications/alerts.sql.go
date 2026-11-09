@@ -10,27 +10,10 @@ import (
 )
 
 const adminAlerts = `-- name: AdminAlerts :one
-select email, hourly_limit_micros, daily_limit_micros from admin_alerts
-`
-
-type AdminAlertsRow struct {
-	Email             string
-	HourlyLimitMicros *int64
-	DailyLimitMicros  *int64
-}
-
-func (q *Queries) AdminAlerts(ctx context.Context) (AdminAlertsRow, error) {
-	row := q.db.QueryRow(ctx, adminAlerts)
-	var i AdminAlertsRow
-	err := row.Scan(&i.Email, &i.HourlyLimitMicros, &i.DailyLimitMicros)
-	return i, err
-}
-
-const lockAdminAlerts = `-- name: LockAdminAlerts :one
 select email, hourly_limit_micros, daily_limit_micros, hourly_over, daily_over from admin_alerts for update
 `
 
-type LockAdminAlertsRow struct {
+type AdminAlertsRow struct {
 	Email             string
 	HourlyLimitMicros *int64
 	DailyLimitMicros  *int64
@@ -38,9 +21,10 @@ type LockAdminAlertsRow struct {
 	DailyOver         bool
 }
 
-func (q *Queries) LockAdminAlerts(ctx context.Context) (LockAdminAlertsRow, error) {
-	row := q.db.QueryRow(ctx, lockAdminAlerts)
-	var i LockAdminAlertsRow
+// Locks the settings row, so spend checks serialize on it.
+func (q *Queries) AdminAlerts(ctx context.Context) (AdminAlertsRow, error) {
+	row := q.db.QueryRow(ctx, adminAlerts)
+	var i AdminAlertsRow
 	err := row.Scan(
 		&i.Email,
 		&i.HourlyLimitMicros,
