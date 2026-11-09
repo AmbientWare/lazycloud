@@ -363,7 +363,7 @@ func (ls listeners) close() {
 // connections come from session (database.OpenSession).
 func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
-	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
+	obs := observability.NewObservability(pool, tel.Registry, logger)
 	changes, err := observability.NewChanges(session, observability.DefaultChangesConfig(), tel.Registry, logger)
 	if err != nil {
 		return fmt.Errorf("change streams: %w", err)

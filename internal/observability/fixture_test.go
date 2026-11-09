@@ -37,7 +37,7 @@ func newFixture(t *testing.T, spec string) *fixture {
 	t.Helper()
 	pool := dbtest.New(t)
 	f := &fixture{t: t, pool: pool, exec: execution.NewExecution(pool),
-		obs: observability.NewObservability(pool, observability.Config{}, slog.New(slog.DiscardHandler))}
+		obs: observability.NewObservability(pool, nil, slog.New(slog.DiscardHandler))}
 	f.workspace, f.app, f.workload, f.release = f.addFunction("acme", "reports", "summarize", spec)
 	return f
 }

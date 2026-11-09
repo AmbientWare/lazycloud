@@ -29,7 +29,7 @@ func TestDayAggregatesReadTheDayNotTheHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	obs := observability.NewObservability(pool, observability.Config{}, slog.New(slog.DiscardHandler))
+	obs := observability.NewObservability(pool, nil, slog.New(slog.DiscardHandler))
 	member := []identity.Workspace{{ID: f.workspace, Name: "acme", Role: identity.RoleOwner}}
 	aggregates := map[string]func() error{
 		"task metrics": func() error {

@@ -44,18 +44,12 @@ type Observability struct {
 	started *startedQueue
 }
 
-// Config wires the owner's optional parts.
-type Config struct {
-	// Registerer receives the ingest collectors; nil skips them.
-	Registerer prometheus.Registerer
-}
-
-// NewObservability returns the owner over pool. sqlc's generated New
-// constructs the package's Queries.
-func NewObservability(pool *pgxpool.Pool, cfg Config, logger *slog.Logger) *Observability {
+// NewObservability returns the owner over pool. registerer receives the
+// ingest collectors; nil skips them.
+func NewObservability(pool *pgxpool.Pool, registerer prometheus.Registerer, logger *slog.Logger) *Observability {
 	return &Observability{
 		pool: pool, queries: New(pool), logger: logger,
-		ingest: newIngestQueue(cfg.Registerer), started: newStartedQueue(cfg.Registerer),
+		ingest: newIngestQueue(registerer), started: newStartedQueue(registerer),
 	}
 }
 

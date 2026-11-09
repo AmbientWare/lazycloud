@@ -166,7 +166,7 @@ func serveWith(t *testing.T, pool *pgxpool.Pool, cfg storage.Config, configure .
 		t.Fatal(err)
 	}
 	publishManagedImage(t, pool, "3.12")
-	obs := observability.NewObservability(pool, observability.Config{}, logger)
+	obs := observability.NewObservability(pool, nil, logger)
 	config := hostsession.Config{
 		TouchInterval:  100 * time.Millisecond,
 		LayerLifetime:  hostsession.LayerLifetime,

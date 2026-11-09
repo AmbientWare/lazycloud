@@ -137,7 +137,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		Identity: id, Control: control.NewControl(pool), Storage: store,
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        im,
-		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
+		Observability: observability.NewObservability(pool, nil, logger), Changes: changes,
 		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool),
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	server := httptest.NewServer(handler)

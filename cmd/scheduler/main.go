@@ -200,7 +200,7 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	every := func(name string, interval time.Duration, pass func(context.Context) bool) func(context.Context) bool {
 		return beats.track(name, interval, timed(name, pass))
 	}
-	obs := observability.NewObservability(pool, observability.Config{}, logger)
+	obs := observability.NewObservability(pool, nil, logger)
 
 	fleet, err := compute.LoadFleet(ctx, os.Getenv)
 	if err != nil {
