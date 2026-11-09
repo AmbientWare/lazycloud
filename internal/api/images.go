@@ -17,10 +17,7 @@ import (
 
 // ResolveImage computes a definition's image without building it.
 func (s *Server) ResolveImage(ctx context.Context, req ResolveImageRequestObject) (ResolveImageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	resolution, err := s.owners.Images.Resolve(ctx, ws.ID, *req.Body)
 	if err != nil {
 		return nil, err
@@ -30,10 +27,7 @@ func (s *Server) ResolveImage(ctx context.Context, req ResolveImageRequestObject
 
 // BuildImage resolves a definition and builds its image unless it is ready.
 func (s *Server) BuildImage(ctx context.Context, req BuildImageRequestObject) (BuildImageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	force := req.Params.Force != nil && *req.Params.Force
 	resolution, err := s.owners.Images.Build(ctx, ws.ID, *req.Body, force)
 	if err != nil {
@@ -44,10 +38,7 @@ func (s *Server) BuildImage(ctx context.Context, req BuildImageRequestObject) (B
 
 // PrepareImage starts or joins the build that makes an image ready.
 func (s *Server) PrepareImage(ctx context.Context, req PrepareImageRequestObject) (PrepareImageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	resolution, err := s.owners.Images.Prepare(ctx, ws.ID, req.Image)
 	if err != nil {
 		return nil, err
@@ -57,10 +48,7 @@ func (s *Server) PrepareImage(ctx context.Context, req PrepareImageRequestObject
 
 // GetImage returns an image the workspace resolved.
 func (s *Server) GetImage(ctx context.Context, req GetImageRequestObject) (GetImageResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	image, err := s.owners.Images.Get(ctx, ws.ID, req.Image)
 	if err != nil {
 		return nil, err
@@ -70,10 +58,7 @@ func (s *Server) GetImage(ctx context.Context, req GetImageRequestObject) (GetIm
 
 // GetImageBuild reads a build, waiting for it to finish when asked.
 func (s *Server) GetImageBuild(ctx context.Context, req GetImageBuildRequestObject) (GetImageBuildResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	wait := time.Duration(0)
 	if req.Params.WaitSeconds != nil {
 		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
@@ -87,10 +72,7 @@ func (s *Server) GetImageBuild(ctx context.Context, req GetImageBuildRequestObje
 
 // StreamImageBuildLogs writes build output as NDJSON, like task logs.
 func (s *Server) StreamImageBuildLogs(ctx context.Context, req StreamImageBuildLogsRequestObject) (StreamImageBuildLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	// Report an unknown build as an error before the stream starts.
 	if _, err := s.owners.Images.GetBuild(ctx, s.owners.Listener, ws.ID, req.Build, 0); err != nil {
 		return nil, err

@@ -61,10 +61,7 @@ func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, functio
 
 // InvokeFunction runs the function's active release with JSON arguments.
 func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestObject) (InvokeFunctionResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	out, err := s.invoke(ctx, ws, req.App, req.Name, nil, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err

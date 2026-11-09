@@ -17,8 +17,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
-// Server implements the public operations. Each authorizes the workspace,
-// invokes one owner and maps its result.
+// Server implements the public operations. Each invokes one owner for the
+// workspace authorizeWorkspace authorized and maps its result.
 type Server struct {
 	owners Owners
 	cfg    Config
@@ -26,6 +26,50 @@ type Server struct {
 }
 
 var _ StrictServerInterface = (*Server)(nil)
+
+// refusedToContainers are the operations a container may not call: a
+// function may drive the instances it started, nothing more.
+var refusedToContainers = map[string]bool{
+	"ScaleWorkload": true, "GetDevbox": true, "StartDevbox": true, "StopDevbox": true,
+	"ListSandboxes": true, "GetSandboxStats": true, "CreateSshCertificate": true, "ListSshHosts": true,
+	"SetContainerTtl": true, "GetContainerNetwork": true, "SetContainerNetwork": true,
+	"SnapshotContainer": true, "CreateFilesystemImage": true, "OpenContainerShell": true, "OpenSshTunnel": true,
+}
+
+// identityScoped are the operations on a workspace whose roles identity
+// checks itself, in any workspace state.
+var identityScoped = map[string]bool{
+	"GetWorkspace": true, "RenameWorkspace": true, "DeleteWorkspace": true,
+	"ListMembers": true, "SetMemberRole": true, "RemoveMember": true, "ListInvitations": true,
+	"CreateInvitation": true, "RevokeInvitation": true, "ResendInvitation": true,
+}
+
+type workspaceKey struct{}
+
+// authorizeWorkspace refuses a container the operations refusedToContainers
+// names, then authorizes the workspace the operation's path names for its
+// handler, which reads it with workspaceFrom.
+func (s *Server) authorizeWorkspace(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		if _, ok := containerFrom(ctx); ok && refusedToContainers[operationID] {
+			return nil, errFromContainer
+		}
+		name := r.PathValue("workspace")
+		if name == "" || identityScoped[operationID] {
+			return next(ctx, w, r, request)
+		}
+		ws, err := s.workspace(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return next(context.WithValue(ctx, workspaceKey{}, ws), w, r, request)
+	}
+}
+
+func workspaceFrom(ctx context.Context) identity.Workspace {
+	ws, _ := ctx.Value(workspaceKey{}).(identity.Workspace)
+	return ws
+}
 
 func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
 	if c, ok := containerFrom(ctx); ok {
@@ -40,10 +84,7 @@ func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace
 
 // CreateSourceUpload registers a source archive or returns where to upload it.
 func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	digest, err := storage.ParseDigest(req.Body.Sha256)
 	if err != nil {
 		return nil, err
@@ -64,10 +105,7 @@ func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadR
 
 // DeployApp makes the app's workloads match the request.
 func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	if err := s.checkImages(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}
@@ -88,10 +126,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 
 // SubmitTasks admits one task per input.
 func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) (SubmitTasksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	submit, err := submitRequest(ctx, ws, req.App, req.Name, req.Body.Inputs, req.Body.ReleaseId, req.Body.ParentTaskId)
 	if err != nil {
 		return nil, err
@@ -137,10 +172,7 @@ func submitRequest(ctx context.Context, ws identity.Workspace, app, function str
 
 // GetTask reads a task, waiting for it to finish when asked.
 func (s *Server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTaskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	wait := time.Duration(0)
 	if req.Params.WaitSeconds != nil {
 		wait = time.Duration(*req.Params.WaitSeconds) * time.Second
@@ -154,10 +186,7 @@ func (s *Server) GetTask(ctx context.Context, req GetTaskRequestObject) (GetTask
 
 // GetTaskResult returns a succeeded task's value.
 func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObject) (GetTaskResultResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	result, err := s.owners.Execution.TaskResult(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
@@ -169,10 +198,7 @@ func (s *Server) GetTaskResult(ctx context.Context, req GetTaskResultRequestObje
 // workspace does not have, waiting for either when asked. The schema bounds
 // the ids and the wait.
 func (s *Server) WaitTasks(ctx context.Context, req WaitTasksRequestObject) (WaitTasksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	ids := make([]execution.TaskID, len(req.Body.TaskIds))
 	for n, id := range req.Body.TaskIds {
 		ids[n] = execution.TaskID(id)
@@ -218,10 +244,7 @@ func (r waitTasksResponse) VisitWaitTasksResponse(w http.ResponseWriter) error {
 
 // CancelTask cancels a queued or running task.
 func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (CancelTaskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	task, err := s.owners.Execution.CancelTask(ctx, ws.ID, execution.TaskID(req.Task))
 	if err != nil {
 		return nil, err
@@ -235,10 +258,7 @@ const logHeartbeat = 15 * time.Second
 
 // StreamTaskLogs writes the task's log entries as NDJSON.
 func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
 }

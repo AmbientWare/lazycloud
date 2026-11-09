@@ -39,10 +39,7 @@ func optional(s string) *string {
 
 // ListSecrets returns one page of secret names.
 func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
 	page, next, err := s.owners.Secrets.List(ctx, ws.ID, cursor, limit)
 	if err != nil {
@@ -57,10 +54,7 @@ func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) 
 
 // GetSecret returns a secret's metadata.
 func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	secret, err := s.owners.Secrets.Get(ctx, ws.ID, req.Secret)
 	if err != nil {
 		return nil, err
@@ -71,10 +65,7 @@ func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (Get
 // SetSecret stores a secret's value: If-None-Match: * only creates it and
 // If-Match: * only replaces an existing one.
 func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	store := s.owners.Secrets.Set
 	switch {
 	case req.Params.IfNoneMatch != nil:
@@ -91,10 +82,7 @@ func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (Set
 
 // DeleteSecret removes a secret.
 func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject) (DeleteSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Secrets.Delete(ctx, ws.ID, req.Secret); err != nil {
 		return nil, err
 	}
@@ -104,10 +92,7 @@ func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject
 // GetSecretValue reveals a secret's value to every principal that reaches
 // the workspace; tokens carry no narrower scope.
 func (s *Server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	secret, value, err := s.owners.Secrets.Reveal(ctx, ws.ID, req.Secret)
 	if err != nil {
 		return nil, err

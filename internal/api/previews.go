@@ -60,10 +60,7 @@ func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Pr
 
 // CreatePreview starts a preview of one workload definition.
 func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObject) (CreatePreviewResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	user, err := s.user(ctx)
 	if err != nil {
 		return nil, err
@@ -86,18 +83,15 @@ func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObje
 	return CreatePreview201JSONResponse(out), nil
 }
 
-func (s *Server) preview(ctx context.Context, workspace string, id uuid.UUID) (identity.Workspace, control.Preview, error) {
-	ws, err := s.workspace(ctx, workspace)
-	if err != nil {
-		return identity.Workspace{}, control.Preview{}, err
-	}
+func (s *Server) preview(ctx context.Context, id uuid.UUID) (identity.Workspace, control.Preview, error) {
+	ws := workspaceFrom(ctx)
 	p, err := s.owners.Control.GetPreview(ctx, ws.ID, id)
 	return ws, p, err
 }
 
 // GetPreview reads a preview, waiting for its container when asked.
 func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (GetPreviewResponseObject, error) {
-	ws, p, err := s.preview(ctx, req.Workspace, req.Preview)
+	ws, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +138,7 @@ func (s *Server) GetPreview(ctx context.Context, req GetPreviewRequestObject) (G
 
 // StopPreview stops a preview and its container.
 func (s *Server) StopPreview(ctx context.Context, req StopPreviewRequestObject) (StopPreviewResponseObject, error) {
-	ws, _, err := s.preview(ctx, req.Workspace, req.Preview)
+	ws, _, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +159,7 @@ func (s *Server) StopPreview(ctx context.Context, req StopPreviewRequestObject) 
 // SyncPreviewFiles applies a tar of source changes to the preview's
 // container.
 func (s *Server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesRequestObject) (SyncPreviewFilesResponseObject, error) {
-	_, p, err := s.preview(ctx, req.Workspace, req.Preview)
+	_, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +180,7 @@ func (s *Server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesReque
 // StreamPreviewOutput writes the preview container's output as NDJSON. A
 // follower keeps the preview alive; the stream ends when it stops.
 func (s *Server) StreamPreviewOutput(ctx context.Context, req StreamPreviewOutputRequestObject) (StreamPreviewOutputResponseObject, error) {
-	_, p, err := s.preview(ctx, req.Workspace, req.Preview)
+	_, p, err := s.preview(ctx, req.Preview)
 	if err != nil {
 		return nil, err
 	}

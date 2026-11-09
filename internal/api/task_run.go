@@ -18,10 +18,7 @@ import (
 // entries as they commit, then its state once it finishes or the wait
 // passes. Admission fails as an error response, before the stream starts.
 func (s *Server) RunTask(ctx context.Context, req RunTaskRequestObject) (RunTaskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	submit, err := submitRequest(ctx, ws, req.App, req.Name, []apitypes.TaskInput{req.Body.Input}, req.Body.ReleaseId, req.Body.ParentTaskId)
 	if err != nil {
 		return nil, err

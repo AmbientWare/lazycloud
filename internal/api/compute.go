@@ -59,10 +59,7 @@ func pageLimit[T ~int](limit *T) int {
 
 // GetComputeSummary summarizes a workspace's compute.
 func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryRequestObject) (GetComputeSummaryResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	sum, err := s.owners.Compute.WorkspaceSummary(ctx, ws.ID)
 	if err != nil {
 		return nil, err
@@ -86,10 +83,7 @@ func (s *Server) GetComputeSummary(ctx context.Context, req GetComputeSummaryReq
 // ListComputeWorkloads lists a workspace's deployed workloads with their
 // sizes and machine pins.
 func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorkloadsRequestObject) (ListComputeWorkloadsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	var after compute.WorkloadCursor
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
@@ -157,10 +151,7 @@ func machinePage(rows []compute.Machine, limit int) apitypes.MachinePage {
 
 // ListWorkspaceMachines lists the joined machines that serve a workspace.
 func (s *Server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMachinesRequestObject) (ListWorkspaceMachinesResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	var after string
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err

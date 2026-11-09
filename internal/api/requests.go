@@ -10,10 +10,7 @@ import (
 
 // ListHttpRequests lists an app's endpoint and ASGI requests, newest first.
 func (s *Server) ListHttpRequests(ctx context.Context, req ListHttpRequestsRequestObject) (ListHttpRequestsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	limit := 50
 	if req.Params.Limit != nil {
 		limit = *req.Params.Limit
@@ -27,10 +24,7 @@ func (s *Server) ListHttpRequests(ctx context.Context, req ListHttpRequestsReque
 
 // GetHttpRequest returns one request by its X-Request-Id.
 func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestObject) (GetHttpRequestResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	out, err := s.owners.Edge.Request(ctx, ws.ID, req.HttpRequest)
 	if err != nil {
 		return nil, err
@@ -41,10 +35,7 @@ func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestOb
 // ListHttpRequestLogs returns what the workload wrote while serving the
 // request.
 func (s *Server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLogsRequestObject) (ListHttpRequestLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	var after int64
 	if req.Params.After != nil {
 		after = *req.Params.After

@@ -55,16 +55,12 @@ func requestFrom(ctx context.Context) *http.Request {
 }
 
 // liveContainer authorizes a call on a ready container of the workspace.
-func (s *Server) liveContainer(ctx context.Context, workspace string, container uuid.UUID) (execution.ContainerRoute, error) {
-	ws, err := s.workspace(ctx, workspace)
-	if err != nil {
-		return execution.ContainerRoute{}, err
-	}
+func (s *Server) liveContainer(ctx context.Context, container uuid.UUID) (execution.ContainerRoute, error) {
 	route, err := s.owners.Execution.Route(ctx, execution.ContainerID(container))
 	if err != nil {
 		return execution.ContainerRoute{}, err
 	}
-	if route.Workspace != ws.ID {
+	if route.Workspace != workspaceFrom(ctx).ID {
 		return execution.ContainerRoute{}, execution.ErrNotFound
 	}
 	if err := ownsInstance(ctx, route.CreatedBy); err != nil {
@@ -86,8 +82,8 @@ type controlCall struct {
 
 // forward sends the operation's request to the container's control API.
 // body replaces a request body the strict handler already decoded.
-func (s *Server) forward(ctx context.Context, workspace string, container uuid.UUID, body any) (controlCall, error) {
-	route, err := s.liveContainer(ctx, workspace, container)
+func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (controlCall, error) {
+	route, err := s.liveContainer(ctx, container)
 	if err != nil {
 		return controlCall{}, err
 	}
@@ -178,17 +174,17 @@ func (c controlCall) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter
 
 // ListProcesses lists the container's API processes.
 func (s *Server) ListProcesses(ctx context.Context, req ListProcessesRequestObject) (ListProcessesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StartProcess starts a process in the container.
 func (s *Server) StartProcess(ctx context.Context, req StartProcessRequestObject) (StartProcessResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // GetProcess reads a process's result.
 func (s *Server) GetProcess(ctx context.Context, req GetProcessRequestObject) (GetProcessResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // KillProcess signals a process's group.
@@ -197,60 +193,57 @@ func (s *Server) KillProcess(ctx context.Context, req KillProcessRequestObject) 
 	if body == nil {
 		body = &apitypes.KillRequest{}
 	}
-	return s.forward(ctx, req.Workspace, req.Container, body)
+	return s.forward(ctx, req.Container, body)
 }
 
 // ListContainerFiles lists a directory.
 func (s *Server) ListContainerFiles(ctx context.Context, req ListContainerFilesRequestObject) (ListContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerFile deletes a file.
 func (s *Server) DeleteContainerFile(ctx context.Context, req DeleteContainerFileRequestObject) (DeleteContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StatContainerFile reads a file's metadata.
 func (s *Server) StatContainerFile(ctx context.Context, req StatContainerFileRequestObject) (StatContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DownloadContainerFile streams a file's bytes.
 func (s *Server) DownloadContainerFile(ctx context.Context, req DownloadContainerFileRequestObject) (DownloadContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // UploadContainerFile streams a file into the container.
 func (s *Server) UploadContainerFile(ctx context.Context, req UploadContainerFileRequestObject) (UploadContainerFileResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // FindInContainerFiles searches files.
 func (s *Server) FindInContainerFiles(ctx context.Context, req FindInContainerFilesRequestObject) (FindInContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // ReplaceInContainerFiles replaces text in files.
 func (s *Server) ReplaceInContainerFiles(ctx context.Context, req ReplaceInContainerFilesRequestObject) (ReplaceInContainerFilesResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, req.Body)
+	return s.forward(ctx, req.Container, req.Body)
 }
 
 // CreateContainerDirectory creates a directory.
 func (s *Server) CreateContainerDirectory(ctx context.Context, req CreateContainerDirectoryRequestObject) (CreateContainerDirectoryResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // DeleteContainerDirectory deletes a directory.
 func (s *Server) DeleteContainerDirectory(ctx context.Context, req DeleteContainerDirectoryRequestObject) (DeleteContainerDirectoryResponseObject, error) {
-	return s.forward(ctx, req.Workspace, req.Container, nil)
+	return s.forward(ctx, req.Container, nil)
 }
 
 // StreamContainerOutput writes the container's output as NDJSON.
 func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerOutputRequestObject) (StreamContainerOutputResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
@@ -349,13 +342,7 @@ func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID)
 // OpenContainerShell opens a login shell in the container over a
 // WebSocket.
 func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
@@ -489,13 +476,7 @@ func (t containerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // OpenSshTunnel carries an SSH connection to a pod over a WebSocket.
 func (s *Server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaceFrom(ctx)
 	return sshTunnel{ctx: ctx, server: s, workspace: ws.ID, app: req.App, pod: req.Name}, nil
 }
 
