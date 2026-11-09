@@ -239,14 +239,15 @@ class Volume(ResourceControlBinding["StorageClient"]):
     def list_path(self, relative_path: str | Path = ".") -> list[VolumePathInfo]:
         """The entries of one directory; a missing directory is empty."""
         path = _relative_path(relative_path).as_posix()
-        entries: list[VolumePathInfo] = []
-        cursor: str | None = None
-        while True:
-            page = self.control_client.list_volume_files(self.name, path, cursor=cursor)
-            entries.extend(_path_info(item) for item in page.files)
-            if not page.next_cursor:
-                return entries
-            cursor = page.next_cursor
+        from lazycloud.clients.api import pages
+
+        return [
+            _path_info(item)
+            for page in pages(
+                lambda cursor: self.control_client.list_volume_files(self.name, path, cursor=cursor)
+            )
+            for item in page.files
+        ]
 
     def stat(self, relative_path: str | Path) -> VolumePathInfo:
         path = _relative_path(relative_path).as_posix()

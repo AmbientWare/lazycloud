@@ -14,7 +14,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.clients.api import ApiClient
+from lazycloud.clients.api import ApiClient, pages
 from lazycloud.contracts.api import Secret, SecretValue
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
@@ -34,14 +34,11 @@ def secret_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected = _session(workspace)
-    secrets: list[Secret] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_secrets(selected, cursor=cursor, limit=100)
-        secrets.extend(page.secrets)
-        if not page.next_cursor:
-            break
-        cursor = page.next_cursor
+    secrets = [
+        item
+        for page in pages(lambda cursor: client.list_secrets(selected, cursor=cursor, limit=100))
+        for item in page.secrets
+    ]
     if json_output_enabled(ctx):
         print_payload(ctx, [_secret_payload(item) for item in secrets])
         return

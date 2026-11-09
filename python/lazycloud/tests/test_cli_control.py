@@ -141,6 +141,19 @@ def test_app_commands_accept_a_name_and_report_each_outcome(fake_api: FakeApi) -
     assert conflicting.exit_code != 0
 
 
+def test_app_list_follows_every_page(fake_api: FakeApi) -> None:
+    @fake_api.route("GET", f"{TEAM}/apps")
+    def apps(request: ApiRequest) -> Reply:
+        if request.query.get("cursor") == ["next"]:
+            return json_reply({"apps": [{**_app(), "name": "billing"}]})
+        return json_reply({"apps": [_app()], "next_cursor": "next"})
+
+    listed = _cli("--json", "app", "list")
+
+    assert listed.exit_code == 0, listed.output
+    assert [item["name"] for item in json.loads(listed.stdout)["apps"]] == ["reports", "billing"]
+
+
 def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> None:
     @fake_api.route("GET", f"{TEAM}/workloads")
     def workloads(request: ApiRequest) -> Reply:

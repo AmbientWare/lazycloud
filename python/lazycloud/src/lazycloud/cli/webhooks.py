@@ -14,8 +14,8 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.clients.api import ApiClient
-from lazycloud.contracts.api import Webhook, WebhookEvent
+from lazycloud.clients.api import ApiClient, pages
+from lazycloud.contracts.api import WebhookEvent
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
 webhook_app = typer.Typer(help="Manage webhooks that receive task and deploy events.")
@@ -34,14 +34,11 @@ def webhook_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected = _session(workspace)
-    webhooks: list[Webhook] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_webhooks(selected, cursor=cursor, limit=100)
-        webhooks.extend(page.webhooks)
-        if not page.next_cursor:
-            break
-        cursor = page.next_cursor
+    webhooks = [
+        item
+        for page in pages(lambda cursor: client.list_webhooks(selected, cursor=cursor, limit=100))
+        for item in page.webhooks
+    ]
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in webhooks])
         return

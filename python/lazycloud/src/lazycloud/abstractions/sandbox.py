@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 from uuid import UUID
@@ -28,7 +29,7 @@ from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, check_workload_options
 from lazycloud.abstractions.volume import VolumeExport, VolumeMount, volume_mounts
 from lazycloud.aio import to_thread
-from lazycloud.clients.api import ApiError
+from lazycloud.clients.api import ApiError, pages
 from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
 from lazycloud.contracts.api import (
     CommandItem,
@@ -1601,17 +1602,16 @@ class Sandbox(ControlClientConfigMixin):
     ) -> builtins.list[SandboxRow]:
         """Sandbox containers, newest first, up to `limit`; `app_id` is an app's name."""
         client = self._client_for(workspace)
-        rows: builtins.list[SandboxRow] = []
-        cursor: str | None = None
-        while len(rows) < limit:
-            page = client.list_sandboxes(
-                app=app_id, limit=min(1000, limit - len(rows)), cursor=cursor
+        rows = (
+            row
+            for page in pages(
+                lambda cursor: client.list_sandboxes(
+                    app=app_id, limit=min(1000, limit), cursor=cursor
+                )
             )
-            rows.extend(page.sandboxes)
-            if page.next_cursor is None:
-                break
-            cursor = page.next_cursor
-        return rows
+            for row in page.sandboxes
+        )
+        return builtins.list(islice(rows, limit))
 
     def stats(
         self,
@@ -1634,15 +1634,13 @@ class Sandbox(ControlClientConfigMixin):
         return _timeline(client.lifecycle(UUID(selected)))
 
     def _newest_container(self, client: WorkloadsClient, stub_id: str) -> str:
-        cursor: str | None = None
-        while True:
-            page = client.list_sandboxes(app=self._app_slug, limit=1000, cursor=cursor)
+        for page in pages(
+            lambda cursor: client.list_sandboxes(app=self._app_slug, limit=1000, cursor=cursor)
+        ):
             for row in page.sandboxes:
                 if str(row.release_id) == stub_id:
                     return str(row.id)
-            if page.next_cursor is None:
-                raise SandboxConnectionError(f"sandbox release {stub_id} has no container")
-            cursor = page.next_cursor
+        raise SandboxConnectionError(f"sandbox release {stub_id} has no container")
 
     def _client_for(self, workspace: str | None) -> WorkloadsClient:
         if workspace is None or workspace == self.control_client.workspace:

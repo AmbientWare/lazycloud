@@ -12,13 +12,14 @@ from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from contextvars import copy_context
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from lazycloud._terminal.formatting import short_id
-from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.clients.api import ApiClient, ApiError, pages
 from lazycloud.contracts.api import Deployment as AppDeployment
 from lazycloud.contracts.api import (
     DeploymentPlanRequest,
@@ -282,21 +283,16 @@ class DeploymentClient:
     ) -> list[Workload]:
         """Deployments by app and name, up to `limit`."""
         client, workspace = self._session()
-        deployments: list[Workload] = []
-        cursor: str | None = None
-        while len(deployments) < limit:
-            page = client.list_workloads(
-                workspace,
-                app=app,
-                name=name,
-                limit=min(1000, limit - len(deployments)),
-                cursor=cursor,
+        found = (
+            item
+            for page in pages(
+                lambda cursor: client.list_workloads(
+                    workspace, app=app, name=name, limit=min(1000, limit), cursor=cursor
+                )
             )
-            deployments.extend(page.workloads)
-            if page.next_cursor is None:
-                break
-            cursor = page.next_cursor
-        return deployments
+            for item in page.workloads
+        )
+        return list(islice(found, limit))
 
     def get(self, deployment_id_or_name: str, *, app: str | None = None) -> Workload:
         client, workspace = self._session()

@@ -14,7 +14,7 @@ from lazycloud.abstractions.volume import Volume, VolumeOperationError, VolumePa
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import workspace_storage
-from lazycloud.contracts import api
+from lazycloud.clients.api import pages
 from lazycloud.terminal import humanize_bytes
 
 VOLUME_SCHEME = "lazycloud://"
@@ -28,14 +28,11 @@ def volume_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client = workspace_storage(workspace=workspace)
-    volumes: list[api.Volume] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_volumes(cursor=cursor)
-        volumes.extend(page.volumes)
-        if not page.next_cursor:
-            break
-        cursor = page.next_cursor
+    volumes = [
+        item
+        for page in pages(lambda cursor: client.list_volumes(cursor=cursor))
+        for item in page.volumes
+    ]
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in volumes])
         return

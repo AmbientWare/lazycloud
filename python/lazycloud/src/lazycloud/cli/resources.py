@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from itertools import islice
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from lazycloud.cli.components.output import (
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import api_session
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
+from lazycloud.clients.api import pages
 from lazycloud.clients.compute import ComputeApi
 from lazycloud.contracts.api import (
     AwsConnection,
@@ -37,7 +39,6 @@ from lazycloud.contracts.api import (
     AwsReconnectRequest,
     ComputeInstancePage,
     ComputeWorkloadPage,
-    Container,
     MachineJoinRequest,
     MachineUpdate,
     StopReason,
@@ -502,16 +503,14 @@ def container_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
-    containers: list[Container] = []
-    cursor: str | None = None
-    while len(containers) < limit:
-        page = client.list_containers(
-            selected_workspace, limit=limit - len(containers), cursor=cursor
+    found = (
+        item
+        for page in pages(
+            lambda cursor: client.list_containers(selected_workspace, limit=limit, cursor=cursor)
         )
-        containers.extend(page.containers)
-        if page.next_cursor is None:
-            break
-        cursor = page.next_cursor
+        for item in page.containers
+    )
+    containers = list(islice(found, limit))
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in containers])
         return

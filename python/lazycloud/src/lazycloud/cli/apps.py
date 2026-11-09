@@ -12,8 +12,8 @@ from lazycloud._terminal.streams import console
 from lazycloud.cli.app_export import app_export
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.control import api_session
-from lazycloud.clients.api import ApiClient
-from lazycloud.contracts.api import App, LiveAppState
+from lazycloud.clients.api import ApiClient, pages
+from lazycloud.contracts.api import App, AppPage, LiveAppState
 
 app_app = typer.Typer(help="Manage deployed applications.")
 app_app.command("export", help="Generate a typed Python package for an app.")(app_export)
@@ -33,13 +33,18 @@ def app_list(
         raise typer.BadParameter("choose only one of --active, --inactive, or --all")
     state = LiveAppState.active if active else LiveAppState.paused if inactive else None
     client, selected_workspace = api_session(workspace=workspace)
-    response = client.list_apps(selected_workspace, state=state)
+    apps = [
+        item
+        for page in pages(
+            lambda cursor: client.list_apps(selected_workspace, state=state, cursor=cursor)
+        )
+        for item in page.apps
+    ]
     if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
+        print_payload(ctx, AppPage(apps=apps).model_dump(mode="json"))
         return
     rows: list[list[object]] = [
-        [item.name, item.state.value, item.workloads, timestamp(item.created_at)]
-        for item in response.apps
+        [item.name, item.state.value, item.workloads, timestamp(item.created_at)] for item in apps
     ]
     console.print(table("Apps", ["name", "state", "workloads", "created"], rows))
 

@@ -34,18 +34,15 @@ class Disk:
     @staticmethod
     def list(*, workspace: str | None = None) -> builtins.list[api.Disk]:
         """Every disk in the workspace, by name."""
-        from lazycloud.clients.api import ApiConnectionError, ApiError
+        from lazycloud.clients.api import ApiConnectionError, ApiError, pages
 
         client = _storage(workspace)
-        disks: builtins.list[api.Disk] = []
-        cursor: str | None = None
         try:
-            while True:
-                page = client.list_disks(cursor=cursor)
-                disks.extend(page.disks)
-                if not page.next_cursor:
-                    return disks
-                cursor = page.next_cursor
+            return [
+                disk
+                for page in pages(lambda cursor: client.list_disks(cursor=cursor))
+                for disk in page.disks
+            ]
         except (ApiError, ApiConnectionError) as exc:
             raise DiskOperationError(f"failed to list disks: {exc}") from exc
 

@@ -37,7 +37,7 @@ from lazycloud.client_handles import (
     ResourceManifest,
     handle_from_manifest,
 )
-from lazycloud.clients.api import ApiClient
+from lazycloud.clients.api import ApiClient, pages
 from lazycloud.contracts.api import WorkloadDetail, WorkloadKind, WorkloadState
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.exceptions import SdkError
@@ -151,9 +151,9 @@ def _deployed_resources(client: ApiClient, workspace: str, app: str) -> list[Res
     """
     resources: list[ResourceManifest] = []
     stale: list[str] = []
-    cursor: str | None = None
-    while True:
-        page = client.list_workloads(workspace, app=app, limit=_PAGE_LIMIT, cursor=cursor)
+    for page in pages(
+        lambda cursor: client.list_workloads(workspace, app=app, limit=_PAGE_LIMIT, cursor=cursor)
+    ):
         for workload in page.workloads:
             kind = _EXPORTED_KINDS.get(workload.kind)
             if kind is None or workload.state is WorkloadState.deleted:
@@ -190,9 +190,6 @@ def _deployed_resources(client: ApiClient, workspace: str, app: str) -> list[Res
                     }
                 )
             )
-        if page.next_cursor is None:
-            break
-        cursor = page.next_cursor
     if stale:
         raise ClientGenerationError(
             f"client manifest for app {app!r} has callable deployments without typed "
