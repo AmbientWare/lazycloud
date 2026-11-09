@@ -24,38 +24,15 @@ import (
 var (
 	// ErrNotFound means the function or task does not exist in the
 	// workspace.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrNotAccepting means the function is stopped or its app paused, so
 	// it admits no tasks.
-	ErrNotAccepting = errors.New("function is not accepting tasks")
+	ErrNotAccepting error = &apitypes.Error{Code: apitypes.Conflict, Message: "the function is stopped or its app is paused"}
 	// ErrPayloadTooLarge means an input or result exceeds MaxPayloadBytes.
 	ErrPayloadTooLarge = errors.New("payload exceeds 16 MiB")
 	// ErrInvalidSubmit marks a submit the schema cannot reject.
 	ErrInvalidSubmit = errors.New("invalid submit")
 )
-
-// TooManyPendingError rejects a submit that would queue more tasks than the
-// function's max_pending_tasks.
-type TooManyPendingError struct {
-	Limit     int
-	Queued    int
-	Submitted int
-}
-
-func (e *TooManyPendingError) Error() string {
-	return fmt.Sprintf("%d queued and %d submitted tasks exceed max_pending_tasks %d", e.Queued, e.Submitted, e.Limit)
-}
-
-// UnknownTaskError rejects a submit that names a parent or upstream task the
-// workspace does not have.
-type UnknownTaskError struct {
-	Role string
-	Task TaskID
-}
-
-func (e *UnknownTaskError) Error() string {
-	return fmt.Sprintf("%s task %s is not in the workspace", e.Role, e.Task)
-}
 
 // TaskInput is one task's arguments and the upstream tasks whose results
 // the arguments refer to.
@@ -156,7 +133,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			return fmt.Errorf("count queued tasks: %w", err)
 		}
 		if int(queued)+len(req.Inputs) > limit {
-			return &TooManyPendingError{Limit: limit, Queued: int(queued), Submitted: len(req.Inputs)}
+			return &apitypes.Error{Code: apitypes.TooManyPendingTasks, Message: fmt.Sprintf("%d queued and %d submitted tasks exceed max_pending_tasks %d", queued, len(req.Inputs), limit)}
 		}
 		live, err := q.CountLiveReleaseContainers(ctx, fn.ReleaseID)
 		if err != nil {
@@ -177,7 +154,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if req.Parent != nil {
 			row, err := q.ParentTask(ctx, ParentTaskParams{ID: uuid.UUID(*req.Parent), WorkspaceID: uuid.UUID(req.Workspace)})
 			if errors.Is(err, pgx.ErrNoRows) {
-				return &UnknownTaskError{Role: "parent", Task: *req.Parent}
+				return unknownTask("parent", *req.Parent)
 			}
 			if err != nil {
 				return fmt.Errorf("read parent task: %w", err)
@@ -327,7 +304,7 @@ func (e *Execution) lockUpstream(ctx context.Context, q *Queries, workspace iden
 	}
 	for _, id := range upstream {
 		if _, ok := statuses[id]; !ok {
-			return nil, &UnknownTaskError{Role: "upstream", Task: TaskID(id)}
+			return nil, unknownTask("upstream", TaskID(id))
 		}
 	}
 	return statuses, nil
@@ -388,4 +365,10 @@ func versionOf(v *int32) *int {
 	}
 	n := int(*v)
 	return &n
+}
+
+// unknownTask rejects a submit that names a parent or upstream task the
+// workspace does not have.
+func unknownTask(role string, task TaskID) error {
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("%s task %s is not in the workspace", role, task)}
 }

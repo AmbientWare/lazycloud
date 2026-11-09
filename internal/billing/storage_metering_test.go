@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -127,8 +126,7 @@ func TestAdmitRefusesGPUModelsTheFleetDoesNotOffer(t *testing.T) {
 	ws := f.workspace(owner)
 	f.setAccount(owner, "payment_method_attached_at = now()")
 	_, err := f.admit(Request{Workspace: ws, Cold: true, GPUs: 1, GPUModels: []GPUType{soon}})
-	var unavailable *GPUUnavailableError
-	if !errors.As(err, &unavailable) || !strings.Contains(err.Error(), string(soon)+" is coming soon") {
+	if apitypes.CodeOf(err) != apitypes.Unsupported || !strings.Contains(err.Error(), string(soon)+" is coming soon") {
 		t.Fatalf("%s on the fleet: %v", soon, err)
 	}
 	grant, err := f.admit(Request{Workspace: ws, GPUs: 1, GPUModels: []GPUType{soon, offered[0]}})

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -243,8 +244,7 @@ func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
 	_, err := e.Submit(t.Context(), SubmitRequest{
 		Workspace: f.workspace, App: "reports", Function: "summarize", Parent: &missing, Inputs: jsonInputs(1),
 	})
-	var unknown *UnknownTaskError
-	if !errors.As(err, &unknown) {
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("unknown parent error %v", err)
 	}
 }

@@ -224,7 +224,7 @@ func (r *resolver) layers(ctx context.Context, ref string, auth *Auth, insecure 
 // imageLayers reads the layers of img, the image ref names. The registry
 // checks each blob against its digest, so the blobs are the image's bytes;
 // the diff_ids are what the config claims. An image the platform cannot
-// convert is an InvalidError saying why.
+// convert is an InvalidRequest refusal saying why.
 func imageLayers(ref string, img v1.Image) ([]registryLayer, error) {
 	manifest, err := img.Manifest()
 	if err != nil {

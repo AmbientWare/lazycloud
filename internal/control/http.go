@@ -39,20 +39,9 @@ func checkKind(spec apitypes.WorkloadSpec) error {
 		ok = http == nil && pod != nil && pod.Kind == apitypes.PodKindSandbox
 	}
 	if !ok {
-		return &InvalidSpecError{Function: spec.Name, Reason: fmt.Sprintf("kind %q does not match its http and pod sections", spec.Kind)}
+		return invalidSpec(spec.Name, fmt.Sprintf("kind %q does not match its http and pod sections", spec.Kind))
 	}
 	return nil
-}
-
-// RouteConflictError means another workload already answers on the
-// subdomain or custom hostname a deploy claims.
-type RouteConflictError struct {
-	Function string
-	Reason   string
-}
-
-func (e *RouteConflictError) Error() string {
-	return fmt.Sprintf("function %s: %s", e.Function, e.Reason)
 }
 
 // HTTP workloads answer quickly and stay warm longer than functions.
@@ -73,16 +62,16 @@ func resolveHTTP(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	}
 	h := *spec.Http
 	if !h.Kind.Valid() {
-		return &InvalidSpecError{Function: spec.Name, Reason: fmt.Sprintf("unknown http kind %q", h.Kind)}
+		return invalidSpec(spec.Name, fmt.Sprintf("unknown http kind %q", h.Kind))
 	}
 	if spec.TimeoutSeconds == nil {
 		out.TimeoutSeconds = new(httpTimeoutSeconds)
 	}
 	switch {
 	case spec.Cron != nil:
-		return &InvalidSpecError{Function: spec.Name, Reason: "schedules apply to functions, not HTTP workloads"}
+		return invalidSpec(spec.Name, "schedules apply to functions, not HTTP workloads")
 	case spec.InProcess != nil && *spec.InProcess:
-		return &InvalidSpecError{Function: spec.Name, Reason: "in_process applies to functions; HTTP workers admit concurrent requests themselves"}
+		return invalidSpec(spec.Name, "in_process applies to functions; HTTP workers admit concurrent requests themselves")
 	}
 	// A warm floor keeps the planner's keep-warm.
 	warmFloor := out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0
@@ -105,7 +94,7 @@ func resolveHTTP(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	} else if (h.Methods != nil && !slices.Equal(*h.Methods, defaultMethods)) || (h.Route != nil && *h.Route != "/") {
 		// The request validator fills the schema's defaults, so only values
 		// other than them were asked for.
-		return &InvalidSpecError{Function: spec.Name, Reason: "route and methods apply to endpoints; an ASGI app answers every path"}
+		return invalidSpec(spec.Name, "route and methods apply to endpoints; an ASGI app answers every path")
 	} else {
 		h.Route, h.Methods = nil, nil
 	}
@@ -168,10 +157,7 @@ func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, w
 			return fmt.Errorf("read domain registration: %w", err)
 		}
 		if !registered {
-			return &InvalidSpecError{
-				Function: spec.Name,
-				Reason:   *spec.Http.Domain + " is not registered to this account; register it with `lazycloud domain add` first",
-			}
+			return invalidSpec(spec.Name, *spec.Http.Domain+" is not registered to this account; register it with `lazycloud domain add` first")
 		}
 		hostname = spec.Http.Domain
 	}
@@ -186,7 +172,7 @@ func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, w
 		if pgErr.ConstraintName == "http_routes_hostname_key" {
 			reason = *hostname + " already serves another deployment"
 		}
-		return &RouteConflictError{Function: spec.Name, Reason: reason}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("function %s: %s", spec.Name, reason)}
 	}
 	if err != nil {
 		return fmt.Errorf("claim route: %w", err)

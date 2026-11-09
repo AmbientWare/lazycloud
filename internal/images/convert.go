@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -145,9 +144,9 @@ func digestOf(reference string) string {
 // ErrNotConverted.
 func (i *Images) adoptLayers(ctx context.Context, workspace identity.WorkspaceID, kind buildKind, reference, architecture, mirror string) error {
 	layers, err := i.layersOf(ctx, reference, architecture)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return &ConversionError{Reason: rejected.Reason}
+	var rejected *apitypes.Error
+	if errors.As(err, &rejected) && rejected.Code == apitypes.InvalidRequest {
+		return &ConversionError{Reason: rejected.Message}
 	}
 	if err != nil {
 		return fmt.Errorf("read %s: %w", reference, err)
@@ -296,9 +295,7 @@ func (i *Images) buildOrWait(ctx context.Context, workspace identity.WorkspaceID
 		return Image{}, &ConversionError{Reason: reason}
 	}
 	r, err := i.build(ctx, workspace, p, false, kind)
-	var unpaid *billing.PaymentRequiredError
-	var limit *billing.LimitError
-	if errors.As(err, &unpaid) || errors.As(err, &limit) {
+	if code := apitypes.CodeOf(err); code == apitypes.PaymentRequired || code == apitypes.LimitReached {
 		return Image{}, &ConversionError{Reason: err.Error()}
 	}
 	if err != nil {

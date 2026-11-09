@@ -1,36 +1,25 @@
 package storage
 
 import (
-	"errors"
 	"fmt"
 	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // ErrNotFound means the volume, file, disk, artifact or map entry does not
 // exist in the workspace.
-var ErrNotFound = errors.New("not found")
+var ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 
 // ErrTooLarge means a queue message or map value exceeds its limit.
-var ErrTooLarge = errors.New("value too large")
-
-// InvalidError rejects a request the schema cannot express, such as a path
-// that leaves the volume.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
+var ErrTooLarge error = &apitypes.Error{Code: apitypes.PayloadTooLarge, Message: "a value is larger than 1 MiB"}
 
 func invalid(format string, args ...any) error {
-	return &InvalidError{Reason: fmt.Sprintf(format, args...)}
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf(format, args...)}
 }
 
-// ConflictError means the request conflicts with current state: a volume or
-// disk in use, a move onto an existing path, or a stale map revision.
-type ConflictError struct{ Reason string }
-
-func (e *ConflictError) Error() string { return e.Reason }
-
 func conflict(format string, args ...any) error {
-	return &ConflictError{Reason: fmt.Sprintf(format, args...)}
+	return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf(format, args...)}
 }
 
 // optionalTime reads a nullable aggregate that sqlc types as any.

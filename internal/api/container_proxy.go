@@ -28,7 +28,7 @@ import (
 // over the host's data connection; status and body pass through.
 
 // errContainerNotRunning refuses a call on a container that is not ready.
-var errContainerNotRunning = errors.New("the container is not running")
+var errContainerNotRunning error = &apitypes.Error{Code: apitypes.Unavailable, Message: "the container is not running"}
 
 const (
 	// shellReadyWait bounds how long a shell waits for a new container.

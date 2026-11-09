@@ -36,7 +36,7 @@ func (b *Billing) Accounts(ctx context.Context, f AccountFilter) (apitypes.Billi
 	if f.Cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(f.Cursor)
 		if err != nil || len(raw) != len(after) {
-			return apitypes.BillingAccountAdminPage{}, &InvalidError{Message: "the cursor is not from a previous page"}
+			return apitypes.BillingAccountAdminPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from a previous page"}
 		}
 		copy(after[:], raw)
 	}

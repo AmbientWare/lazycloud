@@ -20,7 +20,7 @@ const (
 // resolvePod checks and fills the pod section of a resolved spec. A spec
 // without one must name a handler.
 func resolvePod(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
-	invalid := func(reason string) error { return &InvalidSpecError{Function: spec.Name, Reason: reason} }
+	invalid := func(reason string) error { return invalidSpec(spec.Name, reason) }
 	if err := resolveDisks(spec, out); err != nil {
 		return err
 	}
@@ -158,16 +158,16 @@ func resolveDisks(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error 
 	for _, d := range *spec.Disks {
 		switch {
 		case seen[d.Name]:
-			return &InvalidSpecError{Function: spec.Name, Reason: "disk " + d.Name + " is declared twice"}
+			return invalidSpec(spec.Name, "disk "+d.Name+" is declared twice")
 		case paths[d.MountPath]:
-			return &InvalidSpecError{Function: spec.Name, Reason: "two disks mount at " + d.MountPath}
+			return invalidSpec(spec.Name, "two disks mount at "+d.MountPath)
 		case d.SizeBytes%4096 != 0:
-			return &InvalidSpecError{Function: spec.Name, Reason: "disk " + d.Name + " size must be whole 4096-byte blocks"}
+			return invalidSpec(spec.Name, "disk "+d.Name+" size must be whole 4096-byte blocks")
 		}
 		seen[d.Name], paths[d.MountPath] = true, true
 	}
 	if out.Autoscaler != nil && out.Autoscaler.MaxContainers != nil && *out.Autoscaler.MaxContainers > 1 {
-		return &InvalidSpecError{Function: spec.Name, Reason: "a workload with a disk runs one container; set max_containers to 1"}
+		return invalidSpec(spec.Name, "a workload with a disk runs one container; set max_containers to 1")
 	}
 	return nil
 }

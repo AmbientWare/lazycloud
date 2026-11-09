@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -186,12 +187,12 @@ func (c *Compute) verifyProof(ctx context.Context, host HostID, proof IdentityPr
 	req.Host = u.Host
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return callerIdentity{}, &UnavailableError{Message: fmt.Sprintf("AWS STS is unavailable: %v", err)}
+		return callerIdentity{}, &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("AWS STS is unavailable: %v", err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProofResponse))
 	if err != nil {
-		return callerIdentity{}, &UnavailableError{Message: fmt.Sprintf("read AWS STS response: %v", err)}
+		return callerIdentity{}, &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("read AWS STS response: %v", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return callerIdentity{}, &IdentityError{Message: fmt.Sprintf("AWS STS refused the proof (HTTP %d)", resp.StatusCode)}

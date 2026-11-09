@@ -57,8 +57,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(1), 100); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	var out *ConflictError
-	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); !errors.As(err, &out) {
+	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(3), 100); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("skipped generation: %v", err)
 	}
 	if _, err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, []byte("forged"), generation(2), 100); !errors.Is(err, ErrStaleLease) {
@@ -69,14 +68,14 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	}
 
 	second := f.container()
-	if _, err := s.AcquireDisk(ctx, f.host, second, "root"); !errors.As(err, &out) {
+	if _, err := s.AcquireDisk(ctx, f.host, second, "root"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("second holder while the first runs: %v", err)
 	}
 	disk, err := s.GetDisk(ctx, f.ws, "root")
 	if err != nil || disk.Status != apitypes.Attached || disk.Generation != 2 || disk.StoredBytes != 200 {
 		t.Fatalf("attached disk: %+v err=%v", disk, err)
 	}
-	if err := s.DeleteDisk(ctx, f.ws, "root"); !errors.As(err, &out) {
+	if err := s.DeleteDisk(ctx, f.ws, "root"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("delete while attached: %v", err)
 	}
 
@@ -85,7 +84,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if disk, _ := s.GetDisk(ctx, f.ws, "root"); disk.Status != apitypes.Saving {
 		t.Fatalf("stopped holder: %s, want saving", disk.Status)
 	}
-	if _, err := s.AcquireDisk(ctx, f.host, second, "root"); !errors.As(err, &out) {
+	if _, err := s.AcquireDisk(ctx, f.host, second, "root"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("acquire while saving: %v", err)
 	}
 	// A stopped holder publishes its final generation, then releases; after
@@ -169,11 +168,9 @@ func TestDiskCollectionIsFencedByTheLease(t *testing.T) {
 		_, err := storagetest.Client().HeadObject(ctx, &s3.HeadObjectInput{Bucket: &read.Bucket, Key: aws.String(key)})
 		return err == nil
 	}
-
-	var invalid *InvalidError
 	for _, keys := range [][]string{{other}, {indexKey(lease.Disk, 2)}, {prefix + "../volumes/x"}} {
-		if err := s.CollectDisk(ctx, f.host, first, lease.Disk, lease.Token, 2, keys, 1); !errors.As(err, &invalid) {
-			t.Errorf("collecting %v: %v, want InvalidError", keys, err)
+		if err := s.CollectDisk(ctx, f.host, first, lease.Disk, lease.Token, 2, keys, 1); apitypes.CodeOf(err) != apitypes.InvalidRequest {
+			t.Errorf("collecting %v: %v, want Invalid", keys, err)
 		}
 	}
 	if !present(other) {

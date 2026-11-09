@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
@@ -46,12 +47,12 @@ func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 		return ContainerID{}, err
 	}
 	if grant.Start == 0 {
-		return ContainerID{}, &billing.LimitError{Message: "the account holds the most containers or GPUs its plan allows"}
+		return ContainerID{}, &apitypes.Error{Code: apitypes.LimitReached, Message: "the account holds the most containers or GPUs its plan allows"}
 	}
 	// Placement gives the build the model admission granted, which is the
 	// one it named.
 	if gpu != "" && !slices.Contains(grant.GPUModels, billing.GPUType(gpu)) {
-		return ContainerID{}, &billing.PaymentRequiredError{Message: "this account may not use " + gpu}
+		return ContainerID{}, &apitypes.Error{Code: apitypes.PaymentRequired, Message: "this account may not use " + gpu}
 	}
 	return e.createBuildContainer(ctx, tx, workspace, build, cpuMillis, memoryBytes, len(req.GPUModels))
 }

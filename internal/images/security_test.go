@@ -1,7 +1,6 @@
 package images_test
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,8 +43,7 @@ func TestDockerfilesCannotNameUncheckedImages(t *testing.T) {
 		"continued COPY --from image": "FROM scratch\nCOPY \\\n  --from=docker.io/acme/private:1 /a /a\n",
 	}
 	for name, dockerfile := range refused {
-		var invalid *images.InvalidError
-		if _, err := f.images.Resolve(t.Context(), ws, dockerfileDef(dockerfile)); !errors.As(err, &invalid) {
+		if _, err := f.images.Resolve(t.Context(), ws, dockerfileDef(dockerfile)); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Errorf("%s: want the definition refused, got %v", name, err)
 		}
 	}
@@ -66,8 +64,7 @@ func TestDefinitionValuesCannotInjectInstructions(t *testing.T) {
 		"step arg":   {PythonVersion: "3.12", Micromamba: new(true), Steps: &[]apitypes.ImageStep{{Kind: apitypes.Micromamba, Args: &[]string{"numpy" + injected}}}},
 		"base image": {PythonVersion: "3.12", BaseImage: new("docker.io/library/python:3.12" + injected)},
 	} {
-		var invalid *images.InvalidError
-		if _, err := f.images.Resolve(t.Context(), ws, def); !errors.As(err, &invalid) {
+		if _, err := f.images.Resolve(t.Context(), ws, def); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Errorf("%s with a line break: want the definition refused, got %v", name, err)
 		}
 	}
@@ -110,9 +107,8 @@ func TestBaseImagesMustBePublicRegistries(t *testing.T) {
 		"169.254.169.254/latest:meta-data",
 		"localhost:5000/python:3.12",
 	} {
-		var invalid *images.InvalidError
 		def := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: new(base)}
-		if _, err := f.images.Resolve(t.Context(), ws, def); !errors.As(err, &invalid) {
+		if _, err := f.images.Resolve(t.Context(), ws, def); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Errorf("base %s: want the definition refused, got %v", base, err)
 		}
 	}
@@ -142,8 +138,7 @@ func TestRegistryLookupsNeverDialPrivateAddresses(t *testing.T) {
 	})
 	ws := fixture{pool: pool}.workspace(t, "a")
 	_, err := im.Resolve(t.Context(), ws, apitypes.ImageDefinition{PythonVersion: "3.12"})
-	var invalid *images.InvalidError
-	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "private address") {
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), "private address") {
 		t.Fatalf("want the realm on a private address refused, got %v", err)
 	}
 	if realmHits.Load() != 0 {

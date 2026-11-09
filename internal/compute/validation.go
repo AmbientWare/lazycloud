@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -60,7 +61,7 @@ type validated struct {
 func (c *Compute) Validate(ctx context.Context, account identity.UserID) (Connection, error) {
 	row, err := c.queries.ConnectionOfAccount(ctx, uuid.UUID(account))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Connection{}, &NotFoundError{Message: "AWS account connection not found"}
+		return Connection{}, &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 	}
 	if err != nil {
 		return Connection{}, fmt.Errorf("read connection: %w", err)
@@ -82,7 +83,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		q := c.queries.WithTx(tx)
 		row, err := q.LockConnection(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &NotFoundError{Message: "AWS account connection not found"}
+			return &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 		}
 		if err != nil {
 			return fmt.Errorf("lock connection: %w", err)
@@ -94,10 +95,10 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		conn = connectionOf(row, auths)
 		switch conn.Phase {
 		case ConnDraining, ConnRevoking, ConnVerifying, ConnActionRequire, ConnRetiring:
-			return &ConflictError{Message: "AWS account connection is being removed"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection is being removed"}
 		case ConnValidating:
 			if manual {
-				return &ConflictError{Message: "AWS account connection validation is already running"}
+				return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection validation is already running"}
 			}
 		case ConnAwaiting, ConnReady, ConnDegraded, ConnReconnecting:
 		}
@@ -107,7 +108,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		case conn.Active != nil:
 			target = *conn.Active
 		default:
-			return &ConflictError{Message: "AWS account connection has no authorization to validate"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection has no authorization to validate"}
 		}
 		if err := q.StartValidation(ctx, target.ID); err != nil {
 			return fmt.Errorf("start validation: %w", err)
@@ -146,7 +147,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return fmt.Errorf("lock connection: %w", err)
 		}
 		if row.Revision != revision {
-			return &ConflictError{Message: "AWS account connection validation was superseded"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection validation was superseded"}
 		}
 		attempts := int(row.StepAttempts) + 1
 		if failure != nil {
@@ -316,8 +317,7 @@ func (c *Compute) checkStack(ctx context.Context, clients awsClients, scope awsS
 // advanceConnection runs a connection's due background step.
 func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 	conn, err := c.connectionByID(ctx, id)
-	var missing *NotFoundError
-	if errors.As(err, &missing) {
+	if apitypes.CodeOf(err) == apitypes.NotFound {
 		return nil
 	}
 	if err != nil {
@@ -329,8 +329,7 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 			return c.settle(ctx, conn, c.expirePending(conn))
 		}
 		err := c.validateConnection(ctx, id, false)
-		var superseded *ConflictError
-		if errors.As(err, &superseded) {
+		if apitypes.CodeOf(err) == apitypes.Conflict {
 			return nil
 		}
 		return err

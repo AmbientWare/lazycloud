@@ -1,7 +1,6 @@
 package hostsession_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -83,9 +83,7 @@ func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write with the grant: %v", err)
 	}
-
-	var inUse *storage.ConflictError
-	if err := h.store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
+	if err := h.store.DeleteVolume(t.Context(), ws, "data"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("delete of a mounted volume: %v", err)
 	}
 }

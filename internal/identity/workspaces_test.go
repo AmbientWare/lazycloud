@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -30,8 +31,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	// The last workspace stays.
-	var conflict *ConflictError
-	if _, err := f.id.DeleteWorkspace(ctx, admin, "alpha"); !errors.As(err, &conflict) {
+	if _, err := f.id.DeleteWorkspace(ctx, admin, "alpha"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("delete last: %v", err)
 	}
 	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "beta", nil); err != nil {
@@ -45,7 +45,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	if err != nil || renamed.Name != "gamma" || renamed.Role != RoleMember {
 		t.Fatalf("rename %+v %v", renamed, err)
 	}
-	if _, err := f.id.RenameWorkspace(ctx, member, "gamma", "beta"); !errors.As(err, &conflict) {
+	if _, err := f.id.RenameWorkspace(ctx, member, "gamma", "beta"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("rename onto taken name: %v", err)
 	}
 	if _, err := f.id.RenameWorkspace(ctx, member, "beta", "delta"); !errors.Is(err, ErrForbidden) {
@@ -80,7 +80,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	}
 	// It refuses requests, its restricted tokens and invitations are gone,
 	// and the unsent invitation email is withdrawn.
-	if _, err := f.id.AuthorizeWorkspace(ctx, member, "gamma"); !errors.As(err, &conflict) {
+	if _, err := f.id.AuthorizeWorkspace(ctx, member, "gamma"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("authorize deleting: %v", err)
 	}
 	var revoked bool
@@ -140,8 +140,7 @@ func TestConcurrentDeletionKeepsOneWorkspace(t *testing.T) {
 		wg.Go(func() { _, errs[i] = f.id.DeleteWorkspace(ctx, admin, name) })
 	}
 	wg.Wait()
-	var conflict *ConflictError
-	if (errs[0] == nil) == (errs[1] == nil) || (!errors.As(errs[0], &conflict) && !errors.As(errs[1], &conflict)) {
+	if (errs[0] == nil) == (errs[1] == nil) || (apitypes.CodeOf(errs[0]) != apitypes.Conflict && apitypes.CodeOf(errs[1]) != apitypes.Conflict) {
 		t.Fatalf("results %v", errs)
 	}
 }
@@ -171,16 +170,13 @@ func TestMembers(t *testing.T) {
 		t.Fatalf("outsider list: %v", err)
 	}
 
-	var roleErr *RoleError
-	var conflict *ConflictError
-	var invalid *InvalidError
-	if _, err := f.id.SetMemberRole(ctx, plain, "acme", adminMember.User, RoleMember); !errors.As(err, &roleErr) {
+	if _, err := f.id.SetMemberRole(ctx, plain, "acme", adminMember.User, RoleMember); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("member changes role: %v", err)
 	}
-	if _, err := f.id.SetMemberRole(ctx, adminMember, "acme", owner.User, RoleMember); !errors.As(err, &conflict) {
+	if _, err := f.id.SetMemberRole(ctx, adminMember, "acme", owner.User, RoleMember); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("demote owner: %v", err)
 	}
-	if _, err := f.id.SetMemberRole(ctx, adminMember, "acme", plain.User, RoleOwner); !errors.As(err, &invalid) {
+	if _, err := f.id.SetMemberRole(ctx, adminMember, "acme", plain.User, RoleOwner); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("grant owner: %v", err)
 	}
 	promoted, err := f.id.SetMemberRole(ctx, adminMember, "acme", plain.User, RoleAdministrator)
@@ -195,13 +191,13 @@ func TestMembers(t *testing.T) {
 		t.Fatalf("platform admin: %v", err)
 	}
 
-	if err := f.id.RemoveMember(ctx, plain, "acme", adminMember.User); !errors.As(err, &roleErr) {
+	if err := f.id.RemoveMember(ctx, plain, "acme", adminMember.User); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("member removes other: %v", err)
 	}
-	if err := f.id.RemoveMember(ctx, owner, "acme", owner.User); !errors.As(err, &conflict) {
+	if err := f.id.RemoveMember(ctx, owner, "acme", owner.User); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("owner leaves: %v", err)
 	}
-	if err := f.id.RemoveMember(ctx, adminMember, "acme", owner.User); !errors.As(err, &conflict) {
+	if err := f.id.RemoveMember(ctx, adminMember, "acme", owner.User); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("remove owner: %v", err)
 	}
 	// A member leaves without being an administrator.
@@ -232,25 +228,22 @@ func TestInvitations(t *testing.T) {
 	f.exec(`insert into workspace_members (workspace_id, user_id, role)
 		select w.id, u.id, 'member' from workspaces w, users u where w.name = $1 and u.email = 'plain@example.com'`, ws)
 
-	var roleErr *RoleError
-	if _, err := f.id.Invite(ctx, plain, ws, "new@example.com", RoleMember); !errors.As(err, &roleErr) {
+	if _, err := f.id.Invite(ctx, plain, ws, "new@example.com", RoleMember); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("member invites: %v", err)
 	}
-	var invalid *InvalidError
 	for _, bad := range []string{"no-at", "a@b", "two@@example.com", "sp ace@example.com"} {
-		if _, err := f.id.Invite(ctx, owner, ws, bad, RoleMember); !errors.As(err, &invalid) {
+		if _, err := f.id.Invite(ctx, owner, ws, bad, RoleMember); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("bad email %q: %v", bad, err)
 		}
 	}
-	var conflict *ConflictError
-	if _, err := f.id.Invite(ctx, owner, ws, "PLAIN@example.com", RoleMember); !errors.As(err, &conflict) {
+	if _, err := f.id.Invite(ctx, owner, ws, "PLAIN@example.com", RoleMember); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("invite member: %v", err)
 	}
 	inv, err := f.id.Invite(ctx, owner, ws, " Guest@Example.com ", RoleAdministrator)
 	if err != nil || inv.Email != "guest@example.com" || inv.InvitedByName != "Olive Owner" || inv.Delivery != notifications.StateQueued {
 		t.Fatalf("invite %+v %v", inv, err)
 	}
-	if _, err := f.id.Invite(ctx, owner, ws, "guest@example.com", RoleMember); !errors.As(err, &conflict) {
+	if _, err := f.id.Invite(ctx, owner, ws, "guest@example.com", RoleMember); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("second invite: %v", err)
 	}
 
@@ -280,7 +273,7 @@ func TestInvitations(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].Delivery != notifications.StateQueued {
 		t.Fatalf("list %+v %v", listed, err)
 	}
-	if _, err := f.id.ListInvitations(ctx, plain, ws); !errors.As(err, &roleErr) {
+	if _, err := f.id.ListInvitations(ctx, plain, ws); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("member lists invitations: %v", err)
 	}
 	// Another workspace's administrator cannot touch it.
@@ -321,10 +314,10 @@ func TestInvitations(t *testing.T) {
 	if p, err := f.id.PreviewInvitation(ctx, lateToken); err != nil || !p.Expired {
 		t.Fatalf("expired preview %+v %v", p, err)
 	}
-	if _, _, err := f.id.AcceptInvitation(ctx, guest, lateToken); !errors.As(err, &conflict) {
+	if _, _, err := f.id.AcceptInvitation(ctx, guest, lateToken); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("accept expired: %v", err)
 	}
-	if err := f.id.DeclineInvitation(ctx, lateToken); !errors.As(err, &conflict) {
+	if err := f.id.DeclineInvitation(ctx, lateToken); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("decline expired: %v", err)
 	}
 	// Resending brings an expired offer back.

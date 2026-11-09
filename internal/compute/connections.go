@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -328,20 +329,20 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 	if req.ExternalID != "" {
 		// A caller-chosen external ID would let one account aim the platform
 		// at a role another account set up.
-		return Connection{}, &InvalidError{Message: "LazyCloud generates the external ID; make the role require the one it returns"}
+		return Connection{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "LazyCloud generates the external ID; make the role require the one it returns"}
 	}
 	if req.AWSAccountID == c.fleet.AccountID {
 		// The platform's own fleet and its networks run there.
-		return Connection{}, &InvalidError{Message: "LazyCloud's own AWS account cannot be connected"}
+		return Connection{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "LazyCloud's own AWS account cannot be connected"}
 	}
 	if req.RoleARN != "" {
 		m := roleARNPattern.FindStringSubmatch(req.RoleARN)
 		if m == nil || m[2] != req.AWSAccountID {
-			return Connection{}, &InvalidError{Message: "AWS role ARN must belong to account_id"}
+			return Connection{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "AWS role ARN must belong to account_id"}
 		}
 	}
 	if c.fleet.PrincipalARN == "" {
-		return Connection{}, &UnavailableError{Message: "AWS account connections are not configured on this platform"}
+		return Connection{}, &apitypes.Error{Code: apitypes.Unavailable, Message: "AWS account connections are not configured on this platform"}
 	}
 	var id uuid.UUID
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
@@ -358,7 +359,7 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 			}
 			view := connectionOf(existing, auths)
 			if view.removing() {
-				return &ConflictError{Message: "this account's AWS connection is being removed; connect again once `lazycloud cloud status` shows none"}
+				return &apitypes.Error{Code: apitypes.Conflict, Message: "this account's AWS connection is being removed; connect again once `lazycloud cloud status` shows none"}
 			}
 			if view.Active == nil && view.Pending != nil && existing.AwsAccountID == req.AWSAccountID &&
 				(view.Pending.Mode == ModeExistingRole) == (req.RoleARN != "") &&
@@ -366,7 +367,7 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 				id = existing.ID
 				return nil
 			}
-			return &ConflictError{Message: "this account already has an AWS account connection"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "this account already has an AWS account connection"}
 		}
 		if err := billing.AdmitConnectedCloud(ctx, tx, uuid.UUID(account)); err != nil {
 			return err
@@ -429,7 +430,7 @@ func roleFree(ctx context.Context, q *Queries, role string, connection *uuid.UUI
 		return fmt.Errorf("check role: %w", err)
 	}
 	if taken {
-		return &ConflictError{Message: "that AWS role already backs another account's connection"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "that AWS role already backs another account's connection"}
 	}
 	return nil
 }
@@ -467,7 +468,7 @@ func (c *Compute) connectionByID(ctx context.Context, id uuid.UUID) (Connection,
 		q := c.queries.WithTx(tx)
 		row, err := q.LockConnection(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &NotFoundError{Message: "AWS account connection not found"}
+			return &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 		}
 		if err != nil {
 			return fmt.Errorf("read connection: %w", err)
@@ -656,16 +657,16 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 			return nil
 		}
 		if conn.Phase != ConnReady && conn.Phase != ConnDegraded {
-			return &ConflictError{Message: "AWS account connection cannot start authorization replacement"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection cannot start authorization replacement"}
 		}
 		if conn.Active == nil {
-			return &ConflictError{Message: "AWS account connection has no active authorization"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection has no active authorization"}
 		}
 		if (roleARN != "") != (conn.Active.Mode == ModeExistingRole) {
 			if roleARN == "" {
-				return &InvalidError{Message: "existing-role reconnect must revalidate the connected role"}
+				return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "existing-role reconnect must revalidate the connected role"}
 			}
-			return &ConflictError{Message: "AWS reconnect must preserve its authorization mode"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS reconnect must preserve its authorization mode"}
 		}
 		if err := roleFree(ctx, q, roleARN, &row.ID); err != nil {
 			return err
@@ -706,9 +707,9 @@ func (c *Compute) CancelReconnect(ctx context.Context, account identity.UserID) 
 		case conn.Pending == nil && (conn.Phase == ConnReady || conn.Phase == ConnRetiring):
 			return nil
 		case conn.Phase != ConnReconnecting || conn.Pending == nil:
-			return &ConflictError{Message: "AWS account connection has no pending replacement"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS account connection has no pending replacement"}
 		case conn.Active == nil:
-			return &ConflictError{Message: "AWS authorization replacement state is incomplete"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "AWS authorization replacement state is incomplete"}
 		}
 		return retirePending(ctx, tx, q, conn)
 	})
@@ -730,8 +731,7 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		row, auths, err := lockAccountConnection(ctx, q, account)
-		var missing *NotFoundError
-		if errors.As(err, &missing) {
+		if apitypes.CodeOf(err) == apitypes.NotFound {
 			removed = true
 			return nil
 		}
@@ -748,7 +748,7 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 			return fmt.Errorf("read workspaces: %w", err)
 		}
 		if len(workspaces) > 0 {
-			return &ConflictError{Message: "delete the workspaces that live in this AWS account, with their volumes and disks, before disconnecting it: " + strings.Join(workspaces, ", ")}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "delete the workspaces that live in this AWS account, with their volumes and disks, before disconnecting it: " + strings.Join(workspaces, ", ")}
 		}
 		removed, err = beginRemoval(ctx, tx, q, conn)
 		return err
@@ -827,7 +827,7 @@ type Leftover struct {
 func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftover, error) {
 	stuck := func(conn Connection) error {
 		if conn.Phase != ConnActionRequire || conn.Retiring != nil {
-			return &ConflictError{Message: "only a disconnect that needs attention in AWS can be forgotten"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "only a disconnect that needs attention in AWS can be forgotten"}
 		}
 		return nil
 	}
@@ -836,7 +836,7 @@ func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftov
 	case err != nil:
 		return nil, err
 	case conn == nil:
-		return nil, &NotFoundError{Message: "AWS account connection not found"}
+		return nil, &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 	}
 	if err := stuck(*conn); err != nil {
 		return nil, err
@@ -925,7 +925,7 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 func lockAccountConnection(ctx context.Context, q *Queries, account identity.UserID) (CloudConnection, []CloudAuthorization, error) {
 	row, err := q.LockConnectionOfAccount(ctx, uuid.UUID(account))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return CloudConnection{}, nil, &NotFoundError{Message: "AWS account connection not found"}
+		return CloudConnection{}, nil, &apitypes.Error{Code: apitypes.NotFound, Message: "AWS account connection not found"}
 	}
 	if err != nil {
 		return CloudConnection{}, nil, fmt.Errorf("lock connection: %w", err)
@@ -946,7 +946,7 @@ func (c *Compute) PlaceWorkspace(ctx context.Context, tx pgx.Tx, account identit
 	q := c.queries.WithTx(tx)
 	row, err := q.LockWorkspaceConnection(ctx, uuid.UUID(account))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.UUID{}, &ConflictError{Message: "no AWS account is connected; run `lazycloud cloud connect aws` first"}
+		return uuid.UUID{}, &apitypes.Error{Code: apitypes.Conflict, Message: "no AWS account is connected; run `lazycloud cloud connect aws` first"}
 	}
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("lock connection: %w", err)
@@ -956,7 +956,7 @@ func (c *Compute) PlaceWorkspace(ctx context.Context, tx pgx.Tx, account identit
 		return uuid.UUID{}, fmt.Errorf("read authorizations: %w", err)
 	}
 	if conn := connectionOf(row, auths); !conn.HostsWorkloads() {
-		return uuid.UUID{}, &ConflictError{Message: fmt.Sprintf(
+		return uuid.UUID{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf(
 			"the connected AWS account is %s; a workspace can be created there once `lazycloud cloud status` reports ready", conn.Phase)}
 	}
 	return row.ID, nil
@@ -977,13 +977,13 @@ type ConnectedAccount struct {
 func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (ConnectedAccount, error) {
 	row, err := c.queries.ConnectionAccess(ctx, connection)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ConnectedAccount{}, &ConflictError{Message: "the AWS account connection has no active authorization"}
+		return ConnectedAccount{}, &apitypes.Error{Code: apitypes.Conflict, Message: "the AWS account connection has no active authorization"}
 	}
 	if err != nil {
 		return ConnectedAccount{}, fmt.Errorf("read connection access: %w", err)
 	}
 	if AuthorizationPhase(row.Phase) == AuthDegraded && database.Value(row.ErrorCode) == string(ErrAssumeRoleDenied) {
-		return ConnectedAccount{}, &ConflictError{Message: "the connected AWS account refuses LazyCloud its role: " + database.Value(row.ErrorMessage)}
+		return ConnectedAccount{}, &apitypes.Error{Code: apitypes.Conflict, Message: "the connected AWS account refuses LazyCloud its role: " + database.Value(row.ErrorMessage)}
 	}
 	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
 }

@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -28,31 +27,15 @@ import (
 )
 
 // ErrNotFound means the app or function does not exist.
-var ErrNotFound = errors.New("not found")
+var ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 
 // ErrNothingToDeploy rejects a deploy that lists no function and does not
 // prune.
-var ErrNothingToDeploy = errors.New("a deploy needs at least one function unless it prunes")
+var ErrNothingToDeploy error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a deploy needs at least one function unless it prunes"}
 
-// InvalidSpecError rejects a function definition the schema cannot express.
-type InvalidSpecError struct {
-	Function string
-	Reason   string
-}
-
-func (e *InvalidSpecError) Error() string {
-	return fmt.Sprintf("function %s: %s", e.Function, e.Reason)
-}
-
-// SourceMissingError means a function names a source archive the workspace
-// has not registered.
-type SourceMissingError struct {
-	Function string
-	Sha256   string
-}
-
-func (e *SourceMissingError) Error() string {
-	return fmt.Sprintf("function %s: source %s is not uploaded", e.Function, e.Sha256)
+// invalidSpec rejects a function definition the schema cannot express.
+func invalidSpec(function, reason string) error {
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("function %s: %s", function, reason)}
 }
 
 // Control is the control owner.
@@ -78,10 +61,10 @@ func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	out.MaxPendingTasks = orDefault(spec.MaxPendingTasks, 100)
 
 	if r := spec.Resources; r.CpuLimitMillis != nil && *r.CpuLimitMillis < r.CpuMillis {
-		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.cpu_limit_millis is below cpu_millis"}
+		return out, invalidSpec(spec.Name, "resources.cpu_limit_millis is below cpu_millis")
 	}
 	if r := spec.Resources; r.MemoryLimitMib != nil && *r.MemoryLimitMib < r.MemoryMib {
-		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.memory_limit_mib is below memory_mib"}
+		return out, invalidSpec(spec.Name, "resources.memory_limit_mib is below memory_mib")
 	}
 
 	scaler := apitypes.Autoscaler{}
@@ -92,7 +75,7 @@ func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	scaler.MaxContainers = orDefault(scaler.MaxContainers, 1)
 	scaler.TasksPerContainer = orDefault(scaler.TasksPerContainer, 1)
 	if *scaler.MinContainers > *scaler.MaxContainers {
-		return out, &InvalidSpecError{Function: spec.Name, Reason: "autoscaler.min_containers exceeds max_containers"}
+		return out, invalidSpec(spec.Name, "autoscaler.min_containers exceeds max_containers")
 	}
 	out.Autoscaler = &scaler
 
@@ -113,7 +96,7 @@ func Resolve(spec apitypes.WorkloadSpec) (apitypes.WorkloadSpec, error) {
 	out.Environment = &env
 	if spec.Volumes != nil {
 		if err := storage.ValidateVolumes(*spec.Volumes); err != nil {
-			return out, &InvalidSpecError{Function: spec.Name, Reason: err.Error()}
+			return out, invalidSpec(spec.Name, err.Error())
 		}
 	}
 	if err := resolveRuntime(spec, &out); err != nil {
@@ -154,7 +137,7 @@ func resolveFunction(spec apitypes.WorkloadSpec) (resolvedFunction, error) {
 	digest := sha256.Sum256(encoded)
 	source, err := storage.ParseDigest(spec.Source.Sha256)
 	if err != nil {
-		return resolvedFunction{}, &InvalidSpecError{Function: spec.Name, Reason: "source.sha256 is not a lowercase hex digest"}
+		return resolvedFunction{}, invalidSpec(spec.Name, "source.sha256 is not a lowercase hex digest")
 	}
 	return resolvedFunction{spec: resolved, digest: digest[:], source: source}, nil
 }
@@ -188,7 +171,7 @@ func requireSources(ctx context.Context, q *Queries, workspace identity.Workspac
 	}
 	for _, f := range functions {
 		if !have[string(f.source[:])] {
-			return &SourceMissingError{Function: f.spec.Name, Sha256: f.source.String()}
+			return invalidSpec(f.spec.Name, "source "+f.source.String()+" is not uploaded")
 		}
 	}
 	return nil
@@ -211,7 +194,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 	for n, spec := range req.Workloads {
 		key := string(spec.Kind) + ":" + spec.Name
 		if seen[key] {
-			return apitypes.Deployment{}, &InvalidSpecError{Function: spec.Name, Reason: "listed more than once"}
+			return apitypes.Deployment{}, invalidSpec(spec.Name, "listed more than once")
 		}
 		seen[key] = true
 		f, err := resolveFunction(spec)

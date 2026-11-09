@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
@@ -367,9 +368,8 @@ func (p *releasePlan) record(ctx context.Context, tx pgx.Tx, n int, row func(int
 // than fails on: the account cannot pay, or the fleet offers no GPU model
 // the work accepts.
 func refusedToWait(err error) bool {
-	var payment *billing.PaymentRequiredError
-	var gpu *billing.GPUUnavailableError
-	return errors.As(err, &payment) || errors.As(err, &gpu)
+	code := apitypes.CodeOf(err)
+	return code == apitypes.PaymentRequired || code == apitypes.Unsupported
 }
 
 // desiredContainers is clamp(ceil(demand / tasksPerContainer), minimum,

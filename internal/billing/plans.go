@@ -47,7 +47,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 	}
 	target, err := planOfTerms(TermsVersion(req.TermsVersion))
 	if err != nil || target.ID != PlanID(req.Plan) {
-		return apitypes.BillingAccount{}, &InvalidError{Message: "these terms are not the published terms of that plan"}
+		return apitypes.BillingAccount{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "these terms are not the published terms of that plan"}
 	}
 	var change *planChange
 	err = pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
@@ -60,7 +60,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 			return fmt.Errorf("lock account: %w", err)
 		}
 		if account.ComplimentarySince != nil {
-			return &ConflictError{Message: "this account's usage is complimentary; it holds no plan to change"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "this account's usage is complimentary; it holds no plan to change"}
 		}
 		current, err := planOfTerms(TermsVersion(account.TermsVersion))
 		if err != nil {
@@ -71,7 +71,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 		}
 		if current.Terms != target.Terms {
 			if target.MonthlyNanos > current.MonthlyNanos && account.PaymentMethodAttachedAt == nil {
-				return &PaymentRequiredError{Message: "add a payment method before upgrading your subscription"}
+				return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add a payment method before upgrading your subscription"}
 			}
 			if err := planFits(ctx, q, user, target, account.PaymentMethodAttachedAt != nil); err != nil {
 				return err
@@ -79,7 +79,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 		}
 		row, err := q.InsertPlanChange(ctx, InsertPlanChangeParams{UserID: user, FromTerms: account.TermsVersion, ToTerms: string(target.Terms)})
 		if database.IsUniqueViolation(err) {
-			return &ConflictError{Message: "a plan change for this account is already being settled"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "a plan change for this account is already being settled"}
 		}
 		if err != nil {
 			return fmt.Errorf("insert plan change: %w", err)
@@ -130,7 +130,7 @@ func planFits(ctx context.Context, q *Queries, user uuid.UUID, target Plan, hasC
 		}
 	}
 	if len(violations) > 0 {
-		return &ConflictError{Message: "this account cannot move to the requested plan while it has " + strings.Join(violations, ", ")}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "this account cannot move to the requested plan while it has " + strings.Join(violations, ", ")}
 	}
 	return nil
 }
@@ -149,9 +149,9 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 			return fmt.Errorf("record refused plan change: %w", ferr)
 		}
 		if se.Type == stripe.ErrorTypeCard {
-			return &PaymentRequiredError{Message: "your payment method was declined: " + message}
+			return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "your payment method was declined: " + message}
 		}
-		return &ConflictError{Message: "the plan change was refused: " + message}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "the plan change was refused: " + message}
 	}
 	if err != nil {
 		if time.Since(change.createdAt) > planChangeWindow {
@@ -209,7 +209,7 @@ func (b *Billing) applyPlanChange(ctx context.Context, change planChange) (*subs
 			return nil, nil
 		}
 		if ids.StripeCustomerID == nil {
-			return nil, &ConflictError{Message: "the account has no payment method"}
+			return nil, &apitypes.Error{Code: apitypes.Conflict, Message: "the account has no payment method"}
 		}
 		sub, err := s.subscribe(ctx, *ids.StripeCustomerID, change.to, key)
 		return &sub, err
@@ -247,9 +247,7 @@ func (b *Billing) SettlePlanChanges(ctx context.Context) (int, error) {
 	for _, row := range rows {
 		change := planChange{id: row.ID, user: row.UserID, to: TermsVersion(row.ToTerms), attempts: row.Attempts, createdAt: row.CreatedAt}
 		if err := b.settlePlanChange(ctx, change); err != nil {
-			var refused *PaymentRequiredError
-			var conflict *ConflictError
-			if !errors.As(err, &refused) && !errors.As(err, &conflict) {
+			if code := apitypes.CodeOf(err); code != apitypes.PaymentRequired && code != apitypes.Conflict {
 				return 0, err
 			}
 		}

@@ -1,7 +1,6 @@
 package hostsession_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
@@ -162,10 +162,9 @@ func TestNetworkChangesWaitForTheHost(t *testing.T) {
 		}}}); err != nil {
 			t.Fatal(err)
 		}
-		var unavailable *execution.UnavailableError
 		select {
 		case err := <-done:
-			if c.applied != (err == nil) || (!c.applied && !errors.As(err, &unavailable)) {
+			if c.applied != (err == nil) || (!c.applied && apitypes.CodeOf(err) != apitypes.Unavailable) {
 				t.Fatalf("version %d with failure %q: %v", update.GetVersion(), c.failure, err)
 			}
 		case <-time.After(10 * time.Second):

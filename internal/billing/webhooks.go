@@ -12,6 +12,7 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"github.com/stripe/stripe-go/v87/webhook"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -41,7 +42,7 @@ func (b *Billing) ReceiveWebhook(ctx context.Context, payload []byte, signature 
 		return fmt.Errorf("%w: %w", ErrBadSignature, err)
 	}
 	if event.Data == nil {
-		return &InvalidError{Message: "the delivery names no object"}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the delivery names no object"}
 	}
 	object := event.GetObjectValue("id")
 	customer := event.GetObjectValue("customer")

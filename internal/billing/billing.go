@@ -5,60 +5,37 @@
 package billing
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 //go:generate go tool sqlc generate
 
-// PaymentRequiredError refuses work the account must pay for first: no
-// credit left, the monthly usage limit reached, a payment past due, or a
-// capability its plan or a missing card does not include.
-type PaymentRequiredError struct{ Message string }
-
-func (e *PaymentRequiredError) Error() string { return e.Message }
-
-// LimitError refuses something the account already holds the most of its
-// plan allows. The message names the limit and what is held.
-type LimitError struct{ Message string }
-
-func (e *LimitError) Error() string { return e.Message }
-
-// ConflictError is a request the account's current state refuses.
-type ConflictError struct{ Message string }
-
-func (e *ConflictError) Error() string { return e.Message }
-
-// GPUUnavailableError refuses work only the platform fleet can serve that
+// gpuUnavailable refuses work only the platform fleet can serve that
 // accepts only GPU models the fleet does not offer.
-type GPUUnavailableError struct{ Models []GPUType }
-
-func (e *GPUUnavailableError) Error() string {
+func gpuUnavailable(models []GPUType) error {
 	verb, pronoun := "is", "it"
-	if len(e.Models) > 1 {
+	if len(models) > 1 {
 		verb, pronoun = "are", "them"
 	}
-	return fmt.Sprintf("%s %s coming soon to the platform fleet, which offers %s; a joined machine or a connected AWS account can run %s now",
-		joinModels(e.Models), verb, joinModels(enabledGPUs()), pronoun)
+	return &apitypes.Error{Code: apitypes.Unsupported, Message: fmt.Sprintf(
+		"%s %s coming soon to the platform fleet, which offers %s; a joined machine or a connected AWS account can run %s now",
+		joinModels(models), verb, joinModels(enabledGPUs()), pronoun)}
 }
-
-// InvalidError is a request billing rejects.
-type InvalidError struct{ Message string }
-
-func (e *InvalidError) Error() string { return e.Message }
 
 var (
 	// ErrNotFound means the purchase or account does not exist for the
 	// caller.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrPaymentsUnavailable means Stripe is not configured, so nothing
 	// that needs it can run.
-	ErrPaymentsUnavailable = errors.New("payments are not configured on this platform")
+	ErrPaymentsUnavailable error = &apitypes.Error{Code: apitypes.Unavailable, Message: "payments are not configured on this platform"}
 )
 
 // Config is what billing needs beyond the database.

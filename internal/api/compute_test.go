@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -65,9 +64,8 @@ func TestAgentInstallsServePublishedReleaseArchives(t *testing.T) {
 	if err := e.compute.PublishAgentRelease(ctx, release); err != nil {
 		t.Fatalf("republish the same release: %v", err)
 	}
-	var conflict *compute.ConflictError
-	if err := e.compute.PublishAgentRelease(ctx, compute.AgentRelease{Version: "1.0.0", SHA256: map[string]string{"amd64": strings.Repeat("0", 64)}}); !errors.As(err, &conflict) {
-		t.Fatalf("republish 1.0.0 with another digest: %v, want ConflictError", err)
+	if err := e.compute.PublishAgentRelease(ctx, compute.AgentRelease{Version: "1.0.0", SHA256: map[string]string{"amd64": strings.Repeat("0", 64)}}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("republish 1.0.0 with another digest: %v, want Conflict", err)
 	}
 
 	status, script, _ := e.get("/install/agent")

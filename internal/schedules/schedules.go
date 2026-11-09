@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -149,14 +150,14 @@ func (s *Schedules) admit(ctx context.Context, tx pgx.Tx, row LockDueSchedulesRo
 		task = &tasks[0].ID
 		return nil
 	})
-	var tooMany *execution.TooManyPendingError
+	var tooMany *apitypes.Error
 	switch {
 	case err == nil:
 		return task, ""
 	case errors.Is(err, execution.ErrNotAccepting):
 		return nil, "the function is stopped or its app is paused"
-	case errors.As(err, &tooMany):
-		return nil, tooMany.Error()
+	case errors.As(err, &tooMany) && tooMany.Code == apitypes.TooManyPendingTasks:
+		return nil, tooMany.Message
 	case errors.Is(err, execution.ErrNotFound):
 		return nil, "the function has no active release"
 	}

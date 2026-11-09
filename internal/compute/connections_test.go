@@ -24,7 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -290,8 +290,7 @@ func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
 	t.Parallel()
 	o, _, _ := connectionFleet(t)
 	free := identity.UserID(scan[uuid.UUID](t, o.pool, "insert into users (email) values ('free@example.com') returning id"))
-	var unpaid *billing.PaymentRequiredError
-	if _, err := o.compute.Connect(t.Context(), free, compute.ConnectRequest{AWSAccountID: "111111111111"}); !errors.As(err, &unpaid) {
+	if _, err := o.compute.Connect(t.Context(), free, compute.ConnectRequest{AWSAccountID: "111111111111"}); apitypes.CodeOf(err) != apitypes.PaymentRequired {
 		t.Fatalf("a Free account connected AWS: %v", err)
 	}
 	if n := scan[int](t, o.pool, "select count(*)::int from cloud_connections"); n != 0 {
@@ -428,21 +427,18 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	ctx := t.Context()
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
-
-	var invalid *compute.InvalidError
 	for name, req := range map[string]compute.ConnectRequest{
 		"a role in another account":     {AWSAccountID: "111111111111", RoleARN: "arn:aws:iam::222222222222:role/lazycloud"},
 		"the platform's own account":    {AWSAccountID: "111122223333"},
 		"an external ID without a role": {AWSAccountID: "111111111111", ExternalID: strings.Repeat("x", 40)},
 	} {
-		if _, err := o.compute.Connect(ctx, alice, req); !errors.As(err, &invalid) {
-			t.Errorf("%s: %v, want InvalidError", name, err)
+		if _, err := o.compute.Connect(ctx, alice, req); apitypes.CodeOf(err) != apitypes.InvalidRequest {
+			t.Errorf("%s: %v, want Invalid", name, err)
 		}
 	}
-	var unavailable *compute.UnavailableError
 	unconfigured := compute.NewCompute(o.pool, o.execution, compute.Config{})
-	if _, err := unconfigured.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "111111111111"}); !errors.As(err, &unavailable) {
-		t.Errorf("connect without a platform principal: %v, want UnavailableError", err)
+	if _, err := unconfigured.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "111111111111"}); apitypes.CodeOf(err) != apitypes.Unavailable {
+		t.Errorf("connect without a platform principal: %v, want Unavailable", err)
 	}
 
 	conn := connect(t, o, alice, "111111111111")
@@ -453,9 +449,8 @@ func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {
 	if again.ID != conn.ID || again.Pending.ID != conn.Pending.ID {
 		t.Fatalf("repeat connect made %s/%s, want the unfinished setup %s/%s", again.ID, again.Pending.ID, conn.ID, conn.Pending.ID)
 	}
-	var conflict *compute.ConflictError
-	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "333333333333"}); !errors.As(err, &conflict) {
-		t.Fatalf("connect a second AWS account: %v, want ConflictError", err)
+	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "333333333333"}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("connect a second AWS account: %v, want Conflict", err)
 	}
 
 	existing, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{
@@ -685,9 +680,8 @@ func TestDisconnectDrainsInstancesThenRemovesTheStack(t *testing.T) {
 	}
 	ws := newWorkspace(t, o.pool, "prod", alice)
 	run(t, o.pool, "update workspaces set connection_id = $1 where id = $2", conn.ID, ws)
-	var conflict *compute.ConflictError
-	if _, err := o.compute.Disconnect(ctx, alice); !errors.As(err, &conflict) {
-		t.Fatalf("disconnect with a workspace in the account: %v, want ConflictError", err)
+	if _, err := o.compute.Disconnect(ctx, alice); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("disconnect with a workspace in the account: %v, want Conflict", err)
 	}
 	run(t, o.pool, "update workspaces set connection_id = null where id = $1", ws)
 	run(t, o.pool, `insert into capacity_cooldowns (connection_key, region, instance_type, market, until, reason)
@@ -918,9 +912,8 @@ func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 	if _, err := o.compute.Disconnect(ctx, alice); err != nil {
 		t.Fatal(err)
 	}
-	var conflict *compute.ConflictError
-	if _, err := o.compute.Forget(ctx, alice); !errors.As(err, &conflict) {
-		t.Fatalf("forget while draining: %v, want ConflictError", err)
+	if _, err := o.compute.Forget(ctx, alice); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("forget while draining: %v, want Conflict", err)
 	}
 	if err := o.compute.Retire(ctx, discard()); err != nil {
 		t.Fatal(err)
@@ -1152,9 +1145,8 @@ func TestConnectingWhileTheConnectionIsRemovedIsRefused(t *testing.T) {
 	if conn, err := o.compute.Disconnect(ctx, bob); err != nil || conn == nil {
 		t.Fatalf("disconnect: %+v %v, want the removal under way", conn, err)
 	}
-	var conflict *compute.ConflictError
-	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222"}); !errors.As(err, &conflict) {
-		t.Fatalf("connect while removing: %v, want ConflictError", err)
+	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222"}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("connect while removing: %v, want Conflict", err)
 	}
 }
 
@@ -1184,9 +1176,8 @@ func TestAStuckRetirementTakesNoNewWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var conflict *compute.ConflictError
-	if _, err := o.compute.PlaceWorkspace(ctx, tx, alice); !errors.As(err, &conflict) {
-		t.Fatalf("place a workspace: %v, want ConflictError", err)
+	if _, err := o.compute.PlaceWorkspace(ctx, tx, alice); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("place a workspace: %v, want Conflict", err)
 	}
 }
 
@@ -1262,9 +1253,8 @@ func TestAWorkspaceCreatedDuringADisconnectBlocksIt(t *testing.T) {
 	if _, err := identity.NewIdentity(o.pool, identity.Config{}).CreateOwnedWorkspace(ctx, admin, "prod", place); err != nil {
 		t.Fatal(err)
 	}
-	var conflict *compute.ConflictError
-	if err := <-disconnected; !errors.As(err, &conflict) {
-		t.Fatalf("disconnect racing the workspace: %v, want ConflictError", err)
+	if err := <-disconnected; apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("disconnect racing the workspace: %v, want Conflict", err)
 	}
 }
 

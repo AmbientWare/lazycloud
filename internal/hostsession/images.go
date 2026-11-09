@@ -179,9 +179,9 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 		outcome.Uploaded = append(outcome.Uploaded, images.UploadedLayer{Blob: u.GetBlobDigest(), ETags: u.GetPartEtags()})
 	}
 	uploads, err := s.images.CompleteBuild(ctx, hostFrom(ctx), container, outcome)
-	var invalid *images.InvalidError
-	if errors.As(err, &invalid) {
-		return nil, status.Error(codes.InvalidArgument, invalid.Error())
+	var invalid *apitypes.Error
+	if errors.As(err, &invalid) && invalid.Code == apitypes.InvalidRequest {
+		return nil, status.Error(codes.InvalidArgument, invalid.Message)
 	}
 	if err != nil {
 		return nil, s.grpcError(ctx, err)

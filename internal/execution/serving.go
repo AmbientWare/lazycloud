@@ -176,8 +176,8 @@ func clampInt32(n int) int32 {
 // AdmitCold asks billing whether the workspace may start a container of
 // spec for a request that has none, so the edge can refuse the request at
 // once instead of letting it wait for a container planning will not start.
-// It returns billing's GPUUnavailableError, PaymentRequiredError or
-// LimitError.
+// It returns billing's Unsupported, PaymentRequired or LimitReached
+// refusal.
 func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
 	req := billing.DeclaredBy(&spec.Resources, spec.Placement, spec.Autoscaler).Request(workspace)
 	req.Cold = true

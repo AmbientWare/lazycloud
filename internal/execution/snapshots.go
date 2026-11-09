@@ -65,17 +65,17 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 			return fmt.Errorf("lock container: %w", err)
 		}
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
-			return &ConflictError{Reason: "only a running container can be snapshotted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "only a running container can be snapshotted"}
 		}
 		spec := row.Spec
 		if !Checkpointable(apitypes.WorkloadKind(row.Kind), ContainerPurpose(row.Purpose), spec) {
-			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
+			return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
 		}
 		inserted, err := q.InsertSnapshot(ctx, InsertSnapshotParams{
 			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID, Traceparent: telemetry.StoredTraceParent(ctx),
 		})
 		if database.IsUniqueViolation(err) {
-			return &ConflictError{Reason: "a snapshot with that id exists"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "a snapshot with that id exists"}
 		}
 		if err != nil {
 			return fmt.Errorf("insert snapshot: %w", err)
@@ -185,12 +185,12 @@ const unsupportedPrefix = "unsupported: "
 // SnapshotFailure maps a failed snapshot to the error its requester sees.
 func SnapshotFailure(s Snapshot) error {
 	if s.Failure == nil {
-		return &ConflictError{Reason: "the snapshot failed"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "the snapshot failed"}
 	}
 	if reason, ok := strings.CutPrefix(*s.Failure, unsupportedPrefix); ok {
 		return &UnsupportedError{Reason: reason}
 	}
-	return &ConflictError{Reason: "the snapshot failed: " + *s.Failure}
+	return &apitypes.Error{Code: apitypes.Conflict, Message: "the snapshot failed: " + *s.Failure}
 }
 
 // SnapshotCommand asks a host to snapshot a container.
@@ -358,7 +358,7 @@ func (e *Execution) CreateFilesystemImage(ctx context.Context, workspace identit
 			return fmt.Errorf("lock container: %w", err)
 		}
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
-			return &ConflictError{Reason: "only a running container can be saved as an image"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "only a running container can be saved as an image"}
 		}
 		if id, err = q.InsertFilesystemImage(ctx, InsertFilesystemImageParams{WorkspaceID: uuid.UUID(workspace), ContainerID: row.ID}); err != nil {
 			return fmt.Errorf("insert filesystem image: %w", err)

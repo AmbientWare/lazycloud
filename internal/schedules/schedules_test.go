@@ -1,7 +1,6 @@
 package schedules_test
 
 import (
-	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -120,13 +119,12 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 		t.Fatalf("schedule after removing cron: %+v", s)
 	}
 
-	var invalid *control.InvalidSpecError
 	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{{
 		Kind: apitypes.WorkloadKindFunction, Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
 		Image: apitypes.ImageSpec{PythonVersion: apitypes.N312}, Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 		Cron: new("every 60m"),
 	}}})
-	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "unsupported cron interval: every 60m") {
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), "unsupported cron interval: every 60m") {
 		t.Fatalf("invalid cron deploy = %v", err)
 	}
 }

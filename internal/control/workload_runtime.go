@@ -24,7 +24,7 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 	if spec.Cron != nil {
 		cron, err := schedules.ParseCron(*spec.Cron)
 		if err != nil {
-			return &InvalidSpecError{Function: spec.Name, Reason: err.Error()}
+			return invalidSpec(spec.Name, err.Error())
 		}
 		normalized := cron.String()
 		out.Cron = &normalized
@@ -32,7 +32,7 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 	warmFloor := out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0
 	// A pod's keep-warm, -1 included, is resolvePod's.
 	if spec.KeepWarmSeconds != nil && *spec.KeepWarmSeconds < 0 && !warmFloor && spec.Pod == nil {
-		return &InvalidSpecError{Function: spec.Name, Reason: "keep_warm=-1 is only supported for functions with a warm floor (autoscaler.min_containers above zero)"}
+		return invalidSpec(spec.Name, "keep_warm=-1 is only supported for functions with a warm floor (autoscaler.min_containers above zero)")
 	}
 	keepWarm := defaultKeepWarmSeconds
 	switch {
@@ -51,7 +51,7 @@ func resolveRuntime(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) erro
 		if strings.TrimSpace(*spec.CallbackUrl) != "" {
 			target, err := callbacks.TargetURL(*spec.CallbackUrl)
 			if err != nil {
-				return &InvalidSpecError{Function: spec.Name, Reason: "callback_url " + err.Error()}
+				return invalidSpec(spec.Name, "callback_url "+err.Error())
 			}
 			out.CallbackUrl = &target
 		}

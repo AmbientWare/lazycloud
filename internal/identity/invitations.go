@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
@@ -55,7 +56,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 		return Invitation{}, err
 	}
 	if role != RoleAdministrator && role != RoleMember {
-		return Invitation{}, &InvalidError{Message: "an invitation offers administrator or member"}
+		return Invitation{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "an invitation offers administrator or member"}
 	}
 	ws, err := i.AuthorizeWorkspaceRole(ctx, p, workspace, RoleAdministrator)
 	if err != nil {
@@ -65,7 +66,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockActiveWorkspace(ctx, uuid.UUID(ws.ID)); errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: "the workspace is being deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace is being deleted"}
 		} else if err != nil {
 			return fmt.Errorf("lock workspace: %w", err)
 		}
@@ -74,7 +75,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 			return fmt.Errorf("check membership: %w", err)
 		}
 		if member {
-			return &ConflictError{Message: fmt.Sprintf("%s is already a member of this workspace", address)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("%s is already a member of this workspace", address)}
 		}
 		// Billing applies the owner's member limit; an open invitation
 		// holds a seat.
@@ -105,7 +106,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 			TokenHash: digest, MessageID: &messageID, ExpiresAt: expires,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: fmt.Sprintf("an invitation for %s is already open; resend that one instead", address)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("an invitation for %s is already open; resend that one instead", address)}
 		}
 		if err != nil {
 			return fmt.Errorf("insert invitation: %w", err)
@@ -185,7 +186,7 @@ func (i *Identity) changeInvitation(ctx context.Context, p Principal, workspace 
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockActiveWorkspace(ctx, uuid.UUID(ws.ID)); errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: "the workspace is being deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace is being deleted"}
 		} else if err != nil {
 			return fmt.Errorf("lock workspace: %w", err)
 		}
@@ -276,7 +277,7 @@ func (i *Identity) PreviewInvitation(ctx context.Context, token string) (Invitat
 // lock, so it is redeemed once. A member already holding less than the
 // offered role is raised to it.
 func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token string) (Workspace, Member, error) {
-	if err := p.requireAccount("accept invitations"); err != nil {
+	if err := p.RequireAccount("accept invitations"); err != nil {
 		return Workspace{}, Member{}, err
 	}
 	var (
@@ -379,7 +380,7 @@ func redeemable(ctx context.Context, q *Queries, token string) (LockInvitationBy
 		return inv, active, fmt.Errorf("lock invitation: %w", err)
 	}
 	if inv.Expired {
-		return inv, active, &ConflictError{Message: "this invitation has expired; ask for a new one"}
+		return inv, active, &apitypes.Error{Code: apitypes.Conflict, Message: "this invitation has expired; ask for a new one"}
 	}
 	return inv, active, nil
 }
@@ -406,7 +407,7 @@ func normalizeEmail(value string) (string, error) {
 	local, domain, ok := strings.Cut(email, "@")
 	if len(email) > 320 || !ok || strings.Contains(domain, "@") || strings.ContainsAny(email, " \t\r\n") ||
 		local == "" || !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
-		return "", &InvalidError{Message: "invitation email must be a single address such as name@example.com"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "invitation email must be a single address such as name@example.com"}
 	}
 	return email, nil
 }

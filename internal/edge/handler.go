@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 
 	"github.com/google/uuid"
@@ -103,19 +102,17 @@ func (e *Edge) serveTarget(w http.ResponseWriter, r *http.Request, t target, aut
 // fail maps an error to a response.
 func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var failed *releaseFailedError
-	var payment *billing.PaymentRequiredError
-	var limit *billing.LimitError
-	var gpu *billing.GPUUnavailableError
+	var refused *apitypes.Error
 	switch {
 	// Billing's refusals: the fleet runs no GPU model the workload accepts
 	// (400), the account must pay (402), or it is at a plan limit it can act
 	// on (409).
-	case errors.As(err, &gpu):
-		writeError(w, http.StatusBadRequest, gpu.Error())
-	case errors.As(err, &payment):
-		writeError(w, http.StatusPaymentRequired, payment.Error())
-	case errors.As(err, &limit):
-		writeError(w, http.StatusConflict, limit.Error())
+	case errors.As(err, &refused) && refused.Code == apitypes.Unsupported:
+		writeError(w, http.StatusBadRequest, refused.Message)
+	case errors.As(err, &refused) && refused.Code == apitypes.PaymentRequired:
+		writeError(w, http.StatusPaymentRequired, refused.Message)
+	case errors.As(err, &refused) && refused.Code == apitypes.LimitReached:
+		writeError(w, http.StatusConflict, refused.Message)
 	case errors.Is(err, errNoRoute):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, identity.ErrUnauthenticated):

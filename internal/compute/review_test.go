@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 )
 
@@ -23,18 +24,16 @@ func TestConnectionsCannotChooseExternalIDsOrShareRoles(t *testing.T) {
 	o, _, _ := connectionFleet(t)
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
 	role := "arn:aws:iam::222222222222:role/shared"
-	var invalid *compute.InvalidError
 	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{
 		AWSAccountID: "222222222222", RoleARN: role, ExternalID: strings.Repeat("x", 40),
-	}); !errors.As(err, &invalid) {
-		t.Fatalf("connect with a chosen external ID: %v, want InvalidError", err)
+	}); apitypes.CodeOf(err) != apitypes.InvalidRequest {
+		t.Fatalf("connect with a chosen external ID: %v, want Invalid", err)
 	}
 	if _, err := o.compute.Connect(ctx, alice, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role}); err != nil {
 		t.Fatal(err)
 	}
-	var conflict *compute.ConflictError
-	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role}); !errors.As(err, &conflict) {
-		t.Fatalf("connect another account to the same role: %v, want ConflictError", err)
+	if _, err := o.compute.Connect(ctx, bob, compute.ConnectRequest{AWSAccountID: "222222222222", RoleARN: role}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("connect another account to the same role: %v, want Conflict", err)
 	}
 }
 

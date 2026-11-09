@@ -27,7 +27,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -59,24 +58,16 @@ const (
 
 var (
 	// ErrNotFound means the workspace has not resolved the image or build.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrNotReady means the image has not been published yet.
 	ErrNotReady = errors.New("image is not ready")
-	// ErrUnsupported means the definition asks for something the platform
-	// cannot do yet.
-	ErrUnsupported = errors.New("unsupported")
 	// ErrStaleBuild means the build already finished; its late outcome is
 	// discarded.
 	ErrStaleBuild = errors.New("the build already finished")
 )
 
-// InvalidError rejects a definition.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
-
 func invalid(format string, args ...any) error {
-	return &InvalidError{Reason: fmt.Sprintf(format, args...)}
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf(format, args...)}
 }
 
 var manifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -972,9 +963,9 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 		pushed.scope = &started.WorkspaceID
 	}
 	pushed.layers, err = i.layersOf(ctx, pushed.reference, started.Architecture)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return nil, fail(rejected.Reason, false)
+	var rejected *apitypes.Error
+	if errors.As(err, &rejected) && rejected.Code == apitypes.InvalidRequest {
+		return nil, fail(rejected.Message, false)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("check pushed image: %w", err)
@@ -1223,10 +1214,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return nil, fmt.Errorf("read build GPU: %w", err)
 		}
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes, gpu)
-		var unpaid *billing.PaymentRequiredError
-		var limit *billing.LimitError
-		var unoffered *billing.GPUUnavailableError
-		if errors.As(err, &unpaid) || errors.As(err, &limit) || errors.As(err, &unoffered) {
+		if code := apitypes.CodeOf(err); code == apitypes.PaymentRequired || code == apitypes.LimitReached || code == apitypes.Unsupported {
 			return fail(reason+"; "+err.Error(), false)
 		}
 		return nil, err

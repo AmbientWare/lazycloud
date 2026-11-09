@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 var (
@@ -20,28 +22,8 @@ var (
 	// the host is retired.
 	ErrUnknownHost = errors.New("unknown host")
 	// ErrNotFound means the requested compute resource does not exist.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 )
-
-// ConflictError refuses a request that conflicts with current state.
-type ConflictError struct{ Message string }
-
-func (e *ConflictError) Error() string { return e.Message }
-
-// InvalidError refuses a malformed request.
-type InvalidError struct{ Message string }
-
-func (e *InvalidError) Error() string { return e.Message }
-
-// NotFoundError names what was not found.
-type NotFoundError struct{ Message string }
-
-func (e *NotFoundError) Error() string { return e.Message }
-
-// UnavailableError means a dependency the request needs is missing or down.
-type UnavailableError struct{ Message string }
-
-func (e *UnavailableError) Error() string { return e.Message }
 
 // IdentityError refuses a cloud host's identity proof.
 type IdentityError struct{ Message string }

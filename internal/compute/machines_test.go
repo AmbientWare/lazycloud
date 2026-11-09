@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -57,10 +58,8 @@ func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
 	alice, bob := newUser(t, o.pool, "alice@example.com"), newUser(t, o.pool, "bob@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	join := compute.MachineJoin{Account: alice, Name: "gpu-1", Workspaces: []uuid.UUID{dev}}
-
-	var unavailable *compute.UnavailableError
-	if _, err := o.compute.CreateMachineJoin(ctx, join); !errors.As(err, &unavailable) {
-		t.Fatalf("join without a published agent release: %v, want UnavailableError", err)
+	if _, err := o.compute.CreateMachineJoin(ctx, join); apitypes.CodeOf(err) != apitypes.Unavailable {
+		t.Fatalf("join without a published agent release: %v, want Unavailable", err)
 	}
 	publish(t, o.compute)
 
@@ -97,13 +96,11 @@ func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
 	if got, err := o.compute.AuthenticateHost(ctx, token); err != nil || got != host {
 		t.Fatalf("host token: %v %v", got, err)
 	}
-
-	var conflict *compute.ConflictError
-	if _, err := o.compute.CreateMachineJoin(ctx, join); !errors.As(err, &conflict) {
-		t.Fatalf("join of a joined name: %v, want ConflictError", err)
+	if _, err := o.compute.CreateMachineJoin(ctx, join); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("join of a joined name: %v, want Conflict", err)
 	}
-	if _, err := o.compute.CreateMachineJoin(ctx, compute.MachineJoin{Account: bob, Name: "gpu-1", Workspaces: []uuid.UUID{dev}}); !errors.As(err, &conflict) {
-		t.Fatalf("another account's gpu-1 serving dev: %v, want ConflictError", err)
+	if _, err := o.compute.CreateMachineJoin(ctx, compute.MachineJoin{Account: bob, Name: "gpu-1", Workspaces: []uuid.UUID{dev}}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("another account's gpu-1 serving dev: %v, want Conflict", err)
 	}
 }
 
@@ -196,10 +193,8 @@ func TestMachineKeepsWorkspacesWhoseDeploymentsPinIt(t *testing.T) {
 	publish(t, o.compute)
 	joinMachine(t, o, alice, dev, prod)
 	newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-1"}}`)
-
-	var conflict *compute.ConflictError
-	if _, err := o.compute.UpdateMachineWorkspaces(ctx, alice, "gpu-1", []uuid.UUID{prod}); !errors.As(err, &conflict) {
-		t.Fatalf("drop dev while its deployment pins the machine: %v, want ConflictError", err)
+	if _, err := o.compute.UpdateMachineWorkspaces(ctx, alice, "gpu-1", []uuid.UUID{prod}); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("drop dev while its deployment pins the machine: %v, want Conflict", err)
 	}
 	m, err := o.compute.UpdateMachineWorkspaces(ctx, alice, "gpu-1", []uuid.UUID{dev, lab})
 	if err != nil {

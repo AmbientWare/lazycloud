@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // The documented credential names per registry, as users set them.
@@ -42,9 +44,8 @@ func TestRegistryCredentialNames(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := registryAuth(t.Context(), c.host, c.creds, exchange)
-			var invalidErr *InvalidError
 			if c.fails {
-				if !errors.As(err, &invalidErr) {
+				if apitypes.CodeOf(err) != apitypes.InvalidRequest {
 					t.Fatalf("want an invalid definition, got %v %v", got, err)
 				}
 				return

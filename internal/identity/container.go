@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // ContainerPrincipal is the caller of a container API request: code running
@@ -27,7 +29,7 @@ func (p ContainerPrincipal) AuthorizeWorkspace(name string) (Workspace, error) {
 		return Workspace{}, ErrForbidden
 	}
 	if p.Workspace.State == WorkspaceDeleting {
-		return Workspace{}, &ConflictError{Message: fmt.Sprintf("workspace %s is being deleted", name)}
+		return Workspace{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("workspace %s is being deleted", name)}
 	}
 	return p.Workspace, nil
 }

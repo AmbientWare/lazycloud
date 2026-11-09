@@ -109,8 +109,7 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Resolve(c.spec)
-			var invalid *InvalidSpecError
-			if !errors.As(err, &invalid) || !strings.Contains(invalid.Reason, c.reason) {
+			if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), c.reason) {
 				t.Fatalf("resolve = %v, want %q", err, c.reason)
 			}
 		})

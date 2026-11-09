@@ -40,7 +40,7 @@ const (
 
 // ErrVersionNotFound means the workload has no deployed version with that
 // number.
-var ErrVersionNotFound = errors.New("version not found")
+var ErrVersionNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "the deployment has no such version"}
 
 // WorkloadFilter narrows ListWorkloads.
 type WorkloadFilter struct {
@@ -310,7 +310,7 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 	for _, w := range req.Workloads {
 		k := key{string(w.Kind), w.Name}
 		if listed[k] {
-			return apitypes.DeploymentPlan{}, &InvalidSpecError{Function: w.Name, Reason: "listed more than once"}
+			return apitypes.DeploymentPlan{}, invalidSpec(w.Name, "listed more than once")
 		}
 		listed[k] = true
 	}

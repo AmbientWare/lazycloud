@@ -17,12 +17,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 var (
 	// ErrNotFound means the task, container or deployment is not in the
 	// workspace.
-	ErrNotFound = errors.New("not found")
+	ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 	// ErrInvalidRange means a time range is empty, reversed or holds too
 	// many buckets.
 	ErrInvalidRange = errors.New("invalid time range")

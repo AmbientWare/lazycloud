@@ -34,8 +34,8 @@ func (s *server) principal(ctx context.Context) (identity.Principal, error) {
 // workspace, as action needs.
 func (s *server) account(ctx context.Context, action string) (identity.Principal, error) {
 	p, err := s.principal(ctx)
-	if err == nil && p.TokenWorkspace != nil {
-		err = &identity.AccountError{Action: action}
+	if err == nil {
+		err = p.RequireAccount(action)
 	}
 	return p, err
 }

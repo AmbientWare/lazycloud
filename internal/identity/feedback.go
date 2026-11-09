@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -30,7 +31,7 @@ func (k FeedbackKind) check() error {
 	case FeedbackFeature, FeedbackBug, FeedbackSupport:
 		return nil
 	}
-	return &InvalidError{Message: fmt.Sprintf("unknown feedback kind %q", k)}
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("unknown feedback kind %q", k)}
 }
 
 // FeedbackMaxLength bounds a feedback message, in characters.
@@ -42,12 +43,6 @@ const (
 	FeedbackPerHour = 5
 	FeedbackPerDay  = 20
 )
-
-// RateLimitedError means the caller sent as much as a limit allows and may
-// try again later.
-type RateLimitedError struct{ Message string }
-
-func (e *RateLimitedError) Error() string { return e.Message }
 
 // FeedbackID identifies a piece of feedback.
 type FeedbackID uuid.UUID
@@ -71,7 +66,7 @@ type FeedbackPage struct {
 // SubmitFeedback records the caller's feedback for the administrators,
 // within the account's hourly and daily limits.
 func (i *Identity) SubmitFeedback(ctx context.Context, p Principal, kind FeedbackKind, message string) error {
-	if err := p.requireAccount("send feedback"); err != nil {
+	if err := p.RequireAccount("send feedback"); err != nil {
 		return err
 	}
 	if err := kind.check(); err != nil {
@@ -79,7 +74,7 @@ func (i *Identity) SubmitFeedback(ctx context.Context, p Principal, kind Feedbac
 	}
 	message = strings.TrimSpace(message)
 	if message == "" || utf8.RuneCountInString(message) > FeedbackMaxLength {
-		return &InvalidError{Message: fmt.Sprintf("feedback is 1 to %d characters", FeedbackMaxLength)}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("feedback is 1 to %d characters", FeedbackMaxLength)}
 	}
 	user := uuid.UUID(p.User)
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
@@ -93,9 +88,9 @@ func (i *Identity) SubmitFeedback(ctx context.Context, p Principal, kind Feedbac
 		}
 		switch {
 		case recent.LastHour >= FeedbackPerHour:
-			return &RateLimitedError{Message: fmt.Sprintf("you can send %d pieces of feedback an hour; try again later", FeedbackPerHour)}
+			return &apitypes.Error{Code: apitypes.RateLimited, Message: fmt.Sprintf("you can send %d pieces of feedback an hour; try again later", FeedbackPerHour)}
 		case recent.LastDay >= FeedbackPerDay:
-			return &RateLimitedError{Message: fmt.Sprintf("you can send %d pieces of feedback a day; try again tomorrow", FeedbackPerDay)}
+			return &apitypes.Error{Code: apitypes.RateLimited, Message: fmt.Sprintf("you can send %d pieces of feedback a day; try again tomorrow", FeedbackPerDay)}
 		}
 		if err := q.InsertFeedback(ctx, InsertFeedbackParams{UserID: user, Kind: string(kind), Message: message}); err != nil {
 			return fmt.Errorf("insert feedback: %w", err)

@@ -449,8 +449,7 @@ func TestDeployableNeedsAReadyImageForTheRuntime(t *testing.T) {
 	if ref, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.12"); err != nil || ref != repository+"@"+digest {
 		t.Fatal(ref, err)
 	}
-	var invalid *images.InvalidError
-	if _, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.11"); !errors.As(err, &invalid) {
+	if _, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.11"); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("a runtime of another Python version is rejected: %v", err)
 	}
 	built, err := f.images.Resolve(t.Context(), ws, numpy())
@@ -466,24 +465,23 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
-	var invalid *images.InvalidError
 	// No managed base is published for 3.11.
 	missingBase := apitypes.ImageDefinition{PythonVersion: "3.11"}
-	if _, err := f.images.Resolve(t.Context(), ws, missingBase); !errors.As(err, &invalid) {
+	if _, err := f.images.Resolve(t.Context(), ws, missingBase); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("a base that does not exist is rejected: %v", err)
 	}
 	context := apitypes.ImageDefinition{PythonVersion: "3.12", Context: &apitypes.SourceRef{Sha256: strings.Repeat("0", 64)}}
-	if _, err := f.images.Resolve(t.Context(), ws, context); !errors.As(err, &invalid) {
+	if _, err := f.images.Resolve(t.Context(), ws, context); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("a context the workspace did not upload is rejected: %v", err)
 	}
 	for _, model := range []string{"A100", "any"} {
 		gpu := apitypes.ImageDefinition{PythonVersion: "3.12", Gpu: new(model)}
-		if _, err := f.images.Resolve(t.Context(), ws, gpu); !errors.As(err, &invalid) {
+		if _, err := f.images.Resolve(t.Context(), ws, gpu); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 			t.Fatalf("a GPU build names one model, not %q: %v", model, err)
 		}
 	}
 	secret := apitypes.ImageDefinition{PythonVersion: "3.12", Secrets: &[]string{"TOKEN"}}
-	if _, err := f.images.Resolve(t.Context(), ws, secret); !errors.As(err, &invalid) {
+	if _, err := f.images.Resolve(t.Context(), ws, secret); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("a secret the workspace does not have is rejected: %v", err)
 	}
 	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: new("registry.invalid/python:3.12")}
@@ -622,19 +620,16 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 		_, err := f.images.Build(ctx, ws, def, false)
 		return err
 	}
-	var unoffered *billing.GPUUnavailableError
-	if err := build(soon, "true"); !errors.As(err, &unoffered) {
+	if err := build(soon, "true"); apitypes.CodeOf(err) != apitypes.Unsupported {
 		t.Fatalf("a model not offered yet is refused: %v", err)
 	}
-	var unpaid *billing.PaymentRequiredError
-	if err := build(needsCard, "true"); !errors.As(err, &unpaid) {
+	if err := build(needsCard, "true"); apitypes.CodeOf(err) != apitypes.PaymentRequired {
 		t.Fatalf("a model the plan does not allow is refused: %v", err)
 	}
 	if err := build(noCard, "true"); err != nil {
 		t.Fatal(err)
 	}
-	var limit *billing.LimitError
-	if err := build(noCard, "echo second"); !errors.As(err, &limit) {
+	if err := build(noCard, "echo second"); apitypes.CodeOf(err) != apitypes.LimitReached {
 		t.Fatalf("a GPU past the plan's GPUs is refused: %v", err)
 	}
 	var builds int

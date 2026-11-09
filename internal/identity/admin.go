@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -27,7 +28,7 @@ func (r PlatformRole) isAdmin() (bool, error) {
 	case PlatformMember:
 		return false, nil
 	}
-	return false, &InvalidError{Message: fmt.Sprintf("unknown platform role %q", r)}
+	return false, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("unknown platform role %q", r)}
 }
 
 // UserStatus says whether an account may sign in.
@@ -46,7 +47,7 @@ func (s UserStatus) check() error {
 	case UserActive, UserDisabled:
 		return nil
 	}
-	return &InvalidError{Message: fmt.Sprintf("unknown account status %q", s)}
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("unknown account status %q", s)}
 }
 
 // SetUserRole grants or withdraws platform administration.
@@ -104,7 +105,7 @@ func (i *Identity) administer(ctx context.Context, p Principal, target UserID, c
 		return User{}, err
 	}
 	if target == p.User {
-		return User{}, &ConflictError{Message: "you cannot change your own role or status; ask another administrator"}
+		return User{}, &apitypes.Error{Code: apitypes.Conflict, Message: "you cannot change your own role or status; ask another administrator"}
 	}
 	var user User
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
@@ -148,7 +149,7 @@ func requireAccountAdmin(p Principal) error {
 	if !p.IsAdmin {
 		return ErrAdminRequired
 	}
-	return p.requireAccount("manage accounts")
+	return p.RequireAccount("manage accounts")
 }
 
 func userFrom(row UserProfileRow) User {

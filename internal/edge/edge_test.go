@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -335,9 +335,8 @@ select o.id, s.id from o, s`).Scan(&owner, &stranger)
 		t.Fatal("the owner's ready registration does not serve the route")
 	}
 	// The owner cannot remove it while the route holds it.
-	var conflict *DomainConflictError
-	if err := e.RemoveDomain(ctx, identity.UserID(owner), "shop.example.com"); !errors.As(err, &conflict) {
-		t.Fatalf("remove a domain a route holds: %v; want DomainConflictError", err)
+	if err := e.RemoveDomain(ctx, identity.UserID(owner), "shop.example.com"); apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("remove a domain a route holds: %v; want a DomainConflict refusal", err)
 	}
 }
 
@@ -642,9 +641,8 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `update billing_accounts set complimentary_since = null returning user_id`).Scan(&user); err != nil {
 		t.Fatal(err)
 	}
-	var payment *billing.PaymentRequiredError
-	if _, err := e.RegisterDomain(t.Context(), identity.UserID(user), "shop.example.com"); !errors.As(err, &payment) || provider.created != 0 {
-		t.Fatalf("register on the Free plan: %v, %d provider calls; want PaymentRequiredError and none", err, provider.created)
+	if _, err := e.RegisterDomain(t.Context(), identity.UserID(user), "shop.example.com"); apitypes.CodeOf(err) != apitypes.PaymentRequired || provider.created != 0 {
+		t.Fatalf("register on the Free plan: %v, %d provider calls; want a PaymentRequired refusal and none", err, provider.created)
 	}
 }
 

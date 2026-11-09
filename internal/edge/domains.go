@@ -43,30 +43,10 @@ type ProviderHostname struct {
 
 var (
 	// ErrDomainsUnavailable means no provider is configured.
-	ErrDomainsUnavailable = errors.New("custom domains require LAZYCLOUD_CLOUDFLARE_API_TOKEN and LAZYCLOUD_CLOUDFLARE_ZONE_ID")
+	ErrDomainsUnavailable error = &apitypes.Error{Code: apitypes.Unavailable, Message: "custom domains require LAZYCLOUD_CLOUDFLARE_API_TOKEN and LAZYCLOUD_CLOUDFLARE_ZONE_ID"}
 	// ErrDomainNotFound means the caller registered no such hostname.
-	ErrDomainNotFound = errors.New("domain is not registered")
+	ErrDomainNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "domain is not registered"}
 )
-
-// InvalidDomainError rejects a hostname that cannot be registered.
-type InvalidDomainError struct{ Reason string }
-
-func (e *InvalidDomainError) Error() string { return e.Reason }
-
-// DomainConflictError means another account holds the hostname, or a
-// deployment still serves it.
-type DomainConflictError struct{ Reason string }
-
-func (e *DomainConflictError) Error() string { return e.Reason }
-
-// ProviderError is a failure the provider reported. Rejected means it
-// refused the caller's input; otherwise it was unreachable.
-type ProviderError struct {
-	Rejected bool
-	Message  string
-}
-
-func (e *ProviderError) Error() string { return e.Message }
 
 var exactHostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
@@ -77,7 +57,7 @@ const recheckInterval = 5 * time.Minute
 func normalizeHostname(value string) (string, error) {
 	hostname := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
 	if len(hostname) > 253 || !exactHostname.MatchString(hostname) {
-		return "", &InvalidDomainError{Reason: "domain must be an exact hostname such as app.acme.com"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "domain must be an exact hostname such as app.acme.com"}
 	}
 	return hostname, nil
 }
@@ -97,7 +77,7 @@ func (e *Edge) RegisterDomain(ctx context.Context, user identity.UserID, value s
 		return apitypes.Domain{}, err
 	}
 	if base := e.urls.Base(); hostname == base || strings.HasSuffix(hostname, "."+base) {
-		return apitypes.Domain{}, &InvalidDomainError{Reason: base + " is this platform's own domain; every deployment already has a hostname under it"}
+		return apitypes.Domain{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: base + " is this platform's own domain; every deployment already has a hostname under it"}
 	}
 	existing, err := e.queries.DomainByHostname(ctx, DomainByHostnameParams{UserID: uuid.UUID(user), Hostname: hostname})
 	if err == nil {
@@ -134,7 +114,7 @@ func (e *Edge) RegisterDomain(ctx context.Context, user identity.UserID, value s
 		if derr := provider.DeleteHostname(context.WithoutCancel(ctx), state.ID); derr != nil {
 			e.logger.WarnContext(ctx, "delete provider hostname after a conflict", "hostname", hostname, "error", derr)
 		}
-		return apitypes.Domain{}, &DomainConflictError{Reason: hostname + " is registered to another account"}
+		return apitypes.Domain{}, &apitypes.Error{Code: apitypes.Conflict, Message: hostname + " is registered to another account"}
 	}
 	if err != nil {
 		return apitypes.Domain{}, fmt.Errorf("insert domain: %w", err)
@@ -205,7 +185,7 @@ func (e *Edge) RemoveDomain(ctx context.Context, user identity.UserID, hostname 
 		if hidden > 0 {
 			names = append(names, fmt.Sprintf("%d deployment(s) in workspaces you do not own", hidden))
 		}
-		return &DomainConflictError{Reason: fmt.Sprintf("%s still serves %s; remove the domain from those deployments first", row.Hostname, strings.Join(names, ", "))}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("%s still serves %s; remove the domain from those deployments first", row.Hostname, strings.Join(names, ", "))}
 	}
 	if row.ProviderHostnameID != nil {
 		provider, err := e.provider()

@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -263,10 +264,10 @@ func (i *Images) checkConversions(ctx context.Context, pushed publication, repor
 			return nil, fmt.Sprintf("layer %s was uploaded in %d parts, not %d", u.BlobDigest, len(parts), n), nil
 		}
 		err := i.storage.CompleteLayerUpload(ctx, u.ID, *u.UploadID, parts)
-		var refused *storage.InvalidError
+		var refused *apitypes.Error
 		switch {
-		case errors.As(err, &refused):
-			return nil, fmt.Sprintf("layer %s: %s", u.BlobDigest, refused.Reason), nil
+		case errors.As(err, &refused) && refused.Code == apitypes.InvalidRequest:
+			return nil, fmt.Sprintf("layer %s: %s", u.BlobDigest, refused.Message), nil
 		case err != nil && !errors.Is(err, storage.ErrNotFound):
 			return nil, "", err
 		}

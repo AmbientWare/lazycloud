@@ -123,36 +123,3 @@ func (s *server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject
 	}
 	return RemoveDomain204Response{}, nil
 }
-
-// endpointError maps the edge's errors; ok is false for errors it does not
-// know.
-func endpointError(w http.ResponseWriter, err error) bool {
-	var (
-		invalid  *edge.InvalidDomainError
-		conflict *edge.DomainConflictError
-		provider *edge.ProviderError
-	)
-	switch {
-	case errors.Is(err, edge.ErrWorkloadNotFound), errors.Is(err, edge.ErrDomainNotFound), errors.Is(err, edge.ErrRequestNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, err.Error())
-	case errors.As(err, &invalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
-	case errors.As(err, &conflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
-	case errors.Is(err, edge.ErrDomainsUnavailable):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
-	case errors.As(err, &provider) && provider.Rejected:
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, provider.Error())
-	case errors.As(err, &provider):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, provider.Error())
-	case errors.Is(err, errPreviewNotRunning):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
-	case errors.Is(err, edge.ErrSyncRefused):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.Is(err, edge.ErrInvalidArguments):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	default:
-		return false
-	}
-	return true
-}

@@ -127,7 +127,7 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body any, resu
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return &ProviderError{Message: "Cloudflare request failed: " + err.Error()}
+		return &apitypes.Error{Code: apitypes.Unavailable, Message: "Cloudflare request failed: " + err.Error()}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
@@ -135,11 +135,11 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body any, resu
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return &ProviderError{Message: "Cloudflare response unreadable: " + err.Error()}
+		return &apitypes.Error{Code: apitypes.Unavailable, Message: "Cloudflare response unreadable: " + err.Error()}
 	}
 	var envelope cfEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return &ProviderError{Message: fmt.Sprintf("Cloudflare returned an unreadable response (%d)", resp.StatusCode)}
+		return &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("Cloudflare returned an unreadable response (%d)", resp.StatusCode)}
 	}
 	if !envelope.Success {
 		parts := make([]string, 0, len(envelope.Errors))
@@ -152,20 +152,24 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body any, resu
 		}
 		// A rejected hostname is the caller's input; anything else is the
 		// edge's problem and worth retrying.
-		return &ProviderError{Rejected: resp.StatusCode >= 400 && resp.StatusCode < 500, Message: message}
+		code := apitypes.Unavailable
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			code = apitypes.InvalidRequest
+		}
+		return &apitypes.Error{Code: code, Message: message}
 	}
 	if result == nil {
 		return nil
 	}
 	if err := json.Unmarshal(envelope.Result, result); err != nil {
-		return &ProviderError{Message: "Cloudflare reported success without a custom hostname"}
+		return &apitypes.Error{Code: apitypes.Unavailable, Message: "Cloudflare reported success without a custom hostname"}
 	}
 	return nil
 }
 
 func (h cfHostname) state() (ProviderHostname, error) {
 	if h.ID == "" || h.Status == "" || h.SSL.Status == "" {
-		return ProviderHostname{}, &ProviderError{Message: "Cloudflare reported success without a custom hostname"}
+		return ProviderHostname{}, &apitypes.Error{Code: apitypes.Unavailable, Message: "Cloudflare reported success without a custom hostname"}
 	}
 	out := ProviderHostname{ID: h.ID}
 	switch {

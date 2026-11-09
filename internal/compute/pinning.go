@@ -49,7 +49,7 @@ func CheckMachineRuns(ctx context.Context, db DBTX, workspace uuid.UUID, machine
 	fresh := row.LastSeenAt != nil && time.Since(*row.LastSeenAt) < LivenessTimeout
 	if Phase(row.Phase) != PhaseReady || HostState(row.State) != HostOnline || !fresh ||
 		CapacityState(row.CapacityState) != CapacityAvailable {
-		return &ConflictError{Message: fmt.Sprintf(
+		return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf(
 			"machine %q is offline or not taking work (%s); runs pinned to it fail until it is ready", machine, row.Phase)}
 	}
 	return nil
@@ -60,7 +60,7 @@ func notServing(ctx context.Context, db DBTX, workspace uuid.UUID, machine strin
 	if err != nil {
 		return fmt.Errorf("read workspace name: %w", err)
 	}
-	return &InvalidError{Message: fmt.Sprintf(
+	return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf(
 		"machine %q is not joined to this account or does not serve workspace %q", machine, name)}
 }
 

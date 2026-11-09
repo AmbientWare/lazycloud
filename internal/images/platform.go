@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -233,8 +234,7 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 		return nil
 	}
 	var unconvertible *ConversionError
-	var rejected *InvalidError
-	transient := !errors.As(err, &unconvertible) && !errors.As(err, &rejected) && !errors.Is(err, ErrServerDisk)
+	transient := !errors.As(err, &unconvertible) && apitypes.CodeOf(err) != apitypes.InvalidRequest && !errors.Is(err, ErrServerDisk)
 	record := context.WithoutCancel(ctx)
 	failed := pgx.BeginFunc(record, i.pool, func(tx pgx.Tx) error {
 		if err := i.queries.WithTx(tx).FailPlatformImage(record, FailPlatformImageParams{
@@ -300,9 +300,9 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 	}
 	// The copy has the same manifest, so these are its layers too.
 	layers, err := imageLayers(c.reference, img)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return &ConversionError{Reason: rejected.Reason}
+	var rejected *apitypes.Error
+	if errors.As(err, &rejected) && rejected.Code == apitypes.InvalidRequest {
+		return &ConversionError{Reason: rejected.Message}
 	}
 	if err != nil {
 		return err

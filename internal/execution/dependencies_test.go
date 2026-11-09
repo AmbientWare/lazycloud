@@ -2,12 +2,13 @@ package execution
 
 import (
 	"encoding/json"
-	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -159,8 +160,7 @@ func TestSubmitRejectsUpstreamOutsideTheWorkspace(t *testing.T) {
 	_, err := e.Submit(t.Context(), SubmitRequest{
 		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: []TaskInput{dependentInput(missing)},
 	})
-	var unknown *UnknownTaskError
-	if !errors.As(err, &unknown) || unknown.Task != missing {
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest || !strings.Contains(err.Error(), missing.String()) {
 		t.Fatalf("submit error %v, want unknown upstream %s", err, missing)
 	}
 	var tasks int

@@ -415,8 +415,7 @@ func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
 	e := NewExecution(pool)
 	f := newRelease(t, pool, `{}`)
 	container := readyContainer(t, pool, f, newHost(t, pool), time.Minute)
-	var invalid *InvalidError
-	if _, err := e.CreateSnapshot(t.Context(), identity.WorkspaceID(f.workspace), ContainerID(container), nil); !errors.As(err, &invalid) {
+	if _, err := e.CreateSnapshot(t.Context(), identity.WorkspaceID(f.workspace), ContainerID(container), nil); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("snapshot of a plain function: %v", err)
 	}
 }

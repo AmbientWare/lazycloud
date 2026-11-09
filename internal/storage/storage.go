@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -32,7 +33,7 @@ const (
 )
 
 // ErrInvalidDigest means a digest is not 64 lowercase hex characters.
-var ErrInvalidDigest = errors.New("invalid sha256 digest")
+var ErrInvalidDigest error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "invalid sha256 digest"}
 
 // Digest is the SHA-256 of an object's bytes.
 type Digest [32]byte

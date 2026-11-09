@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -78,7 +79,7 @@ func (c ChangesConfig) validate() error {
 
 var (
 	// ErrTooManySubscribers means the server holds MaxSubscribers streams.
-	ErrTooManySubscribers = errors.New("too many open change streams on this server")
+	ErrTooManySubscribers error = &apitypes.Error{Code: apitypes.Unavailable, Message: "too many open change streams on this server"}
 	// ErrTooManyStreams means the caller holds MaxPerPrincipal streams.
 	ErrTooManyStreams = errors.New("too many open change streams for this caller")
 )
