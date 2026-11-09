@@ -14,7 +14,7 @@ import (
 
 const abandonConnectionHosts = `-- name: AbandonConnectionHosts :exec
 update hosts
-set phase = 'failed', state = 'retired', failure = 'unknown', launch_lease_until = null,
+set phase = 'failed', state = 'retired', token_hash = null, failure = 'unknown', launch_lease_until = null,
     phase_message = 'Left in the AWS account when its connection was forgotten', phase_at = now(), updated_at = now()
 where connection_id = $1 and phase not in ('deleted', 'failed')
 `

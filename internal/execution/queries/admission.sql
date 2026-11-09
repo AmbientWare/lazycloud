@@ -3,8 +3,7 @@
 -- Without a release id the task runs on the active release.
 select w.id, w.name, w.desired_state, a.name as app_name, a.state as app_state,
        r.id as release_id, r.version, r.spec,
-       coalesce(p.stopped_at is null and p.lease_expires_at > now()
-                and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live
+       coalesce(preview_live(p), false)::bool as preview_live
 from workloads w
 join apps a on a.id = w.app_id
 join releases r on r.id = coalesce(sqlc.narg(release_id)::uuid, w.active_release_id) and r.workload_id = w.id

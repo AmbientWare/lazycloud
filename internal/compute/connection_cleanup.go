@@ -129,7 +129,7 @@ func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error 
 				cmp.Or(o.action, &CustomerStep{URL: stacksURL(connectionRegion), Label: "Review LazyCloud's resources in AWS"}))
 		}
 		delay := min(time.Duration(10<<min(attempts, 5))*time.Second, 5*time.Minute)
-		return setPhase(ctx, q, conn.ID, conn.Phase, ptr(time.Now().Add(delay)), attempts+1, nil)
+		return setPhase(ctx, q, conn.ID, conn.Phase, new(time.Now().Add(delay)), attempts+1, nil)
 	})
 	if err == nil && o.err != nil && refused == nil {
 		err = fmt.Errorf("connection step: %w", o.err)
@@ -154,7 +154,7 @@ func (c *Compute) expirePending(conn Connection) outcome {
 // retirement deletes its stack, if the customer created one, while the
 // active authorization keeps serving.
 func retirePending(ctx context.Context, tx pgx.Tx, q *Queries, conn Connection) error {
-	if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetiring), Slot: ptr(string(slotRetiring))}); err != nil {
+	if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Pending.ID, Phase: string(AuthRetiring), Slot: new(string(slotRetiring))}); err != nil {
 		return fmt.Errorf("retire pending authorization: %w", err)
 	}
 	if err := setPhase(ctx, q, conn.ID, ConnRetiring, now(), 0, nil); err != nil {
@@ -263,7 +263,7 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	case err != nil || !gone && conn.Phase == ConnVerifying:
 		return outcome{err: err, action: last.action()}
 	case !gone:
-		return moveTo(conn, ConnVerifying, ptr(time.Now().Add(10*time.Second)))
+		return moveTo(conn, ConnVerifying, new(time.Now().Add(10*time.Second)))
 	}
 	return c.finishRevoke(ctx, conn)
 }

@@ -7,7 +7,6 @@ package execution
 
 import (
 	"context"
-	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
@@ -41,26 +40,80 @@ func (q *Queries) CancelQueuedTasks(ctx context.Context, ids []uuid.UUID) ([]uui
 	return items, nil
 }
 
+const cancelRunningTasksOfRelease = `-- name: CancelRunningTasksOfRelease :many
+update tasks t
+set status = 'cancelled', finished_at = now()
+where t.id in (
+    select r.id from tasks r
+    where r.release_id = $1 and r.status = 'running'
+    order by r.id
+    limit $2
+    for update
+)
+returning t.id, t.current_attempt_id,
+          (select c.host_id from attempts a join containers c on c.id = a.container_id where a.id = t.current_attempt_id) as host_id
+`
+
+type CancelRunningTasksOfReleaseParams struct {
+	ReleaseID uuid.UUID
+	BatchSize int32
+}
+
+type CancelRunningTasksOfReleaseRow struct {
+	ID               uuid.UUID
+	CurrentAttemptID *uuid.UUID
+	HostID           *uuid.UUID
+}
+
+// Up to batch_size running tasks of the release, locked in id order and
+// cancelled, with their current attempts and the hosts that run them.
+func (q *Queries) CancelRunningTasksOfRelease(ctx context.Context, arg CancelRunningTasksOfReleaseParams) ([]CancelRunningTasksOfReleaseRow, error) {
+	rows, err := q.db.Query(ctx, cancelRunningTasksOfRelease, arg.ReleaseID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CancelRunningTasksOfReleaseRow
+	for rows.Next() {
+		var i CancelRunningTasksOfReleaseRow
+		if err := rows.Scan(&i.ID, &i.CurrentAttemptID, &i.HostID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createPendingContainers = `-- name: CreatePendingContainers :many
-insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
-select $1, r.id, r.workload_id, 'pending', $2, $3, $4, $5, $6, $7::text,
-       ($8::uuid[])[n]
-from releases r, generate_series(1, $9::int) n
-where r.id = $10
+insert into containers (
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    keep_warm_seconds, block_network, allow_list, traceparent, replaces
+)
+select $1, r.id, r.workload_id, 'pending', $2, $3, $4, $5, $6,
+       $7, $8, $9::text[], $10::text,
+       ($11::uuid[])[n]
+from releases r, generate_series(1, $12::int) n
+where r.id = $13
 returning id
 `
 
 type CreatePendingContainersParams struct {
-	WorkspaceID uuid.UUID
-	Slots       int32
-	CpuMillis   cpu.Millis
-	MemoryBytes int64
-	GpuCount    int32
-	RateClass   string
-	Traceparent *string
-	Replaces    []uuid.UUID
-	Count       int32
-	ReleaseID   uuid.UUID
+	WorkspaceID     uuid.UUID
+	Slots           int32
+	CpuMillis       cpu.Millis
+	MemoryBytes     int64
+	GpuCount        int32
+	RateClass       string
+	KeepWarmSeconds *int32
+	BlockNetwork    bool
+	AllowList       []string
+	Traceparent     *string
+	Replaces        []uuid.UUID
+	Count           int32
+	ReleaseID       uuid.UUID
 }
 
 // Placement records the GPU model and whose machine a container got. The
@@ -73,6 +126,9 @@ func (q *Queries) CreatePendingContainers(ctx context.Context, arg CreatePending
 		arg.MemoryBytes,
 		arg.GpuCount,
 		arg.RateClass,
+		arg.KeepWarmSeconds,
+		arg.BlockNetwork,
+		arg.AllowList,
 		arg.Traceparent,
 		arg.Replaces,
 		arg.Count,
@@ -349,7 +405,7 @@ with recursive queued (release_id) as (
       and a.state = 'active'
       and ws.state = 'active'
       and w.active_release_id > $1
-      and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
+      and (r.spec -> 'autoscaler' ->> 'min_containers')::int > 0
 ),
 batch as (
     -- HTTP workloads and previews follow traffic instead; ServingReleases
@@ -362,8 +418,7 @@ batch as (
     order by c.release_id
     limit $2
 )
-select r.id as release_id,
-       a.workspace_id,
+select a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
         and ws.state = 'active')::bool as active,
        -- A deleted app or workload and a deleting workspace wind down; a
@@ -373,25 +428,12 @@ select r.id as release_id,
         or (r.version is not null and (a.state <> 'active' or w.desired_state = 'stopped')))::bool as stopping,
        -- Deletion also cancels running tasks.
        (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
+       shape.id, shape.cpu_millis, shape.memory_bytes, shape.mounters, shape.gpu_count, shape.gpu_models, shape.preemptible, shape.pinned, shape.machine, shape.start_failures, shape.last_stopped_at,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
        coalesce((r.spec ->> 'concurrency')::int, 1)::int as slots,
        coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
-       (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       release_mounters(r.spec) as mounters,
-       -- What billing prices and admits: the cards each container holds (a
-       -- GPU list without a count holds one), and whether placement is
-       -- preemptible and pinned to a region, zone or machine.
-       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
-                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
-           as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
-        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
-       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
        q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,
@@ -399,19 +441,13 @@ select r.id as release_id,
        c.ready::int as ready,
        c.draining::int as draining,
        coalesce(c.leaving, false)::bool as leaving,
-       (r.load_error is not null)::bool as load_failed,
-       r.start_failures,
-       last_stop.stopped_at as last_stopped_at
+       (r.load_error is not null)::bool as load_failed
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
-left join lateral (
-    select lc.stopped_at from containers lc
-    where lc.release_id = r.id and lc.purpose = 'serve'
-    order by lc.id desc limit 1
-) last_stop on r.start_failures > 0
+join release_shapes shape on shape.id = r.id
 cross join lateral (
     select count(*) as available from (
         select 1 from tasks t
@@ -447,24 +483,16 @@ type PlanningReleasesParams struct {
 }
 
 type PlanningReleasesRow struct {
-	ReleaseID         uuid.UUID
 	WorkspaceID       uuid.UUID
 	Active            bool
 	Stopping          bool
 	Retiring          bool
+	ReleaseShape      ReleaseShape
 	MinContainers     int32
 	MaxContainers     int32
 	TasksPerContainer int32
 	Slots             int32
 	KeepWarmSeconds   int32
-	CpuMillis         int64
-	MemoryBytes       int64
-	Mounters          int32
-	GpuCount          int32
-	GpuModels         []string
-	Preemptible       bool
-	Pinned            bool
-	Machine           bool
 	QueuedAvailable   int32
 	Running           int32
 	Pending           int32
@@ -473,8 +501,6 @@ type PlanningReleasesRow struct {
 	Draining          int32
 	Leaving           bool
 	LoadFailed        bool
-	StartFailures     int32
-	LastStoppedAt     *time.Time
 }
 
 // Releases after @after_id that need a planning decision: queued or running
@@ -482,7 +508,6 @@ type PlanningReleasesRow struct {
 // reads a partial index of live rows, so retained history costs nothing. The
 // queued releases are found by skipping through tasks_queued one release at
 // a time, so a deep backlog costs one probe per release, not per task.
-// The newest serve container's stop paces the next start after failed ones.
 // Demand past max_containers * tasks_per_container changes no decision, so
 // the count stops there and a deep backlog reads a bounded prefix.
 // A task running on a container that drains as it leaves its host
@@ -497,24 +522,26 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 	for rows.Next() {
 		var i PlanningReleasesRow
 		if err := rows.Scan(
-			&i.ReleaseID,
 			&i.WorkspaceID,
 			&i.Active,
 			&i.Stopping,
 			&i.Retiring,
+			&i.ReleaseShape.ID,
+			&i.ReleaseShape.CpuMillis,
+			&i.ReleaseShape.MemoryBytes,
+			&i.ReleaseShape.Mounters,
+			&i.ReleaseShape.GpuCount,
+			&i.ReleaseShape.GpuModels,
+			&i.ReleaseShape.Preemptible,
+			&i.ReleaseShape.Pinned,
+			&i.ReleaseShape.Machine,
+			&i.ReleaseShape.StartFailures,
+			&i.ReleaseShape.LastStoppedAt,
 			&i.MinContainers,
 			&i.MaxContainers,
 			&i.TasksPerContainer,
 			&i.Slots,
 			&i.KeepWarmSeconds,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.Mounters,
-			&i.GpuCount,
-			&i.GpuModels,
-			&i.Preemptible,
-			&i.Pinned,
-			&i.Machine,
 			&i.QueuedAvailable,
 			&i.Running,
 			&i.Pending,
@@ -523,44 +550,10 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.Draining,
 			&i.Leaving,
 			&i.LoadFailed,
-			&i.StartFailures,
-			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const runningTasksOfRelease = `-- name: RunningTasksOfRelease :many
-select id from tasks
-where release_id = $1 and status = 'running'
-order by id
-limit $2
-`
-
-type RunningTasksOfReleaseParams struct {
-	ReleaseID uuid.UUID
-	BatchSize int32
-}
-
-func (q *Queries) RunningTasksOfRelease(ctx context.Context, arg RunningTasksOfReleaseParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, runningTasksOfRelease, arg.ReleaseID, arg.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

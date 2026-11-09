@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -91,10 +90,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		return out, fmt.Errorf("list starting containers: %w", err)
 	}
 	for _, row := range starting {
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return out, fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		var source storage.Digest
 		copy(source[:], row.SourceSha256)
 		out.Start = append(out.Start, StartCommand{

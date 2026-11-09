@@ -12,7 +12,6 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -85,19 +84,18 @@ type EndpointContainer struct {
 // EndpointContainers lists the ready containers of every release of
 // workload, newest version first.
 func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) ([]EndpointContainer, error) {
-	rows, err := e.queries.EndpointContainers(ctx, workload)
+	rows, err := e.queries.ReadyContainers(ctx, workload)
 	if err != nil {
 		return nil, fmt.Errorf("list endpoint containers: %w", err)
 	}
 	out := make([]EndpointContainer, 0, len(rows))
 	for _, row := range rows {
-		if row.HostID == nil || row.Version == nil {
-			continue
+		if row.Version != nil {
+			out = append(out, EndpointContainer{
+				Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ID), Host: *row.HostID,
+				Traceparent: deref(row.Traceparent),
+			})
 		}
-		out = append(out, EndpointContainer{
-			Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID,
-			Traceparent: deref(row.Traceparent),
-		})
 	}
 	return out, nil
 }
@@ -116,81 +114,18 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 //   - A release whose handler failed to load or that reached the start
 //     failure limit gets none until it is replaced or RetryStarts retries it.
 func (e *Execution) PlanServing(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
-	var result PlanResult
-	after := uuid.Nil
-	for {
-		var plans []releasePlan
-		var releases int
-		var last uuid.UUID
-		skipped := false
-		err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-			plans, releases, skipped = nil, 0, false
-			q := e.queries.WithTx(tx)
-			locked, err := q.TryPlanningLock(ctx)
-			if err != nil {
-				return fmt.Errorf("try planning lock: %w", err)
-			}
-			if !locked {
-				skipped = true
-				return nil
-			}
-			rows, err := q.ServingReleases(ctx, ServingReleasesParams{AfterID: after, BatchSize: planningBatch, StartFailureLimit: startFailureLimit})
-			if err != nil {
-				return fmt.Errorf("list serving releases: %w", err)
-			}
-			releases = len(rows)
-			for _, row := range rows {
-				last = row.ReleaseID
-				plan, err := e.planServingIsolated(ctx, tx, row)
-				if err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					logger.ErrorContext(ctx, "plan serving release", "release_id", row.ReleaseID, "error", err)
-					continue
-				}
-				plans = append(plans, plan)
-			}
-			return q.DeleteExpiredEndpointLoads(ctx)
-		})
-		if err != nil {
-			return result, fmt.Errorf("serving planning batch: %w", err)
-		}
-		if skipped {
-			result.Skipped = true
-			return result, nil
-		}
-		for _, plan := range plans {
-			result.add(plan)
-			logPlan(ctx, logger, plan)
-		}
-		if releases < planningBatch {
-			return result, nil
-		}
-		after = last
-	}
-}
-
-func (e *Execution) planServingIsolated(ctx context.Context, tx pgx.Tx, row ServingReleasesRow) (releasePlan, error) {
-	savepoint, err := tx.Begin(ctx)
-	if err != nil {
-		return releasePlan{}, fmt.Errorf("begin savepoint: %w", err)
-	}
-	plan := releasePlan{release: PlanningReleasesRow{ReleaseID: row.ReleaseID}}
-	if err := e.planServing(ctx, savepoint, row, &plan); err != nil {
-		return releasePlan{}, errors.Join(err, savepoint.Rollback(ctx))
-	}
-	if err := savepoint.Commit(ctx); err != nil {
-		return releasePlan{}, fmt.Errorf("release savepoint: %w", err)
-	}
-	return plan, nil
+	return planReleases(ctx, e, logger,
+		func(ctx context.Context, q *Queries, after uuid.UUID) ([]ServingReleasesRow, error) {
+			return q.ServingReleases(ctx, ServingReleasesParams{AfterID: after, BatchSize: planningBatch, StartFailureLimit: startFailureLimit})
+		},
+		func(r ServingReleasesRow) ReleaseShape { return r.ReleaseShape }, e.planServing)
 }
 
 func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingReleasesRow, plan *releasePlan) error {
-	if row.CpuMillis <= 0 || row.MemoryBytes <= 0 {
+	shape := row.ReleaseShape
+	if shape.CpuMillis <= 0 || shape.MemoryBytes <= 0 {
 		return errors.New("release spec has no resources")
 	}
-	q := e.queries.WithTx(tx)
 	leave, err := e.leaving(ctx, tx, plan, row.Leaving)
 	if err != nil {
 		return err
@@ -203,44 +138,10 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 	}
 	pairs, grow := leave.starts(active, desired, room)
 	if pairs+grow > 0 {
-		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
-			return nil
-		}
-		return e.start(ctx, tx, plan, leave.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0,
-			billing.Request{
-				Workspace: row.WorkspaceID, GPUs: int(row.GpuCount),
-				GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
-			},
-			CreatePendingContainersParams{
-				WorkspaceID: row.WorkspaceID, ReleaseID: row.ReleaseID, Slots: row.Slots,
-				CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters),
-				GpuCount: row.GpuCount, RateClass: string(billing.RateClassFor(row.Pinned, row.Preemptible)),
-			})
+		return e.start(ctx, tx, plan, shape, shape.create(row.WorkspaceID, row.Slots),
+			leave.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0)
 	}
-	if active <= desired {
-		return nil
-	}
-	excess := active - desired
-	if pending := min(excess, int(row.Pending)); pending > 0 {
-		stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
-			ReleaseID: row.ReleaseID, Count: int32(pending), //nolint:gosec // Bounded by live containers.
-		})
-		if err != nil {
-			return fmt.Errorf("stop pending containers: %w", err)
-		}
-		plan.stopped = stopped
-		excess -= len(stopped)
-	}
-	if excess <= 0 {
-		return nil
-	}
-	rows, err := q.DrainNewestContainers(ctx, DrainNewestContainersParams{
-		ReleaseID: row.ReleaseID, Count: int32(excess), //nolint:gosec // Bounded by live containers.
-	})
-	if err != nil {
-		return fmt.Errorf("drain containers: %w", err)
-	}
-	return plan.record(ctx, tx, len(rows), func(n int) drainedContainer { return drainedContainer{rows[n].ID, rows[n].HostID} })
+	return e.trim(ctx, tx, plan, active-desired, row.Pending, e.drainExcess(ctx, tx, plan))
 }
 
 // servingDesired is how many active containers the release should have,

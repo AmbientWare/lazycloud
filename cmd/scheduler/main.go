@@ -195,11 +195,6 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	timed := newPassTimer(tel)
 	p := newPace(t)
 	beats := newHeartbeats(p.isLeading)
-	// every wraps a loop's pass with its deadline, heartbeat, trace and
-	// duration metric.
-	every := func(name string, interval time.Duration, pass func(context.Context) bool) func(context.Context) bool {
-		return beats.track(name, interval, timed(name, pass))
-	}
 	obs := observability.NewObservability(pool, nil, logger)
 
 	fleet, err := compute.LoadFleet(ctx, os.Getenv)
@@ -276,7 +271,6 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	liveWake, cancelLiveWake := listener.Subscribe(database.ChannelExecution, "")
 	defer cancelLiveWake()
 	schedulesWake, cancelSchedulesWake := listener.Subscribe(schedules.Channel, "")
-	// Queued callbacks wake delivery at once rather than on its next tick.
 	callbacksWake, cancelCallbacksWake := listener.Subscribe(database.ChannelCallback, "")
 	defer cancelCallbacksWake()
 	defer cancelSchedulesWake()
@@ -306,251 +300,141 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	})
 	group.Go(func() error { return p.watch(ctx, exec.HasLiveWork, liveWake, logger) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.rollup}, nil, nil, every("metrics_rollup", t.rollup, func(ctx context.Context) bool {
+	// When a release held back after failed starts may start again, and when
+	// the purchases the last fleet pass held for arriving containers may
+	// proceed. Each loop's goroutine alone reads and writes its own.
+	var retryAt, batchAt time.Time
+	loops := []loop{
+		{name: "metrics_rollup", cadence: cadence{every: t.rollup}, watch: tracked, pass: func(ctx context.Context) bool {
 			result, err := obs.RollUp(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "metrics rollup pass", "error", err)
 			}
 			// Behind reruns the pass at once, like a contended lock.
 			return result.Behind
-		}))
-	})
-	group.Go(func() error {
-		// When a release held back after failed starts may start again. The
-		// loop's goroutine alone reads and writes it.
-		var retryAt time.Time
-		retryDue := func(context.Context) (time.Time, bool, error) { return retryAt, !retryAt.IsZero(), nil }
-		return p.loop(ctx, cadence{every: t.tick, quiet: true, due: retryDue}, planWake, nil, every("plan", t.tick, func(ctx context.Context) bool {
-			result, err := exec.Plan(ctx, logger)
-			if err != nil {
-				logger.ErrorContext(ctx, "planning pass", "error", err)
-			}
-			serving, err := exec.PlanServing(ctx, logger)
-			if err != nil {
-				logger.ErrorContext(ctx, "serving planning pass", "error", err)
-			}
-			pods, err := exec.PlanPods(ctx, logger)
-			if err != nil {
-				logger.ErrorContext(ctx, "pod planning pass", "error", err)
-			}
-			result.Skipped = result.Skipped || serving.Skipped || pods.Skipped
-			result.Created += serving.Created + pods.Created
-			retryAt = time.Time{}
-			for _, at := range []time.Time{result.RetryAt, serving.RetryAt, pods.RetryAt} {
-				if !at.IsZero() && (retryAt.IsZero() || at.Before(retryAt)) {
-					retryAt = at
+		}},
+		{
+			name: "plan", watch: tracked, wake: planWake,
+			cadence: cadence{every: t.tick, quiet: true, due: func(context.Context) (time.Time, bool, error) { return retryAt, !retryAt.IsZero(), nil }},
+			pass: func(ctx context.Context) bool {
+				retryAt = time.Time{}
+				skipped, created := false, 0
+				for _, planner := range []struct {
+					what string
+					plan func(context.Context, *slog.Logger) (execution.PlanResult, error)
+				}{{"planning pass", exec.Plan}, {"serving planning pass", exec.PlanServing}, {"pod planning pass", exec.PlanPods}} {
+					result, err := planner.plan(ctx, logger)
+					if err != nil {
+						logger.ErrorContext(ctx, planner.what, "error", err)
+					}
+					skipped, created = skipped || result.Skipped, created+result.Created
+					if at := result.RetryAt; !at.IsZero() && (retryAt.IsZero() || at.Before(retryAt)) {
+						retryAt = at
+					}
 				}
-			}
-			if result.Created > 0 {
-				// New pending containers are live work before any report
-				// wakes the probe.
-				p.setLive(true)
-				select {
-				case placeNow <- struct{}{}:
-				default:
+				if created > 0 {
+					// New pending containers are live work before any report
+					// wakes the probe.
+					p.setLive(true)
+					select {
+					case placeNow <- struct{}{}:
+					default:
+					}
 				}
-			}
-			return result.Skipped
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.tick, quiet: true}, placeWake, placeNow, every("place", t.tick, func(ctx context.Context) bool {
+				return skipped
+			},
+		},
+		{name: "place", cadence: cadence{every: t.tick, quiet: true}, wake: placeWake, also: placeNow, watch: tracked, pass: func(ctx context.Context) bool {
 			result, err := sched.Place(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
 			}
 			return result.Skipped
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.tick, quiet: true}, nil, nil, every("workloads", t.tick, func(ctx context.Context) bool {
-			if _, err := exec.StopIdle(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "idle instance pass", "error", err)
-			}
-			if err := exec.TakeAutomaticSnapshots(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "snapshot pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.tick, quiet: true}, nil, nil, every("deadlines", t.tick, func(ctx context.Context) bool {
-			if _, err := exec.TimeOutAttempts(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "attempt deadline pass", "error", err)
-			}
-			if _, err := exec.TimeOutStarts(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "start deadline pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.tick, quiet: true, due: crons.NextFire}, schedulesWake, nil, every("schedules", t.tick, func(ctx context.Context) bool {
-			if _, err := crons.Fire(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "schedule pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.tick, quiet: true, due: deliverer.NextDue}, callbacksWake, nil, every("callbacks", t.tick, func(ctx context.Context) bool {
-			if _, err := deliverer.Deliver(ctx); err != nil {
-				logger.ErrorContext(ctx, "callback pass", "error", err)
-			}
-			return false
-		}))
-	})
-	// Purging finished callbacks runs apart, so a long delivery pass never
-	// holds it back, and on the leader's timer like other upkeep.
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.purge}, nil, nil, every("callback_purge", t.purge, func(ctx context.Context) bool {
-			if _, err := deliverer.Purge(ctx); err != nil {
-				logger.ErrorContext(ctx, "callback purge", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.hostLoss}, nil, nil, every("host_loss", t.hostLoss, func(ctx context.Context) bool {
-			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "host loss pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		// When the purchases the last pass held for arriving containers may
-		// proceed. The loop's goroutine alone reads and writes it.
-		var batchAt time.Time
-		rerun := func() (time.Time, bool) { return batchAt, !batchAt.IsZero() }
-		return p.loop(ctx, cadence{every: t.fleet, rerun: rerun}, capacityWake, capacityFleetWake, timed("fleet_plan", func(ctx context.Context) bool {
-			result, err := comp.Plan(ctx, logger)
-			if err != nil {
-				logger.ErrorContext(ctx, "fleet planning pass", "error", err)
-			}
-			batchAt = time.Time{}
-			if result.BatchWait > 0 {
-				batchAt = time.Now().Add(result.BatchWait)
-			}
-			return result.Skipped
-		}))
-	})
-	// A launch walks EC2's refused pools on a loop of its own, so it holds
-	// up no reserve, retirement or preemption.
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.fleet}, launchWake, nil, timed("fleet_launch", func(ctx context.Context) bool {
-			if _, err := comp.Launch(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "launch pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.fleet}, fleetWake, nil, timed("fleet_hosts", func(ctx context.Context) bool {
-			if _, err := comp.Actuate(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "reserve actuator pass", "error", err)
-			}
-			if _, err := comp.Retire(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "retire pass", "error", err)
-			}
-			if _, err := comp.Preempt(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "preempt pass", "error", err)
-			}
-			return false
-		}))
-	})
-	// Connection steps wait on AWS calls in customer accounts, so they run
-	// on a loop of their own and hold up no actuation.
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.connections}, connectionWake, nil, timed("connections", func(ctx context.Context) bool {
-			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "connection pass", "error", err)
-			}
-			return false
-		}))
-	})
-	// Each account's networks, made once it takes hosts and found again
-	// every half hour, on the leader's timer; the networks lock keeps a
-	// replica's start-up pass apart from it.
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.networks}, nil, nil, timed("fleet_networks", func(ctx context.Context) bool {
-			if _, err := comp.EnsureNetworks(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "fleet networks incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: compute.SpotPriceInterval}, nil, nil, every("spot_prices", compute.SpotPriceInterval, func(ctx context.Context) bool {
-			if _, err := comp.RefreshSpotPrices(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "spot price refresh incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.quotas}, nil, nil, timed("ec2_quotas", func(ctx context.Context) bool {
-			if _, err := comp.RefreshQuotas(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "ec2 quota refresh incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: compute.ZoneOfferingInterval}, nil, nil, every("zone_offerings", compute.ZoneOfferingInterval, func(ctx context.Context) bool {
-			if _, err := comp.RefreshZoneOfferings(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "zone offering refresh incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.reconcile}, nil, nil, func(ctx context.Context) bool {
-			if err := comp.Reconcile(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "reconcile pass", "error", err)
-			}
-			return false
-		})
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.spendAlerts}, nil, nil, every("spend_alerts", t.spendAlerts, func(ctx context.Context) bool {
-			spend, err := comp.FleetSpend(ctx)
-			if err == nil {
-				err = accounts.notifications.AlertSpend(ctx, spend.HourlyMicros(), spend.WindowMicros)
-			}
-			if err != nil && ctx.Err() == nil {
-				logger.ErrorContext(ctx, "spend alert pass", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.sweep}, nil, nil, every("storage_sweep", t.sweep, func(ctx context.Context) bool {
-			if _, err := store.Sweep(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "storage sweep incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.layerSweep}, nil, nil, every("image_layer_sweep", t.layerSweep, func(ctx context.Context) bool {
-			if err := im.SweepLayers(ctx, logger); err != nil && ctx.Err() == nil {
-				logger.WarnContext(ctx, "image layer sweep incomplete", "error", err)
-			}
-			return false
-		}))
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.buildRecovery}, buildWake, nil, every("build_recovery", t.buildRecovery, func(ctx context.Context) bool {
-			if err := im.Recover(ctx, logger); err != nil {
-				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
-			}
-			return false
-		}))
-	})
-	accounts.start(ctx, group, p, beats, t)
-	newBillingLoops(pool, session, exec, store, logger).start(ctx, group, p, t)
+		}},
+		{name: "workloads", cadence: cadence{every: t.tick, quiet: true}, watch: tracked, pass: steps(logger,
+			step{what: "idle instance pass", do: exec.StopIdle},
+			step{what: "snapshot pass", do: exec.TakeAutomaticSnapshots})},
+		{name: "deadlines", cadence: cadence{every: t.tick, quiet: true}, watch: tracked, pass: steps(logger,
+			step{what: "attempt deadline pass", do: exec.TimeOutAttempts},
+			step{what: "start deadline pass", do: exec.TimeOutStarts})},
+		{name: "schedules", cadence: cadence{every: t.tick, quiet: true, due: crons.NextFire}, wake: schedulesWake, watch: tracked,
+			pass: steps(logger, step{what: "schedule pass", do: crons.Fire})},
+		// Queued callbacks wake delivery at once rather than on its next tick.
+		{name: "callbacks", cadence: cadence{every: t.tick, quiet: true, due: deliverer.NextDue}, wake: callbacksWake, watch: tracked,
+			pass: steps(logger, step{what: "callback pass", do: discardContext(deliverer.Deliver)})},
+		// Purging finished callbacks runs apart, so a long delivery pass never
+		// holds it back, and on the leader's timer like other upkeep.
+		{name: "callback_purge", cadence: cadence{every: t.purge}, watch: tracked, pass: steps(logger,
+			step{what: "callback purge", do: func(ctx context.Context, _ *slog.Logger) error { return deliverer.Purge(ctx) }})},
+		{name: "host_loss", cadence: cadence{every: t.hostLoss}, watch: tracked,
+			pass: steps(logger, step{what: "host loss pass", do: exec.ReleaseLostHosts})},
+		{
+			name: "fleet_plan", watch: timedOnly, wake: capacityWake, also: capacityFleetWake,
+			cadence: cadence{every: t.fleet, rerun: func() (time.Time, bool) { return batchAt, !batchAt.IsZero() }},
+			pass: func(ctx context.Context) bool {
+				result, err := comp.Plan(ctx, logger)
+				if err != nil {
+					logger.ErrorContext(ctx, "fleet planning pass", "error", err)
+				}
+				batchAt = time.Time{}
+				if result.BatchWait > 0 {
+					batchAt = time.Now().Add(result.BatchWait)
+				}
+				return result.Skipped
+			},
+		},
+		// A launch walks EC2's refused pools on a loop of its own, so it holds
+		// up no reserve, retirement or preemption.
+		{name: "fleet_launch", cadence: cadence{every: t.fleet}, wake: launchWake, watch: timedOnly,
+			pass: steps(logger, step{what: "launch pass", do: discard(comp.Launch)})},
+		{name: "fleet_hosts", cadence: cadence{every: t.fleet}, wake: fleetWake, watch: timedOnly, pass: steps(logger,
+			step{what: "reserve actuator pass", do: discard(comp.Actuate)},
+			step{what: "retire pass", do: comp.Retire},
+			step{what: "preempt pass", do: discard(comp.Preempt)})},
+		// Connection steps wait on AWS calls in customer accounts, so they run
+		// on a loop of their own and hold up no actuation.
+		{name: "connections", cadence: cadence{every: t.connections}, wake: connectionWake, watch: timedOnly,
+			pass: steps(logger, step{what: "connection pass", do: discard(comp.AdvanceConnections)})},
+		// Each account's networks, made once it takes hosts and found again
+		// every half hour, on the leader's timer; the networks lock keeps a
+		// replica's start-up pass apart from it.
+		{name: "fleet_networks", cadence: cadence{every: t.networks}, watch: timedOnly,
+			pass: steps(logger, step{what: "fleet networks incomplete", warn: true, do: comp.EnsureNetworks})},
+		{name: "spot_prices", cadence: cadence{every: compute.SpotPriceInterval}, watch: tracked,
+			pass: steps(logger, step{what: "spot price refresh incomplete", warn: true, do: discard(comp.RefreshSpotPrices)})},
+		{name: "ec2_quotas", cadence: cadence{every: t.quotas}, watch: timedOnly,
+			pass: steps(logger, step{what: "ec2 quota refresh incomplete", warn: true, do: discard(comp.RefreshQuotas)})},
+		{name: "zone_offerings", cadence: cadence{every: compute.ZoneOfferingInterval}, watch: tracked,
+			pass: steps(logger, step{what: "zone offering refresh incomplete", warn: true, do: discard(comp.RefreshZoneOfferings)})},
+		{name: "reconcile", cadence: cadence{every: t.reconcile}, pass: steps(logger, step{what: "reconcile pass", do: comp.Reconcile})},
+		{name: "spend_alerts", cadence: cadence{every: t.spendAlerts}, watch: tracked, pass: steps(logger,
+			step{what: "spend alert pass", do: func(ctx context.Context, _ *slog.Logger) error {
+				spend, err := comp.FleetSpend(ctx)
+				if err != nil {
+					return err
+				}
+				return accounts.notifications.AlertSpend(ctx, spend.HourlyMicros(), spend.WindowMicros)
+			}})},
+		{name: "storage_sweep", cadence: cadence{every: t.sweep}, watch: tracked,
+			pass: steps(logger, step{what: "storage sweep incomplete", warn: true, do: discard(store.Sweep)})},
+		{name: "image_layer_sweep", cadence: cadence{every: t.layerSweep}, watch: tracked,
+			pass: steps(logger, step{what: "image layer sweep incomplete", warn: true, do: im.SweepLayers})},
+		{name: "build_recovery", cadence: cadence{every: t.buildRecovery}, wake: buildWake, watch: tracked,
+			pass: steps(logger, step{what: "image build recovery pass", do: im.Recover})},
+	}
+	loops = append(loops, accounts.loops(t)...)
+	loops = append(loops, newBillingLoops(pool, session, exec, store, logger).loops(t)...)
+	for _, l := range loops {
+		pass := l.pass
+		switch l.watch {
+		case tracked:
+			pass = beats.track(l.name, l.cadence.every, timed(l.name, pass))
+		case timedOnly:
+			pass = timed(l.name, pass)
+		case unwatched:
+		}
+		group.Go(func() error { return p.loop(ctx, l.cadence, l.wake, l.also, pass) })
+	}
 	if healthListener != nil {
 		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
 		group.Go(func() error {

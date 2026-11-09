@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -143,10 +142,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		if !row.Live {
 			return &ConflictError{Reason: "the workload is deleted or its app is paused"}
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		params, err := instanceParams(workspace, row, spec, req)
 		if err != nil {
 			return err
@@ -206,7 +202,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	}
 	if req.Shell {
 		params.Purpose = string(PurposeShell)
-		params.KeepWarmSeconds = ptr(int32(shellKeepWarm.Seconds()))
+		params.KeepWarmSeconds = new(int32(shellKeepWarm.Seconds()))
 		return params, nil
 	}
 	keepWarm := 600
@@ -217,7 +213,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 		keepWarm = *req.Timeout
 	}
 	if keepWarm > 0 {
-		params.KeepWarmSeconds = ptr(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
+		params.KeepWarmSeconds = new(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
 	}
 	if p := spec.Pod; p != nil {
 		params.BlockNetwork = p.BlockNetwork != nil && *p.BlockNetwork
@@ -247,9 +243,7 @@ func (e *Execution) Instance(ctx context.Context, workspace identity.WorkspaceID
 		reason := StopReason(*row.StopReason)
 		out.StopReason = &reason
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return Instance{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -359,7 +353,7 @@ type TTL struct {
 func (e *Execution) SetTTL(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, ttl int) (TTL, error) {
 	var keepWarm *int32
 	if ttl > 0 {
-		keepWarm = ptr(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
+		keepWarm = new(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
 	}
 	row, err := e.queries.SetContainerTTL(ctx, SetContainerTTLParams{
 		KeepWarmSeconds: keepWarm, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),
@@ -568,9 +562,7 @@ func (e *Execution) Route(ctx context.Context, container ContainerID) (Container
 		by := ContainerID(*row.CreatedByContainer)
 		out.CreatedBy = &by
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return ContainerRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
 	return out, nil
 }
@@ -600,15 +592,14 @@ func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute
 		Release: row.ID, Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.Kind),
 		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Accepting: row.Accepting,
 	}
-	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
-		return PodRoute{}, fmt.Errorf("decode release spec: %w", err)
-	}
+	out.Spec = row.Spec
 	return out, nil
 }
 
 // StopIdle drains idle instances and shell containers, and forgets leases
-// no window needs any more. Hosts stop the drained containers.
-func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, error) {
+// no window needs any more and edge demand long expired. Hosts stop the
+// drained containers.
+func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) error {
 	var drained []drainedContainer
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
@@ -635,13 +626,16 @@ func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, err
 		return notifyHosts(ctx, tx, drained)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("stop idle instances: %w", err)
+		return fmt.Errorf("stop idle instances: %w", err)
 	}
 	for _, c := range drained {
 		logger.InfoContext(ctx, "idle instance draining", "container_id", c.id, "host_id", c.host)
 	}
 	if err := e.queries.DeleteOldContainerLeases(ctx); err != nil {
-		return len(drained), fmt.Errorf("delete old leases: %w", err)
+		return fmt.Errorf("delete old leases: %w", err)
 	}
-	return len(drained), nil
+	if err := e.queries.DeleteExpiredEndpointLoads(ctx); err != nil {
+		return fmt.Errorf("delete expired endpoint loads: %w", err)
+	}
+	return nil
 }

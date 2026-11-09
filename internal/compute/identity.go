@@ -90,7 +90,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 			return HostID{}, "", err
 		}
 		if _, err := c.queries.EndHost(ctx, EndHostParams{
-			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: ptr(string(FailurePreflight)), Message: truncate(message),
+			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: new(string(FailurePreflight)), Message: truncate(message),
 		}); err != nil {
 			return HostID{}, "", fmt.Errorf("fail host: %w", err)
 		}

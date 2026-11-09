@@ -94,30 +94,30 @@ func (ps *pass) returnable(h FleetHost) bool {
 // otherwise it drains.
 func (ps *pass) leave(v *marketView, h *FleetHost) {
 	if h.Requested {
-		ps.act(FleetAction{Kind: ActionCancel, Reason: ReasonUnclaimed, Market: v.m, Host: ptr(h.ID)})
+		ps.act(FleetAction{Kind: ActionCancel, Reason: ReasonUnclaimed, Market: v.m, Host: new(h.ID)})
 		return
 	}
 	var short *ActionReason
 	switch {
 	case !ps.returnable(*h):
 	case !ps.reserveSupply(v, h.ID).Covers(v.holds.Stopped.Load):
-		short = ptr(ReasonReserve)
+		short = new(ReasonReserve)
 	case ps.fitsLargest(v, *h) && !ps.holdsLargest(v, h.ID):
-		short = ptr(ReasonLargest)
+		short = new(ReasonLargest)
 	}
 	if ps.reserveRoom > 0 && short != nil {
 		mode := ReserveStop
 		if t, _ := ps.typeNamed(h.InstanceType); h.HibernationConfigured && hibernates(t) {
 			mode = ReserveHibernate
 		}
-		h.State, h.ReserveMode = FleetPreparing, ptr(mode)
+		h.State, h.ReserveMode = FleetPreparing, new(mode)
 		// It runs until it stops, so it keeps its host room.
 		ps.reserveRoom--
-		ps.act(FleetAction{Kind: ActionReturnToReserve, Reason: *short, Market: v.m, Host: ptr(h.ID), Mode: ptr(mode)})
+		ps.act(FleetAction{Kind: ActionReturnToReserve, Reason: *short, Market: v.m, Host: new(h.ID), Mode: new(mode)})
 		return
 	}
 	h.State = FleetDraining
-	ps.act(FleetAction{Kind: ActionDrain, Reason: ReasonIdle, Market: v.m, Host: ptr(h.ID)})
+	ps.act(FleetAction{Kind: ActionDrain, Reason: ReasonIdle, Market: v.m, Host: new(h.ID)})
 }
 
 // grow covers what the kept hosts leave of what this pass's load and
@@ -331,7 +331,7 @@ func (ps *pass) reserves(v *marketView) {
 	for _, h := range ps.inMarket(v.m, func(h FleetHost) bool { return h.resumable() && h.Protected }) {
 		v.retired[h.ID] = true
 		ps.reserveRoom++
-		ps.act(FleetAction{Kind: ActionRetireReserve, Reason: ReasonInterrupted, Market: v.m, Host: ptr(h.ID)})
+		ps.act(FleetAction{Kind: ActionRetireReserve, Reason: ReasonInterrupted, Market: v.m, Host: new(h.ID)})
 	}
 	counted := ps.counted(v)
 	growable := func(h *FleetHost) bool {
@@ -352,7 +352,7 @@ func (ps *pass) reserves(v *marketView) {
 		if ready.Covers(target) && readyLargest {
 			v.retired[h.ID] = true
 			ps.reserveRoom++
-			ps.act(FleetAction{Kind: ActionRetireReserve, Reason: ReasonSurplus, Market: v.m, Host: ptr(h.ID)})
+			ps.act(FleetAction{Kind: ActionRetireReserve, Reason: ReasonSurplus, Market: v.m, Host: new(h.ID)})
 			continue
 		}
 		if counted(*h) {
@@ -517,7 +517,7 @@ func (ps *pass) rightsize(v *marketView) {
 		}
 	}
 	if best != nil {
-		ps.buy(v.m, *best, ActionRightsize, ReasonCheaper, ps.holdsOf(v, *replaced), nil, ptr(replaced.ID))
+		ps.buy(v.m, *best, ActionRightsize, ReasonCheaper, ps.holdsOf(v, *replaced), nil, new(replaced.ID))
 	}
 }
 

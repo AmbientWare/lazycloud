@@ -3,7 +3,6 @@ package execution
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -140,10 +139,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if !accepting(fn, req.Release != nil) {
 			return ErrNotAccepting
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(fn.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := fn.Spec
 		// A run pinned to a machine fails at once while the machine cannot
 		// take it; deployed calls wait for the machine.
 		if machine := compute.PinnedMachine(spec); req.Release != nil && machine != "" {

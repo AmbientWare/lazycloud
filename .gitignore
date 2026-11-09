@@ -38,3 +38,8 @@ kubeconfig
 /work/
 /bin/
 /scheduler
+/cmd/agent/agent
+/cmd/scheduler/scheduler
+/cmd/server/server
+/cmd/snapshotter/snapshotter
+/cmd/supervisor/supervisor

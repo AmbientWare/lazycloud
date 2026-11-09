@@ -10,8 +10,7 @@ set expression = excluded.expression,
     next_fire_at = excluded.next_fire_at,
     last_fired_at = null,
     last_task_id = null,
-    last_error = null,
-    updated_at = now();
+    last_error = null;
 
 -- name: DeleteSchedule :exec
 delete from schedules where workload_id = @workload_id;
@@ -34,8 +33,7 @@ update schedules
 set next_fire_at = @next_fire_at,
     last_fired_at = @fired_at,
     last_task_id = sqlc.narg(task_id),
-    last_error = sqlc.narg(error),
-    updated_at = now()
+    last_error = sqlc.narg(error)
 where workload_id = @workload_id;
 
 -- name: FunctionSchedule :one

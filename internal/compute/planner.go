@@ -488,9 +488,9 @@ func requested(id uuid.UUID, acct account, o FleetOffer, a FleetAction) requeste
 	}
 	switch a.Kind {
 	case ActionBuyReserve:
-		h.ReserveMode, h.HoldsDisks = a.Mode, ptr(o.Type.DiskSlots())
+		h.ReserveMode, h.HoldsDisks = a.Mode, new(o.Type.DiskSlots())
 	case ActionRightsize:
-		h.Replaces = ptr(uuid.UUID(*a.Host))
+		h.Replaces = new(uuid.UUID(*a.Host))
 	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionHandBack, ActionLend:
 	}
 	return h
@@ -747,10 +747,9 @@ func (ps *fleetPass) write(ctx context.Context, tx pgx.Tx, q *Queries) error {
 			return fmt.Errorf("publish fleet markets: %w", err)
 		}
 	}
-	if len(wake) > 0 {
-		if err := q.NotifyHosts(ctx, NotifyHostsParams{Channel: string(database.ChannelHost), Ids: wake}); err != nil {
-			return fmt.Errorf("wake host sessions: %w", err)
-		}
+	// Wakes the sessions of hosts the pass moved, once it commits.
+	if err := database.NotifyAll(ctx, tx, database.ChannelHost, wake); err != nil {
+		return err
 	}
 	if moved {
 		return database.Notify(ctx, tx, ChannelCompute, string(KindPlatform))

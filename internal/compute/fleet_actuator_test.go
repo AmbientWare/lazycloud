@@ -879,7 +879,7 @@ func TestOneActuatorTerminatesEachInstanceOnce(t *testing.T) {
 	for range 2 {
 		loop(50*time.Millisecond, func(ctx context.Context) {
 			_, _ = o.compute.Actuate(ctx, discard())
-			_, _ = o.compute.Retire(ctx, discard())
+			_ = o.compute.Retire(ctx, discard())
 		})
 	}
 	loop(300*time.Millisecond, func(ctx context.Context) { _ = o.compute.Reconcile(ctx, discard()) })

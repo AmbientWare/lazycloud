@@ -39,7 +39,9 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 		if err := checkDeploy(ctx, tx, uuid.UUID(workspace), []apitypes.WorkloadSpec{f.spec}); err != nil {
 			return err
 		}
-		workload, err := q.EnsureWorkload(ctx, EnsureWorkloadParams{AppID: appRow.ID, Kind: string(f.spec.Kind), Name: function})
+		workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{
+			AppID: appRow.ID, Kind: string(f.spec.Kind), Name: function, State: string(WorkloadActive),
+		})
 		if err != nil {
 			return fmt.Errorf("ensure workload: %w", err)
 		}
@@ -59,11 +61,9 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("find release: %w", err)
 		}
-		inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
-			WorkloadID: workload.ID, Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
-		})
+		inserted, err := addRelease(ctx, q, workload.ID, f, nil, false)
 		if err != nil {
-			return fmt.Errorf("insert release: %w", err)
+			return err
 		}
 		out = apitypes.Release{Id: inserted.ID, Name: function, CreatedAt: inserted.CreatedAt, Spec: f.spec}
 		return nil

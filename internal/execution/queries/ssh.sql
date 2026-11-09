@@ -33,7 +33,7 @@ limit @max_rows;
 
 -- name: PodByName :one
 -- A pod of an app by name, live or stopped, for a tunnel.
-select w.id, w.desired_state, a.state as app_state, r.spec
+select w.id, w.desired_state, a.state as app_state, (r.id is not null)::bool as released, coalesce(r.spec, 'null')::jsonb as spec
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id

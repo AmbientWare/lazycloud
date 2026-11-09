@@ -471,14 +471,3 @@ func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (W
 	)
 	return i, err
 }
-
-const wakeDelivery = `-- name: WakeDelivery :exec
-select pg_notify('lc_callback', '')
-`
-
-// Delivered when the transaction commits, so the deliverer runs at once.
-// The channel is database.ChannelCallback.
-func (q *Queries) WakeDelivery(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, wakeDelivery)
-	return err
-}

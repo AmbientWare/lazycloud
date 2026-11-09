@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
@@ -206,7 +207,7 @@ type StartingContainersOnHostRow struct {
 	Slots         int32
 	CpuMillis     cpu.Millis
 	MemoryBytes   int64
-	Spec          []byte
+	Spec          apitypes.WorkloadSpec
 	Mounters      int32
 	SourceSha256  []byte
 	Purpose       string

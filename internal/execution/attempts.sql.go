@@ -8,6 +8,7 @@ package execution
 import (
 	"context"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
 
@@ -154,7 +155,7 @@ select id, spec from releases where id = any($1::uuid[])
 
 type ReleaseSpecsRow struct {
 	ID   uuid.UUID
-	Spec []byte
+	Spec apitypes.WorkloadSpec
 }
 
 func (q *Queries) ReleaseSpecs(ctx context.Context, ids []uuid.UUID) ([]ReleaseSpecsRow, error) {

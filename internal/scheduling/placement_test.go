@@ -74,13 +74,21 @@ values ($1, $2, (select workload_id from releases where id = $2), 'pending', 1, 
 	return id
 }
 
-func place(t testing.TB, s *Scheduling) PlacementResult {
+// place runs a placement pass and returns how many containers it assigned.
+func place(t testing.TB, s *Scheduling) int {
 	t.Helper()
-	result, err := s.Place(t.Context())
-	if err != nil {
+	assigned := func() int {
+		var n int
+		if err := s.pool.QueryRow(t.Context(), "select count(*) from containers where assigned_at is not null").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := assigned()
+	if _, err := s.Place(t.Context()); err != nil {
 		t.Fatalf("place: %v", err)
 	}
-	return result
+	return assigned() - before
 }
 
 const gib = 1 << 30
@@ -100,8 +108,8 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 		quietIDs = append(quietIDs, pendingContainer(t, pool, quiet, 1000, gib, time.Duration(2-i)*time.Minute))
 	}
 
-	if result := place(t, s); result.Assigned != 4 {
-		t.Fatalf("assigned %d, want 4 (the live host's capacity)", result.Assigned)
+	if n := place(t, s); n != 4 {
+		t.Fatalf("assigned %d, want 4 (the live host's capacity)", n)
 	}
 	want := map[uuid.UUID]bool{busyIDs[0]: true, busyIDs[1]: true, quietIDs[0]: true, quietIDs[1]: true}
 	rows, err := pool.Query(t.Context(), "select id, state, host_id from containers")
@@ -152,8 +160,8 @@ values ($1, 'root', 1073741824, $2, '\x00', now() - interval '1 minute')`, r.wor
 	second := pendingContainer(t, pool, r, 1000, gib, time.Minute)
 	third := pendingContainer(t, pool, r, 1000, gib, 0)
 
-	if result := place(t, s); result.Assigned != 2 {
-		t.Fatalf("assigned %d, want one per host's disk slot", result.Assigned)
+	if n := place(t, s); n != 2 {
+		t.Fatalf("assigned %d, want one per host's disk slot", n)
 	}
 	for id, want := range map[uuid.UUID]*uuid.UUID{first: &warm, second: &tight, third: nil} {
 		var host *uuid.UUID
@@ -188,8 +196,8 @@ values ($1, $2, (select workload_id from releases where id = $2), 'ready', $3, 1
 	reads := pendingContainer(t, pool, mounts, 2000, gib, time.Minute)
 	other := pendingContainer(t, pool, plain, 2000, gib, time.Minute)
 
-	if result := place(t, s); result.Assigned != 2 {
-		t.Fatalf("assigned %d, want 2", result.Assigned)
+	if n := place(t, s); n != 2 {
+		t.Fatalf("assigned %d, want 2", n)
 	}
 	for id, want := range map[uuid.UUID]uuid.UUID{reads: east, other: west} {
 		var host *uuid.UUID
@@ -354,19 +362,17 @@ func TestPlacementSkipsAHostMarkedLostConcurrently(t *testing.T) {
 		t.Fatalf("mark lost: %v, %v", marked, err)
 	}
 
-	done := make(chan PlacementResult, 1)
+	done := make(chan struct{})
 	go func() {
-		result, err := s.Place(t.Context())
-		if err != nil {
+		defer close(done)
+		if _, err := s.Place(t.Context()); err != nil {
 			t.Error(err)
 		}
-		done <- result
 	}()
-	var result PlacementResult
 	placed := false
 	for deadline := time.Now().Add(5 * time.Second); !placed; {
 		select {
-		case result = <-done:
+		case <-done:
 			placed = true
 			continue
 		default:
@@ -388,15 +394,15 @@ select count(*) from pg_stat_activity where datname = current_database() and wai
 		t.Fatal(err)
 	}
 	if !placed {
-		result = <-done
+		<-done
 	}
 	var state string
 	var assigned *uuid.UUID
 	if err := pool.QueryRow(t.Context(), "select state, host_id from containers where id = $1", container).Scan(&state, &assigned); err != nil {
 		t.Fatal(err)
 	}
-	if result.Assigned != 0 || state != "pending" || assigned != nil {
-		t.Fatalf("assigned %d; container %s on %v, want pending off the lost host", result.Assigned, state, assigned)
+	if state != "pending" || assigned != nil {
+		t.Fatalf("container %s on %v, want pending off the lost host", state, assigned)
 	}
 }
 
@@ -445,8 +451,8 @@ select task.id, 1, $3, 'running', now() - make_interval(secs => $4), now() + int
 	second := pendingContainer(t, pool, gpuWork, 1000, 2*gib, time.Minute)
 	exec(t, pool, "update containers set gpu_count = 1 where id in ($1, $2)", first, second)
 
-	if result := place(t, s); result.Assigned != 2 {
-		t.Fatalf("assigned %d of the two GPU containers", result.Assigned)
+	if n := place(t, s); n != 2 {
+		t.Fatalf("assigned %d of the two GPU containers", n)
 	}
 	for id, want := range map[uuid.UUID]string{first: "starting", second: "starting", idle: "stopped", newest: "stopped", longer: "ready"} {
 		var state string

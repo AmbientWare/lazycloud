@@ -3,3 +3,24 @@
 //   sqlc v1.31.1
 
 package execution
+
+import (
+	"time"
+
+	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/google/uuid"
+)
+
+type ReleaseShape struct {
+	ID            uuid.UUID
+	CpuMillis     cpu.Millis
+	MemoryBytes   int64
+	Mounters      int32
+	GpuCount      int32
+	GpuModels     []string
+	Preemptible   bool
+	Pinned        bool
+	Machine       bool
+	StartFailures int32
+	LastStoppedAt *time.Time
+}

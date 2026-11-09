@@ -9,48 +9,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/google/uuid"
 )
-
-const automaticSnapshotCandidates = `-- name: AutomaticSnapshotCandidates :many
-select distinct on (c.release_id) c.id, c.workspace_id, c.release_id::uuid as release_id
-from containers c
-join releases r on r.id = c.release_id
-where c.state = 'ready' and c.purpose = 'serve' and r.spec ? 'checkpoint'
-  and not exists (
-      select 1 from memory_snapshots s where s.release_id = c.release_id and s.automatic and s.state <> 'failed'
-  )
-order by c.release_id, c.ready_at, c.id
-limit 100
-`
-
-type AutomaticSnapshotCandidatesRow struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	ReleaseID   uuid.UUID
-}
-
-// Ready serve containers of checkpoint-enabled releases that have no
-// automatic snapshot pending or available: the oldest per release takes one.
-func (q *Queries) AutomaticSnapshotCandidates(ctx context.Context) ([]AutomaticSnapshotCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, automaticSnapshotCandidates)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []AutomaticSnapshotCandidatesRow
-	for rows.Next() {
-		var i AutomaticSnapshotCandidatesRow
-		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.ReleaseID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
 
 const failStaleFilesystemImages = `-- name: FailStaleFilesystemImages :many
 update filesystem_images f
@@ -217,33 +178,6 @@ func (q *Queries) FinishSnapshot(ctx context.Context, arg FinishSnapshotParams) 
 	return id, err
 }
 
-const insertAutomaticSnapshot = `-- name: InsertAutomaticSnapshot :execrows
-insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
-values ($1, $2, $3, true, 'pending', $4::text)
-on conflict (release_id) where automatic and state <> 'failed' do nothing
-`
-
-type InsertAutomaticSnapshotParams struct {
-	WorkspaceID uuid.UUID
-	ReleaseID   uuid.UUID
-	ContainerID *uuid.UUID
-	Traceparent *string
-}
-
-// One automatic snapshot per release at a time; a concurrent insert loses.
-func (q *Queries) InsertAutomaticSnapshot(ctx context.Context, arg InsertAutomaticSnapshotParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertAutomaticSnapshot,
-		arg.WorkspaceID,
-		arg.ReleaseID,
-		arg.ContainerID,
-		arg.Traceparent,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const insertFilesystemImage = `-- name: InsertFilesystemImage :one
 insert into filesystem_images (workspace_id, container_id, state) values ($1, $2, 'publishing')
 returning id
@@ -316,7 +250,7 @@ type LockSnapshotSourceRow struct {
 	State     string
 	Purpose   string
 	Kind      string
-	Spec      []byte
+	Spec      apitypes.WorkloadSpec
 }
 
 // A container that can be snapshotted: ready, on a host, in the workspace.
@@ -390,7 +324,7 @@ type PendingSnapshotsOnHostRow struct {
 	ContainerID uuid.UUID
 	Automatic   bool
 	CreatedAt   time.Time
-	Spec        []byte
+	Spec        apitypes.WorkloadSpec
 	Traceparent *string
 }
 
@@ -529,4 +463,43 @@ func (q *Queries) SnapshotView(ctx context.Context, id uuid.UUID) (SnapshotViewR
 		&i.FinishedAt,
 	)
 	return i, err
+}
+
+const takeAutomaticSnapshots = `-- name: TakeAutomaticSnapshots :many
+insert into memory_snapshots (workspace_id, release_id, container_id, automatic, state, traceparent)
+select distinct on (c.release_id) c.workspace_id, c.release_id, c.id, true, 'pending', $1::text
+from containers c
+join releases r on r.id = c.release_id
+where c.state = 'ready' and c.purpose = 'serve' and r.spec ? 'checkpoint'
+  and not exists (
+      select 1 from memory_snapshots s where s.release_id = c.release_id and s.automatic and s.state <> 'failed'
+  )
+order by c.release_id, c.ready_at, c.id
+limit 100
+on conflict (release_id) where automatic and state <> 'failed' do nothing
+returning (select h.host_id from containers h where h.id = container_id) as host_id
+`
+
+// Requests a snapshot of the oldest ready serve container of each
+// checkpoint-enabled release with no automatic snapshot pending or
+// available, and returns the hosts to wake. One automatic snapshot per
+// release at a time; a concurrent request loses.
+func (q *Queries) TakeAutomaticSnapshots(ctx context.Context, traceparent *string) ([]*uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, takeAutomaticSnapshots, traceparent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*uuid.UUID
+	for rows.Next() {
+		var host_id *uuid.UUID
+		if err := rows.Scan(&host_id); err != nil {
+			return nil, err
+		}
+		items = append(items, host_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

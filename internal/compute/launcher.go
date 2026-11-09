@@ -134,7 +134,7 @@ func (c *Compute) launchPools(ctx context.Context, logger *slog.Logger, h ClaimH
 		if refusal == nil {
 			return started, err
 		}
-		cool, message := ptr(refusal.cooldown()), refusal.message()
+		cool, message := new(refusal.cooldown()), refusal.message()
 		if h.Replaces != nil {
 			// A rightsize is optional: its refusal keeps the host it would
 			// replace.
@@ -681,7 +681,7 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, failure
 			}
 		}
 		if _, err := q.FailLaunch(ctx, FailLaunchParams{
-			ID: h.ID, Token: h.ActionToken, Failure: ptr(string(failure)), Message: truncate("Launch failed: " + message),
+			ID: h.ID, Token: h.ActionToken, Failure: new(string(failure)), Message: truncate("Launch failed: " + message),
 		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}

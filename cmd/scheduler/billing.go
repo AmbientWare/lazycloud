@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -32,25 +31,15 @@ func newBillingLoops(pool, session *pgxpool.Pool, exec *execution.Execution, sto
 	return &billingLoops{billing: billing.NewBilling(pool, cfg, logger), execution: exec, storage: store, logger: logger}
 }
 
-func (b *billingLoops) start(ctx context.Context, group *errgroup.Group, p *pace, t ticks) {
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.metering}, nil, nil, func(ctx context.Context) bool {
-			b.meter(ctx)
-			return false
-		})
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.payments}, nil, nil, func(ctx context.Context) bool {
-			b.payments(ctx)
-			return false
-		})
-	})
-	group.Go(func() error {
-		return p.loop(ctx, cadence{every: t.retention}, nil, nil, func(ctx context.Context) bool {
-			b.retain(ctx)
-			return false
-		})
-	})
+func (b *billingLoops) loops(t ticks) []loop {
+	return []loop{
+		{name: "metering", cadence: cadence{every: t.metering}, pass: func(ctx context.Context) bool { b.meter(ctx); return false }},
+		{name: "payments", cadence: cadence{every: t.payments}, pass: steps(b.logger,
+			step{what: "stripe deliveries", do: discardContext(b.billing.ProcessEvents)},
+			step{what: "credit purchases", do: discardContext(b.billing.SweepPurchases)},
+			step{what: "plan changes", do: discardContext(b.billing.SettlePlanChanges)})},
+		{name: "retention", cadence: cadence{every: t.retention}, pass: func(ctx context.Context) bool { b.retain(ctx); return false }},
+	}
 }
 
 // retain starts and ends unfunded retention periods and deletes the data of
@@ -126,17 +115,5 @@ func (b *billingLoops) meter(ctx context.Context) {
 	}
 	if _, err := b.billing.Reload(ctx); err != nil {
 		b.logger.ErrorContext(ctx, "automatic reload", "error", err)
-	}
-}
-
-func (b *billingLoops) payments(ctx context.Context) {
-	if _, err := b.billing.ProcessEvents(ctx); err != nil {
-		b.logger.ErrorContext(ctx, "stripe deliveries", "error", err)
-	}
-	if _, err := b.billing.SweepPurchases(ctx); err != nil {
-		b.logger.ErrorContext(ctx, "credit purchases", "error", err)
-	}
-	if _, err := b.billing.SettlePlanChanges(ctx); err != nil {
-		b.logger.ErrorContext(ctx, "plan changes", "error", err)
 	}
 }

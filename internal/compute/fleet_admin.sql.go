@@ -141,10 +141,8 @@ select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
 from hosts h
 left join lateral (
     select sum(c.cpu_millis) as cpu, sum(c.memory_bytes) as memory,
-           sum(case when c.image_build_id is null then coalesce(release_gpus(r.spec), 0) else c.gpu_count end) as gpus,
-           count(*) as containers
+           sum(c.gpu_count) as gpus, count(*) as containers
     from containers c
-    left join releases r on r.id = c.release_id
     where c.host_id = h.id and c.state <> 'stopped'
 ) used on true
 where h.kind = 'platform' and h.instance_id is not null and h.phase not in ('deleted', 'failed')

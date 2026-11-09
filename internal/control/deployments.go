@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -134,7 +133,7 @@ func (c *Control) Release(ctx context.Context, workspace identity.WorkspaceID, i
 		if *version < 1 || *version > math.MaxInt32 {
 			return apitypes.Release{}, ErrVersionNotFound
 		}
-		params.Version = ptr(int32(*version))
+		params.Version = new(int32(*version))
 	}
 	row, err := c.queries.WorkloadRelease(ctx, params)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -143,11 +142,7 @@ func (c *Control) Release(ctx context.Context, workspace identity.WorkspaceID, i
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("read release: %w", err)
 	}
-	var spec apitypes.WorkloadSpec
-	if err := json.Unmarshal(row.Spec, &spec); err != nil {
-		return apitypes.Release{}, fmt.Errorf("decode release spec: %w", err)
-	}
-	return apitypes.Release{Id: row.ID, Name: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
+	return apitypes.Release{Id: row.ID, Name: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: row.Spec}, nil
 }
 
 // StopWorkload stops admission to the workload. Planning drains its
@@ -166,7 +161,7 @@ func (c *Control) StartWorkload(ctx context.Context, workspace identity.Workspac
 			if *version < 1 || *version > math.MaxInt32 {
 				return ErrVersionNotFound
 			}
-			release, err := q.ReleaseByVersion(ctx, ReleaseByVersionParams{WorkloadID: row.ID, Version: ptr(int32(*version))})
+			release, err := q.ReleaseByVersion(ctx, ReleaseByVersionParams{WorkloadID: row.ID, Version: new(int32(*version))})
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrVersionNotFound
 			}
@@ -350,7 +345,7 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 		item := apitypes.DeploymentPlanItem{Kind: w.Kind, Name: w.Name, Action: action, Versions: versions}
 		for _, r := range refused {
 			if r.Kind == w.Kind && r.Name == w.Name {
-				item.Refusals = ptr(append(deref(item.Refusals), r))
+				item.Refusals = new(append(deref(item.Refusals), r))
 			}
 		}
 		items = append(items, item)
@@ -375,8 +370,6 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 	}
 	return apitypes.DeploymentPlan{App: app, Prune: prune, Items: items}, nil
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func deref[T any](v *[]T) []T {
 	if v == nil {

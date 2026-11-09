@@ -133,39 +133,42 @@ func orDefault[T any](v *T, def T) *T {
 	return &def
 }
 
-// Digest is the SHA-256 of a resolved spec's JSON. encoding/json writes
-// struct fields in declaration order and map keys sorted, so the encoding is
-// canonical for a given spec.
-func Digest(resolved apitypes.WorkloadSpec) ([]byte, []byte, error) {
-	encoded, err := json.Marshal(resolved)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode spec: %w", err)
-	}
-	sum := sha256.Sum256(encoded)
-	return encoded, sum[:], nil
-}
-
 type resolvedFunction struct {
-	spec    apitypes.WorkloadSpec
-	encoded []byte
-	digest  []byte
-	source  storage.Digest
+	spec   apitypes.WorkloadSpec
+	digest []byte
+	source storage.Digest
 }
 
+// resolveFunction resolves spec and takes the SHA-256 of its JSON as the
+// digest. encoding/json writes struct fields in declaration order and map
+// keys sorted, so the encoding is canonical for a given spec.
 func resolveFunction(spec apitypes.WorkloadSpec) (resolvedFunction, error) {
 	resolved, err := Resolve(spec)
 	if err != nil {
 		return resolvedFunction{}, err
 	}
-	encoded, digest, err := Digest(resolved)
+	encoded, err := json.Marshal(resolved)
 	if err != nil {
-		return resolvedFunction{}, err
+		return resolvedFunction{}, fmt.Errorf("encode spec: %w", err)
 	}
+	digest := sha256.Sum256(encoded)
 	source, err := storage.ParseDigest(spec.Source.Sha256)
 	if err != nil {
 		return resolvedFunction{}, &InvalidSpecError{Function: spec.Name, Reason: "source.sha256 is not a lowercase hex digest"}
 	}
-	return resolvedFunction{spec: resolved, encoded: encoded, digest: digest, source: source}, nil
+	return resolvedFunction{spec: resolved, digest: digest[:], source: source}, nil
+}
+
+// addRelease records f as a release of workload.
+func addRelease(ctx context.Context, q *Queries, workload uuid.UUID, f resolvedFunction, version *int32, preview bool) (InsertReleaseRow, error) {
+	row, err := q.InsertRelease(ctx, InsertReleaseParams{
+		WorkloadID: workload, Preview: preview, Version: version,
+		Spec: f.spec, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
+	})
+	if err != nil {
+		return row, fmt.Errorf("insert release of %s: %w", f.spec.Name, err)
+	}
+	return row, nil
 }
 
 // requireSources fails unless the workspace registered every function's
@@ -297,7 +300,9 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 // active release. Execution is woken for the new release and for the one it
 // replaces, which drains once its work finishes.
 func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, workspace, app uuid.UUID, appName string, f resolvedFunction) (apitypes.Release, error) {
-	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(f.spec.Kind), Name: f.spec.Name})
+	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{
+		AppID: app, Kind: string(f.spec.Kind), Name: f.spec.Name, State: string(WorkloadActive), Activate: true,
+	})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)
 	}
@@ -326,12 +331,9 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 			}, nil
 		}
 	}
-	inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
-		WorkloadID: workload.ID, Version: &workload.NextVersion,
-		Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
-	})
+	inserted, err := addRelease(ctx, q, workload.ID, f, &workload.NextVersion, false)
 	if err != nil {
-		return apitypes.Release{}, fmt.Errorf("insert release of %s: %w", f.spec.Name, err)
+		return apitypes.Release{}, err
 	}
 	if err := q.ActivateRelease(ctx, ActivateReleaseParams{ReleaseID: inserted.ID, ID: workload.ID}); err != nil {
 		return apitypes.Release{}, fmt.Errorf("activate release of %s: %w", f.spec.Name, err)

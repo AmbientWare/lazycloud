@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -68,10 +67,7 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
 			return &ConflictError{Reason: "only a running container can be snapshotted"}
 		}
-		var spec apitypes.WorkloadSpec
-		if err := json.Unmarshal(row.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
+		spec := row.Spec
 		if !Checkpointable(apitypes.WorkloadKind(row.Kind), ContainerPurpose(row.Purpose), spec) {
 			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
 		}
@@ -238,11 +234,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 			Deadline: row.CreatedAt.Add(SnapshotDeadline), Traceparent: deref(row.Traceparent),
 		}
 		if row.Automatic {
-			var spec apitypes.WorkloadSpec
-			if err := json.Unmarshal(row.Spec, &spec); err != nil {
-				return fmt.Errorf("decode release spec: %w", err)
-			}
-			if spec.Checkpoint != nil && spec.Pod != nil && spec.Checkpoint.ReadinessPath != nil {
+			if spec := row.Spec; spec.Checkpoint != nil && spec.Pod != nil && spec.Checkpoint.ReadinessPath != nil {
 				cmd.Ready = spec.Checkpoint
 			}
 		}
@@ -303,29 +295,22 @@ func (e *Execution) RestoreFailed(ctx context.Context, snapshot uuid.UUID, reaso
 // TakeAutomaticSnapshots requests a snapshot of the first ready container
 // of every checkpoint-enabled release that has none, and fails snapshots and
 // publishes whose container stopped or deadline passed.
-func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, logger *slog.Logger) error {
-	candidates, err := e.queries.AutomaticSnapshotCandidates(ctx)
-	if err != nil {
-		return fmt.Errorf("list snapshot candidates: %w", err)
-	}
-	for _, c := range candidates {
-		err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-			q := e.queries.WithTx(tx)
-			n, err := q.InsertAutomaticSnapshot(ctx, InsertAutomaticSnapshotParams{
-				WorkspaceID: c.WorkspaceID, ReleaseID: c.ReleaseID, ContainerID: &c.ID, Traceparent: traceparent(ctx),
-			})
-			if err != nil || n == 0 {
-				return err //nolint:wrapcheck // Wrapped below.
-			}
-			route, err := q.ContainerRoute(ctx, c.ID)
-			if err != nil || route.HostID == nil {
-				return err //nolint:wrapcheck // Wrapped below.
-			}
-			return database.Notify(ctx, tx, database.ChannelHost, route.HostID.String())
-		})
+func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, _ *slog.Logger) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		hosts, err := e.queries.WithTx(tx).TakeAutomaticSnapshots(ctx, traceparent(ctx))
 		if err != nil {
-			logger.ErrorContext(ctx, "request automatic snapshot", "release_id", c.ReleaseID, "error", err)
+			return fmt.Errorf("request automatic snapshots: %w", err)
 		}
+		wake := make([]string, 0, len(hosts))
+		for _, host := range hosts {
+			if host != nil {
+				wake = append(wake, host.String())
+			}
+		}
+		return database.NotifyAll(ctx, tx, database.ChannelHost, wake)
+	})
+	if err != nil {
+		return fmt.Errorf("automatic snapshots: %w", err)
 	}
 	stale, err := e.queries.FailStaleSnapshots(ctx, SnapshotDeadline.Seconds())
 	if err != nil {

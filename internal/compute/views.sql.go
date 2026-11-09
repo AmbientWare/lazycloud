@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/google/uuid"
 )
@@ -36,7 +37,7 @@ type ComputeWorkloadsRow struct {
 	App  string
 	Name string
 	Kind string
-	Spec []byte
+	Spec apitypes.WorkloadSpec
 }
 
 // Deployed workloads with their active release's size and machine pin, by
