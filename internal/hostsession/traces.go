@@ -105,14 +105,10 @@ func (sess *session) volumePeers(ctx context.Context, cache *syncCache, start ex
 	if peers, ok := cache.volumePeers[start.Workspace]; ok {
 		return peers
 	}
-	found, err := sess.server.execution.VolumePeers(ctx, sess.host, start.Workspace)
+	peers, err := sess.server.execution.VolumePeers(ctx, sess.host, start.Workspace)
 	if err != nil {
 		sess.server.logger.WarnContext(ctx, "reading the volume peers failed", "host", sess.host.String(), "workspace", start.Workspace.String(), "error", err)
 		return nil
-	}
-	peers := make([]string, len(found))
-	for n, p := range found {
-		peers[n] = p.Address
 	}
 	cache.volumePeers[start.Workspace] = peers
 	return peers

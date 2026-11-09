@@ -19,6 +19,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
@@ -155,27 +156,27 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 	return c.Container, c.Host, err
 }
 
-func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.Time) (execution.PodContainer, bool, error) {
+func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.Time) (execution.ReadyContainer, bool, error) {
 	if t.container != nil {
 		route, err := e.execution.Route(ctx, execution.ContainerID(*t.container))
 		if err != nil {
-			return execution.PodContainer{}, false, err
+			return execution.ReadyContainer{}, false, err
 		}
 		if route.State != execution.ContainerReady || route.Host == nil {
-			return execution.PodContainer{}, false, errBusy
+			return execution.ReadyContainer{}, false, errBusy
 		}
-		return execution.PodContainer{Container: route.ID, Host: *route.Host}, false, nil
+		return execution.ReadyContainer{Container: route.ID, Host: *route.Host}, false, nil
 	}
 	if !t.accepting {
-		return execution.PodContainer{}, false, errPodStopped
+		return execution.ReadyContainer{}, false, errPodStopped
 	}
 	woken := false
 	var wokeAt time.Time
 	for {
 		wake := e.podWaits.subscribe(t.workload)
-		ready, err := e.execution.ReadyPodContainers(ctx, t.workload)
+		ready, err := e.execution.ReadyContainers(ctx, t.workload)
 		if err != nil {
-			return execution.PodContainer{}, woken, err
+			return execution.ReadyContainer{}, woken, err
 		}
 		pick := -1
 		for n, c := range ready {
@@ -195,10 +196,10 @@ func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.
 			// once instead of at its deadline.
 			reason, err := e.execution.PodStartFailure(ctx, t.workload, wokeAt)
 			if err != nil {
-				return execution.PodContainer{}, woken, err
+				return execution.ReadyContainer{}, woken, err
 			}
 			if reason != "" {
-				return execution.PodContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, reason)
+				return execution.ReadyContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, reason)
 			}
 		}
 		if !woken {
@@ -206,12 +207,12 @@ func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.
 			held, err := e.execution.WakePod(ctx, t.workspace, t.workload)
 			if err != nil {
 				if apitypes.CodeOf(err) == apitypes.Conflict {
-					return execution.PodContainer{}, woken, errPodStopped
+					return execution.ReadyContainer{}, woken, errPodStopped
 				}
-				return execution.PodContainer{}, woken, err
+				return execution.ReadyContainer{}, woken, err
 			}
 			if held != nil {
-				return execution.PodContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, held.Message)
+				return execution.ReadyContainer{}, woken, fmt.Errorf("%w: %s", errPodStartFailed, held.Message)
 			}
 			woken = true
 		}
@@ -219,13 +220,13 @@ func (e *Edge) pickPodContainer(ctx context.Context, t podTarget, deadline time.
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return execution.PodContainer{}, woken, fmt.Errorf("wait for the pod: %w", ctx.Err())
+			return execution.ReadyContainer{}, woken, fmt.Errorf("wait for the pod: %w", ctx.Err())
 		case <-wake:
 		case <-timer.C:
 		}
 		timer.Stop()
 		if time.Now().After(deadline) {
-			return execution.PodContainer{}, woken, errPodNotReady
+			return execution.ReadyContainer{}, woken, errPodNotReady
 		}
 	}
 }
@@ -267,9 +268,7 @@ func (e *Edge) servePod(w http.ResponseWriter, r *http.Request, id uuid.UUID, po
 	upgrade := r.Header.Get("Upgrade") != ""
 	header := e.requestHead(r, authorized, upgrade, &requestBody{stream: r.Body}, uuid.New())
 	out.Header = http.Header{}
-	for _, h := range header.GetHeaders() {
-		out.Header.Add(h.GetName(), h.GetValue())
-	}
+	hostproto.HeadersIn(out.Header, header.GetHeaders())
 	out.Header.Del(RequestIDHeader)
 	if upgrade {
 		out.Body = http.NoBody

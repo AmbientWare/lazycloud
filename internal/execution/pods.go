@@ -203,29 +203,6 @@ func (e *Execution) ParkPod(ctx context.Context, workspace identity.WorkspaceID,
 	return nil
 }
 
-// PodContainer is a ready serve container of a pod.
-type PodContainer struct {
-	Container ContainerID
-	Host      uuid.UUID
-	Release   uuid.UUID
-	// Traceparent is the trace of the container's start.
-	Traceparent string
-}
-
-// ReadyPodContainers lists the pod's ready serve containers, the active
-// release's first.
-func (e *Execution) ReadyPodContainers(ctx context.Context, workload uuid.UUID) ([]PodContainer, error) {
-	rows, err := e.queries.ReadyContainers(ctx, workload)
-	if err != nil {
-		return nil, fmt.Errorf("list pod containers: %w", err)
-	}
-	out := make([]PodContainer, len(rows))
-	for n, r := range rows {
-		out[n] = PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: database.Value(r.Traceparent)}
-	}
-	return out, nil
-}
-
 // PodReplicas returns the count a scale set, or nil when the pod follows
 // its connections.
 func (e *Execution) PodReplicas(ctx context.Context, workload uuid.UUID) (*int, error) {

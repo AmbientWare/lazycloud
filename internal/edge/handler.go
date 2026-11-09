@@ -388,13 +388,7 @@ func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requ
 	} else if !body.replayable() && r.ContentLength > 0 {
 		header.Set("Content-Length", fmt.Sprint(r.ContentLength))
 	}
-	out := &hostproto.HttpRequest{Method: r.Method, Uri: r.URL.RequestURI(), Host: r.Host}
-	for name, values := range header {
-		for _, value := range values {
-			out.Headers = append(out.Headers, &hostproto.Header{Name: name, Value: value})
-		}
-	}
-	return out
+	return &hostproto.HttpRequest{Method: r.Method, Uri: r.URL.RequestURI(), Host: r.Host, Headers: hostproto.HeadersOut(header)}
 }
 
 // exchangeState is one request on one agent stream.
@@ -528,9 +522,7 @@ func (e *Edge) respond(w http.ResponseWriter, r *http.Request, ex *exchangeState
 	}
 	header := w.Header()
 	ours := header.Get(RequestIDHeader)
-	for _, h := range head.GetHeaders() {
-		header.Add(h.GetName(), h.GetValue())
-	}
+	hostproto.HeadersIn(header, head.GetHeaders())
 	if ours != "" {
 		header.Set(RequestIDHeader, ours)
 	}

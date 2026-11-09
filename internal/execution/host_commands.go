@@ -61,11 +61,10 @@ type StopCommand struct {
 }
 
 // CancelCommand asks a host to kill the slot running an attempt that
-// already ended as Reason (cancelled or timed out).
+// already ended.
 type CancelCommand struct {
 	Container ContainerID
 	Attempt   AttemptID
-	Reason    AttemptState
 }
 
 // HostCommands are the commands durable state implies for a host. They are
@@ -119,9 +118,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		return out, fmt.Errorf("list ended attempts: %w", err)
 	}
 	for _, row := range ended {
-		out.Cancel = append(out.Cancel, CancelCommand{
-			Container: ContainerID(row.ContainerID), Attempt: AttemptID(row.ID), Reason: AttemptState(row.State),
-		})
+		out.Cancel = append(out.Cancel, CancelCommand{Container: ContainerID(row.ContainerID), Attempt: AttemptID(row.ID)})
 	}
 	if err := e.workloadCommands(ctx, host, &out); err != nil {
 		return out, err
@@ -199,24 +196,13 @@ func (e *Execution) ContainerWorkload(ctx context.Context, host compute.HostID, 
 // the host a miss round per peer before the store.
 const maxVolumePeers = 8
 
-// VolumePeer is a host whose volume cache serves a workspace's frames at
-// Address.
-type VolumePeer struct {
-	Host    compute.HostID
-	Address string
-}
-
-// VolumePeers lists the other online hosts of host's region that run a live
+// VolumePeers lists the peer addresses of the other online hosts of host's region that run a live
 // container of workspace and serve a volume cache, at most maxVolumePeers,
 // those with the newest container of the workspace first.
-func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]VolumePeer, error) {
-	rows, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
+func (e *Execution) VolumePeers(ctx context.Context, host compute.HostID, workspace identity.WorkspaceID) ([]string, error) {
+	peers, err := e.queries.VolumePeers(ctx, VolumePeersParams{WorkspaceID: uuid.UUID(workspace), HostID: uuid.UUID(host), MaxPeers: maxVolumePeers})
 	if err != nil {
 		return nil, fmt.Errorf("list volume peers: %w", err)
-	}
-	peers := make([]VolumePeer, len(rows))
-	for n, r := range rows {
-		peers[n] = VolumePeer{Host: compute.HostID(r.ID), Address: r.PeerAddress}
 	}
 	return peers, nil
 }

@@ -24,7 +24,7 @@ order by c.id;
 -- Attempts that ended without their slot knowing: the host kills them. A
 -- lost attempt on a live container was stopped by request or omitted from a
 -- report, and its slot must not keep running it.
-select a.id, a.container_id, a.state
+select a.id, a.container_id
 from containers c
 join attempts a on a.container_id = c.id
 where c.host_id = @host_id and c.state in ('ready', 'draining')
@@ -52,7 +52,7 @@ where id = @id and host_id = @host_id and state <> 'stopped' and workload_id is 
 -- The other online hosts of the host's region that run a live container of
 -- the workspace and serve a volume cache, those with the newest container
 -- first.
-select h.id, h.peer_address
+select h.peer_address
 from containers c
 join hosts h on h.id = c.host_id and h.state = 'online' and h.peer_address <> ''
   and h.region = (select me.region from hosts me where me.id = @host_id)

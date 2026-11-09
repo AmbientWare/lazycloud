@@ -1,12 +1,9 @@
--- name: ListWorkspaces :many
--- Workspaces by name after after_name, with the user's role where a member.
--- members_only limits the list to memberships; restrict_to to one workspace.
-select w.id, w.name, w.state, w.created_at, coalesce(m.role, '')::text as role
+-- name: MemberWorkspaces :many
+-- The user's workspaces by name with its role, only restrict_to when set.
+select w.id, w.name, w.state, w.created_at, m.role
 from workspaces w
-left join workspace_members m on m.workspace_id = w.id and m.user_id = @user_id
-where (not @members_only::bool or m.user_id is not null)
-  and (sqlc.narg(after_name)::text is null or w.name > sqlc.narg(after_name)::text)
-  and (sqlc.narg(restrict_to)::uuid is null or w.id = sqlc.narg(restrict_to)::uuid)
+join workspace_members m on m.workspace_id = w.id and m.user_id = @user_id
+where sqlc.narg(restrict_to)::uuid is null or w.id = sqlc.narg(restrict_to)::uuid
 order by w.name
 limit @row_limit;
 

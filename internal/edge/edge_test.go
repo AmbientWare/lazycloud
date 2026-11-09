@@ -83,8 +83,8 @@ func TestAnOlderContainerReadNeverReplacesANewerOne(t *testing.T) {
 	t.Parallel()
 	e := newTestEdge(t, nil)
 	ws := e.stateLocked(uuid.New())
-	older := []execution.EndpointContainer{{Container: execution.ContainerID(uuid.New()), Version: 1}}
-	newer := []execution.EndpointContainer{{Container: execution.ContainerID(uuid.New()), Version: 2}}
+	older := []execution.ReadyContainer{{Container: execution.ContainerID(uuid.New()), Version: 1}}
+	newer := []execution.ReadyContainer{{Container: execution.ContainerID(uuid.New()), Version: 2}}
 	e.applyLocked(ws, 2, newer)
 	e.applyLocked(ws, 1, older)
 	if len(ws.containers) != 1 || ws.containers[uuid.UUID(newer[0].Container)] == nil {

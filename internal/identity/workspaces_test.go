@@ -52,18 +52,10 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatalf("rename non-member: %v", err)
 	}
 
-	// Administrators list every workspace, page by page; members their own.
-	page, err := f.id.ListWorkspaces(ctx, admin, WorkspacePage{Limit: 1})
-	if err != nil || len(page.Workspaces) != 1 || page.Workspaces[0].Name != "beta" || page.Next != "beta" {
-		t.Fatalf("admin page %+v %v", page, err)
-	}
-	page, _ = f.id.ListWorkspaces(ctx, admin, WorkspacePage{After: page.Next, Limit: 1})
-	if len(page.Workspaces) != 1 || page.Workspaces[0].Name != "gamma" {
-		t.Fatalf("admin second page %+v", page)
-	}
-	mine, _ := f.id.ListWorkspaces(ctx, member, WorkspacePage{Limit: 10})
-	if len(mine.Workspaces) != 1 || mine.Workspaces[0].Name != "gamma" {
-		t.Fatalf("member list %+v", mine)
+	// Members list their own workspaces.
+	mine, err := f.id.Workspaces(ctx, member)
+	if err != nil || len(mine) != 1 || mine[0].Name != "gamma" {
+		t.Fatalf("member list %+v %v", mine, err)
 	}
 
 	// Deleting: only administrators, with an account credential.

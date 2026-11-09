@@ -45,7 +45,7 @@ func TestCancelQueuedAndRunningTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(commands.Cancel) != 1 || commands.Cancel[0].Attempt != claimed[0].Attempt || commands.Cancel[0].Reason != AttemptCancelled {
+	if len(commands.Cancel) != 1 || commands.Cancel[0].Attempt != claimed[0].Attempt {
 		t.Fatalf("cancel commands %+v", commands.Cancel)
 	}
 	late := AttemptOutcome{Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")}}

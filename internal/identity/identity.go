@@ -268,11 +268,17 @@ const maxMemberships = 1000
 // Workspaces lists the workspaces p is a member of and its token reaches,
 // deleting ones included.
 func (i *Identity) Workspaces(ctx context.Context, p Principal) ([]Workspace, error) {
-	page, err := i.ListWorkspaces(ctx, p, WorkspacePage{MembersOnly: true, Limit: maxMemberships})
+	rows, err := i.queries.MemberWorkspaces(ctx, MemberWorkspacesParams{
+		UserID: uuid.UUID(p.User), RestrictTo: (*uuid.UUID)(p.TokenWorkspace), RowLimit: maxMemberships,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list workspaces: %w", err)
 	}
-	return page.Workspaces, nil
+	out := make([]Workspace, len(rows))
+	for n, row := range rows {
+		out[n] = Workspace{ID: WorkspaceID(row.ID), Name: row.Name, State: WorkspaceState(row.State), Role: Role(row.Role), CreatedAt: row.CreatedAt}
+	}
+	return out, nil
 }
 
 // CreateUser adds a user. Administrators reach every workspace.

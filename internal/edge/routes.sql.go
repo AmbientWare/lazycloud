@@ -42,7 +42,7 @@ const releaseRoute = `-- name: ReleaseRoute :one
 select rel.id as release_id, rel.version, rel.spec,
        w.id as workload_id, w.kind, w.name, w.desired_state, (w.active_release_id is not distinct from rel.id)::bool as active,
        a.id as app_id, a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
-       coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
+       coalesce(preview_live(p), false)::bool as preview_live,
        -- Whether the workload's active release requires a token; every host
        -- of every release follows it, so going private closes old URLs.
        coalesce((ar.spec ->> 'authorized')::bool, ar.id is not null)::bool as active_authorized

@@ -71,8 +71,8 @@ func (e *Execution) PublishEndpointLoads(ctx context.Context, edge uuid.UUID, lo
 	return nil
 }
 
-// EndpointContainer is a ready container of an HTTP workload.
-type EndpointContainer struct {
+// ReadyContainer is a ready serve container of an HTTP workload or pod.
+type ReadyContainer struct {
 	Release   uuid.UUID
 	Version   int
 	Container ContainerID
@@ -81,17 +81,17 @@ type EndpointContainer struct {
 	Traceparent string
 }
 
-// EndpointContainers lists the ready containers of every release of
-// workload, newest version first.
-func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) ([]EndpointContainer, error) {
+// ReadyContainers lists the ready serve containers of every deployed
+// release of workload, newest version first.
+func (e *Execution) ReadyContainers(ctx context.Context, workload uuid.UUID) ([]ReadyContainer, error) {
 	rows, err := e.queries.ReadyContainers(ctx, workload)
 	if err != nil {
-		return nil, fmt.Errorf("list endpoint containers: %w", err)
+		return nil, fmt.Errorf("list ready containers: %w", err)
 	}
-	out := make([]EndpointContainer, 0, len(rows))
+	out := make([]ReadyContainer, 0, len(rows))
 	for _, row := range rows {
 		if row.Version != nil {
-			out = append(out, EndpointContainer{
+			out = append(out, ReadyContainer{
 				Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ID), Host: *row.HostID,
 				Traceparent: database.Value(row.Traceparent),
 			})
