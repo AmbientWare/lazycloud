@@ -147,19 +147,6 @@ func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurch
 	return CreateCreditPurchase201JSONResponse(purchase), nil
 }
 
-// GetCreditPurchase returns one of the caller's purchases.
-func (s *Server) GetCreditPurchase(ctx context.Context, req GetCreditPurchaseRequestObject) (GetCreditPurchaseResponseObject, error) {
-	user, err := s.payer(ctx)
-	if err != nil {
-		return nil, err
-	}
-	purchase, err := s.owners.Billing.CreditPurchase(ctx, user, req.Purchase)
-	if err != nil {
-		return nil, err
-	}
-	return GetCreditPurchase200JSONResponse(purchase), nil
-}
-
 // ListCosts pages through the account's usage cost.
 func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
 	user, err := s.payer(ctx)

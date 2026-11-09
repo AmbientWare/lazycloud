@@ -99,7 +99,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		}
 	}
 	var containers apitypes.ContainerPage
-	if status := e.do("GET", deployment+"/containers?live=true", e.owner, nil, &containers); status != 200 {
+	if status := e.do("GET", "/v1/workspaces/acme/containers?live=true&workload_id="+detail.Workload.Id.String(), e.owner, nil, &containers); status != 200 {
 		t.Fatalf("workload containers: %d %+v", status, containers)
 	}
 	var versions apitypes.VersionPage

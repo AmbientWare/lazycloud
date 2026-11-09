@@ -78,7 +78,6 @@ from lazycloud.contracts.api import (
     WorkloadPage,
     WorkloadSpec,
     Workspace,
-    WorkspaceList,
     WorkspaceRequest,
 )
 from lazycloud.exceptions import SdkError
@@ -183,19 +182,8 @@ class ApiClient:
         )
 
     def list_workspaces(self) -> list[Workspace]:
-        """Every workspace the caller may act on, following pages."""
-
-        workspaces: list[Workspace] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, str | int] = {"limit": 1000}
-            if cursor:
-                params["cursor"] = cursor
-            page = self._send(WorkspaceList, "GET", "/v1/workspaces", params=params)
-            workspaces.extend(page.workspaces)
-            if not page.next_cursor:
-                return workspaces
-            cursor = page.next_cursor
+        """The workspaces the caller is a member of and its token reaches."""
+        return self.me().workspaces
 
     def get_workspace(self, name: str) -> Workspace:
         return self._send(Workspace, "GET", _path("v1", "workspaces", name))
@@ -799,11 +787,6 @@ class ApiClient:
             "POST",
             _path("v1", "workspaces", workspace, "webhooks"),
             body=WebhookCreate.model_validate(fields),
-        )
-
-    def get_webhook(self, workspace: str, webhook: UUID) -> Webhook:
-        return self._send(
-            Webhook, "GET", _path("v1", "workspaces", workspace, "webhooks", str(webhook))
         )
 
     def update_webhook(

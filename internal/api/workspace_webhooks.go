@@ -31,19 +31,6 @@ func (s *Server) CreateWebhook(ctx context.Context, req CreateWebhookRequestObje
 	return CreateWebhook201JSONResponse(webhook), nil
 }
 
-// GetWebhook returns one webhook.
-func (s *Server) GetWebhook(ctx context.Context, req GetWebhookRequestObject) (GetWebhookResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	webhook, err := s.owners.Webhooks.Get(ctx, ws.ID, req.Webhook)
-	if err != nil {
-		return nil, err
-	}
-	return GetWebhook200JSONResponse(webhook), nil
-}
-
 // UpdateWebhook changes the fields the body names.
 func (s *Server) UpdateWebhook(ctx context.Context, req UpdateWebhookRequestObject) (UpdateWebhookResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)

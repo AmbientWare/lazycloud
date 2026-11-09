@@ -3980,9 +3980,6 @@ type HttpUrls struct {
 	// Url Follows the active release across deploys.
 	Url string `json:"url"`
 
-	// VersionInvokePath The API-host path pinned to the release's version.
-	VersionInvokePath string `json:"version_invoke_path"`
-
 	// VersionUrl Pinned to the release's version.
 	VersionUrl string `json:"version_url"`
 }
@@ -5867,13 +5864,6 @@ type Workspace struct {
 	State WorkspaceState `json:"state"`
 }
 
-// WorkspaceList defines model for WorkspaceList.
-type WorkspaceList struct {
-	// NextCursor Pass as `cursor` for the next page; absent after the last.
-	NextCursor *Name       `json:"next_cursor,omitempty"`
-	Workspaces []Workspace `json:"workspaces"`
-}
-
 // WorkspaceRequest defines model for WorkspaceRequest.
 type WorkspaceRequest struct {
 	// Cloud aws places the workspace in the caller's ready AWS connection, for good.
@@ -5982,9 +5972,6 @@ type UserCodePath = string
 
 // UserPath defines model for UserPath.
 type UserPath = openapi_types.UUID
-
-// VersionPath defines model for VersionPath.
-type VersionPath = int
 
 // VersionQuery defines model for VersionQuery.
 type VersionQuery = int
@@ -6116,14 +6103,6 @@ type ListTokensParams struct {
 	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
-// ListWorkspacesParams defines parameters for ListWorkspaces.
-type ListWorkspacesParams struct {
-	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The `next_cursor` of the previous page.
-	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
-}
-
 // ListAppsParams defines parameters for ListApps.
 type ListAppsParams struct {
 	// State Only apps in this state. Omitted lists active and paused apps.
@@ -6159,26 +6138,10 @@ type RunTaskParams struct {
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
-// InvokeFunctionVersionParams defines parameters for InvokeFunctionVersion.
-type InvokeFunctionVersionParams struct {
-	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
-	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
-}
-
 // GetWorkloadParams defines parameters for GetWorkload.
 type GetWorkloadParams struct {
 	// Version Describe this version instead of the active one.
 	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
-}
-
-// ListWorkloadContainersParams defines parameters for ListWorkloadContainers.
-type ListWorkloadContainersParams struct {
-	// Live Only containers that have not stopped.
-	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
-
-	// Cursor The next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // StreamWorkloadLogsParams defines parameters for StreamWorkloadLogs.
@@ -6252,8 +6215,11 @@ type ListContainersParams struct {
 	Live *bool `form:"live,omitempty" json:"live,omitempty"`
 
 	// App Only the containers of this app's workloads.
-	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// WorkloadId Only the containers of this workload's releases.
+	WorkloadId *openapi_types.UUID `form:"workload_id,omitempty" json:"workload_id,omitempty"`
+	Limit      *PageLimit          `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -6684,9 +6650,6 @@ type RunTaskJSONRequestBody = RunTaskRequest
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
-
-// InvokeFunctionVersionJSONRequestBody defines body for InvokeFunctionVersion for application/json ContentType.
-type InvokeFunctionVersionJSONRequestBody = InvocationBody
 
 // ScaleWorkloadJSONRequestBody defines body for ScaleWorkload for application/json ContentType.
 type ScaleWorkloadJSONRequestBody = ScaleRequest

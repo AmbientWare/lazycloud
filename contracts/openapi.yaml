@@ -174,27 +174,6 @@ paths:
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces:
-    get:
-      operationId: listWorkspaces
-      summary: The workspaces the caller may act on, by name
-      description: >-
-        Platform administrators see every workspace, members their
-        memberships, and a restricted token only its workspace.
-      parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
-        - name: cursor
-          in: query
-          description: The `next_cursor` of the previous page.
-          schema: { $ref: "#/components/schemas/Name" }
-      responses:
-        "200":
-          description: One page of workspaces
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/WorkspaceList" }
-        default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createWorkspace
       summary: Create a workspace owned by the caller; platform administrators only
@@ -1015,31 +994,6 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/KindPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-    get:
-      operationId: listWorkloadContainers
-      tags: [control]
-      summary: Containers of the workload's releases, newest first
-      parameters:
-        - name: live
-          in: query
-          description: Only containers that have not stopped.
-          schema: { type: boolean, default: false }
-        - $ref: "#/components/parameters/PageLimit"
-        - $ref: "#/components/parameters/Cursor"
-      responses:
-        "200":
-          description: One page of containers
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ContainerPage" }
-        default: { $ref: "#/components/responses/Error" }
-
   /v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -1158,6 +1112,10 @@ paths:
           in: query
           description: Only the containers of this app's workloads.
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: workload_id
+          in: query
+          description: Only the containers of this workload's releases.
+          schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -1382,16 +1340,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/WebhookPath"
-    get:
-      operationId: getWebhook
-      tags: [webhooks]
-      responses:
-        "200":
-          description: The webhook
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Webhook" }
-        default: { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateWebhook
       tags: [webhooks]
@@ -1492,16 +1440,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/VolumePath"
-    get:
-      operationId: getVolume
-      tags: [storage]
-      responses:
-        "200":
-          description: The volume
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Volume" }
-        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteVolume
       tags: [storage]
@@ -1695,16 +1633,6 @@ paths:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
       - $ref: "#/components/parameters/DiskPath"
-    get:
-      operationId: getDisk
-      tags: [storage]
-      responses:
-        "200":
-          description: The disk
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Disk" }
-        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteDisk
       tags: [storage]
@@ -1818,12 +1746,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Artifact" }
-        default: { $ref: "#/components/responses/Error" }
-    delete:
-      operationId: deleteArtifact
-      tags: [storage]
-      responses:
-        "204": { description: Deleted }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/artifacts/{artifact}/complete:
@@ -2234,21 +2156,6 @@ paths:
         default:
           description: The workload's own response, or an Error from the platform.
 
-  /v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: requestEndpointPathVersion
-      summary: Send a request to an endpoint version through the API host
-      description: As requestEndpointPath, pinned to one deployed version.
-      x-lazycloud-opaque: true
-      responses:
-        default:
-          description: The workload's own response, or an Error from the platform.
-
   /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/invoke:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -2258,21 +2165,6 @@ paths:
       operationId: requestAsgiPath
       summary: Send a request to an ASGI or realtime app through the API host
       description: As requestEndpointPath, for an ASGI or realtime app.
-      x-lazycloud-opaque: true
-      responses:
-        default:
-          description: The workload's own response, or an Error from the platform.
-
-  /v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: requestAsgiPathVersion
-      summary: Send a request to an ASGI or realtime app version through the API host
-      description: As requestEndpointPath, for one deployed version of an ASGI or realtime app.
       x-lazycloud-opaque: true
       responses:
         default:
@@ -2289,29 +2181,6 @@ paths:
       description: >-
         The body's `args` and `kwargs`, or else the whole body, become the
         arguments, and query parameters are added as keyword arguments.
-      parameters:
-        - $ref: "#/components/parameters/InvokeWait"
-      requestBody:
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/InvocationBody" }
-      responses:
-        "200":
-          description: The task, with its result when it succeeded within the wait
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Invocation" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/versions/{version}/invoke:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppPath"
-      - $ref: "#/components/parameters/WorkloadPath"
-      - $ref: "#/components/parameters/VersionPath"
-    post:
-      operationId: invokeFunctionVersion
-      summary: Run one version of the function with JSON arguments
       parameters:
         - $ref: "#/components/parameters/InvokeWait"
       requestBody:
@@ -2614,22 +2483,6 @@ paths:
               schema: { $ref: "#/components/schemas/ContainerMetrics" }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/containers/{container}/lifecycle:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/ContainerPath"
-    get:
-      operationId: getContainerLifecycle
-      tags: [observability]
-      summary: How long the container waited for placement and each start stage, and how it stopped
-      responses:
-        "200":
-          description: The container's lifecycle
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ContainerLifecycle" }
-        default: { $ref: "#/components/responses/Error" }
-
   /v1/workspaces/{workspace}/containers/lifecycles:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -2913,24 +2766,6 @@ paths:
       responses:
         "201":
           description: The purchase and its checkout page
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CreditPurchase" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/billing/credit-purchases/{purchase}:
-    parameters:
-      - name: purchase
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    get:
-      tags: [billing]
-      operationId: getCreditPurchase
-      summary: One credit purchase
-      responses:
-        "200":
-          description: The purchase
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreditPurchase" }
@@ -4067,11 +3902,6 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/WorkloadName" }
-    VersionPath:
-      name: version
-      in: path
-      required: true
-      schema: { type: integer, minimum: 1 }
     TaskPath:
       name: task
       in: path
@@ -4402,17 +4232,6 @@ components:
     WorkspaceRole:
       type: string
       enum: [owner, administrator, member]
-
-    WorkspaceList:
-      type: object
-      required: [workspaces]
-      properties:
-        workspaces:
-          type: array
-          items: { $ref: "#/components/schemas/Workspace" }
-        next_cursor:
-          description: Pass as `cursor` for the next page; absent after the last.
-          allOf: [{ $ref: "#/components/schemas/Name" }]
 
     WorkspaceRequest:
       type: object
@@ -6600,7 +6419,7 @@ components:
     HttpUrls:
       description: Where an endpoint or ASGI app answers, for the release a describe names.
       type: object
-      required: [url, version_url, release_url, invoke_path, version_invoke_path]
+      required: [url, version_url, release_url, invoke_path]
       properties:
         url:
           description: Follows the active release across deploys.
@@ -6613,9 +6432,6 @@ components:
           type: string
         invoke_path:
           description: The workload on the API host; append the request's path.
-          type: string
-        version_invoke_path:
-          description: The API-host path pinned to the release's version.
           type: string
         domain_url:
           description: The custom hostname, once its registration is ready.

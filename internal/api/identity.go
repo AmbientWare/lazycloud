@@ -194,30 +194,6 @@ func (s *Server) DenyDeviceLogin(ctx context.Context, req DenyDeviceLoginRequest
 	return DenyDeviceLogin200JSONResponse(deviceCodeOut(code)), nil
 }
 
-// ListWorkspaces pages through the workspaces the caller may act on.
-func (s *Server) ListWorkspaces(ctx context.Context, req ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	page := identity.WorkspacePage{Limit: 100}
-	if req.Params.Limit != nil {
-		page.Limit = *req.Params.Limit
-	}
-	if req.Params.Cursor != nil {
-		page.After = *req.Params.Cursor
-	}
-	list, err := s.owners.Identity.ListWorkspaces(ctx, p, page)
-	if err != nil {
-		return nil, err
-	}
-	out := ListWorkspaces200JSONResponse{Workspaces: workspacesOut(list.Workspaces)}
-	if list.Next != "" {
-		out.NextCursor = &list.Next
-	}
-	return out, nil
-}
-
 // CreateWorkspace creates a workspace owned by the caller.
 func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
 	p, err := s.principal(ctx)

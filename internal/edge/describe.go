@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -56,8 +55,7 @@ func (e *Edge) HTTPUrls(ctx context.Context, workspace, app string, workload uui
 		Url:               e.urls.Deployment(row.Subdomain, path),
 		VersionUrl:        e.urls.Version(row.Subdomain, *release.Version, path),
 		ReleaseUrl:        e.urls.Release(release.Id, path),
-		InvokePath:        InvokePath(workspace, app, kind, release.Name, nil),
-		VersionInvokePath: InvokePath(workspace, app, kind, release.Name, release.Version),
+		InvokePath: InvokePath(workspace, app, kind, release.Name),
 	}
 	if row.Hostname != nil && row.HostnameReady {
 		domain := e.urls.Domain(*row.Hostname, path)
@@ -66,15 +64,10 @@ func (e *Edge) HTTPUrls(ctx context.Context, workspace, app string, workload uui
 	return out, nil
 }
 
-// InvokePath is where the API host serves a deployed endpoint or ASGI app,
-// following its active release or pinned to version; the request's own path
-// follows it.
-func InvokePath(workspace, app string, kind apitypes.WorkloadKind, name string, version *int) string {
-	p := "/v1/workspaces/" + url.PathEscape(workspace) + "/apps/" + url.PathEscape(app) + "/workloads/" + string(kind) + "/" + url.PathEscape(name)
-	if version != nil {
-		p += "/versions/" + strconv.Itoa(*version)
-	}
-	return p + "/invoke"
+// InvokePath is where the API host serves a deployed workload, following its
+// active release; the request's own path follows it.
+func InvokePath(workspace, app string, kind apitypes.WorkloadKind, name string) string {
+	return "/v1/workspaces/" + url.PathEscape(workspace) + "/apps/" + url.PathEscape(app) + "/workloads/" + string(kind) + "/" + url.PathEscape(name) + "/invoke"
 }
 
 // ServeWorkload serves a request the API host received for a deployed
@@ -82,12 +75,8 @@ func InvokePath(workspace, app string, kind apitypes.WorkloadKind, name string, 
 // workspace and whose credentials it removed. subpath is the request's path
 // under the workload. The request is admitted, recorded and forwarded as
 // the workload's own host would.
-func (e *Edge) ServeWorkload(w http.ResponseWriter, r *http.Request, workspace identity.WorkspaceID, app string, kind apitypes.WorkloadKind, name string, version *int, subpath string) {
-	label := control.Subdomain(uuid.UUID(workspace), app, name, kind)
-	if version != nil {
-		label += "-v" + strconv.Itoa(*version)
-	}
-	t, err := e.resolveLabel(r.Context(), label, true)
+func (e *Edge) ServeWorkload(w http.ResponseWriter, r *http.Request, workspace identity.WorkspaceID, app string, kind apitypes.WorkloadKind, name, subpath string) {
+	t, err := e.resolveLabel(r.Context(), control.Subdomain(uuid.UUID(workspace), app, name, kind), true)
 	if err == nil && (t.workload.workspace != workspace || t.workload.kind != kind) {
 		err = errNoRoute
 	}

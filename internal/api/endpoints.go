@@ -72,23 +72,6 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 	return InvokeFunction200JSONResponse(out), nil
 }
 
-// InvokeFunctionVersion runs one version of the function.
-func (s *Server) InvokeFunctionVersion(ctx context.Context, req InvokeFunctionVersionRequestObject) (InvokeFunctionVersionResponseObject, error) {
-	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, apitypes.WorkloadKindFunction, req.Name)
-	if err != nil {
-		return nil, err
-	}
-	release, err := s.owners.Control.Release(ctx, ws.ID, id, &req.Version)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.invoke(ctx, ws, req.App, req.Name, &release.Id, req.Body, req.Params.WaitSeconds)
-	if err != nil {
-		return nil, err
-	}
-	return InvokeFunctionVersion200JSONResponse(out), nil
-}
-
 func (s *Server) user(ctx context.Context) (identity.UserID, error) {
 	p, ok := principalFrom(ctx)
 	if !ok {

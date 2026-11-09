@@ -39,7 +39,8 @@ class _Workspaces:
         self.items: dict[str, dict[str, object]] = {}
         for name in names:
             self._add(name)
-        api.route("GET", "/v1/workspaces")(self.list)
+        api.route("GET", "/v1/me")(self.me)
+        api.route("GET", "/v1/workspaces/([a-z0-9-]+)")(self.get)
         api.route("POST", "/v1/workspaces")(self.create)
         api.route("PATCH", "/v1/workspaces/([a-z0-9-]+)")(self.rename)
         api.route("DELETE", "/v1/workspaces/([a-z0-9-]+)")(self.delete)
@@ -55,9 +56,26 @@ class _Workspaces:
         self.items[name] = item
         return item
 
-    def list(self, request: ApiRequest) -> Reply:
+    def me(self, request: ApiRequest) -> Reply:
         assert request.headers["authorization"] == f"Bearer {TOKEN}"
-        return json_reply({"workspaces": sorted(self.items.values(), key=lambda w: str(w["name"]))})
+        user = {
+            "id": "0192f0a0-0000-7000-8000-ffffffffffff",
+            "email": "dev@example.com",
+            "display_name": "Dev",
+            "avatar_url": "",
+            "github_login": "dev",
+            "is_admin": False,
+            "status": "active",
+            "created_at": "2026-09-01T00:00:00Z",
+        }
+        workspaces = sorted(self.items.values(), key=lambda w: str(w["name"]))
+        return json_reply({"user": user, "workspaces": workspaces})
+
+    def get(self, request: ApiRequest) -> Reply:
+        item = self.items.get(request.path.rsplit("/", 1)[1])
+        if item is None:
+            return error_reply("forbidden", "the token cannot reach this workspace", 403)
+        return json_reply(item)
 
     def create(self, request: ApiRequest) -> Reply:
         return json_reply(self._add(request.json()["name"]), 201)

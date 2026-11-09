@@ -173,19 +173,6 @@ func (s *Server) GetContainerMetrics(ctx context.Context, req GetContainerMetric
 	return GetContainerMetrics200JSONResponse(metrics), nil
 }
 
-// GetContainerLifecycle returns how a container started and stopped.
-func (s *Server) GetContainerLifecycle(ctx context.Context, req GetContainerLifecycleRequestObject) (GetContainerLifecycleResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	lifecycle, err := s.owners.Observability.ContainerLifecycle(ctx, ws.ID, execution.ContainerID(req.Container))
-	if err != nil {
-		return nil, err
-	}
-	return GetContainerLifecycle200JSONResponse(lifecycle), nil
-}
-
 // ListContainerLifecycles returns the lifecycles of several containers.
 func (s *Server) ListContainerLifecycles(ctx context.Context, req ListContainerLifecyclesRequestObject) (ListContainerLifecyclesResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)

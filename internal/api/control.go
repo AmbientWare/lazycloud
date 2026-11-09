@@ -161,6 +161,14 @@ func (s *Server) findWorkload(ctx context.Context, workspace, app string, kind a
 	return ws, id, err
 }
 
+// invokeURLs are where a deployed workload answers on its own host and on
+// the API host.
+func (s *Server) invokeURLs(ws identity.Workspace, app string, spec apitypes.WorkloadSpec) (*string, *string) {
+	url := s.owners.Edge.DeployedURL(ws.ID, app, spec)
+	path := edge.InvokePath(ws.Name, app, spec.Kind, spec.Name)
+	return &url, &path
+}
+
 // workloadOut reads a workload with a pod's role, count and URL.
 func (s *Server) workloadOut(ctx context.Context, ws identity.Workspace, id control.WorkloadID) (apitypes.Workload, error) {
 	w, err := s.owners.Control.GetWorkload(ctx, ws.ID, id)
@@ -195,9 +203,7 @@ func (s *Server) GetWorkload(ctx context.Context, req GetWorkloadRequestObject) 
 		out.Http = &urls
 		out.Release.Url, out.Release.InvokePath = &urls.Url, &urls.InvokePath
 	case apitypes.WorkloadKindFunction:
-		url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
-		path := edge.InvokePath(ws.Name, req.App, req.Kind, req.Name, nil)
-		out.Release.Url, out.Release.InvokePath = &url, &path
+		out.Release.Url, out.Release.InvokePath = s.invokeURLs(ws, req.App, release.Spec)
 		schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Name)
 		if err != nil {
 			return nil, err
@@ -278,20 +284,6 @@ func (s *Server) StreamWorkloadLogs(ctx context.Context, req StreamWorkloadLogsR
 		req.Params.After, req.Params.Tail, req.Params.Follow)
 }
 
-// ListWorkloadContainers lists the workload's containers newest first.
-func (s *Server) ListWorkloadContainers(ctx context.Context, req ListWorkloadContainersRequestObject) (ListWorkloadContainersResponseObject, error) {
-	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
-	if err != nil {
-		return nil, err
-	}
-	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, Workload: (*uuid.UUID)(&id)}
-	page, err := s.containerPage(ctx, ws, filter, req.Params.Limit, req.Params.Cursor)
-	if err != nil {
-		return nil, err
-	}
-	return ListWorkloadContainers200JSONResponse(page), nil
-}
-
 // ListTasks lists tasks newest first.
 func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (ListTasksResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
@@ -361,20 +353,13 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 	if err != nil {
 		return nil, err
 	}
-	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App}
-	page, err := s.containerPage(ctx, ws, filter, req.Params.Limit, req.Params.Cursor)
+	p := req.Params
+	filter := execution.ContainerFilter{Live: p.Live != nil && *p.Live, App: p.App, Workload: p.WorkloadId}
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(p.Limit), cursorOf(p.Cursor))
 	if err != nil {
 		return nil, err
 	}
-	return ListContainers200JSONResponse(page), nil
-}
-
-func (s *Server) containerPage(ctx context.Context, ws identity.Workspace, filter execution.ContainerFilter, limit *apitypes.PageLimit, cursor *apitypes.Cursor) (apitypes.ContainerPage, error) {
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(limit), cursorOf(cursor))
-	if err != nil {
-		return apitypes.ContainerPage{}, err
-	}
-	out := apitypes.ContainerPage{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: optional(page.Next)}
+	out := ListContainers200JSONResponse{Containers: make([]apitypes.Container, len(page.Containers)), NextCursor: optional(page.Next)}
 	for n, c := range page.Containers {
 		out.Containers[n] = containerOut(c)
 	}

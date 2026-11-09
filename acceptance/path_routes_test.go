@@ -69,8 +69,8 @@ func readAll(t *testing.T, resp *http.Response) string {
 }
 
 // The dashboard reaches deployed endpoints and ASGI apps same-origin on the
-// API host with its session: the workload sees neither credential, streams stream, and another workspace's
-// path is refused.
+// API host with its session: the workload sees neither credential, streams
+// stream, and another workspace's path is refused.
 func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 	t.Parallel()
 	p := startPlatform(t)
@@ -84,19 +84,16 @@ func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 		t.Fatalf("describe: %d", status)
 	}
 	endpoint := *detail.Http
-	if endpoint.InvokePath != "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words/invoke" ||
-		endpoint.VersionInvokePath != "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words/versions/1/invoke" {
-		t.Fatalf("invoke paths %q %q", endpoint.InvokePath, endpoint.VersionInvokePath)
+	if endpoint.InvokePath != "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words/invoke" {
+		t.Fatalf("invoke path %q", endpoint.InvokePath)
 	}
-	for _, path := range []string{endpoint.InvokePath, endpoint.VersionInvokePath} {
-		resp := p.browser(http.MethodPost, path+"/word-count", session, `{"text": "one two three"}`, true)
-		if body := readAll(t, resp); resp.StatusCode != http.StatusOK || body != `{"words": 3}` || resp.Header.Get("X-Request-Id") == "" {
-			t.Fatalf("POST %s with the session: %d %s", path, resp.StatusCode, body)
-		}
+	resp := p.browser(http.MethodPost, endpoint.InvokePath+"/word-count", session, `{"text": "one two three"}`, true)
+	if body := readAll(t, resp); resp.StatusCode != http.StatusOK || body != `{"words": 3}` || resp.Header.Get("X-Request-Id") == "" {
+		t.Fatalf("POST %s with the session: %d %s", endpoint.InvokePath, resp.StatusCode, body)
 	}
 	// A mutation without the dashboard's origin is refused, as on every
 	// cookie-authenticated operation.
-	resp := p.browser(http.MethodPost, endpoint.InvokePath+"/word-count", session, `{"text": "a"}`, false)
+	resp = p.browser(http.MethodPost, endpoint.InvokePath+"/word-count", session, `{"text": "a"}`, false)
 	if readAll(t, resp); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("POST without the dashboard origin: %d", resp.StatusCode)
 	}

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -50,19 +48,6 @@ func (s *Server) CreateVolume(ctx context.Context, req CreateVolumeRequestObject
 		return nil, err
 	}
 	return CreateVolume200JSONResponse(volume), nil
-}
-
-// GetVolume returns one volume.
-func (s *Server) GetVolume(ctx context.Context, req GetVolumeRequestObject) (GetVolumeResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	volume, err := s.owners.Storage.GetVolume(ctx, ws.ID, req.Volume)
-	if err != nil {
-		return nil, err
-	}
-	return GetVolume200JSONResponse(volume), nil
 }
 
 // DeleteVolume deletes a volume that no live container mounts.
@@ -193,19 +178,6 @@ func (s *Server) ListDisks(ctx context.Context, req ListDisksRequestObject) (Lis
 	return ListDisks200JSONResponse(page), nil
 }
 
-// GetDisk returns one disk.
-func (s *Server) GetDisk(ctx context.Context, req GetDiskRequestObject) (GetDiskResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	disk, err := s.owners.Storage.GetDisk(ctx, ws.ID, req.Disk)
-	if err != nil {
-		return nil, err
-	}
-	return GetDisk200JSONResponse(disk), nil
-}
-
 // DeleteDisk deletes a disk no container holds.
 func (s *Server) DeleteDisk(ctx context.Context, req DeleteDiskRequestObject) (DeleteDiskResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
@@ -323,22 +295,6 @@ func (s *Server) PresignArtifact(ctx context.Context, req PresignArtifactRequest
 		return nil, err
 	}
 	return PresignArtifact200JSONResponse(url), nil
-}
-
-// DeleteArtifact deletes one artifact.
-func (s *Server) DeleteArtifact(ctx context.Context, req DeleteArtifactRequestObject) (DeleteArtifactResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	deleted, err := s.owners.Storage.DeleteArtifacts(ctx, ws.ID, []uuid.UUID{req.Artifact})
-	if err != nil {
-		return nil, err
-	}
-	if len(deleted) == 0 {
-		return nil, storage.ErrNotFound
-	}
-	return DeleteArtifact204Response{}, nil
 }
 
 // DeleteArtifacts deletes up to 100 artifacts.

@@ -1169,9 +1169,6 @@ class HttpUrls(APIModel):
     invoke_path: Annotated[
         str, Field(description="The workload on the API host; append the request's path.")
     ]
-    version_invoke_path: Annotated[
-        str, Field(description="The API-host path pinned to the release's version.")
-    ]
     domain_url: Annotated[
         str | None, Field(description="The custom hostname, once its registration is ready.")
     ] = None
@@ -2867,17 +2864,6 @@ class Workspace(APIModel):
         Field(description="The caller's role; absent for an administrator who is not a member."),
     ] = None
     created_at: AwareDatetime
-
-
-class WorkspaceList(APIModel):
-    workspaces: list[Workspace]
-    next_cursor: Annotated[
-        str | None,
-        Field(
-            description="Pass as `cursor` for the next page; absent after the last.",
-            pattern="^[a-z][a-z0-9-]{0,62}$",
-        ),
-    ] = None
 
 
 class MemberRoleRequest(APIModel):

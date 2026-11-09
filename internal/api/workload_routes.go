@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
@@ -12,18 +11,16 @@ import (
 // workloadRoutes serves deployed endpoints and ASGI apps on the API host,
 // so the dashboard reaches them same-origin with its session:
 //
-//	/v1/workspaces/{workspace}/apps/{app}/workloads/{endpoint|asgi}/{name}[/versions/{version}]/invoke[/{path...}]
+//	/v1/workspaces/{workspace}/apps/{app}/workloads/{endpoint|asgi}/{name}/invoke[/{path...}]
 //
 // The edge forwards them like its own hosts. They stream, so the API's body
 // limit and operation router do not apply.
 func (s *Server) workloadRoutes(mux *http.ServeMux) {
 	for _, kind := range []apitypes.WorkloadKind{apitypes.WorkloadKindEndpoint, apitypes.WorkloadKindAsgi} {
-		base := "/v1/workspaces/{workspace}/apps/{app}/workloads/" + string(kind) + "/{name}"
-		for _, prefix := range []string{base, base + "/versions/{version}"} {
-			handler := s.authenticate(s.serveWorkload(kind))
-			mux.Handle(prefix+"/invoke", handler)
-			mux.Handle(prefix+"/invoke/{path...}", handler)
-		}
+		base := "/v1/workspaces/{workspace}/apps/{app}/workloads/" + string(kind) + "/{name}/invoke"
+		handler := s.authenticate(s.serveWorkload(kind))
+		mux.Handle(base, handler)
+		mux.Handle(base+"/{path...}", handler)
 	}
 }
 
@@ -34,20 +31,11 @@ func (s *Server) serveWorkload(kind apitypes.WorkloadKind) http.HandlerFunc {
 			s.writeError(w, r, err)
 			return
 		}
-		var version *int
-		if raw := r.PathValue("version"); raw != "" {
-			n, err := strconv.Atoi(raw)
-			if err != nil || n < 1 {
-				writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "no such version")
-				return
-			}
-			version = &n
-		}
 		app, name := r.PathValue("app"), r.PathValue("name")
 		stripCredentials(r)
 		// The app learns where it is mounted, to build its own links.
-		r.Header.Set("X-Forwarded-Prefix", edge.InvokePath(ws.Name, app, kind, name, version))
-		s.owners.Edge.ServeWorkload(w, r, ws.ID, app, kind, name, version, r.PathValue("path"))
+		r.Header.Set("X-Forwarded-Prefix", edge.InvokePath(ws.Name, app, kind, name))
+		s.owners.Edge.ServeWorkload(w, r, ws.ID, app, kind, name, r.PathValue("path"))
 	}
 }
 
