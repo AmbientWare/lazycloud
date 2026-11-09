@@ -33,11 +33,7 @@ func (b *Billing) UnfundedAccounts(ctx context.Context) ([]Unfunded, error) {
 		case r.OverLimit && !r.NoCredit:
 			reason = "the account reached its monthly usage limit"
 		}
-		workspaces, err := b.queries.OwnedWorkspaces(ctx, r.UserID)
-		if err != nil {
-			return nil, fmt.Errorf("list owned workspaces: %w", err)
-		}
-		out = append(out, Unfunded{User: r.UserID, Workspaces: workspaces, Reason: reason})
+		out = append(out, Unfunded{User: r.UserID, Workspaces: r.Workspaces, Reason: reason})
 	}
 	return out, nil
 }

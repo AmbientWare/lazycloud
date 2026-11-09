@@ -149,30 +149,6 @@ func (q *Queries) OpenLots(ctx context.Context, userID uuid.UUID) ([]OpenLotsRow
 	return items, nil
 }
 
-const ownedWorkspaces = `-- name: OwnedWorkspaces :many
-select workspace_id from workspace_members where user_id = $1 and role = 'owner' order by workspace_id
-`
-
-func (q *Queries) OwnedWorkspaces(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, ownedWorkspaces, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var workspace_id uuid.UUID
-		if err := rows.Scan(&workspace_id); err != nil {
-			return nil, err
-		}
-		items = append(items, workspace_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const setBalance = `-- name: SetBalance :exec
 update billing_balances
 set balance_nanos = $1, month_started_at = $2, month_spent_nanos = $3,
@@ -261,7 +237,9 @@ select b.user_id,
        (b.balance_nanos - b.accrued_nanos <= 0)::bool as no_credit,
        (a.monthly_usage_limit_nanos is not null
         and b.month_spent_nanos + b.accrued_nanos >= a.monthly_usage_limit_nanos)::bool as over_limit,
-       (a.status = 'past_due')::bool as past_due
+       (a.status = 'past_due')::bool as past_due,
+       array(select m.workspace_id from workspace_members m
+             where m.user_id = b.user_id and m.role = 'owner' order by m.workspace_id)::uuid[] as workspaces
 from billing_balances b
 join billing_accounts a on a.user_id = b.user_id
 where b.live_containers > 0
@@ -273,10 +251,11 @@ where b.live_containers > 0
 `
 
 type UnfundedAccountsRow struct {
-	UserID    uuid.UUID
-	NoCredit  bool
-	OverLimit bool
-	PastDue   bool
+	UserID     uuid.UUID
+	NoCredit   bool
+	OverLimit  bool
+	PastDue    bool
+	Workspaces []uuid.UUID
 }
 
 // Accounts with live containers that may not run them: no credit left, the
@@ -295,6 +274,7 @@ func (q *Queries) UnfundedAccounts(ctx context.Context) ([]UnfundedAccountsRow, 
 			&i.NoCredit,
 			&i.OverLimit,
 			&i.PastDue,
+			&i.Workspaces,
 		); err != nil {
 			return nil, err
 		}
