@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
-	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -245,7 +243,7 @@ func (s *server) CreateInstance(ctx context.Context, req CreateInstanceRequestOb
 }
 
 // errStillStarting answers a connect whose container is not ready yet.
-var errStillStarting = errors.New("the container is still starting")
+var errStillStarting error = &apitypes.Error{Code: apitypes.Unavailable, Message: "the container is still starting"}
 
 // ConnectContainer waits until the container is ready.
 func (s *server) ConnectContainer(ctx context.Context, req ConnectContainerRequestObject) (ConnectContainerResponseObject, error) {
@@ -268,7 +266,7 @@ func (s *server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 			}
 			return ConnectContainer200JSONResponse(s.instanceOut(i)), nil
 		case execution.ContainerStopped, execution.ContainerDraining:
-			return nil, &execution.ConflictError{Reason: fmt.Sprintf("the container is %s", i.State)}
+			return nil, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("the container is %s", i.State)}
 		case execution.ContainerPending, execution.ContainerStarting:
 		}
 		if !time.Now().Before(deadline) {
@@ -446,13 +444,13 @@ func (s *server) CreateFilesystemImage(ctx context.Context, req CreateFilesystem
 		if image.Failure != nil {
 			reason += ": " + *image.Failure
 		}
-		return nil, &execution.ConflictError{Reason: reason}
+		return nil, &apitypes.Error{Code: apitypes.Conflict, Message: reason}
 	}
 	return CreateFilesystemImage201JSONResponse{ImageId: *image.ImageID}, nil
 }
 
 // errFromContainer refuses workload control from inside a container.
-var errFromContainer = errors.New("this operation is not available from inside a container")
+var errFromContainer error = &apitypes.Error{Code: apitypes.Forbidden, Message: "this operation is not available from inside a container"}
 
 // ownsInstance lets a container principal reach only the instances it
 // started; other callers reach every container of the workspace.
@@ -465,37 +463,6 @@ func ownsInstance(ctx context.Context, created *execution.ContainerID) error {
 		return errFromContainer
 	}
 	return nil
-}
-
-// workloadError maps workload errors; it reports whether it wrote one.
-func workloadError(w http.ResponseWriter, err error) bool {
-	var (
-		invalid     *execution.InvalidError
-		conflict    *execution.ConflictError
-		unsupported *execution.UnsupportedError
-		unavailable *execution.UnavailableError
-	)
-	switch {
-	case errors.Is(err, errFromContainer):
-		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, err.Error())
-	case errors.As(err, &invalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
-	case errors.As(err, &conflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
-	case errors.As(err, &unsupported):
-		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, unsupported.Error())
-	case errors.As(err, &unavailable):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, unavailable.Error())
-	case errors.Is(err, errStillStarting):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
-	case errors.Is(err, edge.ErrContainerUnreachable), errors.Is(err, errContainerNotRunning):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, "the container is not running")
-	case errors.Is(err, execution.ErrPodStopped), errors.Is(err, execution.ErrPodWithoutSSH):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
-	default:
-		return false
-	}
-	return true
 }
 
 // ownsContainer applies ownsInstance to a container by id.

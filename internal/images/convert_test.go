@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -579,8 +580,7 @@ update billing_accounts set complimentary_since = null, payment_method_attached_
 update billing_balances set balance_nanos = 0`); err != nil {
 		t.Fatal(err)
 	}
-	var unpaid *billing.PaymentRequiredError
-	if _, err := f.images.Build(ctx, a, numpy(), false); !errors.As(err, &unpaid) {
+	if _, err := f.images.Build(ctx, a, numpy(), false); apitypes.CodeOf(err) != apitypes.PaymentRequired {
 		t.Fatalf("the account may start no work of its own: %v", err)
 	}
 	r, err := f.images.Resolve(ctx, a, numpy())

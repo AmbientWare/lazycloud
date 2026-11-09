@@ -206,8 +206,8 @@ func invokeFrame(run *hostproto.RunAttempt) (runnerproto.Invoke, error) {
 		TaskId:        run.GetTaskId(),
 		AttemptId:     run.GetAttemptId(),
 		InputEncoding: encoding,
-		AttemptNumber: ptr(max(int(run.GetAttemptNumber()), 1)),
-		MaxAttempts:   ptr(max(int(run.GetMaxAttempts()), 1)),
+		AttemptNumber: new(max(int(run.GetAttemptNumber()), 1)),
+		MaxAttempts:   new(max(int(run.GetMaxAttempts()), 1)),
 	}
 	if root := run.GetRootTaskId(); root != "" {
 		invoke.RootTaskId = &root
@@ -217,8 +217,6 @@ func invokeFrame(run *hostproto.RunAttempt) (runnerproto.Invoke, error) {
 	}
 	return invoke, nil
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // start launches a runner in its own process group with a socket as fd 3.
 func (sl *slot) start(ctx context.Context, cfg *hostproto.Configure) (_ *runnerProcess, err error) {

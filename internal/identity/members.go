@@ -8,6 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // Member is one membership of a workspace.
@@ -32,7 +35,7 @@ func (i *Identity) ListMembers(ctx context.Context, p Principal, workspace strin
 	out := make([]Member, len(rows))
 	for n, row := range rows {
 		out[n] = Member{
-			User: UserID(row.UserID), DisplayName: row.DisplayName, Email: deref(row.Email),
+			User: UserID(row.UserID), DisplayName: row.DisplayName, Email: database.Value(row.Email),
 			Role: Role(row.Role), CreatedAt: row.CreatedAt,
 		}
 	}
@@ -43,7 +46,7 @@ func (i *Identity) ListMembers(ctx context.Context, p Principal, workspace strin
 // administrator; the owner's role never changes.
 func (i *Identity) SetMemberRole(ctx context.Context, p Principal, workspace string, user UserID, role Role) (Member, error) {
 	if role != RoleAdministrator && role != RoleMember {
-		return Member{}, &InvalidError{Message: "a workspace has exactly one owner; choose administrator or member"}
+		return Member{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a workspace has exactly one owner; choose administrator or member"}
 	}
 	ws, err := i.AuthorizeWorkspaceRole(ctx, p, workspace, RoleAdministrator)
 	if err != nil {
@@ -52,10 +55,10 @@ func (i *Identity) SetMemberRole(ctx context.Context, p Principal, workspace str
 	var member Member
 	err = i.changeMember(ctx, ws.ID, user, func(q *Queries, current LockMemberRow) error {
 		if Role(current.Role) == RoleOwner {
-			return &ConflictError{Message: "the workspace owner's role cannot be changed"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace owner's role cannot be changed"}
 		}
 		member = Member{
-			User: user, DisplayName: current.DisplayName, Email: deref(current.Email), Role: role, CreatedAt: current.CreatedAt,
+			User: user, DisplayName: current.DisplayName, Email: database.Value(current.Email), Role: role, CreatedAt: current.CreatedAt,
 		}
 		if Role(current.Role) == role {
 			return nil
@@ -84,9 +87,9 @@ func (i *Identity) RemoveMember(ctx context.Context, p Principal, workspace stri
 	return i.changeMember(ctx, ws.ID, user, func(q *Queries, current LockMemberRow) error {
 		if Role(current.Role) == RoleOwner {
 			if leaving {
-				return &ConflictError{Message: "the workspace owner cannot leave it"}
+				return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace owner cannot leave it"}
 			}
-			return &ConflictError{Message: "the workspace owner cannot be removed"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace owner cannot be removed"}
 		}
 		if err := q.DeleteMember(ctx, DeleteMemberParams{WorkspaceID: uuid.UUID(ws.ID), UserID: uuid.UUID(user)}); err != nil {
 			return fmt.Errorf("remove member: %w", err)
@@ -100,7 +103,7 @@ func (i *Identity) changeMember(ctx context.Context, ws WorkspaceID, user UserID
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
 		if _, err := q.LockActiveWorkspace(ctx, uuid.UUID(ws)); errors.Is(err, pgx.ErrNoRows) {
-			return &ConflictError{Message: "the workspace is being deleted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the workspace is being deleted"}
 		} else if err != nil {
 			return fmt.Errorf("lock workspace: %w", err)
 		}

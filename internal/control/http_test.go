@@ -1,13 +1,11 @@
 package control
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 // Deployed URLs carry these labels, so the same identities must keep
@@ -106,9 +104,8 @@ func TestDeployRejectsRoutesAndMethodsOnASGI(t *testing.T) {
 	_, err := c.Deploy(t.Context(), ws, "web", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{
 		endpoint("service", apitypes.HttpSpec{Kind: apitypes.HttpKindAsgi, Route: &route}),
 	}})
-	var invalid *InvalidSpecError
-	if !errors.As(err, &invalid) {
-		t.Fatalf("deploy ASGI with a route: %v; want InvalidSpecError", err)
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest {
+		t.Fatalf("deploy ASGI with a route: %v; want a InvalidSpec refusal", err)
 	}
 }
 
@@ -120,9 +117,8 @@ func TestDeployCustomDomainNeedsAnOwnerRegistrationAndOneDeployment(t *testing.T
 	spec := endpoint("count", apitypes.HttpSpec{Kind: apitypes.HttpKindEndpoint, Domain: &domain})
 
 	_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
-	var invalid *InvalidSpecError
-	if !errors.As(err, &invalid) {
-		t.Fatalf("deploy with an unregistered domain: %v; want InvalidSpecError", err)
+	if apitypes.CodeOf(err) != apitypes.InvalidRequest {
+		t.Fatalf("deploy with an unregistered domain: %v; want a InvalidSpec refusal", err)
 	}
 
 	if _, err := pool.Exec(t.Context(), `
@@ -135,9 +131,8 @@ select user_id, $2, 'awaiting_verification' from workspace_members where workspa
 		t.Fatal(err)
 	}
 	_, err = c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
-	var payment *billing.PaymentRequiredError
-	if !errors.As(err, &payment) {
-		t.Fatalf("deploy a custom domain on the Free plan: %v; want PaymentRequiredError", err)
+	if apitypes.CodeOf(err) != apitypes.PaymentRequired {
+		t.Fatalf("deploy a custom domain on the Free plan: %v; want a PaymentRequired refusal", err)
 	}
 	if _, err := pool.Exec(t.Context(), `
 update billing_accounts set terms_version = 'team-v3'
@@ -148,8 +143,7 @@ where user_id = (select user_id from workspace_members where workspace_id = $1 a
 
 	// Another app of the workspace cannot claim the same hostname.
 	_, err = c.Deploy(t.Context(), ws, "other", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
-	var conflict *RouteConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("second deployment of %s: %v; want RouteConflictError", domain, err)
+	if apitypes.CodeOf(err) != apitypes.Conflict {
+		t.Fatalf("second deployment of %s: %v; want a RouteConflict refusal", domain, err)
 	}
 }

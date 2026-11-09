@@ -152,10 +152,10 @@ func (e *Edge) invoke(w http.ResponseWriter, r *http.Request, t target) {
 	out, err := Invoke(r.Context(), e.execution, e.listener, execution.SubmitRequest{
 		Workspace: t.workload.workspace, App: t.workload.app, Function: t.workload.name, Release: &t.release.id,
 	}, arguments, InvokeWait)
-	var tooMany *execution.TooManyPendingError
+	var tooMany *apitypes.Error
 	switch {
-	case errors.As(err, &tooMany):
-		writeError(w, http.StatusTooManyRequests, tooMany.Error())
+	case errors.As(err, &tooMany) && tooMany.Code == apitypes.TooManyPendingTasks:
+		writeError(w, http.StatusTooManyRequests, tooMany.Message)
 		return
 	case errors.Is(err, execution.ErrNotAccepting):
 		writeError(w, http.StatusConflict, "the function is stopped or its app is paused")

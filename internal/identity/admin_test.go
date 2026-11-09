@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
@@ -25,17 +27,15 @@ func TestAccountAdministrationNeedsAnAdministratorAccount(t *testing.T) {
 	if _, err := f.id.SetUserRole(ctx, member, admin.User, PlatformMember); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("member demotes: %v", err)
 	}
-	var accountErr *AccountError
-	if _, err := f.id.SetUserStatus(ctx, restricted, member.User, UserDisabled); !errors.As(err, &accountErr) {
+	if _, err := f.id.SetUserStatus(ctx, restricted, member.User, UserDisabled); apitypes.CodeOf(err) != apitypes.Forbidden {
 		t.Fatalf("restricted disable: %v", err)
 	}
 
 	// Nobody changes their own account, so the last administrator stays.
-	var conflict *ConflictError
-	if _, err := f.id.SetUserRole(ctx, admin, admin.User, PlatformMember); !errors.As(err, &conflict) {
+	if _, err := f.id.SetUserRole(ctx, admin, admin.User, PlatformMember); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("self demote: %v", err)
 	}
-	if _, err := f.id.SetUserStatus(ctx, admin, admin.User, UserDisabled); !errors.As(err, &conflict) {
+	if _, err := f.id.SetUserStatus(ctx, admin, admin.User, UserDisabled); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("self disable: %v", err)
 	}
 
@@ -160,12 +160,10 @@ func TestFeedbackIsReadAndDeletedOnlyByAdministrators(t *testing.T) {
 	ctx := t.Context()
 	admin := f.account("admin@example.com", true)
 	member := f.account("member@example.com", false)
-
-	var invalid *InvalidError
-	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, strings.Repeat("x", FeedbackMaxLength+1)); !errors.As(err, &invalid) {
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, strings.Repeat("x", FeedbackMaxLength+1)); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("too long: %v", err)
 	}
-	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, " \n "); !errors.As(err, &invalid) {
+	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, " \n "); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("blank: %v", err)
 	}
 	if err := f.id.SubmitFeedback(ctx, member, FeedbackBug, "  deploys hang  "); err != nil {
@@ -242,13 +240,12 @@ func TestFeedbackIsRateLimitedPerAccount(t *testing.T) {
 	for range burst {
 		wg.Go(func() {
 			err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help")
-			var limited *RateLimitedError
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
 			case err == nil:
 				accepted++
-			case errors.As(err, &limited):
+			case apitypes.CodeOf(err) == apitypes.RateLimited:
 				limit++
 			default:
 				t.Error(err)
@@ -259,7 +256,6 @@ func TestFeedbackIsRateLimitedPerAccount(t *testing.T) {
 	if accepted != FeedbackPerHour || limit != burst-FeedbackPerHour {
 		t.Fatalf("accepted %d and limited %d of %d", accepted, limit, burst)
 	}
-	var limited *RateLimitedError
 	// Deleting the burst does not hand its sender more sends until
 	// housekeeping removes it a day later.
 	sent, err := f.id.ListFeedback(ctx, admin, FeedbackFilter{}, nil, burst)
@@ -271,13 +267,13 @@ func TestFeedbackIsRateLimitedPerAccount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); !errors.As(err, &limited) {
+	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); apitypes.CodeOf(err) != apitypes.RateLimited {
 		t.Fatalf("after deletion: %v", err)
 	}
 	if err := f.id.Housekeeping(ctx, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); !errors.As(err, &limited) {
+	if err := f.id.SubmitFeedback(ctx, spammer, FeedbackSupport, "help"); apitypes.CodeOf(err) != apitypes.RateLimited {
 		t.Fatalf("housekeeping within the day: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx, `update feedback set deleted_at = now() - interval '25 hours', created_at = now() - interval '25 hours' where deleted_at is not null`); err != nil {
@@ -302,7 +298,7 @@ func TestFeedbackIsRateLimitedPerAccount(t *testing.T) {
 		uuid.UUID(other.User), FeedbackPerDay); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.id.SubmitFeedback(ctx, other, FeedbackSupport, "help"); !errors.As(err, &limited) {
+	if err := f.id.SubmitFeedback(ctx, other, FeedbackSupport, "help"); apitypes.CodeOf(err) != apitypes.RateLimited {
 		t.Fatalf("past the daily limit: %v", err)
 	}
 }

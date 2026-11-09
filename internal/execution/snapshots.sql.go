@@ -85,11 +85,10 @@ func (q *Queries) FailStaleSnapshots(ctx context.Context, deadlineSeconds float6
 }
 
 const filesystemImageView = `-- name: FilesystemImageView :one
-select id, state, image_id, failure from filesystem_images where id = $1
+select state, image_id, failure from filesystem_images where id = $1
 `
 
 type FilesystemImageViewRow struct {
-	ID      uuid.UUID
 	State   string
 	ImageID *string
 	Failure *string
@@ -98,12 +97,7 @@ type FilesystemImageViewRow struct {
 func (q *Queries) FilesystemImageView(ctx context.Context, id uuid.UUID) (FilesystemImageViewRow, error) {
 	row := q.db.QueryRow(ctx, filesystemImageView, id)
 	var i FilesystemImageViewRow
-	err := row.Scan(
-		&i.ID,
-		&i.State,
-		&i.ImageID,
-		&i.Failure,
-	)
+	err := row.Scan(&i.State, &i.ImageID, &i.Failure)
 	return i, err
 }
 

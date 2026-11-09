@@ -16,7 +16,7 @@ import (
 )
 
 // ErrWorkloadNotFound means no such deployed HTTP workload or version.
-var ErrWorkloadNotFound = errors.New("not found")
+var ErrWorkloadNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 
 // route is the path an endpoint answers on; ASGI apps answer on every path,
 // so their URLs carry none.

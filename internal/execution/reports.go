@@ -188,11 +188,7 @@ func endedAttempts(ctx context.Context, q *Queries, container ContainerID, runni
 		if ok && row.ContainerID == uuid.UUID(container) && AttemptState(row.State) == AttemptRunning {
 			continue
 		}
-		reason := AttemptCancelled
-		if ok && AttemptState(row.State) == AttemptTimedOut {
-			reason = AttemptTimedOut
-		}
-		cancel = append(cancel, CancelCommand{Container: container, Attempt: AttemptID(id), Reason: reason})
+		cancel = append(cancel, CancelCommand{Container: container, Attempt: AttemptID(id)})
 	}
 	return cancel, nil
 }

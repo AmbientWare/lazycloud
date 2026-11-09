@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 func (f *fixture) admit(req Request) (Grant, error) {
@@ -37,13 +38,11 @@ func (f *fixture) setAccount(user uuid.UUID, assignments string, args ...any) {
 }
 
 func paymentRequired(err error) bool {
-	var p *PaymentRequiredError
-	return errors.As(err, &p)
+	return apitypes.CodeOf(err) == apitypes.PaymentRequired
 }
 
 func limitReached(err error) bool {
-	var l *LimitError
-	return errors.As(err, &l)
+	return apitypes.CodeOf(err) == apitypes.LimitReached
 }
 
 func TestAdmitRefusesWorkTheAccountCannotPayFor(t *testing.T) {
@@ -219,11 +218,10 @@ func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
 
 	// A pending plan change holds every plan-limited addition.
 	f.exec("insert into plan_changes (user_id, from_terms, to_terms) values ($1, 'team-v3', 'business-v2')", owner)
-	var conflict *ConflictError
-	if err := f.admitWorkspace(owner); !errors.As(err, &conflict) {
+	if err := f.admitWorkspace(owner); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("workspace during a plan change: %v", err)
 	}
-	if err := f.admitMember(ws, Candidate{Email: "x@example.test"}); !errors.As(err, &conflict) {
+	if err := f.admitMember(ws, Candidate{Email: "x@example.test"}); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("member during a plan change: %v", err)
 	}
 }
@@ -307,8 +305,7 @@ func TestPlanChangesCannotGoBelowHeldLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = planFits(t.Context(), f.billing.queries, owner, free, true)
-	var conflict *ConflictError
-	if !errors.As(err, &conflict) || !strings.Contains(err.Error(), "2 workspaces (limit 1)") || !strings.Contains(err.Error(), "2 members (limit 1)") {
+	if apitypes.CodeOf(err) != apitypes.Conflict || !strings.Contains(err.Error(), "2 workspaces (limit 1)") || !strings.Contains(err.Error(), "2 members (limit 1)") {
 		t.Fatalf("moving to Free with two workspaces and a member: %v", err)
 	}
 	business, err := PlanFor(PlanBusiness)
@@ -325,7 +322,7 @@ func TestPlanChangesCannotGoBelowHeldLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := planFits(t.Context(), f.billing.queries, owner, team, true); !errors.As(err, &conflict) || !strings.Contains(err.Error(), "connected cloud") {
+	if err := planFits(t.Context(), f.billing.queries, owner, team, true); apitypes.CodeOf(err) != apitypes.Conflict || !strings.Contains(err.Error(), "connected cloud") {
 		t.Fatalf("moving off Business with a connected AWS account: %v", err)
 	}
 	if account, err := f.billing.Account(t.Context(), owner); err != nil || account.Usage.ConnectedClouds != 1 {

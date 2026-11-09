@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -41,8 +42,7 @@ func (s *Storage) DeleteWorkspaceStorage(ctx context.Context, logger *slog.Logge
 		return true, nil
 	}
 	empty, err = s.deleteWorkspaceBucket(ctx, *row.Bucket, *row.Region, row.ConnectionID)
-	var unauthorized *ConflictError
-	if row.ConnectionID != nil && errors.As(err, &unauthorized) {
+	if row.ConnectionID != nil && apitypes.CodeOf(err) == apitypes.Conflict {
 		logger.WarnContext(ctx, "the workspace's bucket stays in the connected AWS account, which no longer authorizes the platform",
 			"workspace", workspace.String(), "bucket", *row.Bucket, "connection", row.ConnectionID.String(), "error", err)
 	} else if err != nil || !empty {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/smithy-go"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -32,7 +33,7 @@ func TestOnlyStartErrorsOfTheContainerFailIt(t *testing.T) {
 		{refusal("volumes", fmt.Errorf("mount volumes: %w", storage.ErrBucketsUnconfigured)), true,
 			"volumes unavailable: workspace buckets are not configured"},
 		{refusal("cloud bucket at /data", storage.ErrNoRegion), true, "cloud bucket at /data unavailable: an AWS S3 bucket needs a region"},
-		{refusal("volumes", &storage.ConflictError{Reason: "volume data is being deleted"}), true,
+		{refusal("volumes", &apitypes.Error{Code: apitypes.Conflict, Message: "volume data is being deleted"}), true,
 			"volumes unavailable: volume data is being deleted"},
 		{refusal("storage grant", fmt.Errorf("issue storage grant: %w", denied)), true,
 			"storage grant unavailable: the object store refused it (AccessDenied)"},

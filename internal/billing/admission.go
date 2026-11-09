@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // Request is work a workspace wants to take on.
@@ -125,11 +127,11 @@ func (s standing) fundsRefusal() error {
 	case s.complimentary:
 		return nil
 	case s.status == statusPastDue:
-		return &PaymentRequiredError{Message: "a payment for this account did not go through; update the card on file to start new work"}
+		return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "a payment for this account did not go through; update the card on file to start new work"}
 	case s.balance <= 0:
-		return &PaymentRequiredError{Message: "add credit before starting more billed work"}
+		return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add credit before starting more billed work"}
 	case s.limit != nil && s.monthSpent >= *s.limit:
-		return &PaymentRequiredError{Message: "the monthly usage limit has been reached"}
+		return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "the monthly usage limit has been reached"}
 	}
 	return nil
 }
@@ -138,10 +140,9 @@ const statusPastDue = "past_due"
 
 // Admit decides, inside the caller's transaction, whether the workspace's
 // billing account may take on req. It refuses GPU work only the platform
-// fleet can serve, naming only models it does not offer, with a
-// GPUUnavailableError; work the account cannot pay for with a
-// PaymentRequiredError; and cold work at the concurrency limit with a
-// LimitError. Starting containers takes the account's container lock for the
+// fleet can serve, naming only models it does not offer, as Unsupported;
+// work the account cannot pay for as PaymentRequired; and cold work at the
+// concurrency limit as LimitReached. Starting containers takes the account's container lock for the
 // rest of tx, so concurrent starts count each other.
 func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	q := New(tx)
@@ -168,13 +169,13 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 		return Grant{}, err
 	}
 	if req.Pinned && !s.entitlements.RegionSelection {
-		return Grant{}, &PaymentRequiredError{Message: s.regionRefusal().sentence()}
+		return Grant{}, &apitypes.Error{Code: apitypes.PaymentRequired, Message: s.regionRefusal().sentence()}
 	}
 	var grant Grant
 	if req.GPUs > 0 {
 		models, refused := s.entitlements.gpuModels(req.GPUModels, fleet)
 		if refused != nil {
-			return Grant{}, &PaymentRequiredError{Message: s.gpuModelRefusal(*refused).sentence()}
+			return Grant{}, &apitypes.Error{Code: apitypes.PaymentRequired, Message: s.gpuModelRefusal(*refused).sentence()}
 		}
 		grant.GPUModels = models
 	}
@@ -188,7 +189,7 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	if req.GPUs > 0 {
 		limit := s.entitlements.MaxGPUs
 		if req.Cold && int(live.Gpus)+req.GPUs > limit {
-			return Grant{}, &LimitError{Message: fmt.Sprintf(
+			return Grant{}, &apitypes.Error{Code: apitypes.LimitReached, Message: fmt.Sprintf(
 				"this account already holds %d GPUs across the containers it is running or has queued, and %d more would pass the most its plan allows (%d)",
 				live.Gpus, req.GPUs, limit)}
 		}
@@ -197,7 +198,7 @@ func Admit(ctx context.Context, tx pgx.Tx, req Request) (Grant, error) {
 	}
 	limit := s.entitlements.MaxCPUContainers
 	if req.Cold && int(live.CpuContainers) >= limit {
-		return Grant{}, &LimitError{Message: fmt.Sprintf(
+		return Grant{}, &apitypes.Error{Code: apitypes.LimitReached, Message: fmt.Sprintf(
 			"this account already has %d containers running or queued, which is the most its plan allows (%d)", live.CpuContainers, limit)}
 	}
 	grant.Start = max(0, min(req.Start, limit-int(live.CpuContainers)))
@@ -215,7 +216,7 @@ func unoffered(requested []GPUType) error {
 		models = append(models, m)
 	}
 	if len(models) > 0 {
-		return &GPUUnavailableError{Models: models}
+		return gpuUnavailable(models)
 	}
 	return nil
 }
@@ -259,7 +260,7 @@ func joinModels(models []GPUType) string {
 // planChangePending refuses plan-limited additions while a change is
 // settling, because the limit they would be held to is about to change.
 func planChangePending() error {
-	return &ConflictError{Message: "this account cannot add plan-limited resources while a plan change is pending"}
+	return &apitypes.Error{Code: apitypes.Conflict, Message: "this account cannot add plan-limited resources while a plan change is pending"}
 }
 
 // AdmitWorkspace applies the owner's workspace limit to a new workspace,
@@ -286,7 +287,7 @@ func AdmitWorkspace(ctx context.Context, tx pgx.Tx, owner uuid.UUID) error {
 		return planChangePending()
 	}
 	if l := s.limits.MaxWorkspaces; !l.Unlimited && int(owned) >= l.Max {
-		return &LimitError{Message: fmt.Sprintf(
+		return &apitypes.Error{Code: apitypes.LimitReached, Message: fmt.Sprintf(
 			"this account already owns %d workspaces, which is the most its plan allows (%d)", owned, l.Max)}
 	}
 	return nil
@@ -352,7 +353,7 @@ func AdmitMember(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, who Candid
 		if offers > 0 {
 			held = fmt.Sprintf(" and %d open invitations", offers)
 		}
-		return &LimitError{Message: fmt.Sprintf(
+		return &apitypes.Error{Code: apitypes.LimitReached, Message: fmt.Sprintf(
 			"this account already has %d members%s, which is the most its plan allows (%d)", members, held, limit.Max)}
 	}
 	return nil
@@ -376,7 +377,7 @@ func AdmitDisk(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, declaredByte
 		return err
 	}
 	if r := s.diskRefusal(declaredBytes); r != nil {
-		return &LimitError{Message: r.sentence()}
+		return &apitypes.Error{Code: apitypes.LimitReached, Message: r.sentence()}
 	}
 	return nil
 }
@@ -429,7 +430,7 @@ func admitCapability(ctx context.Context, q *Queries, user uuid.UUID, has func(E
 		return planChangePending()
 	}
 	if !has(s.entitlements) {
-		return &PaymentRequiredError{Message: refusal}
+		return &apitypes.Error{Code: apitypes.PaymentRequired, Message: refusal}
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // FleetState is a platform host's place in the fleet, as administrators see
@@ -97,7 +98,7 @@ func (c *Compute) FleetNodes(ctx context.Context, after uuid.UUID, limit int) ([
 	for _, r := range rows {
 		n := FleetNode{
 			ID: HostID(r.ID), Enrolled: r.Enrolled, InstanceID: r.InstanceID, Provider: Provider(r.Provider),
-			Region: r.Region, InstanceType: r.InstanceType, Preemptible: deref(r.Market) == string(MarketSpot),
+			Region: r.Region, InstanceType: r.InstanceType, Preemptible: database.Value(r.Market) == string(MarketSpot),
 			GPUType: r.GpuType, Capacity: FleetCapacity{CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes, GPUs: int(r.GpuCount)},
 			Allocated:  FleetCapacity{CPUMillis: cpu.Millis(r.UsedCpu), MemoryBytes: r.UsedMemory, GPUs: int(r.UsedGpus)},
 			Containers: int(r.Containers),

@@ -48,9 +48,9 @@ func TestContainerPrincipalNeedsTheAssignedHostAndARunningTask(t *testing.T) {
 	}
 
 	// Once the attempt ends, the task no longer speaks through the container.
-	if err := e.CompleteAttempt(ctx, f.host, container, AttemptOutcome{
+	if err := e.CompleteAttempts(ctx, f.host, []Completion{{Container: container, Outcome: AttemptOutcome{
 		Attempt: f.attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-	}); err != nil {
+	}}})[0]; err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.ContainerPrincipal(ctx, f.host, container, &task); !errors.Is(err, ErrTaskNotRunningHere) {

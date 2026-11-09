@@ -12,7 +12,7 @@ import (
 func (b *Billing) Catalog(t time.Time) (apitypes.PricingCatalog, error) {
 	card, err := b.rates.cardAt(t)
 	if err != nil {
-		return apitypes.PricingCatalog{}, &InvalidError{Message: err.Error()}
+		return apitypes.PricingCatalog{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: err.Error()}
 	}
 	out := apitypes.PricingCatalog{
 		Trial:                              apitypes.TrialTerms{AmountNanos: TrialNanos, DurationDays: TrialDays, OneTime: true},

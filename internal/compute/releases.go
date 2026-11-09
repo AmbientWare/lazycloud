@@ -16,6 +16,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // AgentRelease is a published agent version with its archive digest per
@@ -37,7 +40,7 @@ type AgentRelease struct {
 const updateWindow = 5 * time.Minute
 
 func releaseOf(version string, amd64, arm64 *string, rollout int32, build *string) AgentRelease {
-	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: deref(build)}
+	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: database.Value(build)}
 	if amd64 != nil {
 		r.SHA256["amd64"] = *amd64
 	}
@@ -103,7 +106,7 @@ func (c *Compute) PublishAgentRelease(ctx context.Context, release AgentRelease)
 			return fmt.Errorf("insert release: %w", err)
 		}
 		if n == 0 {
-			return &ConflictError{Message: fmt.Sprintf("agent release %s was published with other digests", release.Version)}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("agent release %s was published with other digests", release.Version)}
 		}
 		if err := q.ClearTargetRelease(ctx, release.Version); err != nil {
 			return fmt.Errorf("clear target release: %w", err)

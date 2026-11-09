@@ -1,12 +1,11 @@
 package storage_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // TestDisksAreHeldToThePlansAllowance: Free allows no disks, and a paid
@@ -21,8 +20,7 @@ with owner as (select user_id from workspace_members where workspace_id = $1 and
 update billing_balances set balance_nanos = 1000000000 where user_id in (select user_id from owner)`, uuid.UUID(f.ws)); err != nil {
 		t.Fatal(err)
 	}
-	var limit *billing.LimitError
-	if _, err := f.storage.AcquireDisk(t.Context(), f.host, container, "root"); !errors.As(err, &limit) {
+	if _, err := f.storage.AcquireDisk(t.Context(), f.host, container, "root"); apitypes.CodeOf(err) != apitypes.LimitReached {
 		t.Fatalf("disk on Free: %v", err)
 	}
 	if _, err := f.pool.Exec(t.Context(), `update billing_accounts set terms_version = 'team-v3'

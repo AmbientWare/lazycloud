@@ -28,7 +28,7 @@ import (
 // over the host's data connection; status and body pass through.
 
 // errContainerNotRunning refuses a call on a container that is not ready.
-var errContainerNotRunning = errors.New("the container is not running")
+var errContainerNotRunning error = &apitypes.Error{Code: apitypes.Unavailable, Message: "the container is not running"}
 
 const (
 	// shellReadyWait bounds how long a shell waits for a new container.
@@ -432,12 +432,12 @@ func (t sshTunnel) VisitOpenSshTunnelResponse(w http.ResponseWriter) error {
 		if errors.Is(err, execution.ErrNotFound) {
 			reason = fmt.Sprintf("pod %s/%s not found", t.app, t.pod)
 		}
-		_ = client.Close(websocket.StatusPolicyViolation, truncate(reason))
+		_ = client.Close(websocket.StatusPolicyViolation, database.Truncate(reason, 120))
 		return nil
 	}
 	container, host, release, err := s.owners.Edge.ConnectPod(ctx, t.workspace, pod.Workload)
 	if err != nil {
-		_ = client.Close(websocket.StatusTryAgainLater, truncate(err.Error()))
+		_ = client.Close(websocket.StatusTryAgainLater, database.Truncate(err.Error(), 120))
 		return nil
 	}
 	defer release()
@@ -449,7 +449,7 @@ func (t sshTunnel) VisitOpenSshTunnelResponse(w http.ResponseWriter) error {
 	out.Header.Set("Upgrade", edge.TunnelProtocol)
 	resp, err := s.owners.Edge.RoundTrip(ctx, host, uuid.UUID(container), edge.ControlAPI, out)
 	if err != nil {
-		_ = client.Close(websocket.StatusTryAgainLater, truncate(err.Error()))
+		_ = client.Close(websocket.StatusTryAgainLater, database.Truncate(err.Error(), 120))
 		return nil
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -499,11 +499,4 @@ func bridgeTunnel(ctx context.Context, client *websocket.Conn, tunnel io.ReadWri
 	}
 	cancel()
 	<-done
-}
-
-func truncate(reason string) string {
-	if len(reason) > 120 {
-		return reason[:120]
-	}
-	return reason
 }

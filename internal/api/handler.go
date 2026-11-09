@@ -302,151 +302,72 @@ var errInvalidRequest = errors.New("invalid request")
 // logged and reported without detail.
 func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
-		tooMany         *execution.TooManyPendingError
-		unknownTask     *execution.UnknownTaskError
-		invalidSpec     *control.InvalidSpecError
-		sourceMissing   *control.SourceMissingError
-		routeConflict   *control.RouteConflictError
-		refused         *control.RefusedError
-		tooLarge        *http.MaxBytesError
-		invalidImage    *images.InvalidError
-		unconvertible   *images.ConversionError
-		conflict        *identity.ConflictError
-		invalid         *identity.InvalidError
-		rateLimited     *identity.RateLimitedError
-		roleErr         *identity.RoleError
-		accountErr      *identity.AccountError
-		secretMissing   *secrets.NotFoundError
-		secretExists    *secrets.ExistsError
-		secretReserved  *secrets.ReservedNameError
-		computeMissing  *compute.NotFoundError
-		computeClash    *compute.ConflictError
-		computeInvalid  *compute.InvalidError
-		computeDown     *compute.UnavailableError
-		storageInput    *storage.InvalidError
-		storageState    *storage.ConflictError
-		payment         *billing.PaymentRequiredError
-		limit           *billing.LimitError
-		billingConflict *billing.ConflictError
-		billingInvalid  *billing.InvalidError
-		gpuUnavailable  *billing.GPUUnavailableError
-		webhookInvalid  *callbacks.InvalidError
+		refused       *control.RefusedError
+		owner         *apitypes.Error
+		tooLarge      *http.MaxBytesError
+		unconvertible *images.ConversionError
+		secretMissing *secrets.NotFoundError
+		unsupported   *execution.UnsupportedError
 	)
 	switch {
-	case errors.Is(err, identity.ErrUnauthenticated):
-		writeJSONError(w, http.StatusUnauthorized, apitypes.Unauthenticated, "a valid bearer token or session is required")
-	case errors.Is(err, identity.ErrForbidden):
-		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "the token cannot reach this workspace")
-	case errors.Is(err, identity.ErrAdminRequired):
-		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, identity.ErrAdminRequired.Error())
-	case errors.As(err, &roleErr):
-		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, roleErr.Error())
-	case errors.As(err, &accountErr):
-		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, accountErr.Error())
-	case errors.As(err, &conflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
-	case errors.As(err, &invalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
-	case errors.As(err, &rateLimited):
-		writeJSONError(w, http.StatusTooManyRequests, apitypes.RateLimited, rateLimited.Error())
-	case errors.Is(err, identity.ErrExists):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
-	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
-		errors.Is(err, images.ErrNotFound), errors.Is(err, observability.ErrNotFound), errors.Is(err, callbacks.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
-	case errors.As(err, &webhookInvalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, webhookInvalid.Error())
-	case errors.Is(err, callbacks.ErrLimit):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, callbacks.ErrLimit.Error())
-	case errors.Is(err, execution.ErrNoResult):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
-	case errors.Is(err, control.ErrVersionNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the deployment has no such version")
-	case errors.As(err, &unknownTask):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, unknownTask.Error())
-	case errors.Is(err, control.ErrInvalidCursor), errors.Is(err, execution.ErrInvalidCursor):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from this listing")
-	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit),
-		errors.Is(err, observability.ErrInvalidRange):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.As(err, &invalidSpec):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
-	case errors.As(err, &sourceMissing):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
 	case errors.As(err, &refused):
 		writeRefused(w, refused)
-	case errors.As(err, &routeConflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
-	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.As(err, &invalidImage), errors.As(err, &unconvertible):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
-	case errors.Is(err, images.ErrUnsupported):
-		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
-	case errors.Is(err, images.ErrNotReady):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
 	case errors.Is(err, observability.ErrTooManyStreams):
 		writeJSONError(w, http.StatusTooManyRequests, apitypes.Unavailable, err.Error())
-	case errors.Is(err, observability.ErrTooManySubscribers):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
+	case errors.As(err, &owner):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(errorStatus(owner.Code))
+		_ = json.NewEncoder(w).Encode(owner) //nolint:errchkjson // The client is gone if this fails.
+	case errors.Is(err, identity.ErrExists):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
+	case errors.Is(err, errInvalidRequest), errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit),
+		errors.Is(err, observability.ErrInvalidRange), errors.Is(err, edge.ErrSyncRefused), errors.Is(err, edge.ErrInvalidArguments),
+		errors.As(err, &unconvertible):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
+	case errors.Is(err, images.ErrNotReady):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
 	case errors.Is(err, images.ErrRegistryUnavailable):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.As(err, &tooLarge), errors.Is(err, execution.ErrPayloadTooLarge):
 		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "the request or a payload in it is too large")
-	case errors.As(err, &tooMany):
-		writeJSONError(w, http.StatusTooManyRequests, apitypes.TooManyPendingTasks, tooMany.Error())
-	case errors.Is(err, execution.ErrNotAccepting):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
-	case errors.Is(err, execution.ErrTaskNotFinished):
-		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
-	case errors.Is(err, storage.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
-	case errors.As(err, &storageInput):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, storageInput.Error())
-	case errors.As(err, &storageState):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, storageState.Error())
-	case errors.Is(err, storage.ErrTooLarge):
-		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "a value is larger than 1 MiB")
 	case errors.Is(err, storage.ErrBucketsUnconfigured):
 		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, "this server has no workspace bucket provider")
+	case errors.As(err, &unsupported):
+		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, unsupported.Error())
 	case errors.As(err, &secretMissing):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, secretMissing.Error())
-	case errors.As(err, &secretExists):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, secretExists.Error())
-	case errors.As(err, &secretReserved):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, secretReserved.Error())
-	case errors.As(err, &computeMissing):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, computeMissing.Error())
-	case errors.As(err, &computeClash):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, computeClash.Error())
-	case errors.As(err, &computeInvalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, computeInvalid.Error())
-	case errors.As(err, &computeDown):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, computeDown.Error())
-	case errors.Is(err, compute.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
-	case errors.As(err, &gpuUnavailable):
-		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
-	case errors.As(err, &payment):
-		writeJSONError(w, http.StatusPaymentRequired, apitypes.PaymentRequired, payment.Error())
-	case errors.As(err, &limit):
-		writeJSONError(w, http.StatusConflict, apitypes.LimitReached, limit.Error())
-	case errors.As(err, &billingConflict):
-		writeJSONError(w, http.StatusConflict, apitypes.Conflict, billingConflict.Error())
-	case errors.As(err, &billingInvalid):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, billingInvalid.Error())
-	case errors.Is(err, billing.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
-	case errors.Is(err, billing.ErrPaymentsUnavailable):
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, billing.ErrPaymentsUnavailable.Error())
-	case errors.Is(err, secrets.ErrInvalidCursor):
-		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
-	case endpointError(w, err):
-	case workloadError(w, err):
+	case errors.Is(err, edge.ErrContainerUnreachable):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, "the container is not running")
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")
 	}
+}
+
+// errorStatus is the HTTP status of an error code.
+func errorStatus(code apitypes.ErrorCode) int {
+	switch code {
+	case apitypes.InvalidRequest, apitypes.Unsupported:
+		return http.StatusBadRequest
+	case apitypes.Unauthenticated:
+		return http.StatusUnauthorized
+	case apitypes.PaymentRequired:
+		return http.StatusPaymentRequired
+	case apitypes.Forbidden:
+		return http.StatusForbidden
+	case apitypes.NotFound:
+		return http.StatusNotFound
+	case apitypes.Conflict, apitypes.LimitReached, apitypes.TaskNotFinished:
+		return http.StatusConflict
+	case apitypes.PayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case apitypes.RateLimited, apitypes.TooManyPendingTasks:
+		return http.StatusTooManyRequests
+	case apitypes.Unavailable:
+		return http.StatusServiceUnavailable
+	case apitypes.Internal:
+	}
+	return http.StatusInternalServerError
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code apitypes.ErrorCode, message string) {

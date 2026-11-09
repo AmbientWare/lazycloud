@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
@@ -20,11 +21,10 @@ func TestSubmitEnforcesMaxPendingUnderConcurrency(t *testing.T) {
 	for range submitters {
 		wg.Go(func() {
 			tasks, err := e.Submit(t.Context(), SubmitRequest{Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: jsonInputs(3)})
-			var tooMany *TooManyPendingError
 			switch {
 			case err == nil:
 				accepted <- len(tasks)
-			case errors.As(err, &tooMany):
+			case apitypes.CodeOf(err) == apitypes.TooManyPendingTasks:
 			default:
 				t.Errorf("submit: %v", err)
 			}
@@ -86,9 +86,8 @@ select count(distinct xmin::text), count(distinct created_at), max(max_attempts)
 
 	// Anything beyond the limit rejects the whole batch.
 	_, err = e.Submit(t.Context(), SubmitRequest{Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: jsonInputs(1)})
-	var tooMany *TooManyPendingError
-	if !errors.As(err, &tooMany) {
-		t.Fatalf("got %v, want TooManyPendingError", err)
+	if apitypes.CodeOf(err) != apitypes.TooManyPendingTasks {
+		t.Fatalf("got %v, want a TooManyPending refusal", err)
 	}
 }
 

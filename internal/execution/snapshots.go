@@ -10,12 +10,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Memory snapshots checkpoint a running container through its host and are
@@ -65,17 +65,17 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 			return fmt.Errorf("lock container: %w", err)
 		}
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
-			return &ConflictError{Reason: "only a running container can be snapshotted"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "only a running container can be snapshotted"}
 		}
 		spec := row.Spec
 		if !Checkpointable(apitypes.WorkloadKind(row.Kind), ContainerPurpose(row.Purpose), spec) {
-			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
+			return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
 		}
 		inserted, err := q.InsertSnapshot(ctx, InsertSnapshotParams{
-			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID, Traceparent: traceparent(ctx),
+			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID, Traceparent: telemetry.StoredTraceParent(ctx),
 		})
-		if isUniqueViolation(err) {
-			return &ConflictError{Reason: "a snapshot with that id exists"}
+		if database.IsUniqueViolation(err) {
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "a snapshot with that id exists"}
 		}
 		if err != nil {
 			return fmt.Errorf("insert snapshot: %w", err)
@@ -185,12 +185,12 @@ const unsupportedPrefix = "unsupported: "
 // SnapshotFailure maps a failed snapshot to the error its requester sees.
 func SnapshotFailure(s Snapshot) error {
 	if s.Failure == nil {
-		return &ConflictError{Reason: "the snapshot failed"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "the snapshot failed"}
 	}
 	if reason, ok := strings.CutPrefix(*s.Failure, unsupportedPrefix); ok {
 		return &UnsupportedError{Reason: reason}
 	}
-	return &ConflictError{Reason: "the snapshot failed: " + *s.Failure}
+	return &apitypes.Error{Code: apitypes.Conflict, Message: "the snapshot failed: " + *s.Failure}
 }
 
 // SnapshotCommand asks a host to snapshot a container.
@@ -231,7 +231,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 	for _, row := range snapshots {
 		cmd := SnapshotCommand{
 			Snapshot: row.ID, Workspace: identity.WorkspaceID(row.WorkspaceID), Container: ContainerID(row.ContainerID),
-			Deadline: row.CreatedAt.Add(SnapshotDeadline), Traceparent: deref(row.Traceparent),
+			Deadline: row.CreatedAt.Add(SnapshotDeadline), Traceparent: database.Value(row.Traceparent),
 		}
 		if row.Automatic {
 			if spec := row.Spec; spec.Checkpoint != nil && spec.Pod != nil && spec.Checkpoint.ReadinessPath != nil {
@@ -297,7 +297,7 @@ func (e *Execution) RestoreFailed(ctx context.Context, snapshot uuid.UUID, reaso
 // publishes whose container stopped or deadline passed.
 func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, _ *slog.Logger) error {
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		hosts, err := e.queries.WithTx(tx).TakeAutomaticSnapshots(ctx, traceparent(ctx))
+		hosts, err := e.queries.WithTx(tx).TakeAutomaticSnapshots(ctx, telemetry.StoredTraceParent(ctx))
 		if err != nil {
 			return fmt.Errorf("request automatic snapshots: %w", err)
 		}
@@ -338,7 +338,6 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, _ *slog.Logger) 
 
 // FilesystemImage is a filesystem publish as its requester waits for it.
 type FilesystemImage struct {
-	ID      uuid.UUID
 	State   string
 	ImageID *string
 	Failure *string
@@ -358,7 +357,7 @@ func (e *Execution) CreateFilesystemImage(ctx context.Context, workspace identit
 			return fmt.Errorf("lock container: %w", err)
 		}
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
-			return &ConflictError{Reason: "only a running container can be saved as an image"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "only a running container can be saved as an image"}
 		}
 		if id, err = q.InsertFilesystemImage(ctx, InsertFilesystemImageParams{WorkspaceID: uuid.UUID(workspace), ContainerID: row.ID}); err != nil {
 			return fmt.Errorf("insert filesystem image: %w", err)
@@ -445,9 +444,4 @@ func (e *Execution) workspaceOfContainer(ctx context.Context, q *Queries, contai
 		return identity.WorkspaceID{}, fmt.Errorf("read container: %w", err)
 	}
 	return identity.WorkspaceID(route.WorkspaceID), nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

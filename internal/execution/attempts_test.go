@@ -62,7 +62,7 @@ func finish(t *testing.T, e *Execution, f attemptFixture, state AttemptState, fa
 	if state == AttemptSucceeded {
 		outcome.Result = &Payload{Encoding: EncodingJSON, Data: []byte("1")}
 	}
-	if err := e.CompleteAttempt(t.Context(), f.host, f.container, outcome); err != nil {
+	if err := e.CompleteAttempts(t.Context(), f.host, []Completion{{Container: f.container, Outcome: outcome}})[0]; err != nil {
 		t.Fatal(err)
 	}
 }

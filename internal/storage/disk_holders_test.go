@@ -39,9 +39,8 @@ func TestGenerationsNameTheirIndexBySHA256(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bad *InvalidError
 	g := DiskGeneration{Generation: 1, IndexSHA256: "../../volumes/x"}
-	if _, err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g, 1); !errors.As(err, &bad) {
+	if _, err := f.storage.RecordDiskGeneration(ctx, f.host, container, lease.Disk, lease.Token, g, 1); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("an index named by a path: %v", err)
 	}
 }
@@ -72,8 +71,7 @@ func TestHolderOnALostHostReleasesTheDisk(t *testing.T) {
 
 	other := f.secondHost()
 	second := f.containerOn(other)
-	var held *ConflictError
-	if _, err := s.AcquireDisk(ctx, other, second, "root"); !errors.As(err, &held) {
+	if _, err := s.AcquireDisk(ctx, other, second, "root"); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("acquire while the first host can still release: %v", err)
 	}
 	if _, err := f.pool.Exec(ctx, `update hosts set state = 'lost' where id = $1`, uuid.UUID(f.host)); err != nil {
@@ -142,8 +140,7 @@ func TestSupersededUploadsGoToTheHolder(t *testing.T) {
 	key := func(g DiskGeneration) string {
 		return fmt.Sprintf("disks/%s/manifests/%012d-%s", next.Disk, g.Generation, g.IndexSHA256)
 	}
-	var bad *InvalidError
-	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{key(generation(2))}, 0); !errors.As(err, &bad) {
+	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{key(generation(2))}, 0); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("collecting the recorded index: %v", err)
 	}
 	if err := s.CollectDisk(ctx, f.host, second, next.Disk, next.Token, 2, []string{key(lost)}, 0); err != nil {

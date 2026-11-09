@@ -97,67 +97,6 @@ func (q *Queries) DeletingWorkspaces(ctx context.Context, rowLimit int32) ([]Del
 	return items, nil
 }
 
-const listWorkspaces = `-- name: ListWorkspaces :many
-select w.id, w.name, w.state, w.created_at, coalesce(m.role, '')::text as role
-from workspaces w
-left join workspace_members m on m.workspace_id = w.id and m.user_id = $1
-where (not $2::bool or m.user_id is not null)
-  and ($3::text is null or w.name > $3::text)
-  and ($4::uuid is null or w.id = $4::uuid)
-order by w.name
-limit $5
-`
-
-type ListWorkspacesParams struct {
-	UserID      uuid.UUID
-	MembersOnly bool
-	AfterName   *string
-	RestrictTo  *uuid.UUID
-	RowLimit    int32
-}
-
-type ListWorkspacesRow struct {
-	ID        uuid.UUID
-	Name      string
-	State     string
-	CreatedAt time.Time
-	Role      string
-}
-
-// Workspaces by name after after_name, with the user's role where a member.
-// members_only limits the list to memberships; restrict_to to one workspace.
-func (q *Queries) ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) ([]ListWorkspacesRow, error) {
-	rows, err := q.db.Query(ctx, listWorkspaces,
-		arg.UserID,
-		arg.MembersOnly,
-		arg.AfterName,
-		arg.RestrictTo,
-		arg.RowLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListWorkspacesRow
-	for rows.Next() {
-		var i ListWorkspacesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.State,
-			&i.CreatedAt,
-			&i.Role,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockDeletingWorkspace = `-- name: LockDeletingWorkspace :one
 select id from workspaces where id = $1 and state = 'deleting' for update
 `
@@ -228,6 +167,56 @@ func (q *Queries) MarkWorkspaceDeleting(ctx context.Context, id uuid.UUID) (Mark
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const memberWorkspaces = `-- name: MemberWorkspaces :many
+select w.id, w.name, w.state, w.created_at, m.role
+from workspaces w
+join workspace_members m on m.workspace_id = w.id and m.user_id = $1
+where $2::uuid is null or w.id = $2::uuid
+order by w.name
+limit $3
+`
+
+type MemberWorkspacesParams struct {
+	UserID     uuid.UUID
+	RestrictTo *uuid.UUID
+	RowLimit   int32
+}
+
+type MemberWorkspacesRow struct {
+	ID        uuid.UUID
+	Name      string
+	State     string
+	CreatedAt time.Time
+	Role      string
+}
+
+// The user's workspaces by name with its role, only restrict_to when set.
+func (q *Queries) MemberWorkspaces(ctx context.Context, arg MemberWorkspacesParams) ([]MemberWorkspacesRow, error) {
+	rows, err := q.db.Query(ctx, memberWorkspaces, arg.UserID, arg.RestrictTo, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MemberWorkspacesRow
+	for rows.Next() {
+		var i MemberWorkspacesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.State,
+			&i.CreatedAt,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const renameWorkspace = `-- name: RenameWorkspace :one

@@ -45,11 +45,11 @@ func TestCancelQueuedAndRunningTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(commands.Cancel) != 1 || commands.Cancel[0].Attempt != claimed[0].Attempt || commands.Cancel[0].Reason != AttemptCancelled {
+	if len(commands.Cancel) != 1 || commands.Cancel[0].Attempt != claimed[0].Attempt {
 		t.Fatalf("cancel commands %+v", commands.Cancel)
 	}
 	late := AttemptOutcome{Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")}}
-	if err := e.CompleteAttempt(t.Context(), host, container, late); !errors.Is(err, ErrStaleAttempt) {
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: late}})[0]; !errors.Is(err, ErrStaleAttempt) {
 		t.Fatalf("late completion: got %v, want ErrStaleAttempt", err)
 	}
 	if status(t, pool, tasks[0].ID) != TaskCancelled {
@@ -88,9 +88,9 @@ func TestGetTaskWaitWakesOnCompletion(t *testing.T) {
 		task, err := e.GetTask(t.Context(), l, f.workspace, tasks[0].ID, 10*time.Second)
 		return got{task, err}
 	})
-	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-	}); err != nil {
+	}}})[0]; err != nil {
 		t.Fatal(err)
 	}
 	if r := <-wait; r.err != nil || r.task.Status != TaskSucceeded {
@@ -143,9 +143,9 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("a line written while following never arrived")
 	}
-	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 		Attempt: attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-	}); err != nil {
+	}}})[0]; err != nil {
 		t.Fatal(err)
 	}
 	select {

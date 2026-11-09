@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -32,11 +33,6 @@ type NotFoundError struct{ Name string }
 
 func (e *NotFoundError) Error() string { return "secret not found: " + e.Name }
 
-// ExistsError rejects creating a secret that already exists.
-type ExistsError struct{ Name string }
-
-func (e *ExistsError) Error() string { return "secret already exists: " + e.Name }
-
 // UnreadableError means a stored secret cannot be opened: its master key is
 // not held here, or the row does not authenticate.
 type UnreadableError struct {
@@ -50,15 +46,8 @@ func (e *UnreadableError) Error() string {
 
 func (e *UnreadableError) Unwrap() error { return e.Err }
 
-// ReservedNameError rejects a name in the platform's namespace.
-type ReservedNameError struct{ Name string }
-
-func (e *ReservedNameError) Error() string {
-	return fmt.Sprintf("secret name %s is reserved: names starting with %s belong to the platform", e.Name, reservedPrefix)
-}
-
 // ErrInvalidCursor means a list cursor was not produced by List.
-var ErrInvalidCursor = errors.New("invalid cursor")
+var ErrInvalidCursor error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from a previous page"}
 
 // Secret is a secret's metadata; values leave the owner only through Reveal
 // and Resolve.
@@ -149,7 +138,7 @@ func (s *Secrets) open(workspace identity.WorkspaceID, row SealedSecretsRow) (st
 
 func checkName(name string) error {
 	if strings.HasPrefix(name, reservedPrefix) && name != CallbackSigningKey {
-		return &ReservedNameError{Name: name}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("secret name %s is reserved: names starting with %s belong to the platform", name, reservedPrefix)}
 	}
 	return nil
 }
@@ -158,7 +147,7 @@ func secretOf(name string, created, updated time.Time) Secret {
 	return Secret{Name: name, CreatedAt: created, UpdatedAt: updated}
 }
 
-// Create stores a new secret. An existing name returns *ExistsError.
+// Create stores a new secret. An existing name is a Conflict.
 func (s *Secrets) Create(ctx context.Context, workspace identity.WorkspaceID, name, value string) (Secret, error) {
 	if err := checkName(name); err != nil {
 		return Secret{}, err
@@ -169,7 +158,7 @@ func (s *Secrets) Create(ctx context.Context, workspace identity.WorkspaceID, na
 	}
 	row, err := s.queries.InsertSecret(ctx, box)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Secret{}, &ExistsError{Name: name}
+		return Secret{}, &apitypes.Error{Code: apitypes.Conflict, Message: "secret already exists: " + name}
 	}
 	if err != nil {
 		return Secret{}, fmt.Errorf("insert secret: %w", err)
@@ -343,8 +332,7 @@ func (s *Secrets) SigningKey(ctx context.Context, workspace identity.WorkspaceID
 	}
 	key := "whsec_" + base64.RawURLEncoding.EncodeToString(random)
 	if _, err := s.Create(ctx, workspace, CallbackSigningKey, key); err != nil {
-		var exists *ExistsError
-		if !errors.As(err, &exists) {
+		if apitypes.CodeOf(err) != apitypes.Conflict {
 			return "", err
 		}
 		// A concurrent delivery created it first.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -52,7 +53,7 @@ type pulled struct {
 func (sess *session) imagePull(ctx context.Context, cache *syncCache, workspace identity.WorkspaceID, spec apitypes.ImageSpec) (images.Pull, error) {
 	key := pullKey{python: string(spec.PythonVersion)}
 	if spec.ImageId != nil {
-		key = pullKey{workspace: workspace, id: *spec.ImageId, reference: deref(spec.Reference)}
+		key = pullKey{workspace: workspace, id: *spec.ImageId, reference: database.Value(spec.Reference)}
 	}
 	if p, ok := cache.pulls[key]; ok {
 		return p.pull, p.err
@@ -178,9 +179,9 @@ func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.Complete
 		outcome.Uploaded = append(outcome.Uploaded, images.UploadedLayer{Blob: u.GetBlobDigest(), ETags: u.GetPartEtags()})
 	}
 	uploads, err := s.images.CompleteBuild(ctx, hostFrom(ctx), container, outcome)
-	var invalid *images.InvalidError
-	if errors.As(err, &invalid) {
-		return nil, status.Error(codes.InvalidArgument, invalid.Error())
+	var invalid *apitypes.Error
+	if errors.As(err, &invalid) && invalid.Code == apitypes.InvalidRequest {
+		return nil, status.Error(codes.InvalidArgument, invalid.Message)
 	}
 	if err != nil {
 		return nil, s.grpcError(ctx, err)

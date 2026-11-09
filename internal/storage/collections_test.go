@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
@@ -223,11 +224,10 @@ func TestMapCompareAndSet(t *testing.T) {
 	if err != nil || second.Revision == first.Revision {
 		t.Fatalf("write at the current revision: %+v err=%v", second, err)
 	}
-	var stale *ConflictError
-	if _, err := s.SetMapEntry(ctx, f.ws, "m", "k", SetMapEntry{Value: []byte(`3`), IfRevision: &first.Revision}); !errors.As(err, &stale) {
+	if _, err := s.SetMapEntry(ctx, f.ws, "m", "k", SetMapEntry{Value: []byte(`3`), IfRevision: &first.Revision}); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("write at a stale revision: %v", err)
 	}
-	if err := s.DeleteMapEntry(ctx, f.ws, "m", "k", &first.Revision); !errors.As(err, &stale) {
+	if err := s.DeleteMapEntry(ctx, f.ws, "m", "k", &first.Revision); apitypes.CodeOf(err) != apitypes.Conflict {
 		t.Fatalf("delete at a stale revision: %v", err)
 	}
 	entry, err := s.GetMapEntry(ctx, f.ws, "m", "k")
@@ -244,11 +244,10 @@ func TestMapCompareAndSet(t *testing.T) {
 			_, err := s.SetMapEntry(ctx, f.ws, "m", "once", SetMapEntry{Value: fmt.Appendf(nil, "%d", n), IfAbsent: true})
 			mu.Lock()
 			defer mu.Unlock()
-			var c *ConflictError
 			switch {
 			case err == nil:
 				wins++
-			case errors.As(err, &c):
+			case apitypes.CodeOf(err) == apitypes.Conflict:
 				conflicts++
 			default:
 				t.Error(err)
@@ -300,8 +299,7 @@ func TestMapExpiryKeysAndStats(t *testing.T) {
 		t.Fatalf("write without ttl: %+v, want expiry %v (err %v)", kept, written.ExpiresAt, err)
 	}
 	tooLong := 8 * day
-	var bad *InvalidError
-	if _, err := s.SetMapEntry(ctx, f.ws, "m", "c", SetMapEntry{Value: []byte(`1`), TTL: &tooLong}); !errors.As(err, &bad) {
+	if _, err := s.SetMapEntry(ctx, f.ws, "m", "c", SetMapEntry{Value: []byte(`1`), TTL: &tooLong}); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("ttl above 7 days: %v", err)
 	}
 

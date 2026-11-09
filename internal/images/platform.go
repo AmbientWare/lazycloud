@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/imagefs"
@@ -97,7 +98,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 	if err != nil {
 		return nil, fmt.Errorf("read platform images: %w", err)
 	}
-	architecture := deref(rows[0].HostArchitecture)
+	architecture := database.Value(rows[0].HostArchitecture)
 	if architecture == "" {
 		return nil, fmt.Errorf("read platform images: host %s does not exist", uuid.UUID(host))
 	}
@@ -115,7 +116,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 			continue
 		}
 		row := byReference[reference]
-		out[n].Traceparent = deref(row.Traceparent)
+		out[n].Traceparent = database.Value(row.Traceparent)
 		switch {
 		case row.Converted:
 			pull, err := i.pull(ctx, *row.Mirror, architecture, platformPullWindow)
@@ -209,7 +210,7 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 	claimed, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
 		Reference: reference, Architecture: architecture, Token: c.token, LeaseSeconds: lease.Seconds(),
 		TransientRetrySeconds: platformTransientRetry.Seconds(), FailureRetrySeconds: platformFailureRetry.Seconds(),
-		Traceparent: traceparent(ctx),
+		Traceparent: telemetry.StoredTraceParent(ctx),
 	})
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("lazycloud.claimed", err == nil))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -233,12 +234,11 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 		return nil
 	}
 	var unconvertible *ConversionError
-	var rejected *InvalidError
-	transient := !errors.As(err, &unconvertible) && !errors.As(err, &rejected) && !errors.Is(err, ErrServerDisk)
+	transient := !errors.As(err, &unconvertible) && apitypes.CodeOf(err) != apitypes.InvalidRequest && !errors.Is(err, ErrServerDisk)
 	record := context.WithoutCancel(ctx)
 	failed := pgx.BeginFunc(record, i.pool, func(tx pgx.Tx) error {
 		if err := i.queries.WithTx(tx).FailPlatformImage(record, FailPlatformImageParams{
-			Reference: reference, Architecture: architecture, Token: c.token, Failure: truncate(err.Error()), Transient: transient,
+			Reference: reference, Architecture: architecture, Token: c.token, Failure: database.TruncateTail(err.Error(), maxFailureBytes), Transient: transient,
 		}); err != nil {
 			return fmt.Errorf("record platform image failure: %w", err)
 		}
@@ -300,9 +300,9 @@ func (i *Images) convertPlatform(ctx context.Context, source name.Digest, c plat
 	}
 	// The copy has the same manifest, so these are its layers too.
 	layers, err := imageLayers(c.reference, img)
-	var rejected *InvalidError
-	if errors.As(err, &rejected) {
-		return &ConversionError{Reason: rejected.Reason}
+	var rejected *apitypes.Error
+	if errors.As(err, &rejected) && rejected.Code == apitypes.InvalidRequest {
+		return &ConversionError{Reason: rejected.Message}
 	}
 	if err != nil {
 		return err

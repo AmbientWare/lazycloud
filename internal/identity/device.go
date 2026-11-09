@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // Device-code login timing, after RFC 8628.
@@ -85,7 +87,7 @@ func (i *Identity) StartDeviceLogin(ctx context.Context, clientName string) (Dev
 		}
 		return DeviceStart{DeviceCode: code, UserCode: userCode, ExpiresIn: DeviceCodeTTL, Interval: DevicePollInterval}, nil
 	}
-	return DeviceStart{}, &ConflictError{Message: "could not allocate a unique user code; try again"}
+	return DeviceStart{}, &apitypes.Error{Code: apitypes.Conflict, Message: "could not allocate a unique user code; try again"}
 }
 
 // newUserCode draws XXXX-XXXX from consonants that are unambiguous to read
@@ -116,7 +118,7 @@ func NormalizeUserCode(value string) (string, error) {
 		}
 	}
 	if len(compact) != 2*userCodeGroupLength {
-		return "", &InvalidError{Message: "the code has eight letters, such as BCDF-GHJK"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the code has eight letters, such as BCDF-GHJK"}
 	}
 	return string(compact[:userCodeGroupLength]) + "-" + string(compact[userCodeGroupLength:]), nil
 }
@@ -133,7 +135,7 @@ type DeviceCode struct {
 // DeviceLogin reads the login a user code names for the person deciding
 // it, which takes an account credential as deciding does.
 func (i *Identity) DeviceLogin(ctx context.Context, p Principal, userCode string) (DeviceCode, error) {
-	if err := p.requireAccount("read a device sign-in"); err != nil {
+	if err := p.RequireAccount("read a device sign-in"); err != nil {
 		return DeviceCode{}, err
 	}
 	return i.deviceLogin(ctx, userCode)
@@ -169,7 +171,7 @@ func deviceCodeOut(row DeviceCodeByUserCodeRow) DeviceCode {
 // account. A token restricted to one workspace cannot approve, because the
 // device token reaches every workspace of the account.
 func (i *Identity) ApproveDeviceLogin(ctx context.Context, p Principal, userCode string) (DeviceCode, error) {
-	if err := p.requireAccount("approve a device sign-in"); err != nil {
+	if err := p.RequireAccount("approve a device sign-in"); err != nil {
 		return DeviceCode{}, err
 	}
 	user := uuid.UUID(p.User)
@@ -180,7 +182,7 @@ func (i *Identity) ApproveDeviceLogin(ctx context.Context, p Principal, userCode
 // account credential, so a workspace-restricted token cannot decide the
 // sign-in of the account.
 func (i *Identity) DenyDeviceLogin(ctx context.Context, p Principal, userCode string) (DeviceCode, error) {
-	if err := p.requireAccount("deny a device sign-in"); err != nil {
+	if err := p.RequireAccount("deny a device sign-in"); err != nil {
 		return DeviceCode{}, err
 	}
 	return i.decideDeviceLogin(ctx, userCode, deviceStatusDenied, nil)
@@ -203,9 +205,9 @@ func (i *Identity) decideDeviceLogin(ctx context.Context, userCode, status strin
 		return DeviceCode{}, err
 	}
 	if current.Status == DeviceExpired {
-		return DeviceCode{}, &ConflictError{Message: "the code has expired; run lazycloud login again"}
+		return DeviceCode{}, &apitypes.Error{Code: apitypes.Conflict, Message: "the code has expired; run lazycloud login again"}
 	}
-	return DeviceCode{}, &ConflictError{Message: fmt.Sprintf("the code was already %s", current.Status)}
+	return DeviceCode{}, &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("the code was already %s", current.Status)}
 }
 
 // DevicePoll is one poll's answer. Token is set once, on the poll that
@@ -234,7 +236,7 @@ func (i *Identity) PollDeviceLogin(ctx context.Context, deviceCode string) (Devi
 		interval := time.Duration(row.PollIntervalSeconds) * time.Second
 		poll = DevicePoll{Interval: interval}
 		if row.ConsumedAt != nil {
-			return &ConflictError{Message: "the device code was already used"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "the device code was already used"}
 		}
 		if !row.ExpiresAt.After(row.Now) {
 			poll.Status = DeviceExpired

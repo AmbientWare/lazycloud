@@ -156,15 +156,14 @@ func (s *server) ListMachines(ctx context.Context, req ListMachinesRequestObject
 // ownedWorkspaces resolves names to workspaces the caller owns.
 func (s *server) ownedWorkspaces(ctx context.Context, p identity.Principal, names []apitypes.Name) ([]uuid.UUID, error) {
 	if len(names) == 0 {
-		return nil, &compute.InvalidError{Message: "a machine must serve at least one named workspace"}
+		return nil, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a machine must serve at least one named workspace"}
 	}
 	ids := make([]uuid.UUID, 0, len(names))
 	for _, name := range names {
 		ws, err := s.owners.Identity.AuthorizeWorkspace(ctx, p, name)
-		var role *identity.RoleError
-		if errors.Is(err, identity.ErrForbidden) || errors.Is(err, identity.ErrNotFound) || errors.As(err, &role) ||
+		if apitypes.CodeOf(err) == apitypes.Forbidden || errors.Is(err, identity.ErrNotFound) ||
 			(err == nil && ws.Role != identity.RoleOwner) {
-			return nil, &compute.InvalidError{Message: fmt.Sprintf("workspace %q is not owned by this account", name)}
+			return nil, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf("workspace %q is not owned by this account", name)}
 		}
 		if err != nil {
 			return nil, err

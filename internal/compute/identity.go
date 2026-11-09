@@ -18,6 +18,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -66,7 +68,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 	if row.InstanceID == nil {
 		return HostID{}, "", &IdentityError{Message: "the host has no instance yet"}
 	}
-	account, role := row.AwsAccountID, deref(row.NodeRoleArn)
+	account, role := row.AwsAccountID, database.Value(row.NodeRoleArn)
 	caller, err := c.verifyProof(ctx, host, proof)
 	if err != nil {
 		return HostID{}, "", err
@@ -90,7 +92,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 			return HostID{}, "", err
 		}
 		if _, err := c.queries.EndHost(ctx, EndHostParams{
-			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: new(string(FailurePreflight)), Message: truncate(message),
+			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: new(string(FailurePreflight)), Message: database.Truncate(message, maxMessage),
 		}); err != nil {
 			return HostID{}, "", fmt.Errorf("fail host: %w", err)
 		}
@@ -185,12 +187,12 @@ func (c *Compute) verifyProof(ctx context.Context, host HostID, proof IdentityPr
 	req.Host = u.Host
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return callerIdentity{}, &UnavailableError{Message: fmt.Sprintf("AWS STS is unavailable: %v", err)}
+		return callerIdentity{}, &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("AWS STS is unavailable: %v", err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProofResponse))
 	if err != nil {
-		return callerIdentity{}, &UnavailableError{Message: fmt.Sprintf("read AWS STS response: %v", err)}
+		return callerIdentity{}, &apitypes.Error{Code: apitypes.Unavailable, Message: fmt.Sprintf("read AWS STS response: %v", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return callerIdentity{}, &IdentityError{Message: fmt.Sprintf("AWS STS refused the proof (HTTP %d)", resp.StatusCode)}
@@ -220,11 +222,4 @@ func containsFold(list []string, s string) bool {
 		}
 	}
 	return false
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

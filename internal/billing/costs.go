@@ -43,10 +43,10 @@ type costCursor struct {
 
 func checkWindow(start, end time.Time) error {
 	if !end.After(start) {
-		return &InvalidError{Message: "a cost window must end after it starts"}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a cost window must end after it starts"}
 	}
 	if end.Sub(start) > maxCostWindow {
-		return &InvalidError{Message: "a cost window may span at most 400 days"}
+		return &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a cost window may span at most 400 days"}
 	}
 	return nil
 }
@@ -77,7 +77,7 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 			err = json.Unmarshal(raw, &c)
 		}
 		if err != nil {
-			return apitypes.UsageCostPage{}, &InvalidError{Message: "the cursor is not from a previous page"}
+			return apitypes.UsageCostPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from a previous page"}
 		}
 		params.HasCursor, params.AfterCost, params.AfterWorkspace = true, c.Cost, c.Workspace
 		params.AfterApp, params.AfterWorkload, params.AfterCategory, params.AfterDisk = c.App, c.Workload, c.Category, c.Disk
@@ -201,7 +201,7 @@ func (b *Billing) CostSeries(ctx context.Context, user uuid.UUID, start, end tim
 	}
 	count := int((end.Sub(start) + width - 1) / width)
 	if count > maxCostIntervals {
-		return apitypes.UsageCostSeries{}, &InvalidError{Message: fmt.Sprintf(
+		return apitypes.UsageCostSeries{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: fmt.Sprintf(
 			"a cost series holds at most %d intervals; this window is %d of them", maxCostIntervals, count)}
 	}
 	rows, err := b.queries.CostBuckets(ctx, CostBucketsParams{UserID: user, StartAt: start, EndAt: end, WidthSeconds: width.Seconds()})

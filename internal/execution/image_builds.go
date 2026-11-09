@@ -9,11 +9,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // An image build runs in containers that execution owns like any other:
@@ -45,12 +47,12 @@ func (e *Execution) CreateBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 		return ContainerID{}, err
 	}
 	if grant.Start == 0 {
-		return ContainerID{}, &billing.LimitError{Message: "the account holds the most containers or GPUs its plan allows"}
+		return ContainerID{}, &apitypes.Error{Code: apitypes.LimitReached, Message: "the account holds the most containers or GPUs its plan allows"}
 	}
 	// Placement gives the build the model admission granted, which is the
 	// one it named.
 	if gpu != "" && !slices.Contains(grant.GPUModels, billing.GPUType(gpu)) {
-		return ContainerID{}, &billing.PaymentRequiredError{Message: "this account may not use " + gpu}
+		return ContainerID{}, &apitypes.Error{Code: apitypes.PaymentRequired, Message: "this account may not use " + gpu}
 	}
 	return e.createBuildContainer(ctx, tx, workspace, build, cpuMillis, memoryBytes, len(req.GPUModels))
 }
@@ -68,7 +70,7 @@ func (e *Execution) createBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
 		GpuCount:    int32(gpus), //nolint:gosec // At most one GPU.
-		Traceparent: traceparent(ctx),
+		Traceparent: telemetry.StoredTraceParent(ctx),
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)
@@ -144,7 +146,7 @@ func (e *Execution) BuildStarts(ctx context.Context, host compute.HostID) ([]Bui
 	for n, row := range rows {
 		out[n] = BuildStart{
 			Container: ContainerID(row.ID), Build: row.ImageBuildID, Attempt: int(row.Attempt),
-			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, Traceparent: deref(row.Traceparent),
+			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, Traceparent: database.Value(row.Traceparent),
 		}
 	}
 	return out, nil

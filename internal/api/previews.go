@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,7 +14,7 @@ import (
 )
 
 // errPreviewNotRunning means the preview has no ready container to sync.
-var errPreviewNotRunning = errors.New("the preview has no ready container")
+var errPreviewNotRunning error = &apitypes.Error{Code: apitypes.Conflict, Message: "the preview has no ready container"}
 
 // renewEvery paces lease renewals while a follower reads a preview's output.
 const renewEvery = 15 * time.Second

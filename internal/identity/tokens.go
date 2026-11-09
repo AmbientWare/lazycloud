@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
 // Token expiry bounds for account tokens; no expiry means it lasts until
@@ -42,13 +44,13 @@ type TokenPage struct {
 // CreateAccountToken mints a token that reaches every workspace the account
 // belongs to. lifetime nil means no expiry. The secret is returned once.
 func (i *Identity) CreateAccountToken(ctx context.Context, p Principal, name string, lifetime *time.Duration) (string, Token, error) {
-	if err := p.requireAccount("create tokens"); err != nil {
+	if err := p.RequireAccount("create tokens"); err != nil {
 		return "", Token{}, err
 	}
 	var expires *time.Time
 	if lifetime != nil {
 		if *lifetime < MinTokenLifetime || *lifetime > MaxTokenLifetime {
-			return "", Token{}, &InvalidError{Message: "a token expires after 1 to 90 days, or never"}
+			return "", Token{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a token expires after 1 to 90 days, or never"}
 		}
 		at := time.Now().Add(*lifetime)
 		expires = &at
@@ -75,7 +77,7 @@ func mintToken(ctx context.Context, q *Queries, user UserID, name string, expire
 // ListTokens pages through the caller's unrevoked tokens, newest first.
 // Expired tokens are listed until revoked so their owner sees them lapse.
 func (i *Identity) ListTokens(ctx context.Context, p Principal, includeDevice bool, before *TokenID, limit int) (TokenPage, error) {
-	if err := p.requireAccount("list tokens"); err != nil {
+	if err := p.RequireAccount("list tokens"); err != nil {
 		return TokenPage{}, err
 	}
 	rows, err := i.queries.ListUserTokens(ctx, ListUserTokensParams{
@@ -103,11 +105,11 @@ func (i *Identity) ListTokens(ctx context.Context, p Principal, includeDevice bo
 // RevokeToken revokes one of the caller's tokens. The token making the
 // request cannot revoke itself; signing out ends a session.
 func (i *Identity) RevokeToken(ctx context.Context, p Principal, id TokenID) error {
-	if err := p.requireAccount("revoke tokens"); err != nil {
+	if err := p.RequireAccount("revoke tokens"); err != nil {
 		return err
 	}
 	if p.Token != nil && *p.Token == id {
-		return &ConflictError{Message: "a token cannot revoke itself"}
+		return &apitypes.Error{Code: apitypes.Conflict, Message: "a token cannot revoke itself"}
 	}
 	revoked, err := i.queries.RevokeUserToken(ctx, RevokeUserTokenParams{ID: uuid.UUID(id), UserID: uuid.UUID(p.User)})
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -125,12 +126,12 @@ func expectOwner(account string) func(*s3.Options) {
 
 // connectedAccount is the account connection reaches and its active role.
 // Without an active authorization the platform cannot act there, which is
-// a *ConflictError: it fails what needs the account's storage rather than
+// a Conflict: it fails what needs the account's storage rather than
 // being retried.
 func (s *Storage) connectedAccount(ctx context.Context, connection uuid.UUID) (compute.ConnectedAccount, error) {
 	account, err := s.connections.ConnectedAccount(ctx, connection)
-	var refused *compute.ConflictError
-	if errors.As(err, &refused) {
+	var refused *apitypes.Error
+	if errors.As(err, &refused) && refused.Code == apitypes.Conflict {
 		return compute.ConnectedAccount{}, conflict("%s", refused.Message)
 	}
 	if err != nil {
@@ -188,7 +189,7 @@ func (s *Storage) providerOf(ctx context.Context, store bucketClient) (bucketPro
 
 // workspaceStore returns the workspace's bucket, creating it on first use.
 // The object store's refusal is a *StoreRefusedError, and a connection the
-// platform cannot act through a *ConflictError.
+// platform cannot act through a Conflict.
 func (s *Storage) workspaceStore(ctx context.Context, workspace identity.WorkspaceID) (bucketClient, error) {
 	row, err := s.queries.WorkspaceBucket(ctx, uuid.UUID(workspace))
 	if errors.Is(err, pgx.ErrNoRows) {

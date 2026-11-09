@@ -72,7 +72,7 @@ func (e *Edge) load(ctx context.Context, workload uuid.UUID) error {
 	ws.started++
 	read := ws.started
 	e.mu.Unlock()
-	rows, err := e.execution.EndpointContainers(ctx, workload)
+	rows, err := e.execution.ReadyContainers(ctx, workload)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func (e *Edge) load(ctx context.Context, workload uuid.UUID) error {
 
 // applyLocked replaces the workload's container set with the rows of read,
 // unless a newer read was applied already.
-func (e *Edge) applyLocked(ws *workloadState, read uint64, rows []execution.EndpointContainer) {
+func (e *Edge) applyLocked(ws *workloadState, read uint64, rows []execution.ReadyContainer) {
 	if read < ws.applied {
 		return
 	}

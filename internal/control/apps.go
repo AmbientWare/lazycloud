@@ -16,7 +16,7 @@ import (
 )
 
 // ErrInvalidCursor means a page cursor did not come from this listing.
-var ErrInvalidCursor = errors.New("invalid page cursor")
+var ErrInvalidCursor error = &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 
 // AppState is an app's desired state.
 type AppState string

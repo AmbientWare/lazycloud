@@ -49,7 +49,7 @@ func PreviewKind(spec apitypes.WorkloadSpec) apitypes.PreviewKind {
 // preview serves without deploying it.
 func (c *Control) CreatePreview(ctx context.Context, workspace identity.WorkspaceID, user identity.UserID, app string, spec apitypes.WorkloadSpec, timeoutSeconds int) (Preview, error) {
 	if spec.Pod != nil {
-		return Preview{}, &InvalidSpecError{Function: spec.Name, Reason: "pods, devboxes and sandboxes are not served; deploy or create them"}
+		return Preview{}, invalidSpec(spec.Name, "pods, devboxes and sandboxes are not served; deploy or create them")
 	}
 	f, err := resolveFunction(spec)
 	if err != nil {

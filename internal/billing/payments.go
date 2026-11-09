@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -25,6 +26,9 @@ const (
 	// settledRecheck is when a succeeded purchase is read again for refunds
 	// and disputes if no delivery reports them first.
 	settledRecheck = 30 * 24 * time.Hour
+	// maxError bounds the errors stored with purchases, plan changes and
+	// webhook events.
+	maxError = 500
 )
 
 // ownURL refuses to send anyone anywhere but back to the dashboard: Stripe
@@ -32,11 +36,11 @@ const (
 func (b *Billing) ownURL(candidate string) (string, error) {
 	u, err := url.Parse(candidate)
 	if err != nil {
-		return "", &InvalidError{Message: "a billing return address must be a valid URL"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a billing return address must be a valid URL"}
 	}
 	own, err := url.Parse(b.cfg.PublicURL)
 	if err != nil || u.Scheme != own.Scheme || u.Host != own.Host {
-		return "", &InvalidError{Message: "a billing return address must be on this platform"}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "a billing return address must be on this platform"}
 	}
 	return candidate, nil
 }
@@ -158,7 +162,7 @@ func (b *Billing) BuyCredit(ctx context.Context, user uuid.UUID, req apitypes.Cr
 			return fmt.Errorf("lock account: %w", err)
 		}
 		if account.PaymentMethodAttachedAt == nil || account.StripeCustomerID == nil {
-			return &PaymentRequiredError{Message: "add a payment method before buying credit"}
+			return &apitypes.Error{Code: apitypes.PaymentRequired, Message: "add a payment method before buying credit"}
 		}
 		customer = *account.StripeCustomerID
 		key := req.RequestKey
@@ -173,7 +177,7 @@ func (b *Billing) BuyCredit(ctx context.Context, user uuid.UUID, req apitypes.Cr
 			return fmt.Errorf("read purchase: %w", err)
 		}
 		if purchase.AmountNanos != amount || purchase.SuccessUrl != success || purchase.CancelUrl != cancel {
-			return &ConflictError{Message: "a purchase request cannot be reused with different terms"}
+			return &apitypes.Error{Code: apitypes.Conflict, Message: "a purchase request cannot be reused with different terms"}
 		}
 		return nil
 	})
@@ -352,7 +356,7 @@ func (b *Billing) SweepPurchases(ctx context.Context) (int, error) {
 	for _, id := range due {
 		if err := b.settlePurchase(ctx, id); err != nil {
 			b.logger.WarnContext(ctx, "settle credit purchase", "purchase_id", id, "error", err)
-			if err := b.queries.RetryPurchase(ctx, RetryPurchaseParams{ID: id, LastError: truncate(err.Error()), NextAttemptAt: time.Now().Add(5 * time.Minute)}); err != nil {
+			if err := b.queries.RetryPurchase(ctx, RetryPurchaseParams{ID: id, LastError: database.Truncate(err.Error(), maxError), NextAttemptAt: time.Now().Add(5 * time.Minute)}); err != nil {
 				return 0, fmt.Errorf("retry purchase: %w", err)
 			}
 		}
@@ -423,12 +427,4 @@ func (b *Billing) startReload(ctx context.Context, user uuid.UUID) (uuid.UUID, b
 		return uuid.UUID{}, false, fmt.Errorf("start automatic reload: %w", err)
 	}
 	return id, started, nil
-}
-
-func truncate(s string) string {
-	const limit = 500
-	if len(s) > limit {
-		return s[:limit]
-	}
-	return s
 }

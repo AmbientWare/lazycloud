@@ -634,7 +634,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 	} else {
 		http = httpServing(start.Spec)
 		function = &hostproto.FunctionWorkload{
-			Handler:   deref(start.Spec.Handler),
+			Handler:   database.Value(start.Spec.Handler),
 			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
 			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
 			Hooks:     hooksOut(start.Spec.LifecycleHooks),

@@ -25,15 +25,10 @@ import (
 const maxWebhooks = 20
 
 // ErrNotFound means the workspace has no such webhook.
-var ErrNotFound = errors.New("webhook not found")
+var ErrNotFound error = &apitypes.Error{Code: apitypes.NotFound, Message: "not found"}
 
 // ErrLimit means the workspace already holds maxWebhooks webhooks.
-var ErrLimit = fmt.Errorf("a workspace holds at most %d webhooks", maxWebhooks)
-
-// InvalidError rejects a webhook field or a page cursor.
-type InvalidError struct{ Reason string }
-
-func (e *InvalidError) Error() string { return e.Reason }
+var ErrLimit error = &apitypes.Error{Code: apitypes.Conflict, Message: fmt.Sprintf("a workspace holds at most %d webhooks", maxWebhooks)}
 
 // TargetURL checks a callback or webhook target: http or https, a host, no
 // credentials and no fragment. Whether the host is public is checked when
@@ -76,7 +71,7 @@ func (h *Webhooks) List(ctx context.Context, workspace identity.WorkspaceID, cur
 	if cursor != "" {
 		parsed, err := uuid.Parse(cursor)
 		if err != nil {
-			return apitypes.WebhookPage{}, &InvalidError{Reason: "the cursor is not from this listing"}
+			return apitypes.WebhookPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 		}
 		after = parsed
 	}
@@ -214,7 +209,7 @@ func (h *Webhooks) Deliveries(ctx context.Context, workspace identity.WorkspaceI
 	if cursor != "" {
 		parsed, err := strconv.ParseInt(cursor, 10, 64)
 		if err != nil {
-			return apitypes.WebhookDeliveryPage{}, &InvalidError{Reason: "the cursor is not from this listing"}
+			return apitypes.WebhookDeliveryPage{}, &apitypes.Error{Code: apitypes.InvalidRequest, Message: "the cursor is not from this listing"}
 		}
 		before = parsed
 	}
@@ -239,7 +234,7 @@ func (h *Webhooks) Deliveries(ctx context.Context, workspace identity.WorkspaceI
 func webhookURL(value string) (string, error) {
 	target, err := TargetURL(value)
 	if err != nil {
-		return "", &InvalidError{Reason: "url " + err.Error()}
+		return "", &apitypes.Error{Code: apitypes.InvalidRequest, Message: "url " + err.Error()}
 	}
 	return target, nil
 }

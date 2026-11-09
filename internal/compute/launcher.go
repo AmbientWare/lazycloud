@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
@@ -103,7 +104,7 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 // moving it on through refused pools.
 func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimHostActionsRow) (bool, error) {
 	ctx, span := c.hostSpan(ctx, h.ID, "compute.launch", attribute.String("lazycloud.instance_type", h.InstanceType),
-		attribute.String("lazycloud.market", deref(h.Market)), attribute.String("lazycloud.region", h.Region))
+		attribute.String("lazycloud.market", database.Value(h.Market)), attribute.String("lazycloud.region", h.Region))
 	started, err := c.launchPools(ctx, logger, h)
 	span.SetAttributes(attribute.Bool("lazycloud.started", started))
 	telemetry.Fail(span, err)
@@ -514,7 +515,7 @@ func (c *Compute) launchHost(ctx context.Context, logger *slog.Logger, h ClaimHo
 		}
 	}
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
-		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market),
+		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", database.Value(h.Market),
 		"score", c.poolScore(ctx, logger, h.Market, subnet.ZoneID, h.InstanceType))
 	return true, nil, nil
 }
@@ -681,7 +682,7 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimHostActionsRow, failure
 			}
 		}
 		if _, err := q.FailLaunch(ctx, FailLaunchParams{
-			ID: h.ID, Token: h.ActionToken, Failure: new(string(failure)), Message: truncate("Launch failed: " + message),
+			ID: h.ID, Token: h.ActionToken, Failure: new(string(failure)), Message: database.Truncate("Launch failed: "+message, maxMessage),
 		}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}
@@ -706,7 +707,7 @@ func (c *Compute) coolPool(ctx context.Context, q *Queries, h ClaimHostActionsRo
 	params := InsertCooldownParams{
 		ConnectionKey: hostOwner(h.ConnectionID), Region: h.Region, AvailabilityZoneID: cool.zoneID, InstanceType: h.InstanceType,
 		Market: *h.Market, Seconds: c.fleet.CapacityCooldown.Seconds(), MaxSeconds: (cooldownGrowth * c.fleet.CapacityCooldown).Seconds(),
-		Reason: truncate(message), Walk: &h.ID,
+		Reason: database.Truncate(message, maxMessage), Walk: &h.ID,
 	}
 	if err := q.InsertCooldown(ctx, params); err != nil {
 		return fmt.Errorf("insert cooldown: %w", err)

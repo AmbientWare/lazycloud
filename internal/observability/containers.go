@@ -316,18 +316,6 @@ func (o *Observability) ContainerLifecycles(ctx context.Context, ws identity.Wor
 	return out, nil
 }
 
-// ContainerLifecycle returns one container's lifecycle.
-func (o *Observability) ContainerLifecycle(ctx context.Context, ws identity.WorkspaceID, id execution.ContainerID) (apitypes.ContainerLifecycle, error) {
-	lifecycles, err := o.ContainerLifecycles(ctx, ws, []execution.ContainerID{id})
-	if err != nil {
-		return apitypes.ContainerLifecycle{}, err
-	}
-	if len(lifecycles) == 0 {
-		return apitypes.ContainerLifecycle{}, ErrNotFound
-	}
-	return lifecycles[0], nil
-}
-
 // lifecycleOut builds the stages from the durable transitions (placement
 // and draining) and the stored start stages.
 func lifecycleOut(r ContainerLifecyclesRow, reported []ContainerStartupStage) apitypes.ContainerLifecycle {

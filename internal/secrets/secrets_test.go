@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -45,8 +46,7 @@ func TestSecretLifecycle(t *testing.T) {
 	if _, err := s.Create(ctx, ws, "API_TOKEN", "first"); err != nil {
 		t.Fatal(err)
 	}
-	var exists *ExistsError
-	if _, err := s.Create(ctx, ws, "API_TOKEN", "again"); !errors.As(err, &exists) || err.Error() != "secret already exists: API_TOKEN" {
+	if _, err := s.Create(ctx, ws, "API_TOKEN", "again"); apitypes.CodeOf(err) != apitypes.Conflict || err.Error() != "secret already exists: API_TOKEN" {
 		t.Fatalf("duplicate create = %v", err)
 	}
 	if _, err := s.Update(ctx, ws, "API_TOKEN", "second"); err != nil {
@@ -69,8 +69,7 @@ func TestSecretLifecycle(t *testing.T) {
 	if _, err := s.Resolve(ctx, ws, []string{"API_TOKEN", "ABSENT"}); !errors.As(err, &missing) || missing.Name != "ABSENT" {
 		t.Fatalf("resolve with a missing name = %v", err)
 	}
-	var reserved *ReservedNameError
-	if _, err := s.Set(ctx, ws, "LAZYCLOUD_TOKEN", "x"); !errors.As(err, &reserved) {
+	if _, err := s.Set(ctx, ws, "LAZYCLOUD_TOKEN", "x"); apitypes.CodeOf(err) != apitypes.InvalidRequest {
 		t.Fatalf("reserved name = %v", err)
 	}
 	if err := s.Delete(ctx, ws, "OTHER"); err != nil {

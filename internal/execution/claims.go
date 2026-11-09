@@ -171,8 +171,8 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
-			claimed[n].TraceParent = deref(row.Traceparent)
-			traceClaim(ctx, claimed[n], row.AvailableAt, container, deref(c.Traceparent))
+			claimed[n].TraceParent = database.Value(row.Traceparent)
+			traceClaim(ctx, claimed[n], row.AvailableAt, container, database.Value(c.Traceparent))
 			ids[n] = row.TaskID
 			index[row.TaskID] = n
 		}
