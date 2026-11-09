@@ -832,7 +832,7 @@ func (c *container) onReady(ctx context.Context, ready *hostproto.SlotsReady) {
 	}
 	c.signalSlotFree()
 	if changed {
-		c.log.Info("container ready", "slots", ready.GetSlots(), "running", len(running))
+		c.log.Info("container ready", "running", len(running))
 		c.report()
 	}
 	if startClaims {

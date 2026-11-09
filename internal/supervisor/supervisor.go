@@ -69,11 +69,8 @@ type Supervisor struct {
 	loaded map[*slot]bool
 	runs   chan *hostproto.RunAttempt
 	// queued maps attempts waiting for a slot to whether they were cancelled.
-	queued map[string]bool
-	ready  bool
-	// readySlots is the slot count reported ready: every runner slot, or a
-	// pod's one.
-	readySlots     int32
+	queued         map[string]bool
+	ready          bool
 	loadFailedSent bool
 	draining       bool
 
@@ -528,10 +525,8 @@ func (s *Supervisor) slotLoaded(sl *slot) {
 	defer s.mu.Unlock()
 	s.loaded[sl] = true
 	if !s.ready && len(s.loaded) == len(s.slots) {
-		s.ready, s.readySlots = true, int32(len(s.slots)) //nolint:gosec // slots come from an int32
-		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{
-			Ready: &hostproto.SlotsReady{Slots: int32(len(s.slots))}, //nolint:gosec // slots come from an int32
-		}})
+		s.ready = true
+		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{}}})
 	}
 }
 
@@ -559,10 +554,7 @@ func (s *Supervisor) readyMessage() *hostproto.SupervisorMessage {
 	// first finds every attempt in one place or the other. The agent accepts
 	// outcomes only for attempts it counts as running.
 	running = append(running, s.out.unreportedAttempts()...)
-	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{
-		Slots:           s.readySlots,
-		RunningAttempts: running,
-	}}}
+	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{RunningAttempts: running}}}
 }
 
 func (s *Supervisor) loadFailed(e *hostproto.RunnerError) {

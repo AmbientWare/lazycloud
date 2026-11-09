@@ -234,9 +234,7 @@ func forwardHTTP(ctx context.Context, stream forwardStream, in *inbound, transpo
 		return
 	}
 	req.Host = head.GetHost()
-	for _, h := range head.GetHeaders() {
-		req.Header.Add(h.GetName(), h.GetValue())
-	}
+	hostproto.HeadersIn(req.Header, head.GetHeaders())
 	req.ContentLength = -1
 	if length := req.Header.Get("Content-Length"); length != "" {
 		if n, err := strconv.ParseInt(length, 10, 64); err == nil && n >= 0 {
@@ -263,14 +261,8 @@ func forwardHTTP(ctx context.Context, stream forwardStream, in *inbound, transpo
 		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_BUSY, reason))
 		return
 	}
-	headers := make([]*hostproto.Header, 0, len(resp.Header))
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, &hostproto.Header{Name: name, Value: value})
-		}
-	}
 	if err := stream.Send(&hostproto.ForwardUp{Body: &hostproto.ForwardUp_Head{Head: &hostproto.ResponseHead{
-		Status: int32(resp.StatusCode), Headers: headers, //nolint:gosec // HTTP status codes fit
+		Status: int32(resp.StatusCode), Headers: hostproto.HeadersOut(resp.Header), //nolint:gosec // HTTP status codes fit
 	}}}); err != nil {
 		return
 	}

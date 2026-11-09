@@ -174,9 +174,9 @@ func (s *Supervisor) podReady() {
 	if s.ready {
 		return
 	}
-	s.ready, s.readySlots = true, 1
+	s.ready = true
 	s.log.Info("pod ready")
-	s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{Slots: 1}}})
+	s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{}}})
 }
 
 // waitReady polls the pod's health check, or without one a TCP connection to

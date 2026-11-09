@@ -131,11 +131,11 @@ func (s *Server) buildStartMessage(ctx context.Context, host compute.HostID, id 
 	if command.Context != nil {
 		var digest storage.Digest
 		copy(digest[:], command.Context)
-		url, expires, err := s.storage.SourceURL(ctx, command.Workspace, digest)
+		url, err := s.storage.SourceURL(ctx, command.Workspace, digest)
 		if err != nil {
 			return nil, err
 		}
-		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
+		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url}
 	}
 	reserved, memory, memoryLimit := s.images.BuildResources()
 	ctx, span := telemetry.StartIn(ctx, s.tracer, start.Traceparent, "hostsession.start_build", trace.WithAttributes(

@@ -80,7 +80,7 @@ func (a *Agent) prepareReserve(request *hostproto.PrepareReserve) {
 		if ready.GetRefused() != "" {
 			a.log.Info("refusing to stop into the reserve", "attempt_id", request.GetAttemptId(), "reason", ready.GetRefused())
 		} else {
-			a.log.Info("ready to stop into the reserve", "attempt_id", request.GetAttemptId(), "mode", request.GetMode().String())
+			a.log.Info("ready to stop into the reserve", "attempt_id", request.GetAttemptId())
 		}
 		a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_ReserveReady{ReserveReady: ready}})
 	})

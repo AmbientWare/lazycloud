@@ -37,8 +37,8 @@ func TestSessionStoresMetricsAndStartStagesOfTheHostsContainers(t *testing.T) {
 		Samples: []*hostproto.ContainerSample{
 			{ContainerId: container.String(), IntervalMs: 5000, CpuUsageUsec: 2_500_000, MemoryRssBytes: 64 << 20,
 				Gpus: []*hostproto.GPUSample{
-					{Uuid: "GPU-a", Name: "NVIDIA L4", UtilizationPercent: 40, MemoryUsedBytes: 1 << 30, MemoryTotalBytes: 24 << 30},
-					{Uuid: "GPU-b", Name: "NVIDIA L4", UtilizationPercent: 60, MemoryUsedBytes: 1 << 30, MemoryTotalBytes: 24 << 30},
+					{Name: "NVIDIA L4", UtilizationPercent: 40, MemoryUsedBytes: 1 << 30, MemoryTotalBytes: 24 << 30},
+					{Name: "NVIDIA L4", UtilizationPercent: 60, MemoryUsedBytes: 1 << 30, MemoryTotalBytes: 24 << 30},
 				}},
 			// Another host's container, or none at all, is dropped.
 			{ContainerId: uuid.NewString(), IntervalMs: 5000, CpuUsageUsec: 1},

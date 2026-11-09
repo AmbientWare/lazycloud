@@ -520,12 +520,8 @@ func (v *volumes) mount(ctx context.Context, c *container, spec *hostproto.Start
 // rememberPeers keeps the peers a start of workspace names, which every
 // grant of the workspace hands the snapshotter.
 func (v *volumes) rememberPeers(workspace string, spec *hostproto.StartContainer) {
-	peers := make([]string, 0, len(spec.GetVolumePeers()))
-	for _, p := range spec.GetVolumePeers() {
-		peers = append(peers, p.GetAddress())
-	}
 	v.mu.Lock()
-	v.peers[workspace] = peers
+	v.peers[workspace] = spec.GetVolumePeers()
 	v.mu.Unlock()
 }
 

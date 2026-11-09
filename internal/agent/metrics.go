@@ -291,7 +291,7 @@ func parseGPUSamples(data []byte) map[string]*hostproto.GPUSample {
 		used, _ := strconv.ParseUint(fields[3], 10, 64)
 		total, _ := strconv.ParseUint(fields[4], 10, 64)
 		out[fields[0]] = &hostproto.GPUSample{
-			Uuid: fields[0], Name: fields[1], UtilizationPercent: uint32(util), //nolint:gosec // Percent.
+			Name: fields[1], UtilizationPercent: uint32(util), //nolint:gosec // Percent.
 			MemoryUsedBytes: used << 20, MemoryTotalBytes: total << 20,
 		}
 	}

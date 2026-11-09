@@ -3,6 +3,7 @@ syntax = "proto3";
 package lazycloud.host.v1;
 
 import "google/protobuf/timestamp.proto";
+import "host/v1/data.proto";
 import "imagefs/v1/source.proto";
 
 option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
@@ -187,12 +188,6 @@ message VolumeTrace {
   bool record = 2;
 }
 
-// VolumePeer is another host's volume cache, at its peer address.
-message VolumePeer {
-  string host_id = 1;
-  string address = 2;
-}
-
 // Interruption is a provider's notice that it reclaims the instance at
 // reclaim_at, such as an EC2 Spot interruption.
 message Interruption {
@@ -324,7 +319,6 @@ message ContainerSample {
 }
 
 message GPUSample {
-  string uuid = 1;
   string name = 2;
   uint32 utilization_percent = 3;
   uint64 memory_used_bytes = 4;
@@ -450,17 +444,8 @@ message PrepareReserve {
   // request is stale.
   string request_id = 1;
   string attempt_id = 2;
-  ReserveMode mode = 3;
   // The GPUs the host must still find through the driver.
   int32 gpus = 4;
-}
-
-enum ReserveMode {
-  RESERVE_MODE_UNSPECIFIED = 0;
-  // A plain stop; the host boots cold on resume.
-  RESERVE_MODE_STOP = 1;
-  // EC2 hibernation; memory is restored on resume.
-  RESERVE_MODE_HIBERNATE = 2;
 }
 
 // ReserveReady answers PrepareReserve.
@@ -529,9 +514,9 @@ message StartContainer {
   bool record_trace = 121;
   // Set for a start that mounts platform volumes.
   VolumeTrace volume_trace = 122;
-  // Hosts of the region that hold the workspace's grant, whose volume
-  // caches a frame is asked of before the store.
-  repeated VolumePeer volume_peers = 123;
+  // Peer addresses of the region's hosts that hold the workspace's grant,
+  // whose volume caches a frame is asked of before the store.
+  repeated string volume_peers = 123;
   // The W3C traceparent of the server's span that sent the start, when it
   // was sampled. The host's spans of the start are its children.
   string traceparent = 130;
@@ -707,7 +692,6 @@ message Source {
   string sha256 = 1;
   // A presigned GET URL for the source zip.
   string url = 2;
-  google.protobuf.Timestamp url_expires_at = 3;
 }
 
 // Resources reserve cpu_millis, thousandths of a CPU, and memory_bytes; the
@@ -753,18 +737,11 @@ message StopContainer {
   int32 grace_seconds = 2;
 }
 
-enum CancelReason {
-  CANCEL_REASON_UNSPECIFIED = 0;
-  CANCEL_REASON_CANCELLED = 1;
-  CANCEL_REASON_TIMED_OUT = 2;
-}
-
 // CancelAttempt kills the slot running the attempt. The server has already
 // recorded the outcome.
 message CancelAttempt {
   string container_id = 1;
   string attempt_id = 2;
-  CancelReason reason = 3;
 }
 
 message ClaimTasksRequest {
@@ -980,25 +957,16 @@ message APIRequestHead {
   string method = 2;
   // The request target: path and query.
   string target = 3;
-  repeated APIHeader headers = 4;
-}
-
-message APIHeader {
-  string name = 1;
-  string value = 2;
+  repeated Header headers = 4;
 }
 
 // APIResponse is one message of a container API answer. Only the first
 // carries head.
 message APIResponse {
-  APIResponseHead head = 1;
+  ResponseHead head = 1;
   bytes body = 2;
 }
 
-message APIResponseHead {
-  int32 status = 1;
-  repeated APIHeader headers = 2;
-}
 message CompleteImageBuildRequest {
   string container_id = 1;
   oneof outcome {

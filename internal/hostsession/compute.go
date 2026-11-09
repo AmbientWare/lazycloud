@@ -106,12 +106,8 @@ func (sess *session) syncReserve(ctx context.Context) error {
 		return nil
 	}
 	attempt := uuid.New()
-	mode := hostproto.ReserveMode_RESERVE_MODE_STOP
-	if request.Mode == compute.ReserveHibernate {
-		mode = hostproto.ReserveMode_RESERVE_MODE_HIBERNATE
-	}
 	msg := &hostproto.ServerMessage{CommandId: "reserve:" + attempt.String(), Body: &hostproto.ServerMessage_PrepareReserve{PrepareReserve: &hostproto.PrepareReserve{
-		RequestId: request.ID, AttemptId: attempt.String(), Mode: mode, Gpus: int32(request.GPUs), //nolint:gosec // GPU counts are small.
+		RequestId: request.ID, AttemptId: attempt.String(), Gpus: int32(request.GPUs), //nolint:gosec // GPU counts are small.
 	}}}
 	if err := sess.stream.Send(msg); err != nil {
 		return fmt.Errorf("send prepare reserve: %w", err)

@@ -219,7 +219,6 @@ func (x *CommandExited) GetExitCode() int32 {
 // already occupy slots.
 type SlotsReady struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Slots           int32                  `protobuf:"varint,1,opt,name=slots,proto3" json:"slots,omitempty"`
 	RunningAttempts []string               `protobuf:"bytes,2,rep,name=running_attempts,json=runningAttempts,proto3" json:"running_attempts,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -253,13 +252,6 @@ func (x *SlotsReady) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SlotsReady.ProtoReflect.Descriptor instead.
 func (*SlotsReady) Descriptor() ([]byte, []int) {
 	return file_host_v1_container_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *SlotsReady) GetSlots() int32 {
-	if x != nil {
-		return x.Slots
-	}
-	return 0
 }
 
 func (x *SlotsReady) GetRunningAttempts() []string {
@@ -1193,10 +1185,9 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"\bdetached\x18[ \x01(\v2\x1b.lazycloud.host.v1.DetachedH\x00R\bdetachedB\x06\n" +
 	"\x04body\",\n" +
 	"\rCommandExited\x12\x1b\n" +
-	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"M\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"7\n" +
 	"\n" +
-	"SlotsReady\x12\x14\n" +
-	"\x05slots\x18\x01 \x01(\x05R\x05slots\x12)\n" +
+	"SlotsReady\x12)\n" +
 	"\x10running_attempts\x18\x02 \x03(\tR\x0frunningAttempts\"B\n" +
 	"\n" +
 	"LoadFailed\x124\n" +
