@@ -8,25 +8,39 @@ from __future__ import annotations
 
 import logging
 import pprint
+from dataclasses import dataclass
 from typing import TypeGuard
 
-from lazycloud._shared.function_payloads import (
-    FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS,
-    FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES,
-    FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS,
-    FunctionResultDisplay,
-    FunctionResultHtmlDisplay,
-    FunctionResultImageDisplay,
-    FunctionResultRichDisplay,
-)
+# The runner protocol's display limits.
+TEXT_MAX_CHARS = 64 * 1024
+HTML_MAX_CHARS = 256 * 1024
+IMAGE_MAX_BYTES = 1024 * 1024
 
 LOGGER = logging.getLogger(__name__)
 _TEXT_WIDTH = 88
 _TRUNCATION_MARK = "..."
 
 
+@dataclass(frozen=True, slots=True)
+class FunctionResultDisplay:
+    """A result's text, plus a PNG or HTML rendering when it defines one."""
+
+    text: str
+    png: bytes | None = None
+    html: str | None = None
+
+
 def build_function_result_display(value: object) -> FunctionResultDisplay:
-    return FunctionResultDisplay(text=_display_text(value), rich=_rich_display(value))
+    text = _display_text(value)
+    if isinstance(value, type):
+        return FunctionResultDisplay(text=text)
+    png = _call_repr_method(value, "_repr_png_")
+    if isinstance(png, bytes) and 0 < len(png) <= IMAGE_MAX_BYTES:
+        return FunctionResultDisplay(text=text, png=png)
+    html = _call_repr_method(value, "_repr_html_")
+    if isinstance(html, str) and 0 < len(html) <= HTML_MAX_CHARS:
+        return FunctionResultDisplay(text=text, html=html)
+    return FunctionResultDisplay(text=text)
 
 
 def _display_text(value: object) -> str:
@@ -34,22 +48,10 @@ def _display_text(value: object) -> str:
         text = pprint.pformat(value, width=_TEXT_WIDTH, compact=True, sort_dicts=False)
     except Exception as exc:
         text = f"<{type(value).__name__} repr failed: {type(exc).__name__}>"
-    if len(text) > FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS:
-        keep = FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS - len(_TRUNCATION_MARK)
+    if len(text) > TEXT_MAX_CHARS:
+        keep = TEXT_MAX_CHARS - len(_TRUNCATION_MARK)
         text = text[:keep] + _TRUNCATION_MARK
     return text
-
-
-def _rich_display(value: object) -> FunctionResultRichDisplay | None:
-    if isinstance(value, type):
-        return None
-    png = _call_repr_method(value, "_repr_png_")
-    if isinstance(png, bytes) and 0 < len(png) <= FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES:
-        return FunctionResultImageDisplay.from_bytes(png)
-    html = _call_repr_method(value, "_repr_html_")
-    if isinstance(html, str) and 0 < len(html) <= FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS:
-        return FunctionResultHtmlDisplay(html=html)
-    return None
 
 
 def _call_repr_method(value: object, name: str) -> object:
@@ -71,4 +73,4 @@ def _is_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
 
 
-__all__ = ["build_function_result_display"]
+__all__ = ["FunctionResultDisplay", "build_function_result_display"]

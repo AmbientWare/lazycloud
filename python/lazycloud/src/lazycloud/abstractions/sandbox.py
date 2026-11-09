@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -17,21 +17,16 @@ from typing_extensions import Never, Self
 from lazycloud._shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from lazycloud._shared.deployment_records import (
     DEFAULT_CPU,
-    DEFAULT_DISK,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    Resources,
-    VolumeMount,
     request_and_limit,
 )
 from lazycloud._shared.deployments import DeploymentKind
-from lazycloud._shared.gpu import GpuInput, gpu_preference
-from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.gpu import GpuInput
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.abstractions.metadata import MachineInput, check_workload_options
+from lazycloud.abstractions.volume import VolumeExport, VolumeMount, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.clients.api import ApiError
 from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
@@ -83,32 +78,6 @@ _FAILED_STOP_REASONS = frozenset(
         StopReason.host_lost,
     }
 )
-
-
-class SandboxOptions(TypedDict, total=False):
-    cpu: CpuRequest | str
-    memory: MemoryRequest
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    image: Image | None
-    keep_warm_seconds: int
-    authorized: bool
-    name: str | None
-    volumes: Iterable[VolumeMount | VolumeExport] | None
-    secrets: Iterable[str] | None
-    env: Mapping[str, str] | None
-    sync_local_dir: bool
-    block_network: bool
-    allow_list: Iterable[str] | None
-    docker_enabled: bool
-    preemptible: bool
-    ports: Iterable[int] | None
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-    metadata: Mapping[str, Any] | None
-    command: Iterable[str] | None
 
 
 class SandboxConnectionError(RuntimeError):
@@ -1454,6 +1423,7 @@ class AsyncSandboxInstance:
 
 @dataclass(init=False, slots=True)
 class Sandbox(ControlClientConfigMixin):
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Sandbox
     name: str = "sandbox"
     _app_slug: str = field(init=False, repr=False)
     image: Image = field(default_factory=Image)
@@ -1554,6 +1524,7 @@ class Sandbox(ControlClientConfigMixin):
             ready_timeout_seconds,
         )
         self.terminal = None
+        check_workload_options(self)
 
     @property
     def control_client(self) -> WorkloadsClient:
@@ -1564,41 +1535,6 @@ class Sandbox(ControlClientConfigMixin):
     @property
     def resource_name(self) -> str:
         return self.name
-
-    def spec(self) -> DeploymentSpec:
-        return DeploymentSpec(
-            name=self.name,
-            kind=DeploymentKind.Sandbox,
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                keep_warm=self.keep_warm_seconds,
-                preemptible=self.preemptible,
-            ),
-            command=self.command,
-            ports=_sandbox_port_mapping(self.ports),
-            env=dict(self.env or {}),
-            secrets=self.secrets,
-            volumes=list(self.volumes),
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                authorized=self.authorized,
-                block_network=self.block_network,
-                allow_list=self.allow_list,
-                docker_enabled=self.docker_enabled,
-                machine=self.machine,
-                extra={
-                    **self.metadata,
-                    "sync_local_dir": self.sync_local_dir,
-                },
-            ),
-        )
 
     def handler_reference(self) -> None:
         """A sandbox runs its command, not a handler."""
@@ -2088,7 +2024,6 @@ __all__ = [
     "SandboxFileSystem",
     "SandboxFileSystemError",
     "SandboxInstance",
-    "SandboxOptions",
     "SandboxProcess",
     "SandboxProcessError",
     "SandboxProcessInfo",

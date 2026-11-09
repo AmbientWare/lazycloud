@@ -7,13 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 from urllib.parse import urlencode
 
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue
 
-from lazycloud._shared.autoscaling import Autoscaler
-from lazycloud._shared.callbacks import normalize_callback_url
 from lazycloud._shared.deployments import DeploymentKind
-from lazycloud._shared.gpu import gpu_preference
-from lazycloud._shared.image_building.python import python_minor_version
 from lazycloud.abstractions.metadata import lifecycle_hook_references
 from lazycloud.client_contracts import build_client_contract
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
@@ -74,8 +70,12 @@ def http_workload_spec(
     methods: list[str] | None = None,
 ) -> WorkloadSpec:
     """The API definition of an HTTP workload for an uploaded source and a ready image."""
-    from lazycloud.abstractions.function import _resources, _volume_spec, placement_fields
-    from lazycloud.contracts.api import WorkloadSpec
+    from lazycloud.abstractions.function import (
+        FunctionOperationError,
+        autoscaler_spec,
+        base_workload_spec,
+        validated_workload_spec,
+    )
 
     http: dict[str, Any] = {
         "kind": kind,
@@ -87,19 +87,15 @@ def http_workload_spec(
         http["methods"] = [method.strip().upper() for method in methods if method.strip()]
     if owner.domain:
         http["domain"] = owner.domain.strip().rstrip(".").lower()
-    spec: dict[str, Any] = {
-        "kind": "endpoint" if kind == "endpoint" else "asgi",
-        "name": owner.resource_name,
-        "handler": handler,
-        "source": {"sha256": source_sha256},
-        "image": {
-            "python_version": python_minor_version(image.python_version),
-            "image_id": image.image_id,
-        },
-        "resources": _resources(owner.cpu, owner.memory, owner.disk),
-        "concurrency": concurrency,
-        "http": http,
-    }
+    spec = base_workload_spec(
+        owner,
+        kind="endpoint" if kind == "endpoint" else "asgi",
+        source_sha256=source_sha256,
+        image=image,
+    )
+    spec["handler"] = handler
+    spec["concurrency"] = concurrency
+    spec["http"] = http
     if owner.effective_timeout_seconds() is not None:
         spec["timeout_seconds"] = owner.effective_timeout_seconds()
     if keep_warm is not None:
@@ -107,27 +103,15 @@ def http_workload_spec(
     if max_pending_tasks is not None:
         spec["max_pending_tasks"] = max_pending_tasks
     if owner.autoscaler is not None:
-        spec["autoscaler"] = Autoscaler.model_validate(owner.autoscaler).model_dump(
-            include={"min_containers", "max_containers", "tasks_per_container"}
-        )
+        spec["autoscaler"] = autoscaler_spec(owner.autoscaler)
     if retry_policy is not None:
         spec["retry_policy"] = retry_policy.model_dump(
             mode="json",
             include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
             exclude_none=True,
         )
-    if owner.env:
-        spec["environment"] = dict(owner.env)
-    if getattr(owner, "metadata", None):
-        spec["metadata"] = dict(owner.metadata)
-    if owner.secrets:
-        spec["secrets"] = list(dict.fromkeys(owner.secrets))
-    if owner.volumes:
-        spec["volumes"] = [_volume_spec(volume) for volume in owner.volumes]
     if owner.authorized is False:
         spec["authorized"] = False
-    if getattr(owner, "docker_enabled", False):
-        spec["docker_enabled"] = True
     if owner.checkpoint_enabled:
         # The runner reports readiness, so the snapshot needs no probe.
         spec["checkpoint"] = {}
@@ -137,35 +121,13 @@ def http_workload_spec(
         )
         if contract is not None:
             spec["client_contract"] = contract.model_dump(mode="json")
-    try:
-        on_start = lifecycle_hook_references(owner.on_start)
-        gpu = gpu_preference(owner.gpu)
-        placement = placement_fields(owner)
-        callback_url = normalize_callback_url(owner.callback_url)
-    except (TypeError, ValueError) as exc:
-        from lazycloud.abstractions.function import FunctionOperationError
-
-        msg = f"{kind} {owner.resource_name} has invalid options: {exc}"
-        raise FunctionOperationError(msg) from exc
-    if callback_url is not None:
-        # Each request is called back once it ends.
-        spec["callback_url"] = callback_url
+    on_start = lifecycle_hook_references(owner.on_start)
     if on_start:
         # Workers run on_start once each, before they take requests.
         spec["lifecycle_hooks"] = {"on_start": list(on_start)}
-    if gpu:
-        spec["resources"]["gpu"] = list(gpu)
-    if owner.gpu_count:
-        spec["resources"]["gpu_count"] = owner.gpu_count
-    if placement:
-        spec["placement"] = placement
-    try:
-        return WorkloadSpec.model_validate(spec)
-    except ValidationError as exc:
-        from lazycloud.abstractions.function import FunctionOperationError
-
-        msg = f"{kind} {owner.resource_name} has invalid options: {exc}"
-        raise FunctionOperationError(msg) from exc
+    return validated_workload_spec(
+        spec, label=f"{kind} {owner.resource_name}", error=FunctionOperationError
+    )
 
 
 def resolve_url(

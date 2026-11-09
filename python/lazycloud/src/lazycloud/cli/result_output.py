@@ -8,26 +8,24 @@ from pathlib import Path
 from pydantic import JsonValue
 from rich.text import Text
 
-from lazycloud._shared.function_display import build_function_result_display
-from lazycloud._shared.function_payloads import (
+from lazycloud._shared.function_display import (
     FunctionResultDisplay,
-    FunctionResultDisplayKind,
-    FunctionResultRichDisplay,
+    build_function_result_display,
 )
 from lazycloud._shared.serialization import to_json_value
 from lazycloud._terminal import theme
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.values import cloudpickle_bytes
 
-_RICH_EXTENSIONS = {
-    FunctionResultDisplayKind.Image: ".png",
-    FunctionResultDisplayKind.Html: ".html",
-}
 
-
-def rich_display_hint(rich: FunctionResultRichDisplay) -> Text:
-    extension = _RICH_EXTENSIONS[rich.kind]
-    what = "an image" if rich.kind is FunctionResultDisplayKind.Image else "HTML"
+def rich_display_hint(display: FunctionResultDisplay) -> Text | None:
+    """Where to save the image or HTML a result also renders as, if it renders as one."""
+    if display.png is not None:
+        what, extension = "an image", ".png"
+    elif display.html is not None:
+        what, extension = "HTML", ".html"
+    else:
+        return None
     return Text(
         f"Also renders as {what}. Save it with --output FILE{extension}.",
         style=theme.MUTED,
@@ -40,32 +38,30 @@ class ResultExport:
     def __init__(self, *, value: object = None) -> None:
         self._value = value
         self._display: FunctionResultDisplay | None = None
-        self._display_built = False
 
     @classmethod
     def from_value(cls, value: object) -> ResultExport:
         return cls(value=value)
 
-    def display(self) -> FunctionResultDisplay | None:
-        if not self._display_built:
-            self._display = self._build_display()
-            self._display_built = True
+    def display(self) -> FunctionResultDisplay:
+        if self._display is None:
+            self._display = build_function_result_display(self._value)
         return self._display
-
-    def _build_display(self) -> FunctionResultDisplay | None:
-        return build_function_result_display(self._value)
 
     def write(self, path: Path) -> None:
         extension = path.suffix.lower()
         if extension == ".png":
-            path.write_bytes(self._rich_bytes(FunctionResultDisplayKind.Image, extension))
+            png = self.display().png
+            if png is None:
+                raise _unavailable(extension, "this result does not render as an image")
+            path.write_bytes(png)
         elif extension == ".html":
-            path.write_bytes(self._rich_bytes(FunctionResultDisplayKind.Html, extension))
+            html = self.display().html
+            if html is None:
+                raise _unavailable(extension, "this result does not render as HTML")
+            path.write_bytes(html.encode("utf-8"))
         elif extension == ".txt":
-            display = self.display()
-            if display is None:
-                raise _unavailable(extension, "this result has no text rendering")
-            path.write_text(display.text + "\n", encoding="utf-8")
+            path.write_text(self.display().text + "\n", encoding="utf-8")
         elif extension == ".json":
             path.write_text(self._json_text() + "\n", encoding="utf-8")
         elif extension in {".pkl", ".pickle"}:
@@ -77,16 +73,6 @@ class ResultExport:
                 title="Unsupported result file",
                 hint="Use a .png, .html, .txt, .json, .pkl, or .pickle file name.",
             )
-
-    def _rich_bytes(self, kind: FunctionResultDisplayKind, extension: str) -> bytes:
-        display = self.display()
-        rich = display.rich if display is not None else None
-        if rich is None or rich.kind is not kind:
-            what = "an image" if kind is FunctionResultDisplayKind.Image else "HTML"
-            raise _unavailable(extension, f"this result does not render as {what}")
-        if rich.kind is FunctionResultDisplayKind.Html:
-            return rich.html.encode("utf-8")
-        return rich.bytes_value()
 
     def _json_text(self) -> str:
         try:

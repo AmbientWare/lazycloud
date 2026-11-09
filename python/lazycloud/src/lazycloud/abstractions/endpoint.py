@@ -10,13 +10,12 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Generic,
     ParamSpec,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
-    overload,
     runtime_checkable,
 )
 
@@ -26,19 +25,14 @@ from lazycloud._invocation import encode_arguments, prepare_arguments, serialize
 from lazycloud._shared.autoscaling import Autoscaler
 from lazycloud._shared.deployment_records import (
     DEFAULT_CPU,
-    DEFAULT_DISK,
     DEFAULT_HTTP_MEMORY,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    Resources,
-    VolumeMount,
 )
 from lazycloud._shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from lazycloud._shared.function_payloads import FunctionPayloadEncoding
-from lazycloud._shared.gpu import GpuInput, gpu_preference
-from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.gpu import GpuInput
 from lazycloud._shared.serialization import to_json_value
 from lazycloud._shared.tasks import RetryPolicy, TaskPolicy
 from lazycloud.abstractions.function import FunctionOperationError
@@ -56,17 +50,10 @@ from lazycloud.abstractions.metadata import (
     MachineInput,
     RetryPolicyInput,
     SchemaInput,
-    build_resource_metadata,
-    lifecycle_hooks,
+    check_workload_options,
     retry_policy_config,
 )
-from lazycloud.abstractions.volume import VolumeExport, volume_mounts
-from lazycloud.client_contracts import (
-    asgi_client_contract,
-    build_client_contract,
-    schema_from_contract_parameters,
-    schema_from_contract_return,
-)
+from lazycloud.abstractions.volume import VolumeMount, volume_mounts
 from lazycloud.env import is_local
 from lazycloud.references import dotted_reference
 
@@ -104,76 +91,9 @@ class EndpointOperationError(FunctionOperationError):
     pass
 
 
-class EndpointOptions(TypedDict, total=False):
-    image: Image | None
-    name: str | None
-    route: str
-    domain: str | None
-    methods: list[str] | None
-    cpu: CpuRequest | None
-    memory: MemoryRequest | None
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    timeout_seconds: int | None
-    retries: int | None
-    retry_policy: RetryPolicyInput
-    retry_delay_seconds: float | None
-    workers: int
-    concurrency: int
-    keep_warm: int
-    max_pending_tasks: int | None
-    callback_url: str | None
-    authorized: bool | None
-    env: dict[str, str] | None
-    secrets: list[str] | None
-    volumes: Iterable[VolumeMount | VolumeExport] | None
-    on_start: LifecycleHookInput
-    autoscaler: Autoscaler | Mapping[str, Any] | None
-    task_policy: TaskPolicy | Mapping[str, Any] | None
-    checkpoint_enabled: bool
-    inputs: SchemaInput
-    outputs: SchemaInput
-    docker_enabled: bool
-    preemptible: bool
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-    metadata: dict[str, Any] | None
-
-
-class ASGIOptions(TypedDict, total=False):
-    name: str
-    image: Image | None
-    route: str
-    domain: str | None
-    cpu: CpuRequest | None
-    memory: MemoryRequest | None
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    timeout_seconds: int | None
-    workers: int
-    concurrent_requests: int
-    keep_warm_seconds: int
-    max_pending_tasks: int
-    authorized: bool
-    callback_url: str | None
-    env: dict[str, str] | None
-    secrets: list[str] | None
-    volumes: Iterable[VolumeMount | VolumeExport] | None
-    on_start: LifecycleHookInput
-    autoscaler: Autoscaler | Mapping[str, Any] | None
-    task_policy: TaskPolicy | Mapping[str, Any] | None
-    checkpoint_enabled: bool
-    preemptible: bool
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-
-
 @dataclass
 class Endpoint(Generic[P, R]):
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Endpoint
     func: Callable[P, R]
     _app_slug: str
     image: Image = field(default_factory=Image)
@@ -216,6 +136,13 @@ class Endpoint(Generic[P, R]):
 
     def __post_init__(self) -> None:
         update_wrapper(self, self.func)
+        self.image = self.image or Image()
+        self.env = dict(self.env or {})
+        self.secrets = list(self.secrets or [])
+        self.volumes = volume_mounts(self.volumes or ())
+        self.metadata = dict(self.metadata or {})
+        self.methods = list(self.methods or DEFAULT_ENDPOINT_METHODS)
+        check_workload_options(self)
 
     @property
     def resource_name(self) -> str:
@@ -244,70 +171,6 @@ class Endpoint(Generic[P, R]):
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )
-
-    def spec(self, *, kind: DeploymentKind = DeploymentKind.Endpoint) -> DeploymentSpec:
-        client_contract = build_client_contract(
-            self.func,
-            kind=kind,
-            inputs=self.inputs,
-            outputs=self.outputs,
-        )
-        spec = DeploymentSpec(
-            name=self.resource_name,
-            kind=kind,
-            handler=self._handler_reference(),
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
-                concurrency=self.concurrency,
-                keep_warm=self.keep_warm,
-                preemptible=self.preemptible,
-            ),
-            route=self.route,
-            domain=self.domain,
-            methods=list(self.methods),
-            env=self.env,
-            secrets=self.secrets,
-            volumes=list(self.volumes),
-            retry_policy=retry_policy_config(
-                self.retry_policy,
-                retries=self.retries,
-                retry_delay_seconds=self.retry_delay_seconds,
-            ),
-            lifecycle_hooks=lifecycle_hooks(on_start=self.on_start),
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                workers=self.workers,
-                max_pending_tasks=self.max_pending_tasks,
-                callback_url=self.callback_url,
-                authorized=self.authorized,
-                autoscaler=self.autoscaler,
-                task_policy=self.task_policy,
-                checkpoint_enabled=self.checkpoint_enabled,
-                inputs=(
-                    self.inputs
-                    if self.inputs is not None
-                    else schema_from_contract_parameters(client_contract)
-                ),
-                outputs=(
-                    self.outputs
-                    if self.outputs is not None
-                    else schema_from_contract_return(client_contract)
-                ),
-                docker_enabled=self.docker_enabled,
-                machine=self.machine,
-                extra=self.metadata,
-            ),
-            client_contract=client_contract,
-        )
-        return spec
 
     def effective_timeout_seconds(self) -> int | None:
         return _effective_timeout_seconds(self.task_policy, self.timeout_seconds)
@@ -462,180 +325,9 @@ def _shell_http(
     return shell.create_standalone(str(release.id), sync_dir=sync_dir)
 
 
-@overload
-def _endpoint(
-    func: Callable[P, R],
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    route: str = "/",
-    domain: str | None = None,
-    methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = 180,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    workers: int = 1,
-    concurrency: int = 1,
-    keep_warm: int = 180,
-    max_pending_tasks: int | None = 100,
-    callback_url: str | None = None,
-    authorized: bool | None = True,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    checkpoint_enabled: bool = False,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Endpoint[P, R]: ...
-
-
-@overload
-def _endpoint(
-    func: None = None,
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    route: str = "/",
-    domain: str | None = None,
-    methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = 180,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    workers: int = 1,
-    concurrency: int = 1,
-    keep_warm: int = 180,
-    max_pending_tasks: int | None = 100,
-    callback_url: str | None = None,
-    authorized: bool | None = True,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    checkpoint_enabled: bool = False,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
-
-
-def _endpoint(
-    func: Callable[P, R] | None = None,
-    *,
-    _app_slug: str,
-    image: Image | None = None,
-    name: str | None = None,
-    route: str = "/",
-    domain: str | None = None,
-    methods: list[str] | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = 180,
-    retries: int | None = None,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
-    retry_delay_seconds: float | None = None,
-    workers: int = 1,
-    concurrency: int = 1,
-    keep_warm: int = 180,
-    max_pending_tasks: int | None = 100,
-    callback_url: str | None = None,
-    authorized: bool | None = True,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    checkpoint_enabled: bool = False,
-    inputs: SchemaInput = None,
-    outputs: SchemaInput = None,
-    docker_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-    metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[P, R]], Endpoint[P, R]] | Endpoint[P, R]:
-    def decorate(target: Callable[P, R]) -> Endpoint[P, R]:
-        return Endpoint(
-            target,
-            _app_slug=_app_slug,
-            image=image or Image(),
-            name=name,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            retries=retries,
-            retry_policy=retry_policy,
-            retry_delay_seconds=retry_delay_seconds,
-            workers=workers,
-            concurrency=concurrency,
-            keep_warm=keep_warm,
-            max_pending_tasks=max_pending_tasks,
-            callback_url=callback_url,
-            authorized=authorized,
-            env=env or {},
-            secrets=secrets or [],
-            volumes=volume_mounts(volumes or ()),
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            inputs=inputs,
-            outputs=outputs,
-            docker_enabled=docker_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            metadata=metadata or {},
-            route=route,
-            domain=domain,
-            methods=methods or list(DEFAULT_ENDPOINT_METHODS),
-        )
-
-    if func is None:
-        return decorate
-    return decorate(func)
-
-
 @dataclass
 class ASGI:
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Asgi
     app: Callable[..., Awaitable[Any]] | Callable[..., Any]
     _app_slug: str
     name: str = "asgi"
@@ -676,6 +368,11 @@ class ASGI:
     def __post_init__(self) -> None:
         self._handler_reference_target = self.app
         update_wrapper(self, self.app)
+        self.image = self.image or Image()
+        self.env = dict(self.env or {})
+        self.secrets = list(self.secrets or [])
+        self.volumes = volume_mounts(self.volumes or ())
+        check_workload_options(self)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if not is_local():
@@ -686,45 +383,6 @@ class ASGI:
         if _is_asgi_call(args, kwargs):
             return _call_asgi_compatible(self.app, args[0], args[1], args[2])
         return self.app(*args, **kwargs)
-
-    def spec(self) -> DeploymentSpec:
-        return DeploymentSpec(
-            name=self.name,
-            kind=DeploymentKind.Asgi,
-            handler=self._handler_reference(),
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                timeout_seconds=_effective_timeout_seconds(self.task_policy, self.timeout_seconds),
-                concurrency=self.concurrent_requests,
-                keep_warm=self.keep_warm_seconds,
-                preemptible=self.preemptible,
-            ),
-            route=self.route,
-            domain=self.domain,
-            env=self.env,
-            secrets=self.secrets,
-            volumes=list(self.volumes),
-            lifecycle_hooks=lifecycle_hooks(on_start=self.on_start),
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                workers=self.workers,
-                max_pending_tasks=self.max_pending_tasks,
-                authorized=self.authorized,
-                callback_url=self.callback_url,
-                autoscaler=self.autoscaler,
-                task_policy=self.task_policy,
-                checkpoint_enabled=self.checkpoint_enabled,
-                machine=self.machine,
-            ),
-            client_contract=asgi_client_contract(),
-        )
 
     @property
     def resource_name(self) -> str:
@@ -830,88 +488,10 @@ class ASGI:
 @dataclass
 class RealtimeASGI(ASGI):
     def __post_init__(self) -> None:
-        source_handler = self.app
-        self._handler_reference_target = source_handler
-        self.app = _RealtimeWebSocketApp(source_handler)
-        update_wrapper(self, source_handler)
+        super().__post_init__()
+        self.app = _RealtimeWebSocketApp(self.app)
 
     _http_kind = "realtime"
-
-    def spec(self) -> DeploymentSpec:
-        spec = super().spec()
-        spec.metadata["realtime"] = True
-        return spec
-
-
-ASGIResourceT = TypeVar("ASGIResourceT", bound=ASGI)
-
-
-def _asgi(
-    *,
-    resource_type: type[ASGIResourceT],
-    _app_slug: str,
-    name: str = "asgi",
-    image: Image | None = None,
-    route: str = "/",
-    domain: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_CPU,
-    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = 180,
-    workers: int = 1,
-    concurrent_requests: int = 1,
-    keep_warm_seconds: int = 180,
-    max_pending_tasks: int = 100,
-    authorized: bool = True,
-    callback_url: str | None = None,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    checkpoint_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    machine: MachineInput = None,
-) -> Callable[[Callable[..., Any]], ASGIResourceT]:
-    def decorate(target: Callable[..., Any]) -> ASGIResourceT:
-        return resource_type(
-            app=target,
-            _app_slug=_app_slug,
-            name=name,
-            image=image or Image(),
-            route=route,
-            domain=domain,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            workers=workers,
-            concurrent_requests=concurrent_requests,
-            keep_warm_seconds=keep_warm_seconds,
-            max_pending_tasks=max_pending_tasks,
-            authorized=authorized,
-            callback_url=callback_url,
-            env=env or {},
-            secrets=secrets or [],
-            volumes=volume_mounts(volumes or ()),
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-        )
-
-    return decorate
 
 
 class _RealtimeWebSocketApp:
@@ -1070,13 +650,9 @@ def _effective_timeout_seconds(
 
 __all__ = [
     "ASGI",
-    "ASGIOptions",
     "Endpoint",
     "EndpointInvocation",
     "EndpointOperationError",
-    "EndpointOptions",
     "EndpointResponse",
     "RealtimeASGI",
-    "_asgi",
-    "_endpoint",
 ]

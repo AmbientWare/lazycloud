@@ -4,30 +4,24 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from lazycloud._shared.deployment_records import (
-    DEFAULT_DISK,
     DEFAULT_POD_CPU,
     DEFAULT_WORKLOAD_PREEMPTIBLE,
     CpuRequest,
-    DeploymentSpec,
     MemoryRequest,
-    Resources,
-    VolumeMount,
 )
-from lazycloud._shared.deployments import DeploymentKind, PodRole
+from lazycloud._shared.deployments import DeploymentKind
 from lazycloud._shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount
-from lazycloud._shared.gpu import GpuInput, gpu_preference
-from lazycloud._shared.image_building.python import python_minor_version
-from lazycloud._shared.placement import ProductRegion
+from lazycloud._shared.gpu import GpuInput
 from lazycloud.abstractions.disk import disk_mounts
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.volume import volume_mounts
+from lazycloud.abstractions.metadata import MachineInput, check_workload_options
+from lazycloud.abstractions.volume import VolumeMount, volume_mounts
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.contracts.api import (
     AllowListItem,
@@ -61,43 +55,6 @@ DEVBOX_KEEP_WARM_SECONDS = 1800
 
 class PodOperationError(SdkError):
     pass
-
-
-class PodOptions(TypedDict, total=False):
-    name: str
-    image: Image
-    command: list[str]
-    ports: dict[str, int]
-    env: dict[str, str]
-    cpu: CpuRequest | None
-    memory: MemoryRequest | None
-    disk: str | None
-    gpu: GpuInput
-    gpu_count: int
-    keep_warm: int | None
-    secrets: list[str]
-    volumes: list[VolumeMount]
-    disks: list[DiskMount]
-    authorized: bool
-    checkpoint_enabled: bool
-    checkpoint_readiness_path: str | None
-    checkpoint_readiness_port: int | None
-    checkpoint_readiness_timeout_seconds: int
-    checkpoint_readiness_interval_seconds: float
-    health_check_path: str | None
-    health_check_port: int | None
-    tcp: bool
-    ssh: bool | None
-    block_network: bool
-    allow_list: list[str] | None
-    docker_enabled: bool
-    preemptible: bool | None
-    role: PodRole | None
-    root_disk_bytes: int | None
-    region: str | None
-    availability_zone: str
-    machine: MachineInput
-    metadata: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -236,6 +193,7 @@ def _container_lines(client: WorkloadsClient, container: ApiContainer) -> Iterat
 
 @dataclass(slots=True)
 class Pod:
+    kind: ClassVar[DeploymentKind] = DeploymentKind.Pod
     _app_slug: str = field(repr=False)
     name: str = "pod"
     image: Image = field(default_factory=Image)
@@ -265,7 +223,7 @@ class Pod:
     allow_list: list[str] | None = None
     docker_enabled: bool = False
     preemptible: bool | None = DEFAULT_WORKLOAD_PREEMPTIBLE
-    role: PodRole | None = None
+    devbox: bool = False
     root_disk_bytes: int | None = None
     region: str | None = None
     availability_zone: str = ""
@@ -277,8 +235,15 @@ class Pod:
     terminal: Terminal | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.volumes = volume_mounts(self.volumes)
-        self.disks = disk_mounts(self.disks)
+        self.image = self.image or Image()
+        self.command = [str(item) for item in self.command or ()]
+        self.ports = dict(self.ports or {})
+        self.env = dict(self.env or {})
+        self.secrets = [str(secret) for secret in self.secrets or ()]
+        self.volumes = volume_mounts(self.volumes or ())
+        self.disks = disk_mounts(self.disks or ())
+        self.metadata = dict(self.metadata or {})
+        check_workload_options(self)
         self.image.ignore_python = True
         if self.checkpoint_enabled and (
             not (self.checkpoint_readiness_path or "").startswith("/")
@@ -297,60 +262,6 @@ class Pod:
     def resource_name(self) -> str:
         return self.name
 
-    def spec(self) -> DeploymentSpec:
-        return DeploymentSpec(
-            name=self.name,
-            kind=DeploymentKind.Pod,
-            role=self.role,
-            root_disk_bytes=self.root_disk_bytes,
-            image=self.image.spec(),
-            resources=Resources(
-                region=ProductRegion(self.region) if self.region is not None else None,
-                availability_zone=self.availability_zone,
-                cpu=self.cpu,
-                memory=self.memory,
-                disk=self.disk or DEFAULT_DISK,
-                gpu=list(gpu_preference(self.gpu)),
-                gpu_count=self.gpu_count,
-                keep_warm=self.keep_warm,
-                preemptible=self.preemptible,
-            ),
-            command=self.command,
-            ports=self.ports,
-            env=self.env,
-            secrets=self.secrets,
-            volumes=self.volumes,
-            disks=self.disks,
-            metadata=build_resource_metadata(
-                app=self._app_slug,
-                authorized=self.authorized,
-                checkpoint_enabled=self.checkpoint_enabled,
-                tcp=self.tcp,
-                ssh=self.ssh,
-                block_network=self.block_network,
-                allow_list=self.allow_list,
-                docker_enabled=self.docker_enabled,
-                machine=self.machine,
-                extra={
-                    **self.metadata,
-                    "checkpoint_readiness_path": self.checkpoint_readiness_path or "",
-                    "checkpoint_readiness_port": self.checkpoint_readiness_port or 0,
-                    "checkpoint_readiness_timeout_seconds": (
-                        self.checkpoint_readiness_timeout_seconds
-                    ),
-                    "checkpoint_readiness_interval_seconds": (
-                        self.checkpoint_readiness_interval_seconds
-                    ),
-                    "health_check_path": self.health_check_path or "",
-                    "health_check_port": self.health_check_port or 0,
-                },
-            ),
-        )
-
-    @property
-    def is_devbox(self) -> bool:
-        return self.role is PodRole.Devbox
-
     def handler_reference(self) -> None:
         """A pod runs its command, not a handler."""
         return None
@@ -361,7 +272,7 @@ class Pod:
         """The API definition of this pod for an uploaded source and a ready image."""
         del handler
         # Only the options set are sent, so the server's defaults apply.
-        pod = PodSpec(kind=PodKind.devbox if self.is_devbox else PodKind.pod)
+        pod = PodSpec(kind=PodKind.devbox if self.devbox else PodKind.pod)
         if self.command:
             pod.command = [CommandItem(item) for item in self.command]
         if self.ports:
@@ -378,7 +289,7 @@ class Pod:
             DiskMountSpec(name=disk.name, size_bytes=disk.size_bytes, mount_path=disk.mount_path)
             for disk in self.disks
         ]
-        if self.is_devbox and self.root_disk_bytes is not None:
+        if self.devbox and self.root_disk_bytes is not None:
             disks.insert(
                 0,
                 DiskMountSpec(
@@ -386,11 +297,11 @@ class Pod:
                 ),
             )
         keep_warm = self.keep_warm
-        if keep_warm is None and self.is_devbox:
+        if keep_warm is None and self.devbox:
             keep_warm = DEVBOX_KEEP_WARM_SECONDS
         preemptible = self.preemptible
         if preemptible is None:
-            preemptible = not self.is_devbox
+            preemptible = not self.devbox
         checkpoint = (
             CheckpointSpec(
                 readiness_path=self.checkpoint_readiness_path,
@@ -403,7 +314,7 @@ class Pod:
         )
         return container_workload_spec(
             self,
-            label="devbox" if self.is_devbox else "pod",
+            label="devbox" if self.devbox else "pod",
             pod=pod,
             source_sha256=source_sha256,
             image=image,
@@ -571,67 +482,30 @@ def container_workload_spec(
     checkpoint: CheckpointSpec | None = None,
 ) -> WorkloadSpec:
     """The API definition of a pod, devbox or sandbox: a command, not a handler."""
-    from lazycloud.abstractions.function import _resources, _volume_spec
+    from lazycloud.abstractions.function import base_workload_spec, validated_workload_spec
 
     if block_network:
         pod.block_network = True
     if allow_list is not None:
         pod.allow_list = [AllowListItem(item) for item in allow_list]
-    spec: dict[str, Any] = {
-        "kind": WorkloadKind.sandbox if pod.kind is PodKind.sandbox else WorkloadKind.pod,
-        "name": owner.resource_name,
-        "source": {"sha256": source_sha256},
-        "image": {
-            "python_version": python_minor_version(image.python_version),
-            "image_id": image.image_id,
-        },
-        "resources": _resources(owner.cpu, owner.memory, owner.disk),
-        "authorized": bool(owner.authorized),
-        "pod": pod,
-    }
+    spec = base_workload_spec(
+        owner,
+        kind=WorkloadKind.sandbox if pod.kind is PodKind.sandbox else WorkloadKind.pod,
+        source_sha256=source_sha256,
+        image=image,
+        preemptible=preemptible,
+    )
+    spec["authorized"] = bool(owner.authorized)
+    spec["pod"] = pod
     if keep_warm is not None:
         spec["keep_warm_seconds"] = keep_warm
-    if owner.env:
-        spec["environment"] = dict(owner.env)
-    if owner.metadata:
-        spec["metadata"] = dict(owner.metadata)
-    if owner.secrets:
-        spec["secrets"] = list(dict.fromkeys(owner.secrets))
-    if owner.volumes:
-        spec["volumes"] = [_volume_spec(volume) for volume in owner.volumes]
     if disks:
         spec["disks"] = disks
-    if owner.docker_enabled:
-        spec["docker_enabled"] = True
     if checkpoint is not None:
         spec["checkpoint"] = checkpoint
-    try:
-        gpu = gpu_preference(owner.gpu)
-    except (TypeError, ValueError) as exc:
-        raise PodOperationError(
-            f"{label} {owner.resource_name} has invalid options: {exc}"
-        ) from exc
-    if gpu:
-        spec["resources"]["gpu"] = list(gpu)
-    if owner.gpu_count:
-        spec["resources"]["gpu_count"] = owner.gpu_count
-    placement: dict[str, Any] = {}
-    if owner.machine:
-        placement["machine"] = owner.machine
-    if owner.region is not None:
-        placement["region"] = owner.region
-    if owner.availability_zone:
-        placement["availability_zone"] = owner.availability_zone
-    if not preemptible:
-        placement["preemptible"] = False
-    if placement:
-        spec["placement"] = placement
-    try:
-        return WorkloadSpec.model_validate(spec)
-    except ValidationError as exc:
-        raise PodOperationError(
-            f"{label} {owner.resource_name} has invalid options: {exc}"
-        ) from exc
+    return validated_workload_spec(
+        spec, label=f"{label} {owner.resource_name}", error=PodOperationError
+    )
 
 
 __all__ = [
@@ -640,6 +514,5 @@ __all__ = [
     "Pod",
     "PodInstance",
     "PodOperationError",
-    "PodOptions",
     "attach_container",
 ]

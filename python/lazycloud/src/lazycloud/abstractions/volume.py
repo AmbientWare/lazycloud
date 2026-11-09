@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
-from lazycloud._shared.deployment_records import VolumeMount
 from lazycloud._shared.enums import StringEnum
 from lazycloud.control import ResourceControlBinding, storage_client
 
@@ -123,6 +122,16 @@ class MultipartAbort:
     upload_id: str
     volume_name: str
     volume_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeMount:
+    """A volume, or a cloud bucket described by `config`, as a workload mounts it."""
+
+    name: str
+    mount_path: str
+    read_only: bool = False
+    config: dict[str, JsonValue] | None = None
 
 
 @runtime_checkable
@@ -474,6 +483,7 @@ __all__ = [
     "Volume",
     "VolumeExport",
     "VolumeFileServiceInfo",
+    "VolumeMount",
     "VolumeOperationError",
     "VolumePathInfo",
 ]
