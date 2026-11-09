@@ -765,21 +765,13 @@ func fuseConnection(path string) (string, *os.File) {
 	return connection, root
 }
 
-// mountPath undoes how mountinfo escapes a mount point's path.
-var mountPath = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`) //nolint:gochecknoglobals // A constant table.
-
-// mountDevice returns the major:minor of the device mounted at path, read
-// from /proc/self/mountinfo so that no filesystem answers the question: a
-// stat of a FUSE root waits for its server, for good once the server
-// stopped serving. Of mounts stacked at path it names the top one.
+// mountDevice returns the major:minor of the device mounted at path. Of
+// mounts stacked at path it names the top one.
 func mountDevice(path string) (device string, ok bool) {
-	data, err := os.ReadFile("/proc/self/mountinfo")
-	if err != nil {
-		return "", false
-	}
-	for line := range strings.Lines(string(data)) {
-		if fields := strings.Fields(line); len(fields) > 4 && mountPath.Replace(fields[4]) == path {
-			device, ok = fields[2], true
+	mounts, _ := hostproto.ReadMounts()
+	for _, m := range mounts {
+		if m.Path == path {
+			device, ok = m.Device, true
 		}
 	}
 	return device, ok
