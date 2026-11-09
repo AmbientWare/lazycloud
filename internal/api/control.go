@@ -60,30 +60,21 @@ func (s *Server) GetApp(ctx context.Context, req GetAppRequestObject) (GetAppRes
 	return GetApp200JSONResponse(app), nil
 }
 
-// PauseApp pauses an app.
-func (s *Server) PauseApp(ctx context.Context, req PauseAppRequestObject) (PauseAppResponseObject, error) {
+// UpdateApp pauses or resumes an app.
+func (s *Server) UpdateApp(ctx context.Context, req UpdateAppRequestObject) (UpdateAppResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	app, err := s.owners.Control.PauseApp(ctx, ws.ID, req.App)
+	update := s.owners.Control.ResumeApp
+	if req.Body.Paused {
+		update = s.owners.Control.PauseApp
+	}
+	app, err := update(ctx, ws.ID, req.App)
 	if err != nil {
 		return nil, err
 	}
-	return PauseApp200JSONResponse(app), nil
-}
-
-// ResumeApp resumes a paused app.
-func (s *Server) ResumeApp(ctx context.Context, req ResumeAppRequestObject) (ResumeAppResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	app, err := s.owners.Control.ResumeApp(ctx, ws.ID, req.App)
-	if err != nil {
-		return nil, err
-	}
-	return ResumeApp200JSONResponse(app), nil
+	return UpdateApp200JSONResponse(app), nil
 }
 
 // DeleteApp deletes an app.

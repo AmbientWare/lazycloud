@@ -379,7 +379,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/users/{user}/role": {
+    "/v1/users/{user}": {
         parameters: {
             query?: never;
             header?: never;
@@ -389,35 +389,16 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Grant or withdraw platform administration; never your own */
-        put: operations["setUserRole"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/users/{user}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user: components["parameters"]["UserPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
         /**
-         * Enable or disable an account; never your own
+         * Change an account's platform role or status; never your own
          * @description A disabled account cannot sign in, and its tokens, browser sessions and approved device logins end at once. Enabling it again restores none of them. Its running work is not stopped.
          */
-        put: operations["setUserStatus"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/v1/feedback": {
@@ -695,51 +676,11 @@ export interface paths {
         delete: operations["deleteApp"];
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/pause": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
         /**
-         * Stop admission and drain every workload of the app
-         * @description Queued tasks are cancelled; running tasks finish.
+         * Pause or resume the app
+         * @description Pausing stops admission and drains every workload of the app: queued tasks are cancelled and running tasks finish.
          */
-        post: operations["pauseApp"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/resume": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["resumeApp"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["updateApp"];
         trace?: never;
     };
     "/v1/workspaces/{workspace}/apps/{app}/deployment-plan": {
@@ -1128,8 +1069,7 @@ export interface paths {
         /** Secret names and update times, without values */
         get: operations["listSecrets"];
         put?: never;
-        /** Create a secret; an existing name is a conflict */
-        post: operations["createSecret"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1148,14 +1088,16 @@ export interface paths {
         };
         /** A secret without its value */
         get: operations["getSecret"];
-        /** Create the secret or replace its value */
+        /**
+         * Create the secret or replace its value
+         * @description `If-None-Match: *` only creates it, so an existing name is a conflict; `If-Match: *` only replaces an existing secret's value.
+         */
         put: operations["setSecret"];
         post?: never;
         delete: operations["deleteSecret"];
         options?: never;
         head?: never;
-        /** Replace an existing secret's value */
-        patch: operations["updateSecret"];
+        patch?: never;
         trace?: never;
     };
     "/v1/workspaces/{workspace}/secrets/{secret}/value": {
@@ -1170,7 +1112,7 @@ export interface paths {
         };
         /**
          * Reveal a secret's value
-         * @description The only operation that returns a value. Tokens limited to reading cannot call it.
+         * @description The only operation that returns a value.
          */
         get: operations["getSecretValue"];
         put?: never;
@@ -3539,11 +3481,10 @@ export interface components {
          * @enum {string}
          */
         PlatformRole: "administrator" | "member";
-        UserRoleRequest: {
-            role: components["schemas"]["PlatformRole"];
-        };
-        UserStatusRequest: {
-            status: components["schemas"]["UserStatus"];
+        /** @description One change; role grants or withdraws platform administration. */
+        UserUpdate: {
+            role?: components["schemas"]["PlatformRole"];
+            status?: components["schemas"]["UserStatus"];
         };
         Workspace: {
             /** Format: uuid */
@@ -3777,6 +3718,9 @@ export interface components {
             running_containers: number;
             /** Format: date-time */
             created_at: string;
+        };
+        AppUpdate: {
+            paused: boolean;
         };
         /** @description One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function. */
         WorkloadSpec: {
@@ -4096,10 +4040,6 @@ export interface components {
         /** @description An environment variable name; the LAZYCLOUD_ prefix is reserved. */
         SecretName: string;
         SecretText: string;
-        SecretCreate: {
-            name: components["schemas"]["SecretName"];
-            value: components["schemas"]["SecretText"];
-        };
         SecretValueUpdate: {
             value: components["schemas"]["SecretText"];
         };
@@ -7183,7 +7123,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    setUserRole: {
+    updateUser: {
         parameters: {
             query?: never;
             header?: never;
@@ -7194,34 +7134,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UserRoleRequest"];
-            };
-        };
-        responses: {
-            /** @description The account */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["User"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    setUserStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user: components["parameters"]["UserPath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserStatusRequest"];
+                "application/json": components["schemas"]["UserUpdate"];
             };
         };
         responses: {
@@ -7639,7 +7552,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    pauseApp: {
+    updateApp: {
         parameters: {
             query?: never;
             header?: never;
@@ -7650,34 +7563,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
-        responses: {
-            /** @description The paused app */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["App"];
-                };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppUpdate"];
             };
-            default: components["responses"]["Error"];
         };
-    };
-    resumeApp: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
-            /** @description The resumed app */
+            /** @description The app */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8241,33 +8133,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    createSecret: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SecretCreate"];
-            };
-        };
-        responses: {
-            /** @description The created secret */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Secret"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     getSecret: {
         parameters: {
             query?: never;
@@ -8295,7 +8160,10 @@ export interface operations {
     setSecret: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "If-None-Match"?: "*";
+                "If-Match"?: "*";
+            };
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 secret: components["parameters"]["SecretPath"];
@@ -8338,34 +8206,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    updateSecret: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                secret: components["parameters"]["SecretPath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SecretValueUpdate"];
-            };
-        };
-        responses: {
-            /** @description The secret */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Secret"];
-                };
             };
             default: components["responses"]["Error"];
         };
@@ -11848,6 +11688,8 @@ type ReadonlyArray<T> = [
 ] extends [
     unknown[]
 ] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
+export const pathsV1WorkspacesWorkspaceSecretsSecretPutParametersHeaderIfNoneMatchValues: ReadonlyArray<FlattenedDeepRequired<paths>["/v1/workspaces/{workspace}/secrets/{secret}"]["put"]["parameters"]["header"]["If-None-Match"]> = ["*"];
+export const pathsV1WorkspacesWorkspaceSecretsSecretPutParametersHeaderIfMatchValues: ReadonlyArray<FlattenedDeepRequired<paths>["/v1/workspaces/{workspace}/secrets/{secret}"]["put"]["parameters"]["header"]["If-Match"]> = ["*"];
 export const errorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ErrorCode"]> = ["invalid_request", "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large", "unsupported", "too_many_pending_tasks", "task_not_finished", "unavailable", "internal", "payment_required", "limit_reached", "rate_limited"];
 export const userStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UserStatus"]> = ["active", "disabled"];
 export const feedbackKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FeedbackKind"]> = ["feature", "bug", "support"];

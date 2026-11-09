@@ -20,6 +20,7 @@ from lazycloud._shared.client_version import (
 from lazycloud._shared.task_context import current_task_id
 from lazycloud.contracts.api import (
     App,
+    AppUpdate,
     AppPage,
     Container,
     ContainerPage,
@@ -47,7 +48,6 @@ from lazycloud.contracts.api import (
     RunTaskRequest,
     ScaleRequest,
     Secret,
-    SecretCreate,
     SecretPage,
     SecretValue,
     SecretValueUpdate,
@@ -409,11 +409,13 @@ class ApiClient:
         """Read an app by name or id."""
         return self._send(App, "GET", _path("v1", "workspaces", workspace, "apps", app))
 
-    def pause_app(self, workspace: str, app: str) -> App:
-        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "pause"))
-
-    def resume_app(self, workspace: str, app: str) -> App:
-        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "resume"))
+    def update_app(self, workspace: str, app: str, *, paused: bool) -> App:
+        return self._send(
+            App,
+            "PATCH",
+            _path("v1", "workspaces", workspace, "apps", app),
+            body=AppUpdate(paused=paused),
+        )
 
     def delete_app(self, workspace: str, app: str) -> App:
         return self._send(App, "DELETE", _path("v1", "workspaces", workspace, "apps", app))
@@ -715,31 +717,20 @@ class ApiClient:
             SecretPage, "GET", _path("v1", "workspaces", workspace, "secrets"), params=params
         )
 
-    def create_secret(self, workspace: str, name: str, value: str) -> Secret:
-        return self._send(
-            Secret,
-            "POST",
-            _path("v1", "workspaces", workspace, "secrets"),
-            body=SecretCreate(name=name, value=value),
-        )
-
     def get_secret(self, workspace: str, name: str) -> Secret:
         return self._send(Secret, "GET", _path("v1", "workspaces", workspace, "secrets", name))
 
-    def set_secret(self, workspace: str, name: str, value: str) -> Secret:
+    def set_secret(
+        self, workspace: str, name: str, value: str, *, exists: bool | None = None
+    ) -> Secret:
+        """Store a secret's value; `exists` False only creates it, True only replaces it."""
+        headers = {} if exists is None else {"If-Match" if exists else "If-None-Match": "*"}
         return self._send(
             Secret,
             "PUT",
             _path("v1", "workspaces", workspace, "secrets", name),
             body=SecretValueUpdate(value=value),
-        )
-
-    def update_secret(self, workspace: str, name: str, value: str) -> Secret:
-        return self._send(
-            Secret,
-            "PATCH",
-            _path("v1", "workspaces", workspace, "secrets", name),
-            body=SecretValueUpdate(value=value),
+            headers=headers,
         )
 
     def delete_secret(self, workspace: str, name: str) -> None:
@@ -882,6 +873,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT: ...
 
@@ -894,6 +886,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> None: ...
 
@@ -905,6 +898,7 @@ class ApiClient:
         *,
         body: BaseModel | None = None,
         params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT | None:
         content = (
@@ -923,7 +917,10 @@ class ApiClient:
                 path,
                 content=content,
                 params=params,
-                headers={"Content-Type": "application/json"} if content is not None else None,
+                headers={
+                    **(headers or {}),
+                    **({"Content-Type": "application/json"} if content is not None else {}),
+                },
                 timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
             )
         except httpx.HTTPError as exc:

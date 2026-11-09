@@ -25,14 +25,6 @@ def _secret(name: str) -> dict[str, object]:
 def secrets_api(fake_api: FakeApi) -> FakeApi:
     values: dict[str, str] = {}
 
-    @fake_api.route("POST", SECRETS)
-    def create(request: ApiRequest) -> Reply:
-        body = request.json()
-        if body["name"] in values:
-            return error_reply("conflict", f"secret already exists: {body['name']}", 409)
-        values[body["name"]] = body["value"]
-        return json_reply(_secret(body["name"]), 201)
-
     @fake_api.route("GET", SECRETS)
     def listing(request: ApiRequest) -> Reply:
         names = sorted(values)
@@ -62,13 +54,10 @@ def secrets_api(fake_api: FakeApi) -> FakeApi:
 
     @fake_api.route("PUT", SECRETS + r"/\w+")
     def put(request: ApiRequest) -> Reply:
-        values[request.path.rsplit("/", 1)[1]] = request.json()["value"]
-        return json_reply(_secret(request.path.rsplit("/", 1)[1]))
-
-    @fake_api.route("PATCH", SECRETS + r"/\w+")
-    def patch(request: ApiRequest) -> Reply:
         name = request.path.rsplit("/", 1)[1]
-        if name not in values:
+        if request.headers.get("if-none-match") == "*" and name in values:
+            return error_reply("conflict", f"secret already exists: {name}", 409)
+        if request.headers.get("if-match") == "*" and name not in values:
             return error_reply("not_found", f"secret not found: {name}", 404)
         values[name] = request.json()["value"]
         return json_reply(_secret(name))

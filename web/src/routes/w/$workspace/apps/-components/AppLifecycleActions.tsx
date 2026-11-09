@@ -8,8 +8,7 @@ import type { Schemas } from "@/lib/api/client";
 import {
   deleteAppMutationOptions,
   invalidateAppLists,
-  pauseAppMutationOptions,
-  resumeAppMutationOptions,
+  setAppPausedMutationOptions,
 } from "@/lib/queries/apps";
 
 export function AppLifecycleActions({
@@ -24,11 +23,11 @@ export function AppLifecycleActions({
 
   const refresh = () => invalidateAppLists(queryClient, workspace);
   const pause = useMutation({
-    ...pauseAppMutationOptions(workspace, app.name),
+    ...setAppPausedMutationOptions(workspace, app.name, true),
     onSuccess: refresh,
   });
   const resume = useMutation({
-    ...resumeAppMutationOptions(workspace, app.name),
+    ...setAppPausedMutationOptions(workspace, app.name, false),
     onSuccess: refresh,
   });
   const remove = useMutation({

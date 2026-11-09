@@ -127,7 +127,8 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		t.Fatal(err)
 	}
 	store := storage.NewStorage(pool, storagetest.Config(t), comp)
-	im, err := images.NewImages(pool, e, secrets.NewSecrets(pool, masterKey), store, images.Config{
+	secretStore := secrets.NewSecrets(pool, masterKey)
+	im, err := images.NewImages(pool, e, secretStore, store, images.Config{
 		Registry: "registry.example.com", Repository: "lazycloud", PlatformTransferBackoff: images.PlatformTransferBackoff,
 	})
 	if err != nil {
@@ -138,7 +139,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        im,
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool),
+		Compute: comp, Schedules: schedules.NewSchedules(pool, e), Edge: edges, Webhooks: callbacks.NewWebhooks(pool), Secrets: secretStore,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

@@ -67,12 +67,9 @@ class PlatformRole(str, Enum):
     member = "member"
 
 
-class UserRoleRequest(APIModel):
-    role: PlatformRole
-
-
-class UserStatusRequest(APIModel):
-    status: UserStatus
+class UserUpdate(APIModel):
+    role: PlatformRole | None = None
+    status: UserStatus | None = None
 
 
 class WorkspaceState(str, Enum):
@@ -273,6 +270,10 @@ class UploadTarget(APIModel):
     expires_at: AwareDatetime
 
 
+class AppUpdate(APIModel):
+    paused: bool
+
+
 class SourceRef(APIModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
@@ -415,17 +416,6 @@ class SecretName(RootModel[str]):
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
     ]
-
-
-class SecretCreate(APIModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    value: Annotated[str, Field(max_length=65536)]
 
 
 class SecretValueUpdate(APIModel):

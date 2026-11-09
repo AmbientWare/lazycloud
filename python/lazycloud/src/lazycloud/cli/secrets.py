@@ -57,7 +57,7 @@ def secret_create(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected = _session(workspace)
-    secret = client.create_secret(selected, name, value)
+    secret = client.set_secret(selected, name, value, exists=False)
     emit(
         ctx,
         payload={"id": secret.name, "name": secret.name},
@@ -73,7 +73,7 @@ def secret_modify(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected = _session(workspace)
-    client.update_secret(selected, name, value)
+    client.set_secret(selected, name, value, exists=True)
     emit(
         ctx,
         payload={"name": name, "updated": True},

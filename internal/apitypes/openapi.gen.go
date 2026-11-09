@@ -2443,6 +2443,36 @@ func (e WorkspaceState) Valid() bool {
 	}
 }
 
+// Defines values for SetSecretParamsIfNoneMatch.
+const (
+	SetSecretParamsIfNoneMatchAsterisk SetSecretParamsIfNoneMatch = "*"
+)
+
+// Valid indicates whether the value is a known member of the SetSecretParamsIfNoneMatch enum.
+func (e SetSecretParamsIfNoneMatch) Valid() bool {
+	switch e {
+	case SetSecretParamsIfNoneMatchAsterisk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SetSecretParamsIfMatch.
+const (
+	SetSecretParamsIfMatchAsterisk SetSecretParamsIfMatch = "*"
+)
+
+// Valid indicates whether the value is a known member of the SetSecretParamsIfMatch enum.
+func (e SetSecretParamsIfMatch) Valid() bool {
+	switch e {
+	case SetSecretParamsIfMatchAsterisk:
+		return true
+	default:
+		return false
+	}
+}
+
 // AbortVolumeUploadRequest defines model for AbortVolumeUploadRequest.
 type AbortVolumeUploadRequest struct {
 	// Path A file or directory below the volume root.
@@ -2561,6 +2591,11 @@ type AppRef = string
 
 // AppState defines model for AppState.
 type AppState string
+
+// AppUpdate defines model for AppUpdate.
+type AppUpdate struct {
+	Paused bool `json:"paused"`
+}
 
 // Artifact defines model for Artifact.
 type Artifact struct {
@@ -4989,13 +5024,6 @@ type Secret struct {
 	UsedBy []WorkloadRef `json:"used_by"`
 }
 
-// SecretCreate defines model for SecretCreate.
-type SecretCreate struct {
-	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
-	Name  SecretName `json:"name"`
-	Value SecretText `json:"value"`
-}
-
 // SecretName An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretName = string
 
@@ -5514,19 +5542,16 @@ type User struct {
 	Status UserStatus `json:"status"`
 }
 
-// UserRoleRequest defines model for UserRoleRequest.
-type UserRoleRequest struct {
-	// Role An account's standing on the platform; administrators reach every workspace.
-	Role PlatformRole `json:"role"`
-}
-
 // UserStatus A disabled account cannot sign in or authenticate.
 type UserStatus string
 
-// UserStatusRequest defines model for UserStatusRequest.
-type UserStatusRequest struct {
+// UserUpdate One change; role grants or withdraws platform administration.
+type UserUpdate struct {
+	// Role An account's standing on the platform; administrators reach every workspace.
+	Role *PlatformRole `json:"role,omitempty"`
+
 	// Status A disabled account cannot sign in or authenticate.
-	Status UserStatus `json:"status"`
+	Status *UserStatus `json:"status,omitempty"`
 }
 
 // Version defines model for Version.
@@ -6461,6 +6486,18 @@ type ListSecretsParams struct {
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SetSecretParams defines parameters for SetSecret.
+type SetSecretParams struct {
+	IfNoneMatch *SetSecretParamsIfNoneMatch `json:"If-None-Match,omitempty"`
+	IfMatch     *SetSecretParamsIfMatch     `json:"If-Match,omitempty"`
+}
+
+// SetSecretParamsIfNoneMatch defines parameters for SetSecret.
+type SetSecretParamsIfNoneMatch string
+
+// SetSecretParamsIfMatch defines parameters for SetSecret.
+type SetSecretParamsIfMatch string
+
 // ListSshHostsParams defines parameters for ListSshHosts.
 type ListSshHostsParams struct {
 	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
@@ -6618,17 +6655,17 @@ type UpdateMachineJSONRequestBody = MachineUpdate
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = TokenCreateRequest
 
-// SetUserRoleJSONRequestBody defines body for SetUserRole for application/json ContentType.
-type SetUserRoleJSONRequestBody = UserRoleRequest
-
-// SetUserStatusJSONRequestBody defines body for SetUserStatus for application/json ContentType.
-type SetUserStatusJSONRequestBody = UserStatusRequest
+// UpdateUserJSONRequestBody defines body for UpdateUser for application/json ContentType.
+type UpdateUserJSONRequestBody = UserUpdate
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = WorkspaceRequest
 
 // RenameWorkspaceJSONRequestBody defines body for RenameWorkspace for application/json ContentType.
 type RenameWorkspaceJSONRequestBody = WorkspaceRequest
+
+// UpdateAppJSONRequestBody defines body for UpdateApp for application/json ContentType.
+type UpdateAppJSONRequestBody = AppUpdate
 
 // PlanDeploymentJSONRequestBody defines body for PlanDeployment for application/json ContentType.
 type PlanDeploymentJSONRequestBody = DeploymentPlanRequest
@@ -6716,12 +6753,6 @@ type SetMemberRoleJSONRequestBody = MemberRoleRequest
 
 // PutQueueMessagesJSONRequestBody defines body for PutQueueMessages for application/json ContentType.
 type PutQueueMessagesJSONRequestBody = PutQueueMessagesRequest
-
-// CreateSecretJSONRequestBody defines body for CreateSecret for application/json ContentType.
-type CreateSecretJSONRequestBody = SecretCreate
-
-// UpdateSecretJSONRequestBody defines body for UpdateSecret for application/json ContentType.
-type UpdateSecretJSONRequestBody = SecretValueUpdate
 
 // SetSecretJSONRequestBody defines body for SetSecret for application/json ContentType.
 type SetSecretJSONRequestBody = SecretValueUpdate

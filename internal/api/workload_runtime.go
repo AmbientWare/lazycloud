@@ -55,19 +55,6 @@ func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) 
 	return out, nil
 }
 
-// CreateSecret stores a new secret.
-func (s *Server) CreateSecret(ctx context.Context, req CreateSecretRequestObject) (CreateSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := s.owners.Secrets.Create(ctx, ws.ID, req.Body.Name, req.Body.Value)
-	if err != nil {
-		return nil, err
-	}
-	return CreateSecret201JSONResponse(secretOut(secret)), nil
-}
-
 // GetSecret returns a secret's metadata.
 func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
@@ -81,30 +68,25 @@ func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (Get
 	return GetSecret200JSONResponse(secretOut(secret)), nil
 }
 
-// SetSecret creates the secret or replaces its value.
+// SetSecret stores a secret's value: If-None-Match: * only creates it and
+// If-Match: * only replaces an existing one.
 func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	secret, err := s.owners.Secrets.Set(ctx, ws.ID, req.Secret, req.Body.Value)
+	store := s.owners.Secrets.Set
+	switch {
+	case req.Params.IfNoneMatch != nil:
+		store = s.owners.Secrets.Create
+	case req.Params.IfMatch != nil:
+		store = s.owners.Secrets.Update
+	}
+	secret, err := store(ctx, ws.ID, req.Secret, req.Body.Value)
 	if err != nil {
 		return nil, err
 	}
 	return SetSecret200JSONResponse(secretOut(secret)), nil
-}
-
-// UpdateSecret replaces an existing secret's value.
-func (s *Server) UpdateSecret(ctx context.Context, req UpdateSecretRequestObject) (UpdateSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := s.owners.Secrets.Update(ctx, ws.ID, req.Secret, req.Body.Value)
-	if err != nil {
-		return nil, err
-	}
-	return UpdateSecret200JSONResponse(secretOut(secret)), nil
 }
 
 // DeleteSecret removes a secret.

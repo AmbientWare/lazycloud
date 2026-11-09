@@ -11,8 +11,7 @@ import { ApiError, type Schemas } from "@/lib/api/client";
 import {
   billingAccountsQueryOptions,
   setComplimentary,
-  setUserRole,
-  setUserStatus,
+  updateUser,
 } from "@/lib/queries/admin";
 import { accountQueryKeys, EVERY_ACCOUNT, type AccountScope } from "@/lib/queries/workspace-keys";
 
@@ -215,9 +214,9 @@ export function platformRole(user: User): PlatformRole {
 async function runCommand(sent: Command): Promise<CommandResult> {
   switch (sent.kind) {
     case "role":
-      return { user: await setUserRole(sent.userId, sent.role) };
+      return { user: await updateUser(sent.userId, { role: sent.role }) };
     case "status":
-      return { user: await setUserStatus(sent.userId, sent.status) };
+      return { user: await updateUser(sent.userId, { status: sent.status }) };
     case "complimentary":
       return { account: await setComplimentary(sent.userId, sent.complimentary) };
   }

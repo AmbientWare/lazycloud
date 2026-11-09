@@ -10,30 +10,23 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
-// SetUserRole grants or withdraws platform administration.
-func (s *Server) SetUserRole(ctx context.Context, req SetUserRoleRequestObject) (SetUserRoleResponseObject, error) {
+// UpdateUser changes an account's platform role or status; the schema
+// admits exactly one.
+func (s *Server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (UpdateUserResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	u, err := s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(req.Body.Role))
+	var u identity.User
+	if req.Body.Role != nil {
+		u, err = s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(*req.Body.Role))
+	} else {
+		u, err = s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(*req.Body.Status))
+	}
 	if err != nil {
 		return nil, err
 	}
-	return SetUserRole200JSONResponse(userOut(u)), nil
-}
-
-// SetUserStatus enables or disables an account.
-func (s *Server) SetUserStatus(ctx context.Context, req SetUserStatusRequestObject) (SetUserStatusResponseObject, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	u, err := s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(req.Body.Status))
-	if err != nil {
-		return nil, err
-	}
-	return SetUserStatus200JSONResponse(userOut(u)), nil
+	return UpdateUser200JSONResponse(userOut(u)), nil
 }
 
 // ListFeedback pages through every account's feedback for administrators.

@@ -379,33 +379,13 @@ paths:
   # Administration: platform accounts, for platform administrators using an
   # account credential.
 
-  /v1/users/{user}/role:
+  /v1/users/{user}:
     parameters:
       - $ref: "#/components/parameters/UserPath"
-    put:
-      operationId: setUserRole
+    patch:
+      operationId: updateUser
       tags: [admin]
-      summary: Grant or withdraw platform administration; never your own
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/UserRoleRequest" }
-      responses:
-        "200":
-          description: The account
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/User" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/users/{user}/status:
-    parameters:
-      - $ref: "#/components/parameters/UserPath"
-    put:
-      operationId: setUserStatus
-      tags: [admin]
-      summary: Enable or disable an account; never your own
+      summary: Change an account's platform role or status; never your own
       description: >-
         A disabled account cannot sign in, and its tokens, browser sessions
         and approved device logins end at once. Enabling it again restores
@@ -414,7 +394,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/UserStatusRequest" }
+            schema: { $ref: "#/components/schemas/UserUpdate" }
       responses:
         "200":
           description: The account
@@ -713,6 +693,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/App" }
         default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateApp
+      tags: [control]
+      summary: Pause or resume the app
+      description: >-
+        Pausing stops admission and drains every workload of the app: queued
+        tasks are cancelled and running tasks finish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppUpdate" }
+      responses:
+        "200":
+          description: The app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteApp
       tags: [control]
@@ -724,38 +723,6 @@ paths:
       responses:
         "200":
           description: The deleted app
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/App" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/pause:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppRefPath"
-    post:
-      operationId: pauseApp
-      tags: [control]
-      summary: Stop admission and drain every workload of the app
-      description: Queued tasks are cancelled; running tasks finish.
-      responses:
-        "200":
-          description: The paused app
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/App" }
-        default: { $ref: "#/components/responses/Error" }
-
-  /v1/workspaces/{workspace}/apps/{app}/resume:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/AppRefPath"
-    post:
-      operationId: resumeApp
-      tags: [control]
-      responses:
-        "200":
-          description: The resumed app
           content:
             application/json:
               schema: { $ref: "#/components/schemas/App" }
@@ -1204,22 +1171,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SecretPage" }
         default: { $ref: "#/components/responses/Error" }
-    post:
-      operationId: createSecret
-      tags: [secrets]
-      summary: Create a secret; an existing name is a conflict
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SecretCreate" }
-      responses:
-        "201":
-          description: The created secret
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Secret" }
-        default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/secrets/{secret}:
     parameters:
@@ -1240,22 +1191,16 @@ paths:
       operationId: setSecret
       tags: [secrets]
       summary: Create the secret or replace its value
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
-      responses:
-        "200":
-          description: The secret
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Secret" }
-        default: { $ref: "#/components/responses/Error" }
-    patch:
-      operationId: updateSecret
-      tags: [secrets]
-      summary: Replace an existing secret's value
+      description: >-
+        `If-None-Match: *` only creates it, so an existing name is a
+        conflict; `If-Match: *` only replaces an existing secret's value.
+      parameters:
+        - name: If-None-Match
+          in: header
+          schema: { type: string, enum: ["*"] }
+        - name: If-Match
+          in: header
+          schema: { type: string, enum: ["*"] }
       requestBody:
         required: true
         content:
@@ -1284,9 +1229,7 @@ paths:
       operationId: getSecretValue
       tags: [secrets]
       summary: Reveal a secret's value
-      description: >-
-        The only operation that returns a value. Tokens limited to reading
-        cannot call it.
+      description: The only operation that returns a value.
       responses:
         "200":
           description: The secret and its value
@@ -4201,16 +4144,13 @@ components:
       type: string
       enum: [administrator, member]
 
-    UserRoleRequest:
+    UserUpdate:
+      description: One change; role grants or withdraws platform administration.
       type: object
-      required: [role]
+      minProperties: 1
+      maxProperties: 1
       properties:
         role: { $ref: "#/components/schemas/PlatformRole" }
-
-    UserStatusRequest:
-      type: object
-      required: [status]
-      properties:
         status: { $ref: "#/components/schemas/UserStatus" }
 
     Workspace:
@@ -4546,6 +4486,12 @@ components:
           type: integer
           minimum: 0
         created_at: { type: string, format: date-time }
+
+    AppUpdate:
+      type: object
+      required: [paused]
+      properties:
+        paused: { type: boolean }
 
     WorkloadSpec:
       description: >-
@@ -5107,13 +5053,6 @@ components:
     SecretText:
       type: string
       maxLength: 65536
-
-    SecretCreate:
-      type: object
-      required: [name, value]
-      properties:
-        name: { $ref: "#/components/schemas/SecretName" }
-        value: { $ref: "#/components/schemas/SecretText" }
 
     SecretValueUpdate:
       type: object
