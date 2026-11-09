@@ -18,10 +18,6 @@ MAX_MAP_TTL_SECONDS = 7 * 24 * 60 * 60
 _MISSING = object()
 
 
-class MapSetError(ValueError):
-    pass
-
-
 @dataclass(slots=True)
 class Map(ResourceControlBinding[StorageClient], MutableMapping[str, Any]):
     """A dictionary of Python values with per-key expiry, created on the first write."""
@@ -107,5 +103,4 @@ def _normalize_ttl(value: int) -> int:
 __all__ = [
     "MAX_MAP_TTL_SECONDS",
     "Map",
-    "MapSetError",
 ]

@@ -67,31 +67,6 @@ def build_client_contract(
     )
 
 
-def schema_from_contract_parameters(
-    contract: ClientContract | None,
-) -> dict[str, JsonValue]:
-    if contract is None:
-        return {}
-    return {
-        "fields": {
-            parameter.name: _metadata_from_json_schema(parameter.json_schema)
-            for parameter in contract.operation.parameters
-            if parameter.parameter_kind not in {"var_positional", "var_keyword"}
-            and parameter.json_schema is not None
-        }
-    }
-
-
-def schema_from_contract_return(contract: ClientContract | None) -> dict[str, JsonValue]:
-    if contract is None or not contract.operation.return_schema:
-        return {}
-    return {
-        "fields": {
-            "return": _metadata_from_json_schema(contract.operation.return_schema),
-        }
-    }
-
-
 def asgi_client_contract() -> ClientContract:
     return ClientContract(
         operation=ClientOperation(
@@ -366,38 +341,6 @@ def _json_schema_from_metadata(value: JsonValue) -> dict[str, JsonValue]:
     return {}
 
 
-def _metadata_from_json_schema(schema: dict[str, Any]) -> JsonValue:
-    resolved = _non_null_schema(schema)
-    schema_type = resolved.get("type") if isinstance(resolved, dict) else None
-    if resolved.get("format") == "binary":
-        return {"type": "file"}
-    if isinstance(schema_type, str) and schema_type in {
-        "string",
-        "integer",
-        "number",
-        "boolean",
-        "array",
-    }:
-        return {"type": schema_type}
-    if schema_type == "object" or "properties" in resolved:
-        return {"type": "object"}
-    return {"type": "json"}
-
-
-def _non_null_schema(schema: dict[str, Any]) -> dict[str, JsonValue]:
-    validated = validate_json_object(schema)
-    for key in ("anyOf", "oneOf"):
-        options = validated.get(key)
-        if not isinstance(options, list):
-            continue
-        non_null = [
-            item for item in options if isinstance(item, dict) and item.get("type") != "null"
-        ]
-        if len(non_null) == 1:
-            return non_null[0]
-    return validated
-
-
 def _default_payload(value: object) -> tuple[JsonValue, str]:
     if value is inspect.Parameter.empty or value is _MISSING or value is dataclasses.MISSING:
         return None, ""
@@ -412,6 +355,4 @@ __all__ = [
     "ClientContractError",
     "asgi_client_contract",
     "build_client_contract",
-    "schema_from_contract_parameters",
-    "schema_from_contract_return",
 ]

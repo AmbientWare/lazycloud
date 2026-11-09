@@ -392,10 +392,6 @@ class ArtifactNotFoundError(RuntimeError):
     pass
 
 
-class ArtifactCannotRunLocallyError(RuntimeError):
-    pass
-
-
 class ArtifactTaskIdError(RuntimeError):
     pass
 
@@ -414,7 +410,6 @@ def guess_content_type(path: Path) -> str:
 __all__ = [
     "DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES",
     "Artifact",
-    "ArtifactCannotRunLocallyError",
     "ArtifactDeleteError",
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",
