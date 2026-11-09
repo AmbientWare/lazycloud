@@ -138,7 +138,7 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 	}
 	pairs, grow := leave.starts(active, desired, room)
 	if pairs+grow > 0 {
-		return e.start(ctx, tx, plan, row.WorkspaceID, shape, shape.create(row.WorkspaceID, row.Slots),
+		return e.start(ctx, tx, plan, shape, shape.create(row.WorkspaceID, row.Slots),
 			leave.unpaired[:pairs], pairs+grow, live == 0 && row.Demand == 0 && row.Peak == 0)
 	}
 	return e.trim(ctx, tx, plan, active-desired, row.Pending, e.drainExcess(ctx, tx, plan))

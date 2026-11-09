@@ -192,7 +192,7 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, release Planning
 
 	pairs, grow := leave.starts(active, desired, int(release.MaxContainers)-live)
 	if pairs+grow > 0 {
-		return e.start(ctx, tx, plan, release.WorkspaceID, shape, shape.create(release.WorkspaceID, release.Slots),
+		return e.start(ctx, tx, plan, shape, shape.create(release.WorkspaceID, release.Slots),
 			leave.unpaired[:pairs], pairs+grow, live == 0 && release.QueuedAvailable+release.Running == 0)
 	}
 	return e.trim(ctx, tx, plan, active-desired, release.Pending, func(count int) error {
@@ -298,14 +298,14 @@ func (l leaving) starts(active, desired, room int) (pairs, grow int) {
 // leaving containers the account admits no replacement for drain, so their
 // replacements start once they stop. rollout says only a warm minimum asks
 // for the containers.
-func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, workspace uuid.UUID, shape ReleaseShape,
+func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, shape ReleaseShape,
 	create CreatePendingContainersParams, replaces []uuid.UUID, count int, rollout bool,
 ) error {
 	if plan.holdStart(shape) {
 		return nil
 	}
 	grant, err := billing.Admit(ctx, tx, billing.Request{
-		Workspace: workspace, Start: count, GPUs: int(shape.GpuCount),
+		Workspace: create.WorkspaceID, Start: count, GPUs: int(shape.GpuCount),
 		GPUModels: billingModels(shape.GpuModels), Pinned: shape.Pinned, Machine: shape.Machine,
 	})
 	if refusedToWait(err) {

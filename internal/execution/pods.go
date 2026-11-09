@@ -47,7 +47,7 @@ func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, 
 			create.KeepWarmSeconds = new(row.KeepWarmSeconds)
 		}
 		create.BlockNetwork, create.AllowList = row.BlockNetwork, row.AllowList
-		return e.start(ctx, tx, plan, row.WorkspaceID, shape, create, nil, desired-active, active+int(row.Draining) == 0)
+		return e.start(ctx, tx, plan, shape, create, nil, desired-active, active+int(row.Draining) == 0)
 	}
 	return e.trim(ctx, tx, plan, active-desired, row.Pending, e.drainExcess(ctx, tx, plan))
 }
