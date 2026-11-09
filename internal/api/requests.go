@@ -38,7 +38,7 @@ func (s *Server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLog
 	}
 	out := ListHttpRequestLogs200JSONResponse{Data: make([]apitypes.ContainerLogEntry, len(entries))}
 	for n, e := range entries {
-		out.Data[n] = apitypes.ContainerLogEntry{Id: e.ID, Stream: apitypes.ContainerLogEntryStream(e.Stream), Data: e.Data, Time: e.Time}
+		out.Data[n] = containerLogOut(e)
 	}
 	return out, nil
 }

@@ -259,78 +259,89 @@ func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestOb
 
 // logStream checks the source before the response starts, so an unknown one
 // is an error response rather than an empty stream.
-func (s *Server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (logStream, error) {
+func (s *Server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (written, error) {
 	if err := s.owners.Execution.CheckLogSource(ctx, ws.ID, source); err != nil {
-		return logStream{}, err
+		return nil, err
 	}
-	stream := logStream{
-		ctx: ctx, server: s, workspace: ws.ID, source: source,
-		query: execution.LogQuery{Heartbeat: logHeartbeat},
+	query := execution.LogQuery{
+		After: valueOr(after, 0), Tail: valueOr(tail, 0), Follow: valueOr(follow, false), Heartbeat: logHeartbeat,
 	}
-	if after != nil {
-		stream.query.After = *after
-	}
-	if tail != nil {
-		stream.query.Tail = *tail
-	}
-	if follow != nil {
-		stream.query.Follow = *follow
-	}
-	return stream, nil
+	return ndjson(s, ctx, logEntryOut, func(emit func([]execution.LogEntry) error) error {
+		return s.owners.Execution.StreamLogs(ctx, s.owners.Listener, ws.ID, source, query, emit)
+	}, "log stream", "source", source.Kind, "id", source.ID), nil
 }
 
-// logStream writes log entries as NDJSON, flushing each batch, and a blank
-// line for each heartbeat of a followed stream.
-type logStream struct {
-	// ctx is the request's context; the generated visitor does not pass one.
-	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
-	workspace identity.WorkspaceID
-	source    execution.LogSource
-	query     execution.LogQuery
+// written is a response its operation writes itself: a stream, a socket or
+// a forwarded answer, once the operation's checks passed.
+type written func(http.ResponseWriter) error
+
+func (f written) VisitStreamTaskLogsResponse(w http.ResponseWriter) error       { return f(w) }
+func (f written) VisitStreamWorkloadLogsResponse(w http.ResponseWriter) error   { return f(w) }
+func (f written) VisitStreamContainerLogsResponse(w http.ResponseWriter) error  { return f(w) }
+func (f written) VisitStreamImageBuildLogsResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitStreamContainerOutputResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitStreamPreviewOutputResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitListProcessesResponse(w http.ResponseWriter) error       { return f(w) }
+func (f written) VisitStartProcessResponse(w http.ResponseWriter) error        { return f(w) }
+func (f written) VisitGetProcessResponse(w http.ResponseWriter) error          { return f(w) }
+func (f written) VisitKillProcessResponse(w http.ResponseWriter) error         { return f(w) }
+func (f written) VisitListContainerFilesResponse(w http.ResponseWriter) error  { return f(w) }
+func (f written) VisitDeleteContainerFileResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitStatContainerFileResponse(w http.ResponseWriter) error   { return f(w) }
+func (f written) VisitDownloadContainerFileResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitUploadContainerFileResponse(w http.ResponseWriter) error { return f(w) }
+func (f written) VisitFindInContainerFilesResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitReplaceInContainerFilesResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitCreateContainerDirectoryResponse(w http.ResponseWriter) error {
+	return f(w)
+}
+func (f written) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter) error {
+	return f(w)
 }
 
-func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error { return l.visit(w) }
-
-func (l logStream) VisitStreamWorkloadLogsResponse(w http.ResponseWriter) error {
-	return l.visit(w)
-}
-
-func (l logStream) VisitStreamContainerLogsResponse(w http.ResponseWriter) error {
-	return l.visit(w)
-}
-
-func (l logStream) visit(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w)
-	// Send the status now; a follower may wait long for the first entry.
-	if err := flush.Flush(); err != nil {
-		return nil //nolint:nilerr // The client is gone.
-	}
-	enc := json.NewEncoder(w)
-	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.source, l.query,
-		func(batch []execution.LogEntry) error {
+// ndjson writes stream's batches as NDJSON: line maps each entry to its
+// line, an empty batch is a blank heartbeat line, and each batch is flushed.
+// The status is sent first, so a failure only ends the stream early, which
+// is logged as what with attrs.
+func ndjson[E, L any](s *Server, ctx context.Context, line func(E) L, stream func(emit func([]E) error) error, what string, attrs ...any) written {
+	return func(w http.ResponseWriter) error {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		flush := http.NewResponseController(w)
+		// Send the status now; a follower may wait long for the first entry.
+		if err := flush.Flush(); err != nil {
+			return nil //nolint:nilerr // The client is gone.
+		}
+		enc := json.NewEncoder(w)
+		err := stream(func(batch []E) error {
 			if len(batch) == 0 {
 				if _, err := w.Write([]byte("\n")); err != nil {
 					return fmt.Errorf("write heartbeat: %w", err)
 				}
 			}
 			for _, entry := range batch {
-				if err := enc.Encode(logEntryOut(entry)); err != nil {
-					return fmt.Errorf("write log entry: %w", err)
+				if err := enc.Encode(line(entry)); err != nil {
+					return fmt.Errorf("write entry: %w", err)
 				}
 			}
 			if err := flush.Flush(); err != nil {
-				return fmt.Errorf("flush log entries: %w", err)
+				return fmt.Errorf("flush entries: %w", err)
 			}
 			return nil
 		})
-	// The status is sent, so a failure can only end the stream early.
-	if err != nil && l.ctx.Err() == nil {
-		l.server.logger.WarnContext(l.ctx, "log stream ended early", "source", l.source.Kind, "id", l.source.ID, "error", err)
+		if err != nil && ctx.Err() == nil {
+			s.logger.WarnContext(ctx, what+" ended early", append(attrs, "error", err)...)
+		}
+		return nil
 	}
-	return nil
 }
 
 func logEntryOut(e execution.LogEntry) apitypes.LogEntry {

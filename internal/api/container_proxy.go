@@ -72,28 +72,21 @@ func (s *Server) liveContainer(ctx context.Context, container uuid.UUID) (execut
 	return route, s.owners.Execution.Touch(ctx, route.ID)
 }
 
-// controlCall is a forwarded control API call; it writes the supervisor's
-// answer as every operation's response.
-type controlCall struct {
-	ctx   context.Context //nolint:containedctx // Lives for one response.
-	resp  *http.Response
-	owner *Server
-}
-
-// forward sends the operation's request to the container's control API.
-// body replaces a request body the strict handler already decoded.
-func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (controlCall, error) {
+// forward sends the operation's request to the container's control API and
+// answers with the supervisor's status and body. body replaces a request
+// body the strict handler already decoded.
+func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (written, error) {
 	route, err := s.liveContainer(ctx, container)
 	if err != nil {
-		return controlCall{}, err
+		return nil, err
 	}
 	r := requestFrom(ctx)
 	if r == nil {
-		return controlCall{}, errors.New("the operation has no request to forward")
+		return nil, errors.New("the operation has no request to forward")
 	}
 	_, suffix, ok := strings.Cut(r.URL.Path, "/containers/"+container.String())
 	if !ok {
-		return controlCall{}, fmt.Errorf("%w: unexpected path %s", errInvalidRequest, r.URL.Path)
+		return nil, fmt.Errorf("%w: unexpected path %s", errInvalidRequest, r.URL.Path)
 	}
 	target := "http://container" + suffix
 	if r.URL.RawQuery != "" {
@@ -108,13 +101,13 @@ func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (co
 	default:
 		encoded, err := json.Marshal(b)
 		if err != nil {
-			return controlCall{}, fmt.Errorf("encode request: %w", err)
+			return nil, fmt.Errorf("encode request: %w", err)
 		}
 		reader, length = bytes.NewReader(encoded), int64(len(encoded))
 	}
 	out, err := http.NewRequestWithContext(ctx, r.Method, target, reader)
 	if err != nil {
-		return controlCall{}, fmt.Errorf("build control request: %w", err)
+		return nil, fmt.Errorf("build control request: %w", err)
 	}
 	out.ContentLength = length
 	if ct := r.Header.Get("Content-Type"); ct != "" {
@@ -125,51 +118,25 @@ func (s *Server) forward(ctx context.Context, container uuid.UUID, body any) (co
 			out.Header.Set("Content-Type", "application/json")
 		}
 	}
-	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out) //nolint:bodyclose // controlCall.write closes it.
+	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out) //nolint:bodyclose // The response closes it.
 	if err != nil {
-		return controlCall{}, err
+		return nil, err
 	}
-	return controlCall{ctx: ctx, resp: resp, owner: s}, nil
-}
-
-func (c controlCall) write(w http.ResponseWriter) error {
-	defer func() { _ = c.resp.Body.Close() }()
-	for _, name := range []string{"Content-Type", "Content-Length", "Lazycloud-Truncated", "Content-Disposition"} {
-		if v := c.resp.Header.Get(name); v != "" {
-			w.Header().Set(name, v)
+	return func(w http.ResponseWriter) error {
+		defer func() { _ = resp.Body.Close() }()
+		for _, name := range []string{"Content-Type", "Content-Length", "Lazycloud-Truncated", "Content-Disposition"} {
+			if v := resp.Header.Get(name); v != "" {
+				w.Header().Set(name, v)
+			}
 		}
-	}
-	w.WriteHeader(c.resp.StatusCode)
-	if _, err := io.Copy(w, c.resp.Body); err != nil && c.ctx.Err() == nil {
-		// The status is sent; dropping the connection tells the client the
-		// body is incomplete.
-		panic(http.ErrAbortHandler)
-	}
-	return nil
-}
-
-func (c controlCall) VisitListProcessesResponse(w http.ResponseWriter) error       { return c.write(w) }
-func (c controlCall) VisitStartProcessResponse(w http.ResponseWriter) error        { return c.write(w) }
-func (c controlCall) VisitGetProcessResponse(w http.ResponseWriter) error          { return c.write(w) }
-func (c controlCall) VisitKillProcessResponse(w http.ResponseWriter) error         { return c.write(w) }
-func (c controlCall) VisitListContainerFilesResponse(w http.ResponseWriter) error  { return c.write(w) }
-func (c controlCall) VisitDeleteContainerFileResponse(w http.ResponseWriter) error { return c.write(w) }
-func (c controlCall) VisitStatContainerFileResponse(w http.ResponseWriter) error   { return c.write(w) }
-func (c controlCall) VisitDownloadContainerFileResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitUploadContainerFileResponse(w http.ResponseWriter) error { return c.write(w) }
-func (c controlCall) VisitFindInContainerFilesResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitReplaceInContainerFilesResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitCreateContainerDirectoryResponse(w http.ResponseWriter) error {
-	return c.write(w)
-}
-func (c controlCall) VisitDeleteContainerDirectoryResponse(w http.ResponseWriter) error {
-	return c.write(w)
+		w.WriteHeader(resp.StatusCode)
+		if _, err := io.Copy(w, resp.Body); err != nil && ctx.Err() == nil {
+			// The status is sent; dropping the connection tells the client
+			// the body is incomplete.
+			panic(http.ErrAbortHandler)
+		}
+		return nil
+	}, nil
 }
 
 // ListProcesses lists the container's API processes.
@@ -250,51 +217,14 @@ func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerO
 	if err := s.ownsContainer(ctx, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
-	out := containerOutput{ctx: ctx, server: s, workspace: ws.ID, container: execution.ContainerID(req.Container)}
-	if req.Params.After != nil {
-		out.after = *req.Params.After
-	}
-	out.follow = valueOr(req.Params.Follow, false)
-	return out, nil
+	after, follow := valueOr(req.Params.After, 0), valueOr(req.Params.Follow, false)
+	return ndjson(s, ctx, containerLogOut, func(emit func([]execution.ContainerLogEntry) error) error {
+		return s.owners.Execution.StreamContainerOutput(ctx, s.owners.Listener, ws.ID, execution.ContainerID(req.Container), after, follow, logHeartbeat, emit)
+	}, "container output stream", "container", req.Container.String()), nil
 }
 
-type containerOutput struct {
-	ctx       context.Context //nolint:containedctx // Lives for one response.
-	server    *Server
-	workspace identity.WorkspaceID
-	container execution.ContainerID
-	after     int64
-	follow    bool
-}
-
-func (o containerOutput) VisitStreamContainerOutputResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w)
-	if err := flush.Flush(); err != nil {
-		return nil //nolint:nilerr // The client is gone.
-	}
-	enc := json.NewEncoder(w)
-	err := o.server.owners.Execution.StreamContainerOutput(o.ctx, o.server.owners.Listener, o.workspace, o.container, o.after, o.follow, logHeartbeat,
-		func(batch []execution.ContainerLogEntry) error {
-			if len(batch) == 0 {
-				if _, err := w.Write([]byte("\n")); err != nil {
-					return fmt.Errorf("write heartbeat: %w", err)
-				}
-			}
-			for _, entry := range batch {
-				if err := enc.Encode(apitypes.ContainerLogEntry{
-					Id: entry.ID, Stream: apitypes.ContainerLogEntryStream(entry.Stream), Data: entry.Data, Time: entry.Time,
-				}); err != nil {
-					return fmt.Errorf("write output entry: %w", err)
-				}
-			}
-			return flush.Flush()
-		})
-	if err != nil && o.ctx.Err() == nil {
-		o.server.logger.WarnContext(o.ctx, "container output stream ended early", "container", o.container.String(), "error", err)
-	}
-	return nil
+func containerLogOut(e execution.ContainerLogEntry) apitypes.ContainerLogEntry {
+	return apitypes.ContainerLogEntry{Id: e.ID, Stream: apitypes.ContainerLogEntryStream(e.Stream), Data: e.Data, Time: e.Time}
 }
 
 // acceptSocket accepts a WebSocket after checking a browser session's

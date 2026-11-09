@@ -2,10 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -177,63 +174,17 @@ func (s *Server) StreamPreviewOutput(ctx context.Context, req StreamPreviewOutpu
 	if err != nil {
 		return nil, err
 	}
-	stream := previewOutput{ctx: ctx, server: s, release: p.Release}
-	if req.Params.After != nil {
-		stream.after = *req.Params.After
-	}
-	if req.Params.Follow != nil {
-		stream.follow = *req.Params.Follow
-	}
-	return stream, nil
-}
-
-type previewOutput struct {
-	// ctx is the request's context; the generated visitor does not pass one.
-	ctx     context.Context //nolint:containedctx // Lives for one response.
-	server  *Server
-	release uuid.UUID
-	after   int64
-	follow  bool
-}
-
-func (o previewOutput) VisitStreamPreviewOutputResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flush := http.NewResponseController(w)
-	if err := flush.Flush(); err != nil {
-		return nil //nolint:nilerr // The client is gone.
-	}
-	enc := json.NewEncoder(w)
 	var renewed time.Time
 	done := func(ctx context.Context) (bool, error) {
 		if time.Since(renewed) < renewEvery {
 			return false, nil
 		}
-		live, err := o.server.owners.Control.RenewPreview(ctx, o.release)
+		live, err := s.owners.Control.RenewPreview(ctx, p.Release)
 		renewed = time.Now()
 		return !live, err
 	}
-	err := o.server.owners.Execution.StreamReleaseLogs(o.ctx, o.server.owners.Listener, o.release, o.after, o.follow, logHeartbeat, done,
-		func(batch []execution.ContainerLogEntry) error {
-			if len(batch) == 0 {
-				if _, err := w.Write([]byte("\n")); err != nil {
-					return fmt.Errorf("write heartbeat: %w", err)
-				}
-			}
-			for _, entry := range batch {
-				if err := enc.Encode(apitypes.ContainerLogEntry{
-					Id: entry.ID, Stream: apitypes.ContainerLogEntryStream(entry.Stream), Data: entry.Data, Time: entry.Time,
-				}); err != nil {
-					return fmt.Errorf("write log entry: %w", err)
-				}
-			}
-			if err := flush.Flush(); err != nil {
-				return fmt.Errorf("flush log entries: %w", err)
-			}
-			return nil
-		})
-	if err != nil && o.ctx.Err() == nil {
-		o.server.logger.WarnContext(o.ctx, "preview output stream ended early", "preview", o.release.String(), "error", err)
-	}
-	return nil
+	after, follow := valueOr(req.Params.After, 0), valueOr(req.Params.Follow, false)
+	return ndjson(s, ctx, containerLogOut, func(emit func([]execution.ContainerLogEntry) error) error {
+		return s.owners.Execution.StreamReleaseLogs(ctx, s.owners.Listener, p.Release, after, follow, logHeartbeat, done, emit)
+	}, "preview output stream", "preview", p.Release.String()), nil
 }
