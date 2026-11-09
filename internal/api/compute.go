@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,20 +169,11 @@ func (s *server) ownedWorkspaces(ctx context.Context, p identity.Principal, name
 		if err != nil {
 			return nil, err
 		}
-		if !containsID(ids, uuid.UUID(ws.ID)) {
+		if !slices.Contains(ids, uuid.UUID(ws.ID)) {
 			ids = append(ids, uuid.UUID(ws.ID))
 		}
 	}
 	return ids, nil
-}
-
-func containsID(ids []uuid.UUID, id uuid.UUID) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
 }
 
 // CreateMachineJoinCommand mints the command that joins a host as a named

@@ -27,21 +27,27 @@ type server struct {
 
 var _ StrictServerInterface = (*server)(nil)
 
-// refusedToContainers are the operations a container may not call: a
+// refusedToContainers reports the operations a container may not call: a
 // function may drive the instances it started, nothing more.
-var refusedToContainers = map[string]bool{
-	"ScaleWorkload": true, "GetDevbox": true, "StartDevbox": true, "StopDevbox": true,
-	"ListSandboxes": true, "GetSandboxStats": true, "CreateSshCertificate": true, "ListSshHosts": true,
-	"SetContainerTtl": true, "GetContainerNetwork": true, "SetContainerNetwork": true,
-	"SnapshotContainer": true, "CreateFilesystemImage": true, "OpenContainerShell": true, "OpenSshTunnel": true,
+func refusedToContainers(operationID string) bool {
+	switch operationID {
+	case "ScaleWorkload", "GetDevbox", "StartDevbox", "StopDevbox", "ListSandboxes", "GetSandboxStats",
+		"CreateSshCertificate", "ListSshHosts", "SetContainerTtl", "GetContainerNetwork", "SetContainerNetwork",
+		"SnapshotContainer", "CreateFilesystemImage", "OpenContainerShell", "OpenSshTunnel":
+		return true
+	}
+	return false
 }
 
-// identityScoped are the operations on a workspace whose roles identity
+// identityScoped reports the operations on a workspace whose roles identity
 // checks itself, in any workspace state.
-var identityScoped = map[string]bool{
-	"GetWorkspace": true, "RenameWorkspace": true, "DeleteWorkspace": true,
-	"ListMembers": true, "SetMemberRole": true, "RemoveMember": true, "ListInvitations": true,
-	"CreateInvitation": true, "RevokeInvitation": true, "ResendInvitation": true,
+func identityScoped(operationID string) bool {
+	switch operationID {
+	case "GetWorkspace", "RenameWorkspace", "DeleteWorkspace", "ListMembers", "SetMemberRole", "RemoveMember",
+		"ListInvitations", "CreateInvitation", "RevokeInvitation", "ResendInvitation":
+		return true
+	}
+	return false
 }
 
 type workspaceKey struct{}
@@ -51,11 +57,11 @@ type workspaceKey struct{}
 // handler, which reads it with workspaceFrom.
 func (s *server) authorizeWorkspace(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
-		if _, ok := containerFrom(ctx); ok && refusedToContainers[operationID] {
+		if _, ok := containerFrom(ctx); ok && refusedToContainers(operationID) {
 			return nil, errFromContainer
 		}
 		name := r.PathValue("workspace")
-		if name == "" || identityScoped[operationID] {
+		if name == "" || identityScoped(operationID) {
 			return next(ctx, w, r, request)
 		}
 		ws, err := s.workspace(ctx, name)

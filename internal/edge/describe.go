@@ -52,9 +52,9 @@ func (e *Edge) HTTPUrls(ctx context.Context, workspace, app string, workload uui
 	}
 	path, kind := route(release.Spec), apitypes.WorkloadKind(row.Kind)
 	out := apitypes.HttpUrls{
-		Url:               e.urls.Deployment(row.Subdomain, path),
-		VersionUrl:        e.urls.Version(row.Subdomain, *release.Version, path),
-		ReleaseUrl:        e.urls.Release(release.Id, path),
+		Url:        e.urls.Deployment(row.Subdomain, path),
+		VersionUrl: e.urls.Version(row.Subdomain, *release.Version, path),
+		ReleaseUrl: e.urls.Release(release.Id, path),
 		InvokePath: InvokePath(workspace, app, kind, release.Name),
 	}
 	if row.Hostname != nil && row.HostnameReady {
