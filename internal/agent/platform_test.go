@@ -54,7 +54,7 @@ func removeImage(t *testing.T, ctrd *containerd.Client, image string) {
 func TestPlatformAndTenantImagesReadThroughTheirOwnGrants(t *testing.T) {
 	e := newEnv(t)
 	ctx := t.Context()
-	ctrd, err := containerd.New(containerdSocket, containerd.WithDefaultNamespace("moby"))
+	ctrd, err := containerd.New(ContainerdSocket, containerd.WithDefaultNamespace("moby"))
 	if err != nil {
 		t.Fatal(err)
 	}

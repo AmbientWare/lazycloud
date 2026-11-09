@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AmbientWare/lazycloud/internal/agent"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/imagefs/layersource"
 )
@@ -68,8 +69,8 @@ func installSnapshotter(executable string, out io.Writer) error {
 	if err := checkDocker(); err != nil {
 		return err
 	}
-	if _, err := os.Stat("/run/containerd/containerd.sock"); err != nil {
-		return fmt.Errorf("the snapshotter needs Docker on the system containerd at /run/containerd/containerd.sock: %w", err)
+	if _, err := os.Stat(agent.ContainerdSocket); err != nil {
+		return fmt.Errorf("the snapshotter needs Docker on the system containerd at %s: %w", agent.ContainerdSocket, err)
 	}
 	active := exec.CommandContext(context.Background(), "systemctl", "is-active", "--quiet", layersource.Unit).Run() == nil //nolint:gosec // a fixed unit name
 	if active {
@@ -99,14 +100,7 @@ func installSnapshotter(executable string, out io.Writer) error {
 		_, _ = fmt.Fprintln(out, "restarting Docker on the lazycloud storage driver")
 		commands = append(commands, []string{"restart", "docker.service"})
 	}
-	for _, command := range commands {
-		cmd := exec.CommandContext(context.Background(), "systemctl", command...) //nolint:gosec // fixed subcommands and unit names
-		cmd.Stdout, cmd.Stderr = out, out
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("systemctl %s: %w", strings.Join(command, " "), err)
-		}
-	}
-	return nil
+	return systemctl(out, commands...)
 }
 
 func checkDocker() error {

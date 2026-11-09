@@ -82,7 +82,7 @@ func withImage(start *hostproto.ServerMessage, image string) *hostproto.ServerMe
 func noLayerSince(t *testing.T, image string, since time.Time) {
 	t.Helper()
 	ctx := t.Context()
-	ctrd, err := containerd.New(containerdSocket, containerd.WithDefaultNamespace("moby"))
+	ctrd, err := containerd.New(ContainerdSocket, containerd.WithDefaultNamespace("moby"))
 	if err != nil {
 		t.Fatal(err)
 	}

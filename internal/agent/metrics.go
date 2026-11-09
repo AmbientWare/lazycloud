@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -113,7 +112,7 @@ func (a *Agent) sampleUsage(ctx context.Context) {
 				continue
 			}
 			if len(source.gpus) > 0 && gpus == nil {
-				gpus = a.readGPUs(ctx)
+				gpus = readGPUs(ctx)
 			}
 			if s := source.sample(c.id, time.Now(), a.topology, gpus); s != nil {
 				samples = append(samples, s)
@@ -262,36 +261,20 @@ func readNetDev(path string) (rx, tx uint64) {
 	return rx, tx
 }
 
-// readGPUs reads every GPU's use through NVML's nvidia-smi, keyed by UUID.
-// A host without it returns none.
-func (a *Agent) readGPUs(ctx context.Context) map[string]*hostproto.GPUSample {
-	ctx, cancel := context.WithTimeout(ctx, gpuSampleTimeout)
-	defer cancel()
-	out := map[string]*hostproto.GPUSample{}
-	data, err := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=uuid,name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits").Output()
-	if err != nil {
-		a.log.Debug("reading GPU use failed", "error", err)
-		return out
-	}
-	return parseGPUSamples(data)
+// readGPUs reads every GPU's use, keyed by UUID. A host without
+// nvidia-smi returns none.
+func readGPUs(ctx context.Context) map[string]*hostproto.GPUSample {
+	return gpuSamples(queryGPUs(ctx, gpuSampleTimeout, "uuid,name,utilization.gpu,memory.used,memory.total"))
 }
 
-func parseGPUSamples(data []byte) map[string]*hostproto.GPUSample {
+func gpuSamples(rows [][]string) map[string]*hostproto.GPUSample {
 	out := map[string]*hostproto.GPUSample{}
-	for line := range strings.SplitSeq(string(data), "\n") {
-		fields := strings.Split(line, ",")
-		if len(fields) != 5 {
-			continue
-		}
-		for i := range fields {
-			fields[i] = strings.TrimSpace(fields[i])
-		}
-		util, _ := strconv.ParseUint(fields[2], 10, 32)
-		used, _ := strconv.ParseUint(fields[3], 10, 64)
-		total, _ := strconv.ParseUint(fields[4], 10, 64)
-		out[fields[0]] = &hostproto.GPUSample{
-			Name: fields[1], UtilizationPercent: uint32(util), //nolint:gosec // Percent.
+	for _, row := range rows {
+		util, _ := strconv.ParseUint(row[2], 10, 32)
+		used, _ := strconv.ParseUint(row[3], 10, 64)
+		total, _ := strconv.ParseUint(row[4], 10, 64)
+		out[row[0]] = &hostproto.GPUSample{
+			Name: row[1], UtilizationPercent: uint32(util), //nolint:gosec // Percent.
 			MemoryUsedBytes: used << 20, MemoryTotalBytes: total << 20,
 		}
 	}

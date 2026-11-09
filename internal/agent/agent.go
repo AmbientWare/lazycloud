@@ -70,8 +70,8 @@ const maxSocketPath = 107
 // 16 MiB inputs; the server limits how many it returns.
 const maxMessageBytes = 512 << 20
 
-// containerdSocket is the containerd Docker runs on.
-const containerdSocket = "/run/containerd/containerd.sock"
+// ContainerdSocket is the containerd Docker runs on.
+const ContainerdSocket = "/run/containerd/containerd.sock"
 
 // dockerWait bounds how long the preflight waits for Docker to answer.
 const dockerWait = 30 * time.Second
@@ -303,7 +303,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = docker.Close() }()
 	// Docker keeps its images in containerd's moby namespace.
-	ctrd, err := containerd.New(containerdSocket, containerd.WithDefaultNamespace("moby"))
+	ctrd, err := containerd.New(ContainerdSocket, containerd.WithDefaultNamespace("moby"))
 	if err != nil {
 		return fmt.Errorf("create containerd client: %w", err)
 	}
