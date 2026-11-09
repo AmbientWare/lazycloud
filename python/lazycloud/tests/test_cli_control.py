@@ -145,7 +145,8 @@ def test_app_list_follows_every_page(fake_api: FakeApi) -> None:
     @fake_api.route("GET", f"{TEAM}/apps")
     def apps(request: ApiRequest) -> Reply:
         if request.query.get("cursor") == ["next"]:
-            return json_reply({"apps": [{**_app(), "name": "billing"}]})
+            billing: dict[str, object] = {**_app(), "name": "billing"}
+            return json_reply({"apps": [billing]})
         return json_reply({"apps": [_app()], "next_cursor": "next"})
 
     listed = _cli("--json", "app", "list")
