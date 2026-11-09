@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils";
 
 export const Tabs = TabsPrimitive.Root;
 
-export const tabsListClassName = "inline-flex h-8 items-center gap-1 border-b border-border";
+const tabsListClassName = "inline-flex h-8 items-center gap-1 border-b border-border";
 
-export const tabTriggerClassName =
+const tabTriggerClassName =
   "-mb-px h-8 rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 text-xs font-normal text-muted-foreground outline-none transition-[color,border-color] hover:bg-transparent hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[state=active]:border-brand data-[state=active]:font-medium data-[state=active]:text-foreground";
 
 export function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
