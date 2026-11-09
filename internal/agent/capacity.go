@@ -227,7 +227,7 @@ func detectGPUs(ctx context.Context) []gpuDevice {
 func queryGPUs(ctx context.Context, timeout time.Duration, fields string) [][]string {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu="+fields, "--format=csv,noheader,nounits").Output()
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu="+fields, "--format=csv,noheader,nounits").Output() //nolint:gosec // Fixed query names.
 	if err != nil {
 		return nil
 	}

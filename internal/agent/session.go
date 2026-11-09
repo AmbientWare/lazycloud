@@ -58,7 +58,7 @@ func (a *Agent) reconnect(ctx context.Context, what string, now <-chan struct{},
 			return err
 		}
 		if ctx.Err() != nil {
-			return nil
+			return nil //nolint:nilerr // It ended because the agent is stopping.
 		}
 		if time.Since(began) > time.Minute {
 			delay = minSessionBackoff
