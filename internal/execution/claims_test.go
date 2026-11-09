@@ -43,9 +43,9 @@ func TestConcurrentClaimsNeverShareATask(t *testing.T) {
 						t.Errorf("deadline %v is not the release timeout from now", c.Deadline)
 					}
 					// Free the slot so the container keeps claiming.
-					err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+					err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 						Attempt: c.Attempt, State: AttemptSucceeded, Result: &Payload{Encoding: EncodingJSON, Data: []byte("1")},
-					})
+					}}})[0]
 					if err != nil {
 						t.Errorf("complete: %v", err)
 					}
@@ -192,16 +192,16 @@ func TestCompletionIsFencedByContainerAndHost(t *testing.T) {
 	result := &Payload{Encoding: EncodingJSON, Data: []byte(`5500`)}
 	success := AttemptOutcome{Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: result}
 
-	if err := e.CompleteAttempt(t.Context(), host, otherContainer, success); !errors.Is(err, ErrStaleAttempt) {
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: otherContainer, Outcome: success}})[0]; !errors.Is(err, ErrStaleAttempt) {
 		t.Fatalf("wrong container: got %v, want ErrStaleAttempt", err)
 	}
-	if err := e.CompleteAttempt(t.Context(), compute.HostID(uuid.New()), container, success); !errors.Is(err, ErrStaleAttempt) {
+	if err := e.CompleteAttempts(t.Context(), compute.HostID(uuid.New()), []Completion{{Container: container, Outcome: success}})[0]; !errors.Is(err, ErrStaleAttempt) {
 		t.Fatalf("wrong host: got %v, want ErrStaleAttempt", err)
 	}
-	if err := e.CompleteAttempt(t.Context(), host, container, success); err != nil {
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: success}})[0]; err != nil {
 		t.Fatal(err)
 	}
-	if err := e.CompleteAttempt(t.Context(), host, container, success); !errors.Is(err, ErrStaleAttempt) {
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: success}})[0]; !errors.Is(err, ErrStaleAttempt) {
 		t.Fatalf("duplicate: got %v, want ErrStaleAttempt", err)
 	}
 	got, err := e.TaskResult(t.Context(), f.workspace, claimed[0].Task)

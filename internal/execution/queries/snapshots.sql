@@ -106,7 +106,7 @@ where f.id = @id and f.state = 'publishing' and c.id = f.container_id and c.id =
 returning f.id, f.workspace_id;
 
 -- name: FilesystemImageView :one
-select id, state, image_id, failure from filesystem_images where id = @id;
+select state, image_id, failure from filesystem_images where id = @id;
 
 -- name: FailStaleFilesystemImages :many
 update filesystem_images f

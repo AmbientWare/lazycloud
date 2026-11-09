@@ -338,7 +338,6 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, _ *slog.Logger) 
 
 // FilesystemImage is a filesystem publish as its requester waits for it.
 type FilesystemImage struct {
-	ID      uuid.UUID
 	State   string
 	ImageID *string
 	Failure *string

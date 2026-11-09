@@ -27,11 +27,6 @@ type Completion struct {
 	Outcome   AttemptOutcome
 }
 
-// CompleteAttempt records one completion; see CompleteAttempts.
-func (e *Execution) CompleteAttempt(ctx context.Context, host compute.HostID, container ContainerID, outcome AttemptOutcome) error {
-	return e.CompleteAttempts(ctx, host, []Completion{{Container: container, Outcome: outcome}})[0]
-}
-
 // CompleteAttempts records how attempts that host ran ended, in one
 // transaction, and returns one error per completion. Only a running attempt
 // on the completion's container, assigned to host, accepts an outcome;

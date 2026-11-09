@@ -428,10 +428,10 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 		e.t.Error(err)
 		return
 	}
-	if err := e.execution.CompleteAttempt(ctx, host, container, execution.AttemptOutcome{
+	if err := e.execution.CompleteAttempts(ctx, host, []execution.Completion{{Container: container, Outcome: execution.AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: execution.AttemptSucceeded,
 		Result: &execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(result)},
-	}); err != nil {
+	}}})[0]; err != nil {
 		e.t.Error(err)
 		return
 	}

@@ -75,10 +75,11 @@ func (h *harness) conversionStage(ws identity.WorkspaceID, container execution.C
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		lifecycle, err := h.obs.ContainerLifecycle(h.t.Context(), ws, container)
-		if err != nil {
-			h.t.Fatal(err)
+		lifecycles, err := h.obs.ContainerLifecycles(h.t.Context(), ws, []execution.ContainerID{container})
+		if err != nil || len(lifecycles) != 1 {
+			h.t.Fatalf("lifecycles %+v %v", lifecycles, err)
 		}
+		lifecycle := lifecycles[0]
 		i := slices.IndexFunc(lifecycle.Stages, func(s apitypes.LifecycleStage) bool {
 			return s.Stage == apitypes.LifecycleStageKindConversion
 		})

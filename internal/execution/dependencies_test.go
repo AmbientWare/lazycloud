@@ -64,9 +64,9 @@ func TestDependentWaitsForUpstreamThenReceivesItsResult(t *testing.T) {
 		t.Fatalf("first claim %+v %v, want only the upstream rooted at itself", claimed, err)
 	}
 	result := Payload{Encoding: EncodingCloudpickle, Data: []byte("upstream result")}
-	if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+	if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 		Attempt: claimed[0].Attempt, State: AttemptSucceeded, Result: &result,
-	}); err != nil {
+	}}})[0]; err != nil {
 		t.Fatal(err)
 	}
 
@@ -186,9 +186,9 @@ func TestOversizedDependencyResultsFailTheDependent(t *testing.T) {
 	// Four 16 MiB results exceed the 48 MiB a dependent may receive.
 	result := Payload{Encoding: EncodingCloudpickle, Data: make([]byte, MaxPayloadBytes)}
 	for _, c := range claimed {
-		if err := e.CompleteAttempt(t.Context(), host, container, AttemptOutcome{
+		if err := e.CompleteAttempts(t.Context(), host, []Completion{{Container: container, Outcome: AttemptOutcome{
 			Attempt: c.Attempt, State: AttemptSucceeded, Result: &result,
-		}); err != nil {
+		}}})[0]; err != nil {
 			t.Fatal(err)
 		}
 	}
