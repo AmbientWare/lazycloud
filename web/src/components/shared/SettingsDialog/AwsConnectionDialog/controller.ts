@@ -18,7 +18,7 @@ import type { AwsConnectionDialogRecoveryAction } from "./lifecycle";
 /** The actions the dialog confirms before running. */
 export type AwsConnectionConfirmedAction = "remove" | "forget";
 
-export type AwsConnectionDialogAction =
+type AwsConnectionDialogAction =
   "create" | AwsConnectionDialogRecoveryAction | AwsConnectionConfirmedAction;
 
 type AwsConnectionCommand =
@@ -32,7 +32,7 @@ type AwsConnectionMutationOutcome =
       connection: Schemas["AwsConnection"] | null;
     };
 
-export type AwsConnectionController = {
+type AwsConnectionController = {
   activeAction: AwsConnectionDialogAction | null;
   createError: Error | null;
   recoveryError: Error | null;

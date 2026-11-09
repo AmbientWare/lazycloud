@@ -48,7 +48,7 @@ export function buildMetricData(metrics: Schemas["ContainerMetrics"]): MetricDat
     });
 }
 
-export type ComputeReadout = {
+type ComputeReadout = {
   cpu: string;
   memory: string;
   /** `null` until an interval-bearing sample provides real rates (no fake zeros). */

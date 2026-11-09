@@ -20,7 +20,7 @@ export type InfiniteListQueryData<TItem> = {
   }[];
 };
 
-export type InfiniteListSelection<TItem> = {
+type InfiniteListSelection<TItem> = {
   items: TItem[];
   nextCursor: string | undefined;
 };

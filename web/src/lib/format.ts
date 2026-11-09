@@ -1,6 +1,6 @@
 import { formatDistanceStrict, parseISO } from "date-fns";
 
-export type RowValue = string | number | boolean | null | undefined;
+type RowValue = string | number | boolean | null | undefined;
 
 export function displayValue(value: RowValue): string {
   if (value === null || value === undefined || value === "") return "None";

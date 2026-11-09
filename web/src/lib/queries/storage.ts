@@ -28,19 +28,12 @@ const secretPath = (workspace: string, secret: string) => ({
   params: { path: { workspace, secret } },
 });
 
-export function createSecret(workspace: string, name: string, value: string) {
+/** Store a secret's value; `exists` false only creates it, true only replaces it. */
+export function setSecret(workspace: string, name: string, value: string, exists: boolean) {
+  const header = exists ? { "If-Match": "*" } : { "If-None-Match": "*" };
   return ok(
     api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
-      params: { path: { workspace, secret: name }, header: { "If-None-Match": "*" } },
-      body: { value },
-    }),
-  );
-}
-
-export function updateSecretValue(workspace: string, name: string, value: string) {
-  return ok(
-    api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
-      params: { path: { workspace, secret: name }, header: { "If-Match": "*" } },
+      params: { path: { workspace, secret: name }, header },
       body: { value },
     }),
   );

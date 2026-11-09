@@ -24,7 +24,7 @@ type RenameCommand = {
   name: string;
 };
 
-export type WorkspaceRenameController = {
+type WorkspaceRenameController = {
   mode: WorkspaceRenameMode;
   draftName: string;
   error: Error | null;

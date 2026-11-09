@@ -4,7 +4,7 @@ type AwsConnection = Schemas["AwsConnection"];
 type AwsConnectionAction = Schemas["AwsConnectionAction"];
 type AwsSetupStep = Schemas["AwsSetupStep"];
 
-export type AwsConnectionPresentation = {
+type AwsConnectionPresentation = {
   label:
     | "Waiting for stack"
     | "Creating"
@@ -24,7 +24,7 @@ export type AwsConnectionDialogRecoveryAction = Exclude<
   "authorize" | "remove" | "forget"
 >;
 
-export type AwsConnectionDialogActionPlan = {
+type AwsConnectionDialogActionPlan = {
   /** In the API's order; the first is the primary action. */
   recovery: AwsConnectionDialogRecoveryAction[];
   remove: boolean;
@@ -113,7 +113,7 @@ export function awsConnectionIsRemoving(connection: AwsConnection): boolean {
   return awsConnectionPresentation(connection).label === "Removing";
 }
 
-export type AwsConnectionConfirmation = {
+type AwsConnectionConfirmation = {
   title: string;
   description: string;
   cancelLabel: string;

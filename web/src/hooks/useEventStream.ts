@@ -17,7 +17,7 @@ export type EventStreamStatus =
  * subscription, and resolves "done" when nothing more can arrive or
  * "reconnect" when the server ended a stream that has more to send.
  */
-export type StreamConnect = (session: {
+type StreamConnect = (session: {
   signal: AbortSignal;
   cursor: { value?: string };
   onOpen: () => void;

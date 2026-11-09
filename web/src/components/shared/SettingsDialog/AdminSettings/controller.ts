@@ -40,7 +40,7 @@ export function useDebounced<T>(value: T, delayMs: number): T {
  * second look before they happen. Each takes something away, and two of them
  * can lock a person out.
  */
-export type ConfirmedAction = "demote" | "disable" | "revoke";
+type ConfirmedAction = "demote" | "disable" | "revoke";
 
 export type PendingConfirmation = {
   action: ConfirmedAction;
@@ -54,7 +54,7 @@ type Command =
 
 type CommandResult = { user: User } | { account: BillingAccountAdmin };
 
-export type AccountFilters = AccountScope;
+type AccountFilters = AccountScope;
 
 export type AdminSettingsController = {
   accounts: readonly BillingAccountAdmin[];

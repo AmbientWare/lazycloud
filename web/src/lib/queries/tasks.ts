@@ -31,7 +31,7 @@ export function taskFinished(status: Schemas["TaskStatus"]): boolean {
  * ends: failed when the workload answered with a server error, cancelled when
  * the caller left first (499).
  */
-export function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskStatus"] {
+function requestStatus(request: Schemas["HttpRequest"]): Schemas["TaskStatus"] {
   if (request.status === 499) return "cancelled";
   return request.status >= 500 ? "failed" : "succeeded";
 }
@@ -82,7 +82,7 @@ export function cancelTask(workspace: string, taskId: string): Promise<Schemas["
 
 type TaskListQuery = NonNullable<operations["listTasks"]["parameters"]["query"]>;
 
-export type TaskFilter = Omit<TaskListQuery, "limit" | "cursor">;
+type TaskFilter = Omit<TaskListQuery, "limit" | "cursor">;
 
 const TASK_PAGE_SIZE = 50;
 
@@ -187,7 +187,7 @@ export function requestsQueryOptions(workspace: string, app: string, name: strin
   });
 }
 
-export type TaskDetail = {
+type TaskDetail = {
   task: Schemas["Task"];
   result: Schemas["Payload"] | null;
 };

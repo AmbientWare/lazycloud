@@ -4,7 +4,7 @@ import type { LogSource } from "@/lib/api/logs";
 /** A workload's address: /apps/{app}/workloads/{kind}/{name}. */
 export type WorkloadRef = Pick<Schemas["Workload"], "app" | "kind" | "name">;
 
-export type TaskListKeyParts = {
+type TaskListKeyParts = {
   mode: "page" | "infinite";
   limit: number;
   app: string | null;
@@ -15,13 +15,13 @@ export type TaskListKeyParts = {
   rootOnly: boolean;
 };
 
-export type AccountActivityKeyParts = {
+type AccountActivityKeyParts = {
   measure: string;
   range: string;
   limit: number;
 };
 
-export type AccountCostKeyParts = {
+type AccountCostKeyParts = {
   start: string;
   end: string;
   groupBy: string;
@@ -31,7 +31,7 @@ export type AccountCostKeyParts = {
   category: string | null;
 };
 
-export type AccountCostSeriesKeyParts = {
+type AccountCostSeriesKeyParts = {
   start: string;
   end: string;
   bucket: string;
@@ -287,7 +287,7 @@ export const accountQueryKeys = {
   },
 } as const;
 
-export type WorkspaceLiveQueryMeta = {
+type WorkspaceLiveQueryMeta = {
   workspaceLiveEnabled: boolean;
   workspaceLiveCritical: boolean;
   workspaceLiveRecoverErrors: boolean;

@@ -11,11 +11,10 @@ import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  createSecret,
   deleteSecret,
   revealSecretValue,
+  setSecret,
   secretsQueryOptions,
-  updateSecretValue,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import type { Schemas } from "@/lib/api/client";
@@ -265,13 +264,10 @@ function SecretForm({
   const [name, setName] = useState(fixedName ?? "");
   const [value, setValue] = useState("");
   const mutation = useMutation({
-    mutationFn: async () => {
-      if (mode === "create") {
-        await createSecret(workspace, name.trim(), value);
-      } else {
-        await updateSecretValue(workspace, fixedName ?? name, value);
-      }
-    },
+    mutationFn: () =>
+      mode === "create"
+        ? setSecret(workspace, name.trim(), value, false)
+        : setSecret(workspace, fixedName ?? name, value, true),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: workspaceQueryKeys.storage.secrets(workspace),
