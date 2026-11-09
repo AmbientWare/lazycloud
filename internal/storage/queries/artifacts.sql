@@ -32,9 +32,6 @@ returning *;
 select * from artifacts
 where id = @id and workspace_id = @workspace_id and state = 'stored' and expires_at > now();
 
--- name: AnyArtifact :one
-select * from artifacts where id = @id and workspace_id = @workspace_id;
-
 -- name: ListArtifacts :many
 select * from artifacts
 where workspace_id = @workspace_id and state = 'stored' and expires_at > now()

@@ -12,37 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const anyArtifact = `-- name: AnyArtifact :one
-select id, workspace_id, task_id, app_id, app_name, filename, content_type, size_bytes, state, upload_id, retention_seconds, created_at, stored_at, expires_at from artifacts where id = $1 and workspace_id = $2
-`
-
-type AnyArtifactParams struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-}
-
-func (q *Queries) AnyArtifact(ctx context.Context, arg AnyArtifactParams) (Artifact, error) {
-	row := q.db.QueryRow(ctx, anyArtifact, arg.ID, arg.WorkspaceID)
-	var i Artifact
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.TaskID,
-		&i.AppID,
-		&i.AppName,
-		&i.Filename,
-		&i.ContentType,
-		&i.SizeBytes,
-		&i.State,
-		&i.UploadID,
-		&i.RetentionSeconds,
-		&i.CreatedAt,
-		&i.StoredAt,
-		&i.ExpiresAt,
-	)
-	return i, err
-}
-
 const artifactIDs = `-- name: ArtifactIDs :many
 select id from artifacts where id = any($1::uuid[])
 `
