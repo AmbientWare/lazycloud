@@ -68,6 +68,9 @@ class PlatformRole(str, Enum):
 
 
 class UserUpdate(APIModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
     role: PlatformRole | None = None
     status: UserStatus | None = None
 

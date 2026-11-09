@@ -36,6 +36,11 @@ func TestAccountAdministrationOverHTTP(t *testing.T) {
 	if status := e.do("PATCH", "/v1/users/"+outsider.String(), admin, map[string]string{"role": "owner"}, &apiErr); status != 400 {
 		t.Fatalf("unknown role: %d %+v", status, apiErr)
 	}
+	for name, token := range map[string]string{"member": e.owner, "admin": admin} {
+		if status := e.do("PATCH", "/v1/users/"+outsider.String(), token, map[string]int{"x": 1}, &apiErr); status != 400 {
+			t.Fatalf("%s sends an unknown field: %d %+v", name, status, apiErr)
+		}
+	}
 
 	var user apitypes.User
 	if status := e.do("PATCH", "/v1/users/"+outsider.String(), admin, map[string]string{"role": "administrator"}, &user); status != 200 || !user.IsAdmin {

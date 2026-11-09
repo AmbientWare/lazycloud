@@ -18,10 +18,13 @@ func (s *server) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (U
 		return nil, err
 	}
 	var u identity.User
-	if req.Body.Role != nil {
-		u, err = s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(*req.Body.Role))
-	} else {
-		u, err = s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(*req.Body.Status))
+	switch b := req.Body; {
+	case b.Role != nil:
+		u, err = s.owners.Identity.SetUserRole(ctx, p, identity.UserID(req.User), identity.PlatformRole(*b.Role))
+	case b.Status != nil:
+		u, err = s.owners.Identity.SetUserStatus(ctx, p, identity.UserID(req.User), identity.UserStatus(*b.Status))
+	default:
+		return nil, errInvalidRequest
 	}
 	if err != nil {
 		return nil, err
