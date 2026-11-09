@@ -40,7 +40,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		t.Fatalf("apps: %d %+v", status, apps)
 	}
 	var app apitypes.App
-	if status := e.do("POST", "/v1/workspaces/acme/apps/"+apps.Apps[0].Id.String()+"/pause", e.owner, nil, &app); status != 200 || app.State != apitypes.AppStatePaused {
+	if status := e.do("PATCH", "/v1/workspaces/acme/apps/"+apps.Apps[0].Id.String(), e.owner, apitypes.AppUpdate{Paused: true}, &app); status != 200 || app.State != apitypes.AppStatePaused {
 		t.Fatalf("pause by id: %d %+v", status, app)
 	}
 	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks"
@@ -49,7 +49,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 	if status := e.do("POST", fnPath, e.owner, submit, &apiErr); status != http.StatusConflict {
 		t.Fatalf("submit to a paused app: %d %+v", status, apiErr)
 	}
-	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/resume", e.owner, nil, &app); status != 200 || app.State != apitypes.AppStateActive {
+	if status := e.do("PATCH", "/v1/workspaces/acme/apps/reports", e.owner, apitypes.AppUpdate{Paused: false}, &app); status != 200 || app.State != apitypes.AppStateActive {
 		t.Fatalf("resume: %d %+v", status, app)
 	}
 	if status := e.do("GET", "/v1/workspaces/acme/apps/Not-A-Name", e.owner, nil, &apiErr); status != http.StatusBadRequest {
@@ -99,7 +99,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		}
 	}
 	var containers apitypes.ContainerPage
-	if status := e.do("GET", deployment+"/containers?live=true", e.owner, nil, &containers); status != 200 {
+	if status := e.do("GET", "/v1/workspaces/acme/containers?live=true&workload_id="+detail.Workload.Id.String(), e.owner, nil, &containers); status != 200 {
 		t.Fatalf("workload containers: %d %+v", status, containers)
 	}
 	var versions apitypes.VersionPage

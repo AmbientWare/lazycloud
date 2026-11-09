@@ -85,7 +85,7 @@ it("shows a Python object's image as a PNG", () => {
         data: pickle,
         display: {
           text: "<Figure>",
-          rich: { kind: "image", media_type: "image/png", value_base64: "iVBORw0KGgo=" },
+          rich: { kind: "image", value_base64: "iVBORw0KGgo=" },
         },
       }}
     />,

@@ -100,17 +100,15 @@ export function invalidateAppLists(queryClient: QueryClient, workspace: string) 
 
 const appPath = (workspace: string, app: string) => ({ params: { path: { workspace, app } } });
 
-export function pauseAppMutationOptions(workspace: string, app: string) {
+export function setAppPausedMutationOptions(workspace: string, app: string, paused: boolean) {
   return {
     mutationFn: () =>
-      ok(api.POST("/v1/workspaces/{workspace}/apps/{app}/pause", appPath(workspace, app))),
-  };
-}
-
-export function resumeAppMutationOptions(workspace: string, app: string) {
-  return {
-    mutationFn: () =>
-      ok(api.POST("/v1/workspaces/{workspace}/apps/{app}/resume", appPath(workspace, app))),
+      ok(
+        api.PATCH("/v1/workspaces/{workspace}/apps/{app}", {
+          ...appPath(workspace, app),
+          body: { paused },
+        }),
+      ),
   };
 }
 

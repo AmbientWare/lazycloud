@@ -689,7 +689,6 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
                     "version_url": url,
                     "release_url": url,
                     "invoke_path": f"{workload}/invoke",
-                    "version_invoke_path": f"{workload}/versions/1/invoke",
                 },
             }
         )

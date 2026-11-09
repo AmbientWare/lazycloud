@@ -122,8 +122,9 @@ def _container(state: str = "stopped", **extra: object) -> dict[str, object]:
 
 def test_app_commands_accept_a_name_and_report_each_outcome(fake_api: FakeApi) -> None:
     fake_api.route("GET", f"{TEAM}/apps")(lambda _: json_reply({"apps": [_app("paused")]}))
-    fake_api.route("POST", f"{TEAM}/apps/reports/pause")(lambda _: json_reply(_app("paused")))
-    fake_api.route("POST", f"{TEAM}/apps/reports/resume")(lambda _: json_reply(_app()))
+    fake_api.route("PATCH", f"{TEAM}/apps/reports")(
+        lambda request: json_reply(_app("paused" if request.json()["paused"] else "active"))
+    )
     fake_api.route("DELETE", f"{TEAM}/apps/reports")(lambda _: json_reply(_app("deleted")))
 
     listed = _cli("app", "list", "--inactive")

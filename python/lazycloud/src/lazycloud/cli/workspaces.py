@@ -143,14 +143,16 @@ def workspace_use(ctx: typer.Context, name: str) -> None:
     _require_profile_workspace()
     profile = get_profile()
     with workspace_client() as client:
-        workspaces = client.list_workspaces()
-    workspace = next((item for item in workspaces if item.name == name), None)
-    if workspace is None:
-        raise ClientError(
-            f"Workspace not found: {name}",
-            type="not_found",
-            title="Workspace not found",
-        )
+        try:
+            workspace = client.get_workspace(name)
+        except ApiError as exc:
+            if exc.status_code not in (403, 404):
+                raise
+            raise ClientError(
+                f"Workspace not found: {name}",
+                type="not_found",
+                title="Workspace not found",
+            ) from exc
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:

@@ -182,11 +182,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * The workspaces the caller may act on, by name
-         * @description Platform administrators see every workspace, members their memberships, and a restricted token only its workspace.
-         */
-        get: operations["listWorkspaces"];
+        get?: never;
         put?: never;
         /** Create a workspace owned by the caller; platform administrators only */
         post: operations["createWorkspace"];
@@ -383,7 +379,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/users/{user}/role": {
+    "/v1/users/{user}": {
         parameters: {
             query?: never;
             header?: never;
@@ -393,35 +389,16 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Grant or withdraw platform administration; never your own */
-        put: operations["setUserRole"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/users/{user}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user: components["parameters"]["UserPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
         /**
-         * Enable or disable an account; never your own
+         * Change an account's platform role or status; never your own
          * @description A disabled account cannot sign in, and its tokens, browser sessions and approved device logins end at once. Enabling it again restores none of them. Its running work is not stopped.
          */
-        put: operations["setUserStatus"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["updateUser"];
         trace?: never;
     };
     "/v1/feedback": {
@@ -699,51 +676,11 @@ export interface paths {
         delete: operations["deleteApp"];
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/pause": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
         /**
-         * Stop admission and drain every workload of the app
-         * @description Queued tasks are cancelled; running tasks finish.
+         * Pause or resume the app
+         * @description Pausing stops admission and drains every workload of the app: queued tasks are cancelled and running tasks finish.
          */
-        post: operations["pauseApp"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/resume": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["resumeApp"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["updateApp"];
         trace?: never;
     };
     "/v1/workspaces/{workspace}/apps/{app}/deployment-plan": {
@@ -953,28 +890,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                kind: components["parameters"]["KindPath"];
-                name: components["parameters"]["WorkloadPath"];
-            };
-            cookie?: never;
-        };
-        /** Containers of the workload's releases, newest first */
-        get: operations["listWorkloadContainers"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance": {
         parameters: {
             query?: never;
@@ -1154,8 +1069,7 @@ export interface paths {
         /** Secret names and update times, without values */
         get: operations["listSecrets"];
         put?: never;
-        /** Create a secret; an existing name is a conflict */
-        post: operations["createSecret"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1174,14 +1088,16 @@ export interface paths {
         };
         /** A secret without its value */
         get: operations["getSecret"];
-        /** Create the secret or replace its value */
+        /**
+         * Create the secret or replace its value
+         * @description `If-None-Match: *` only creates it, so an existing name is a conflict; `If-Match: *` only replaces an existing secret's value.
+         */
         put: operations["setSecret"];
         post?: never;
         delete: operations["deleteSecret"];
         options?: never;
         head?: never;
-        /** Replace an existing secret's value */
-        patch: operations["updateSecret"];
+        patch?: never;
         trace?: never;
     };
     "/v1/workspaces/{workspace}/secrets/{secret}/value": {
@@ -1196,7 +1112,7 @@ export interface paths {
         };
         /**
          * Reveal a secret's value
-         * @description The only operation that returns a value. Tokens limited to reading cannot call it.
+         * @description The only operation that returns a value.
          */
         get: operations["getSecretValue"];
         put?: never;
@@ -1240,7 +1156,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        get: operations["getWebhook"];
+        get?: never;
         put?: never;
         post?: never;
         /** Delete the webhook and its pending deliveries */
@@ -1321,7 +1237,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        get: operations["getVolume"];
+        get?: never;
         put?: never;
         post?: never;
         /**
@@ -1501,7 +1417,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        get: operations["getDisk"];
+        get?: never;
         put?: never;
         post?: never;
         /**
@@ -1585,7 +1501,7 @@ export interface paths {
         get: operations["getArtifact"];
         put?: never;
         post?: never;
-        delete: operations["deleteArtifact"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1970,31 +1886,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/workloads/endpoint/{name}/versions/{version}/invoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send a request to an endpoint version through the API host
-         * @description As requestEndpointPath, pinned to one deployed version.
-         */
-        post: operations["requestEndpointPathVersion"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/invoke": {
         parameters: {
             query?: never;
@@ -2019,31 +1910,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{workspace}/apps/{app}/workloads/asgi/{name}/versions/{version}/invoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send a request to an ASGI or realtime app version through the API host
-         * @description As requestEndpointPath, for one deployed version of an ASGI or realtime app.
-         */
-        post: operations["requestAsgiPathVersion"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/invoke": {
         parameters: {
             query?: never;
@@ -2062,28 +1928,6 @@ export interface paths {
          * @description The body's `args` and `kwargs`, or else the whole body, become the arguments, and query parameters are added as keyword arguments.
          */
         post: operations["invokeFunction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/versions/{version}/invoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Run one version of the function with JSON arguments */
-        post: operations["invokeFunctionVersion"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2315,26 +2159,6 @@ export interface paths {
          * @description Hosts sample every 5 seconds. Samples are kept for an hour and as per-minute points for seven days, so a step under 60 seconds reads only the last hour. The default range is the container's last hour of life, and a range spans at most 7 days; at most 1,000 points are returned, and the step grows to fit.
          */
         get: operations["getContainerMetrics"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace}/containers/{container}/lifecycle": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                container: components["parameters"]["ContainerPath"];
-            };
-            cookie?: never;
-        };
-        /** How long the container waited for placement and each start stage, and how it stopped */
-        get: operations["getContainerLifecycle"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2605,25 +2429,6 @@ export interface paths {
          * @description Needs a saved payment method. Repeating a request_key returns the same purchase.
          */
         post: operations["createCreditPurchase"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/billing/credit-purchases/{purchase}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                purchase: string;
-            };
-            cookie?: never;
-        };
-        /** One credit purchase */
-        get: operations["getCreditPurchase"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3676,11 +3481,10 @@ export interface components {
          * @enum {string}
          */
         PlatformRole: "administrator" | "member";
-        UserRoleRequest: {
-            role: components["schemas"]["PlatformRole"];
-        };
-        UserStatusRequest: {
-            status: components["schemas"]["UserStatus"];
+        /** @description One change; role grants or withdraws platform administration. */
+        UserUpdate: {
+            role?: components["schemas"]["PlatformRole"];
+            status?: components["schemas"]["UserStatus"];
         };
         Workspace: {
             /** Format: uuid */
@@ -3696,11 +3500,6 @@ export interface components {
         WorkspaceState: "active" | "deleting";
         /** @enum {string} */
         WorkspaceRole: "owner" | "administrator" | "member";
-        WorkspaceList: {
-            workspaces: components["schemas"]["Workspace"][];
-            /** @description Pass as `cursor` for the next page; absent after the last. */
-            next_cursor?: components["schemas"]["Name"];
-        };
         WorkspaceRequest: {
             name: components["schemas"]["Name"];
             /**
@@ -3920,6 +3719,9 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        AppUpdate: {
+            paused: boolean;
+        };
         /** @description One workload's definition. `kind` names what it deploys as and which section it carries: `http` for an endpoint or ASGI app, `pod` for a pod or sandbox, neither for a function. */
         WorkloadSpec: {
             kind: components["schemas"]["WorkloadKind"];
@@ -4062,8 +3864,6 @@ export interface components {
         RichDisplay: {
             /** @enum {string} */
             kind: "image" | "html";
-            /** @enum {string} */
-            media_type?: "image/png";
             value_base64?: string;
             html?: string;
         };
@@ -4238,10 +4038,6 @@ export interface components {
         /** @description An environment variable name; the LAZYCLOUD_ prefix is reserved. */
         SecretName: string;
         SecretText: string;
-        SecretCreate: {
-            name: components["schemas"]["SecretName"];
-            value: components["schemas"]["SecretText"];
-        };
         SecretValueUpdate: {
             value: components["schemas"]["SecretText"];
         };
@@ -5041,8 +4837,6 @@ export interface components {
             release_url: string;
             /** @description The workload on the API host; append the request's path. */
             invoke_path: string;
-            /** @description The API-host path pinned to the release's version. */
-            version_invoke_path: string;
             /** @description The custom hostname, once its registration is ready. */
             domain_url?: string;
         };
@@ -5623,10 +5417,7 @@ export interface components {
         };
         ComputeSummary: {
             /** @description The connected account the workspace lives in; absent on platform compute. */
-            connection?: {
-                account_id: string;
-                phase: components["schemas"]["AwsConnectionPhase"];
-            };
+            connection?: components["schemas"]["ComputeConnection"];
             instances: {
                 total: number;
                 ready: number;
@@ -5643,6 +5434,10 @@ export interface components {
                 estimated: boolean;
             };
             workload_count: number;
+        };
+        ComputeConnection: {
+            account_id: string;
+            phase: components["schemas"]["AwsConnectionPhase"];
         };
         ComputeWorkload: {
             /**
@@ -5674,18 +5469,19 @@ export interface components {
         AwsAuthorizationPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "retiring" | "retired";
         /** @enum {string} */
         AwsAuthorizationError: "assume_role_denied" | "external_id_not_enforced" | "account_mismatch" | "permission_drift" | "stack_drift" | "upstream_unavailable";
+        AwsManagedAuthorization: {
+            stack_name: string;
+            region: string;
+            generation: number;
+            stack_id?: string;
+            template_version: string;
+            template_sha256: string;
+        };
         AwsAuthorizationGeneration: {
             generation: number;
             /** @enum {string} */
             authorization_mode: "managed_stack" | "existing_role";
-            managed_authorization?: {
-                stack_name: string;
-                region: string;
-                generation: number;
-                stack_id?: string;
-                template_version: string;
-                template_sha256: string;
-            };
+            managed_authorization?: components["schemas"]["AwsManagedAuthorization"];
             phase: components["schemas"]["AwsAuthorizationPhase"];
             /** Format: date-time */
             last_validation_started_at?: string;
@@ -5831,23 +5627,23 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
             /** @description The planner's last published plan; absent once it expires. */
-            plan?: {
-                /** Format: date-time */
-                generated_at: string;
-                /** Format: date-time */
-                expires_at: string;
-                markets: components["schemas"]["FleetMarket"][];
-            };
+            plan?: components["schemas"]["FleetPlan"];
             /** @description The agent release platform hosts move to. */
-            release?: {
-                version: string;
-                generation: number;
-                /** @description Every connected platform host runs the release. */
-                complete: boolean;
-                phases: {
-                    [key: string]: number;
-                };
-                pending_capacity_owners: number;
+            release?: components["schemas"]["FleetRelease"];
+        };
+        FleetPlan: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            markets: components["schemas"]["FleetMarket"][];
+        };
+        FleetRelease: {
+            version: string;
+            /** @description Every connected platform host runs the release. */
+            complete: boolean;
+            phases: {
+                [key: string]: number;
             };
         };
         FleetNode: {
@@ -6703,7 +6499,6 @@ export interface components {
         RequestPath: string;
         KindPath: components["schemas"]["WorkloadKind"];
         WorkloadPath: components["schemas"]["WorkloadName"];
-        VersionPath: number;
         TaskPath: string;
         SecretPath: components["schemas"]["SecretName"];
         WebhookPath: string;
@@ -6986,31 +6781,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceCode"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    listWorkspaces: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description The `next_cursor` of the previous page. */
-                cursor?: components["schemas"]["Name"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One page of workspaces */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceList"];
                 };
             };
             default: components["responses"]["Error"];
@@ -7353,7 +7123,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    setUserRole: {
+    updateUser: {
         parameters: {
             query?: never;
             header?: never;
@@ -7364,34 +7134,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UserRoleRequest"];
-            };
-        };
-        responses: {
-            /** @description The account */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["User"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    setUserStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user: components["parameters"]["UserPath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UserStatusRequest"];
+                "application/json": components["schemas"]["UserUpdate"];
             };
         };
         responses: {
@@ -7809,7 +7552,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    pauseApp: {
+    updateApp: {
         parameters: {
             query?: never;
             header?: never;
@@ -7820,34 +7563,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
-        responses: {
-            /** @description The paused app */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["App"];
-                };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppUpdate"];
             };
-            default: components["responses"]["Error"];
         };
-    };
-    resumeApp: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                /** @description The app's name or id. */
-                app: components["parameters"]["AppRefPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
-            /** @description The resumed app */
+            /** @description The app */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8152,38 +7874,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    listWorkloadContainers: {
-        parameters: {
-            query?: {
-                /** @description Only containers that have not stopped. */
-                live?: boolean;
-                limit?: components["parameters"]["PageLimit"];
-                /** @description The next_cursor of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                kind: components["parameters"]["KindPath"];
-                name: components["parameters"]["WorkloadPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One page of containers */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContainerPage"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     getWorkloadPerformance: {
         parameters: {
             query?: {
@@ -8312,6 +8002,8 @@ export interface operations {
                 live?: boolean;
                 /** @description Only the containers of this app's workloads. */
                 app?: components["schemas"]["AppName"];
+                /** @description Only the containers of this workload's releases. */
+                workload_id?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -8441,33 +8133,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    createSecret: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SecretCreate"];
-            };
-        };
-        responses: {
-            /** @description The created secret */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Secret"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     getSecret: {
         parameters: {
             query?: never;
@@ -8495,7 +8160,10 @@ export interface operations {
     setSecret: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "If-None-Match"?: "*";
+                "If-Match"?: "*";
+            };
             path: {
                 workspace: components["parameters"]["WorkspacePath"];
                 secret: components["parameters"]["SecretPath"];
@@ -8538,34 +8206,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    updateSecret: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                secret: components["parameters"]["SecretPath"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SecretValueUpdate"];
-            };
-        };
-        responses: {
-            /** @description The secret */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Secret"];
-                };
             };
             default: components["responses"]["Error"];
         };
@@ -8638,30 +8278,6 @@ export interface operations {
         responses: {
             /** @description The webhook */
             201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Webhook"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    getWebhook: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                webhook: components["parameters"]["WebhookPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The webhook */
-            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8815,30 +8431,6 @@ export interface operations {
                 "application/json": components["schemas"]["CreateVolumeRequest"];
             };
         };
-        responses: {
-            /** @description The volume */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    getVolume: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                volume: components["parameters"]["VolumePath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description The volume */
             200: {
@@ -9121,30 +8713,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    getDisk: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                disk: components["parameters"]["DiskPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The disk */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Disk"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     deleteDisk: {
         parameters: {
             query?: never;
@@ -9301,28 +8869,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Artifact"];
                 };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    deleteArtifact: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                artifact: components["parameters"]["ArtifactPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -9896,29 +9442,6 @@ export interface operations {
             };
         };
     };
-    requestEndpointPathVersion: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The workload's own response, or an Error from the platform. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     requestAsgiPath: {
         parameters: {
             query?: never;
@@ -9927,29 +9450,6 @@ export interface operations {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
                 name: components["parameters"]["WorkloadPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The workload's own response, or an Error from the platform. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    requestAsgiPathVersion: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -9975,39 +9475,6 @@ export interface operations {
                 workspace: components["parameters"]["WorkspacePath"];
                 app: components["parameters"]["AppPath"];
                 name: components["parameters"]["WorkloadPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["InvocationBody"];
-            };
-        };
-        responses: {
-            /** @description The task, with its result when it succeeded within the wait */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Invocation"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    invokeFunctionVersion: {
-        parameters: {
-            query?: {
-                /** @description Hold the request until the task finishes or this many seconds pass. */
-                wait_seconds?: components["parameters"]["InvokeWait"];
-            };
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                app: components["parameters"]["AppPath"];
-                name: components["parameters"]["WorkloadPath"];
-                version: components["parameters"]["VersionPath"];
             };
             cookie?: never;
         };
@@ -10395,30 +9862,6 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    getContainerLifecycle: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace: components["parameters"]["WorkspacePath"];
-                container: components["parameters"]["ContainerPath"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The container's lifecycle */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContainerLifecycle"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
     listContainerLifecycles: {
         parameters: {
             query?: never;
@@ -10764,29 +10207,6 @@ export interface operations {
         responses: {
             /** @description The purchase and its checkout page */
             201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreditPurchase"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    getCreditPurchase: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                purchase: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The purchase */
-            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12268,6 +11688,8 @@ type ReadonlyArray<T> = [
 ] extends [
     unknown[]
 ] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
+export const pathsV1WorkspacesWorkspaceSecretsSecretPutParametersHeaderIfNoneMatchValues: ReadonlyArray<FlattenedDeepRequired<paths>["/v1/workspaces/{workspace}/secrets/{secret}"]["put"]["parameters"]["header"]["If-None-Match"]> = ["*"];
+export const pathsV1WorkspacesWorkspaceSecretsSecretPutParametersHeaderIfMatchValues: ReadonlyArray<FlattenedDeepRequired<paths>["/v1/workspaces/{workspace}/secrets/{secret}"]["put"]["parameters"]["header"]["If-Match"]> = ["*"];
 export const errorCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ErrorCode"]> = ["invalid_request", "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large", "unsupported", "too_many_pending_tasks", "task_not_finished", "unavailable", "internal", "payment_required", "limit_reached", "rate_limited"];
 export const userStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UserStatus"]> = ["active", "disabled"];
 export const feedbackKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FeedbackKind"]> = ["feature", "bug", "support"];
@@ -12286,7 +11708,6 @@ export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<compo
 export const retryPolicyRetry_onValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["retry_on"]> = ["user_error", "timeout", "lost"];
 export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
 export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["kind"]> = ["image", "html"];
-export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "preempted", "start_failed", "system", "dependency_failed"];

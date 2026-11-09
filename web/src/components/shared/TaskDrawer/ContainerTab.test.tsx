@@ -35,13 +35,17 @@ it("names a function container's image and host, with no pod command or ports", 
         points: [],
       });
     }
-    if (path.endsWith("/lifecycle")) {
+    if (path.endsWith("/lifecycles")) {
       return Response.json({
-        container_id: container.id,
-        state: "stopped",
-        host: "host-a",
-        created_at: container.created_at,
-        stages: [],
+        lifecycles: [
+          {
+            container_id: container.id,
+            state: "stopped",
+            host: "host-a",
+            created_at: container.created_at,
+            stages: [],
+          },
+        ],
       });
     }
     return Response.json(container);

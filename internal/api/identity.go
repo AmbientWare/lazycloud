@@ -13,12 +13,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// ActivatePath is the dashboard page where a person approves a device-code
+// activatePath is the dashboard page where a person approves a device-code
 // login.
-const ActivatePath = "/activate"
+const activatePath = "/activate"
 
-func (s *Server) principal(ctx context.Context) (identity.Principal, error) {
-	// A container acts for its workspace, not for a user or account.
+// principal is the calling user; a container acts for its workspace, not
+// for a user.
+func (s *server) principal(ctx context.Context) (identity.Principal, error) {
 	if _, ok := containerFrom(ctx); ok {
 		return identity.Principal{}, identity.ErrForbidden
 	}
@@ -29,8 +30,27 @@ func (s *Server) principal(ctx context.Context) (identity.Principal, error) {
 	return p, nil
 }
 
+// account is the calling user with a credential not restricted to one
+// workspace, as action needs.
+func (s *server) account(ctx context.Context, action string) (identity.Principal, error) {
+	p, err := s.principal(ctx)
+	if err == nil && p.TokenWorkspace != nil {
+		err = &identity.AccountError{Action: action}
+	}
+	return p, err
+}
+
+// admin admits platform administrators with an account credential.
+func (s *server) admin(ctx context.Context) error {
+	p, err := s.account(ctx, "administer the platform")
+	if err == nil && !p.IsAdmin {
+		err = identity.ErrAdminRequired
+	}
+	return err
+}
+
 // GetMe returns the caller and the workspaces they are a member of.
-func (s *Server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
+func (s *server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -47,7 +67,7 @@ func (s *Server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponse
 }
 
 // SignOut ends the requesting browser session and clears its cookie.
-func (s *Server) SignOut(ctx context.Context, _ SignOutRequestObject) (SignOutResponseObject, error) {
+func (s *server) SignOut(ctx context.Context, _ SignOutRequestObject) (SignOutResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -67,19 +87,12 @@ func (signedOut) VisitSignOutResponse(w http.ResponseWriter) error {
 }
 
 // ListTokens pages through the caller's tokens.
-func (s *Server) ListTokens(ctx context.Context, req ListTokensRequestObject) (ListTokensResponseObject, error) {
+func (s *server) ListTokens(ctx context.Context, req ListTokensRequestObject) (ListTokensResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	includeDevice, limit := true, 50
-	if req.Params.IncludeDevice != nil {
-		includeDevice = *req.Params.IncludeDevice
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
-	page, err := s.owners.Identity.ListTokens(ctx, p, includeDevice, (*identity.TokenID)(req.Params.Cursor), limit)
+	page, err := s.owners.Identity.ListTokens(ctx, p, valueOr(req.Params.IncludeDevice, true), (*identity.TokenID)(req.Params.Cursor), valueOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +105,7 @@ func (s *Server) ListTokens(ctx context.Context, req ListTokensRequestObject) (L
 }
 
 // CreateToken mints an account token.
-func (s *Server) CreateToken(ctx context.Context, req CreateTokenRequestObject) (CreateTokenResponseObject, error) {
+func (s *server) CreateToken(ctx context.Context, req CreateTokenRequestObject) (CreateTokenResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -110,7 +123,7 @@ func (s *Server) CreateToken(ctx context.Context, req CreateTokenRequestObject) 
 }
 
 // RevokeToken revokes one of the caller's tokens.
-func (s *Server) RevokeToken(ctx context.Context, req RevokeTokenRequestObject) (RevokeTokenResponseObject, error) {
+func (s *server) RevokeToken(ctx context.Context, req RevokeTokenRequestObject) (RevokeTokenResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -122,16 +135,12 @@ func (s *Server) RevokeToken(ctx context.Context, req RevokeTokenRequestObject) 
 }
 
 // StartDeviceLogin opens a device-code login; it needs no credential.
-func (s *Server) StartDeviceLogin(ctx context.Context, req StartDeviceLoginRequestObject) (StartDeviceLoginResponseObject, error) {
-	client := ""
-	if req.Body.ClientName != nil {
-		client = *req.Body.ClientName
-	}
-	start, err := s.owners.Identity.StartDeviceLogin(ctx, client)
+func (s *server) StartDeviceLogin(ctx context.Context, req StartDeviceLoginRequestObject) (StartDeviceLoginResponseObject, error) {
+	start, err := s.owners.Identity.StartDeviceLogin(ctx, valueOr(req.Body.ClientName, ""))
 	if err != nil {
 		return nil, err
 	}
-	verification := s.cfg.PublicURL + ActivatePath
+	verification := s.cfg.PublicURL + activatePath
 	return StartDeviceLogin201JSONResponse{
 		DeviceCode: start.DeviceCode, UserCode: start.UserCode, VerificationUri: verification,
 		VerificationUriComplete: verification + "?code=" + url.QueryEscape(start.UserCode),
@@ -141,7 +150,7 @@ func (s *Server) StartDeviceLogin(ctx context.Context, req StartDeviceLoginReque
 }
 
 // PollDeviceLogin answers a CLI polling its device code.
-func (s *Server) PollDeviceLogin(ctx context.Context, req PollDeviceLoginRequestObject) (PollDeviceLoginResponseObject, error) {
+func (s *server) PollDeviceLogin(ctx context.Context, req PollDeviceLoginRequestObject) (PollDeviceLoginResponseObject, error) {
 	poll, err := s.owners.Identity.PollDeviceLogin(ctx, req.Body.DeviceCode)
 	if err != nil {
 		return nil, err
@@ -156,7 +165,7 @@ func (s *Server) PollDeviceLogin(ctx context.Context, req PollDeviceLoginRequest
 }
 
 // GetDeviceLogin reads the login a user code names.
-func (s *Server) GetDeviceLogin(ctx context.Context, req GetDeviceLoginRequestObject) (GetDeviceLoginResponseObject, error) {
+func (s *server) GetDeviceLogin(ctx context.Context, req GetDeviceLoginRequestObject) (GetDeviceLoginResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -169,7 +178,7 @@ func (s *Server) GetDeviceLogin(ctx context.Context, req GetDeviceLoginRequestOb
 }
 
 // ApproveDeviceLogin approves a waiting CLI for the caller's account.
-func (s *Server) ApproveDeviceLogin(ctx context.Context, req ApproveDeviceLoginRequestObject) (ApproveDeviceLoginResponseObject, error) {
+func (s *server) ApproveDeviceLogin(ctx context.Context, req ApproveDeviceLoginRequestObject) (ApproveDeviceLoginResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -182,7 +191,7 @@ func (s *Server) ApproveDeviceLogin(ctx context.Context, req ApproveDeviceLoginR
 }
 
 // DenyDeviceLogin refuses a waiting CLI.
-func (s *Server) DenyDeviceLogin(ctx context.Context, req DenyDeviceLoginRequestObject) (DenyDeviceLoginResponseObject, error) {
+func (s *server) DenyDeviceLogin(ctx context.Context, req DenyDeviceLoginRequestObject) (DenyDeviceLoginResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -194,32 +203,8 @@ func (s *Server) DenyDeviceLogin(ctx context.Context, req DenyDeviceLoginRequest
 	return DenyDeviceLogin200JSONResponse(deviceCodeOut(code)), nil
 }
 
-// ListWorkspaces pages through the workspaces the caller may act on.
-func (s *Server) ListWorkspaces(ctx context.Context, req ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	page := identity.WorkspacePage{Limit: 100}
-	if req.Params.Limit != nil {
-		page.Limit = *req.Params.Limit
-	}
-	if req.Params.Cursor != nil {
-		page.After = *req.Params.Cursor
-	}
-	list, err := s.owners.Identity.ListWorkspaces(ctx, p, page)
-	if err != nil {
-		return nil, err
-	}
-	out := ListWorkspaces200JSONResponse{Workspaces: workspacesOut(list.Workspaces)}
-	if list.Next != "" {
-		out.NextCursor = &list.Next
-	}
-	return out, nil
-}
-
 // CreateWorkspace creates a workspace owned by the caller.
-func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
+func (s *server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -238,7 +223,7 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 }
 
 // GetWorkspace returns a workspace in any state.
-func (s *Server) GetWorkspace(ctx context.Context, req GetWorkspaceRequestObject) (GetWorkspaceResponseObject, error) {
+func (s *server) GetWorkspace(ctx context.Context, req GetWorkspaceRequestObject) (GetWorkspaceResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -251,7 +236,7 @@ func (s *Server) GetWorkspace(ctx context.Context, req GetWorkspaceRequestObject
 }
 
 // RenameWorkspace renames a workspace.
-func (s *Server) RenameWorkspace(ctx context.Context, req RenameWorkspaceRequestObject) (RenameWorkspaceResponseObject, error) {
+func (s *server) RenameWorkspace(ctx context.Context, req RenameWorkspaceRequestObject) (RenameWorkspaceResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -264,7 +249,7 @@ func (s *Server) RenameWorkspace(ctx context.Context, req RenameWorkspaceRequest
 }
 
 // DeleteWorkspace begins or resumes deleting a workspace.
-func (s *Server) DeleteWorkspace(ctx context.Context, req DeleteWorkspaceRequestObject) (DeleteWorkspaceResponseObject, error) {
+func (s *server) DeleteWorkspace(ctx context.Context, req DeleteWorkspaceRequestObject) (DeleteWorkspaceResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -277,7 +262,7 @@ func (s *Server) DeleteWorkspace(ctx context.Context, req DeleteWorkspaceRequest
 }
 
 // ListMembers lists a workspace's members.
-func (s *Server) ListMembers(ctx context.Context, req ListMembersRequestObject) (ListMembersResponseObject, error) {
+func (s *server) ListMembers(ctx context.Context, req ListMembersRequestObject) (ListMembersResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -294,7 +279,7 @@ func (s *Server) ListMembers(ctx context.Context, req ListMembersRequestObject) 
 }
 
 // SetMemberRole changes a member's role.
-func (s *Server) SetMemberRole(ctx context.Context, req SetMemberRoleRequestObject) (SetMemberRoleResponseObject, error) {
+func (s *server) SetMemberRole(ctx context.Context, req SetMemberRoleRequestObject) (SetMemberRoleResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -307,7 +292,7 @@ func (s *Server) SetMemberRole(ctx context.Context, req SetMemberRoleRequestObje
 }
 
 // RemoveMember removes a member or lets the caller leave.
-func (s *Server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject) (RemoveMemberResponseObject, error) {
+func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject) (RemoveMemberResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -319,7 +304,7 @@ func (s *Server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 }
 
 // ListInvitations lists open invitations.
-func (s *Server) ListInvitations(ctx context.Context, req ListInvitationsRequestObject) (ListInvitationsResponseObject, error) {
+func (s *server) ListInvitations(ctx context.Context, req ListInvitationsRequestObject) (ListInvitationsResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -336,7 +321,7 @@ func (s *Server) ListInvitations(ctx context.Context, req ListInvitationsRequest
 }
 
 // CreateInvitation invites an email address.
-func (s *Server) CreateInvitation(ctx context.Context, req CreateInvitationRequestObject) (CreateInvitationResponseObject, error) {
+func (s *server) CreateInvitation(ctx context.Context, req CreateInvitationRequestObject) (CreateInvitationResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -353,7 +338,7 @@ func (s *Server) CreateInvitation(ctx context.Context, req CreateInvitationReque
 }
 
 // RevokeInvitation withdraws an invitation.
-func (s *Server) RevokeInvitation(ctx context.Context, req RevokeInvitationRequestObject) (RevokeInvitationResponseObject, error) {
+func (s *server) RevokeInvitation(ctx context.Context, req RevokeInvitationRequestObject) (RevokeInvitationResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -365,7 +350,7 @@ func (s *Server) RevokeInvitation(ctx context.Context, req RevokeInvitationReque
 }
 
 // ResendInvitation sends an invitation again on a new link.
-func (s *Server) ResendInvitation(ctx context.Context, req ResendInvitationRequestObject) (ResendInvitationResponseObject, error) {
+func (s *server) ResendInvitation(ctx context.Context, req ResendInvitationRequestObject) (ResendInvitationResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -378,7 +363,7 @@ func (s *Server) ResendInvitation(ctx context.Context, req ResendInvitationReque
 }
 
 // PreviewInvitation shows what a link offers to a signed-in person.
-func (s *Server) PreviewInvitation(ctx context.Context, req PreviewInvitationRequestObject) (PreviewInvitationResponseObject, error) {
+func (s *server) PreviewInvitation(ctx context.Context, req PreviewInvitationRequestObject) (PreviewInvitationResponseObject, error) {
 	if _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
@@ -394,7 +379,7 @@ func (s *Server) PreviewInvitation(ctx context.Context, req PreviewInvitationReq
 }
 
 // AcceptInvitation joins the workspace as the caller.
-func (s *Server) AcceptInvitation(ctx context.Context, req AcceptInvitationRequestObject) (AcceptInvitationResponseObject, error) {
+func (s *server) AcceptInvitation(ctx context.Context, req AcceptInvitationRequestObject) (AcceptInvitationResponseObject, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -407,7 +392,7 @@ func (s *Server) AcceptInvitation(ctx context.Context, req AcceptInvitationReque
 }
 
 // DeclineInvitation refuses an invitation.
-func (s *Server) DeclineInvitation(ctx context.Context, req DeclineInvitationRequestObject) (DeclineInvitationResponseObject, error) {
+func (s *server) DeclineInvitation(ctx context.Context, req DeclineInvitationRequestObject) (DeclineInvitationResponseObject, error) {
 	if _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}

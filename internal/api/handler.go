@@ -76,8 +76,8 @@ type Config struct {
 	AgentDistDir string
 }
 
-// RecommendedClientHeader carries Config.ClientReleaseVersion.
-const RecommendedClientHeader = "X-Lazycloud-Recommended-Client-Version"
+// recommendedClientHeader carries Config.ClientReleaseVersion.
+const recommendedClientHeader = "X-Lazycloud-Recommended-Client-Version"
 
 // NewHandler serves the public API: it limits the body, authenticates the
 // bearer token or session cookie, validates the request against document,
@@ -113,10 +113,10 @@ func NewContainerHandler(document *openapi3.T, owners Owners, cfg Config, logger
 
 // newServer returns the server and the validated operation handler, whose
 // security requirements authenticated applies.
-func newServer(document *openapi3.T, owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*Server, http.Handler) {
+func newServer(document *openapi3.T, owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*server, http.Handler) {
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
-	s := &Server{owners: owners, cfg: cfg, logger: logger}
-	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery, withRequest}, StrictHTTPServerOptions{
+	s := &server{owners: owners, cfg: cfg, logger: logger}
+	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{s.authorizeWorkspace, nameOperation, withQuery, withRequest}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
@@ -193,7 +193,7 @@ func requireContainerScheme(ctx context.Context, input *openapi3filter.Authentic
 }
 
 // requireContainer admits only requests carrying a container principal.
-func (s *Server) requireContainer(next http.Handler) http.Handler {
+func (s *server) requireContainer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := containerFrom(r.Context())
 		if !ok {
@@ -230,19 +230,19 @@ func requireScheme(ctx context.Context, input *openapi3filter.AuthenticationInpu
 	return identity.ErrUnauthenticated
 }
 
-func (s *Server) limitBody(next http.Handler) http.Handler {
+func (s *server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) recommendClient(next http.Handler) http.Handler {
+func (s *server) recommendClient(next http.Handler) http.Handler {
 	if s.cfg.ClientReleaseVersion == "" {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(RecommendedClientHeader, s.cfg.ClientReleaseVersion)
+		w.Header().Set(recommendedClientHeader, s.cfg.ClientReleaseVersion)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -253,7 +253,7 @@ func (s *Server) recommendClient(next http.Handler) http.Handler {
 // the operation's security requirement decides. A cookie-authenticated
 // request that changes state must come from the dashboard's origin, because
 // browsers attach the cookie to requests other sites start.
-func (s *Server) authenticate(next http.Handler) http.Handler {
+func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if header := r.Header.Get("Authorization"); header != "" {
 			scheme, token, ok := strings.Cut(header, " ")
@@ -300,7 +300,7 @@ var errInvalidRequest = errors.New("invalid request")
 
 // writeError maps an owner error to the Error schema. Unexpected errors are
 // logged and reported without detail.
-func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
+func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooMany         *execution.TooManyPendingError
 		unknownTask     *execution.UnknownTaskError

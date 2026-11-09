@@ -360,9 +360,7 @@ def _display(result: Any) -> ResultDisplay:
     shown = build_function_result_display(result)
     rich: RichDisplay | None = None
     if isinstance(shown.rich, FunctionResultImageDisplay):
-        rich = RichDisplay(
-            kind=Kind.image, media_type="image/png", value_base64=shown.rich.value_base64
-        )
+        rich = RichDisplay(kind=Kind.image, value_base64=shown.rich.value_base64)
     elif shown.rich is not None:
         rich = RichDisplay(kind=Kind.html, html=shown.rich.html)
     return ResultDisplay(text=shown.text, rich=rich)

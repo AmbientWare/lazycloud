@@ -42,17 +42,17 @@ const secretPath = (workspace: string, secret: string) => ({
 
 export function createSecret(workspace: string, name: string, value: string) {
   return ok(
-    api.POST("/v1/workspaces/{workspace}/secrets", {
-      params: { path: { workspace } },
-      body: { name, value },
+    api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
+      params: { path: { workspace, secret: name }, header: { "If-None-Match": "*" } },
+      body: { value },
     }),
   );
 }
 
 export function updateSecretValue(workspace: string, name: string, value: string) {
   return ok(
-    api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
-      ...secretPath(workspace, name),
+    api.PUT("/v1/workspaces/{workspace}/secrets/{secret}", {
+      params: { path: { workspace, secret: name }, header: { "If-Match": "*" } },
       body: { value },
     }),
   );

@@ -456,9 +456,9 @@ func TestPickledResultsKeepOnlyAValidDisplay(t *testing.T) {
 		kept bool
 	}{
 		{`{"text": "Table(rows=1)", "rich": {"kind": "html", "html": "<table><td>1</td></table>"}}`, true},
-		{`{"text": "Chart()", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + png + `"}}`, true},
-		{`{"text": "x", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + base64.StdEncoding.EncodeToString([]byte("<svg onload=alert(1)>")) + `"}}`, false},
-		{`{"text": "x", "rich": {"kind": "image", "media_type": "image/png", "value_base64": "` + png + `", "html": "<b>"}}`, false},
+		{`{"text": "Chart()", "rich": {"kind": "image", "value_base64": "` + png + `"}}`, true},
+		{`{"text": "x", "rich": {"kind": "image", "value_base64": "` + base64.StdEncoding.EncodeToString([]byte("<svg onload=alert(1)>")) + `"}}`, false},
+		{`{"text": "x", "rich": {"kind": "image", "value_base64": "` + png + `", "html": "<b>"}}`, false},
 		{`{"text": "x", "script": "alert(1)"}`, false},
 		{`{"text": "` + strings.Repeat("a", 64<<10+1) + `"}`, false},
 	}

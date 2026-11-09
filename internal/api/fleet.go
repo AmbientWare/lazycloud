@@ -8,19 +8,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
-
-func (s *Server) administrator(ctx context.Context) error {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return identity.ErrUnauthenticated
-	}
-	if !p.IsAdmin || p.TokenWorkspace != nil {
-		return identity.ErrAdminRequired
-	}
-	return nil
-}
 
 func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 	return apitypes.FleetCapacity{CpuMillicores: int64(c.CPUMillis), MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
@@ -28,8 +16,8 @@ func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 
 // GetFleet returns the platform fleet's published plan and agent rollout
 // for administrators. The plan is absent while none is current.
-func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+func (s *server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	fleet, err := s.owners.Compute.Fleet(ctx)
@@ -38,11 +26,7 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 	}
 	out := GetFleet200JSONResponse{ObservedAt: fleet.ObservedAt}
 	if p := fleet.Plan; p != nil {
-		plan := &struct {
-			ExpiresAt   time.Time              `json:"expires_at"`
-			GeneratedAt time.Time              `json:"generated_at"`
-			Markets     []apitypes.FleetMarket `json:"markets"`
-		}{GeneratedAt: p.GeneratedAt, ExpiresAt: p.ExpiresAt, Markets: []apitypes.FleetMarket{}}
+		plan := &apitypes.FleetPlan{GeneratedAt: p.GeneratedAt, ExpiresAt: p.ExpiresAt, Markets: []apitypes.FleetMarket{}}
 		for _, m := range p.Markets {
 			market := apitypes.FleetMarket{
 				Preemptible: m.Preemptible, GpuType: m.GPUType, WarmFree: fleetCapacityOut(m.WarmFree),
@@ -65,37 +49,28 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 		out.Plan = plan
 	}
 	if r := fleet.Release; r != nil {
-		out.Release = &struct {
-			Complete              bool           `json:"complete"`
-			Generation            int            `json:"generation"`
-			PendingCapacityOwners int            `json:"pending_capacity_owners"`
-			Phases                map[string]int `json:"phases"`
-			Version               string         `json:"version"`
-		}{Complete: r.Complete, Generation: 1, Phases: r.Phases, Version: r.Version}
+		out.Release = &apitypes.FleetRelease{Complete: r.Complete, Phases: r.Phases, Version: r.Version}
 	}
 	return out, nil
 }
 
 // ListFleetNodes lists the platform's hosts with an instance for
 // administrators.
-func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestObject) (ListFleetNodesResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+func (s *server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestObject) (ListFleetNodesResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	var after uuid.UUID
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := pageLimit(req.Params.Limit)
+	limit := valueOr(req.Params.Limit, defaultPageSize)
 	nodes, err := s.owners.Compute.FleetNodes(ctx, after, limit+1)
 	if err != nil {
 		return nil, err
 	}
 	out := ListFleetNodes200JSONResponse{Nodes: []apitypes.FleetNode{}, ObservedAt: time.Now()}
-	if len(nodes) > limit {
-		nodes = nodes[:limit]
-		out.NextCursor = encodeCursor(uuid.UUID(nodes[limit-1].ID))
-	}
+	nodes, out.NextCursor = pageOf(nodes, limit, func(n compute.FleetNode) any { return uuid.UUID(n.ID) })
 	for _, n := range nodes {
 		node := apitypes.FleetNode{
 			Id: uuid.UUID(n.ID), Provider: apitypes.FleetNodeProvider(n.Provider), Region: n.Region,
@@ -114,8 +89,8 @@ func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestOb
 
 // GetFleetSpend returns what the platform's cloud hosts cost for
 // administrators.
-func (s *Server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+func (s *server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	spend, err := s.owners.Compute.FleetSpend(ctx)

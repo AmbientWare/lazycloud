@@ -14,13 +14,13 @@ import (
 // Agent installs are unauthenticated downloads: the script, and release
 // archives from Config.AgentDistDir laid out as
 // <version>/lazycloud-agent-linux-<arch>.tar.gz.
-func (s *Server) installRoutes(mux *http.ServeMux) {
+func (s *server) installRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /install/agent", s.installScript)
 	mux.HandleFunc("GET /install/agent/{os}/{arch}", s.installArchive)
 	mux.HandleFunc("GET /install/agent/{version}/{os}/{arch}", s.installArchive)
 }
 
-func (s *Server) installScript(w http.ResponseWriter, r *http.Request) {
+func (s *server) installScript(w http.ResponseWriter, r *http.Request) {
 	script, err := s.owners.Compute.InstallScript(r.Context())
 	if err != nil {
 		s.writeError(w, r, err)
@@ -35,7 +35,7 @@ func (s *Server) installScript(w http.ResponseWriter, r *http.Request) {
 // installArchive serves a release archive. Publishing hashed it into the
 // release row and the installer checks that digest, so serving does not
 // read it twice. Without a version it serves the target release.
-func (s *Server) installArchive(w http.ResponseWriter, r *http.Request) {
+func (s *server) installArchive(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	osName, arch, version := r.PathValue("os"), r.PathValue("arch"), r.PathValue("version")
 	if osName != "linux" || (arch != "amd64" && arch != "arm64") {

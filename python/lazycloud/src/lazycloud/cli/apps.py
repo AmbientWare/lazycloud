@@ -62,7 +62,7 @@ def app_pause(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
-    response = client.pause_app(selected_workspace, app)
+    response = client.update_app(selected_workspace, app, paused=True)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -77,7 +77,7 @@ def app_resume(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     client, selected_workspace = api_session(workspace=workspace)
-    response = client.resume_app(selected_workspace, app)
+    response = client.update_app(selected_workspace, app, paused=False)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),

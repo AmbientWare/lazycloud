@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import {
   LIVE_LIST_MAX_PAGES,
@@ -13,19 +13,18 @@ import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./
 /** The containers of the workload's releases, newest first; `live` keeps those not stopped. */
 export function containersQueryOptions(
   workspace: string,
-  workload: WorkloadRef,
+  workload: WorkloadRef & { id: string },
   { live = false, enabled }: { live?: boolean; enabled?: boolean } = {},
 ) {
-  const { app, kind, name } = workload;
   return infiniteQueryOptions({
     queryKey: workspaceQueryKeys.containers.list(workspace, workload, live),
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
       const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers", {
+        api.GET("/v1/workspaces/{workspace}/containers", {
           params: {
-            path: { workspace, app, kind, name },
-            query: { live, limit: 100, cursor: pageParam || undefined },
+            path: { workspace },
+            query: { workload_id: workload.id, live, limit: 100, cursor: pageParam || undefined },
           },
           signal,
         }),
@@ -99,16 +98,16 @@ export function containerMetricsQueryOptions(
 export function containerLifecycleQueryOptions(workspace: string, containerId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.containers.lifecycle(workspace, containerId),
-    queryFn: ({ signal }): Promise<Schemas["ContainerLifecycle"] | null> =>
-      ok(
-        api.GET("/v1/workspaces/{workspace}/containers/{container}/lifecycle", {
-          params: { path: { workspace, container: containerId } },
+    queryFn: async ({ signal }): Promise<Schemas["ContainerLifecycle"] | null> => {
+      const page = await ok(
+        api.POST("/v1/workspaces/{workspace}/containers/lifecycles", {
+          params: { path: { workspace } },
+          body: { container_ids: [containerId] },
           signal,
         }),
-      ).catch((error: unknown) => {
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw error;
-      }),
+      );
+      return page.lifecycles[0] ?? null;
+    },
     meta: workspaceLiveQueryMeta(false),
   });
 }

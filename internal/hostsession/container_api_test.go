@@ -103,7 +103,7 @@ func TestContainerAPIReachesOnlyTheContainersWorkspace(t *testing.T) {
 	if _, err := call(otherHost, h.client, container, "GET", "/v1/workspaces/ws/secrets", nil, nil); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("another host's call as the container: %v", err)
 	}
-	reply, err = call(ctx, h.client, container, "POST", "/v1/workspaces/ws/secrets", bytes.Repeat([]byte("x"), hostsession.MaxContainerAPIBody+1), nil)
+	reply, err = call(ctx, h.client, container, "PUT", "/v1/workspaces/ws/secrets/BIG", bytes.Repeat([]byte("x"), hostsession.MaxContainerAPIBody+1), nil)
 	if err != nil || reply.status != 413 {
 		t.Fatalf("an oversized body: %d %v", reply.status, err)
 	}

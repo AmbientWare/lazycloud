@@ -67,12 +67,12 @@ class PlatformRole(str, Enum):
     member = "member"
 
 
-class UserRoleRequest(APIModel):
-    role: PlatformRole
-
-
-class UserStatusRequest(APIModel):
-    status: UserStatus
+class UserUpdate(APIModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    role: PlatformRole | None = None
+    status: UserStatus | None = None
 
 
 class WorkspaceState(str, Enum):
@@ -273,6 +273,10 @@ class UploadTarget(APIModel):
     expires_at: AwareDatetime
 
 
+class AppUpdate(APIModel):
+    paused: bool
+
+
 class SourceRef(APIModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
@@ -330,7 +334,6 @@ class Kind(str, Enum):
 
 class RichDisplay(APIModel):
     kind: Kind
-    media_type: Literal["image/png"] | None = None
     value_base64: Annotated[str | None, Field(max_length=1398104)] = None
     html: Annotated[str | None, Field(max_length=262144)] = None
 
@@ -415,17 +418,6 @@ class SecretName(RootModel[str]):
             pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
         ),
     ]
-
-
-class SecretCreate(APIModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    value: Annotated[str, Field(max_length=65536)]
 
 
 class SecretValueUpdate(APIModel):
@@ -1169,9 +1161,6 @@ class HttpUrls(APIModel):
     invoke_path: Annotated[
         str, Field(description="The workload on the API host; append the request's path.")
     ]
-    version_invoke_path: Annotated[
-        str, Field(description="The API-host path pinned to the release's version.")
-    ]
     domain_url: Annotated[
         str | None, Field(description="The custom hostname, once its registration is ready.")
     ] = None
@@ -1862,18 +1851,18 @@ class AwsAuthorizationError(str, Enum):
     upstream_unavailable = "upstream_unavailable"
 
 
-class AuthorizationMode(str, Enum):
-    managed_stack = "managed_stack"
-    existing_role = "existing_role"
-
-
-class ManagedAuthorization(APIModel):
+class AwsManagedAuthorization(APIModel):
     stack_name: str
     region: str
     generation: int
     stack_id: str | None = None
     template_version: str
     template_sha256: str
+
+
+class AuthorizationMode(str, Enum):
+    managed_stack = "managed_stack"
+    existing_role = "existing_role"
 
 
 class AwsSetupStep(str, Enum):
@@ -2019,28 +2008,16 @@ class FleetMarket(APIModel):
     reason: Annotated[str, Field(description="Why the market cannot grow, when it cannot.")]
 
 
-class Plan(APIModel):
+class FleetPlan(APIModel):
     generated_at: AwareDatetime
     expires_at: AwareDatetime
     markets: list[FleetMarket]
 
 
-class Release1(APIModel):
+class FleetRelease(APIModel):
     version: str
-    generation: int
     complete: Annotated[bool, Field(description="Every connected platform host runs the release.")]
     phases: dict[str, int]
-    pending_capacity_owners: int
-
-
-class FleetSummary(APIModel):
-    observed_at: AwareDatetime
-    plan: Annotated[
-        Plan | None, Field(description="The planner's last published plan; absent once it expires.")
-    ] = None
-    release: Annotated[
-        Release1 | None, Field(description="The agent release platform hosts move to.")
-    ] = None
 
 
 class Provider(str, Enum):
@@ -2869,17 +2846,6 @@ class Workspace(APIModel):
     created_at: AwareDatetime
 
 
-class WorkspaceList(APIModel):
-    workspaces: list[Workspace]
-    next_cursor: Annotated[
-        str | None,
-        Field(
-            description="Pass as `cursor` for the next page; absent after the last.",
-            pattern="^[a-z][a-z0-9-]{0,62}$",
-        ),
-    ] = None
-
-
 class MemberRoleRequest(APIModel):
     role: InvitationRole
 
@@ -3232,27 +3198,15 @@ class ContainerMetrics(APIModel):
     points: list[ContainerMetricPoint]
 
 
-class Connection(APIModel):
+class ComputeConnection(APIModel):
     account_id: str
     phase: AwsConnectionPhase
-
-
-class ComputeSummary(APIModel):
-    connection: Annotated[
-        Connection | None,
-        Field(
-            description="The connected account the workspace lives in; absent on platform compute."
-        ),
-    ] = None
-    instances: Instances
-    cost: Cost
-    workload_count: int
 
 
 class AwsAuthorizationGeneration(APIModel):
     generation: int
     authorization_mode: AuthorizationMode
-    managed_authorization: ManagedAuthorization | None = None
+    managed_authorization: AwsManagedAuthorization | None = None
     phase: AwsAuthorizationPhase
     last_validation_started_at: AwareDatetime | None = None
     last_validated_at: AwareDatetime | None = None
@@ -3297,6 +3251,17 @@ class AwsConnectionEnvelope(APIModel):
 class AwsConnectionAuthorization(APIModel):
     connection: AwsConnection
     authorization: Authorization
+
+
+class FleetSummary(APIModel):
+    observed_at: AwareDatetime
+    plan: Annotated[
+        FleetPlan | None,
+        Field(description="The planner's last published plan; absent once it expires."),
+    ] = None
+    release: Annotated[
+        FleetRelease | None, Field(description="The agent release platform hosts move to.")
+    ] = None
 
 
 class GpuRate(APIModel):
@@ -3681,6 +3646,18 @@ class PreviewRequest(APIModel):
     timeout_seconds: Annotated[
         int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
     ] = 0
+
+
+class ComputeSummary(APIModel):
+    connection: Annotated[
+        ComputeConnection | None,
+        Field(
+            description="The connected account the workspace lives in; absent on platform compute."
+        ),
+    ] = None
+    instances: Instances
+    cost: Cost
+    workload_count: int
 
 
 class DeploymentRequest(APIModel):

@@ -11,15 +11,21 @@ import (
 // defaultPageSize is the page size when a list names no limit.
 const defaultPageSize = 100
 
-func pageArgs(cursor *string, limit *int) (string, int) {
-	c, n := "", defaultPageSize
-	if cursor != nil {
-		c = *cursor
+// valueOr is an optional parameter's value, or def without one.
+func valueOr[T any](p *T, def T) T {
+	if p == nil {
+		return def
 	}
-	if limit != nil {
-		n = *limit
+	return *p
+}
+
+// pageOf trims rows read with a limit of limit+1 and returns the cursor
+// after the last row it keeps, nil on the last page.
+func pageOf[T any](rows []T, limit int, cursor func(T) any) ([]T, *string) {
+	if len(rows) <= limit {
+		return rows, nil
 	}
-	return c, n
+	return rows[:limit], encodeCursor(cursor(rows[limit-1]))
 }
 
 func secretOut(s secrets.Secret) apitypes.Secret {
@@ -38,13 +44,9 @@ func optional(s string) *string {
 }
 
 // ListSecrets returns one page of secret names.
-func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	cursor, limit := pageArgs(req.Params.Cursor, req.Params.Limit)
-	page, next, err := s.owners.Secrets.List(ctx, ws.ID, cursor, limit)
+func (s *server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) (ListSecretsResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	page, next, err := s.owners.Secrets.List(ctx, ws.ID, valueOr(req.Params.Cursor, ""), valueOr(req.Params.Limit, defaultPageSize))
 	if err != nil {
 		return nil, err
 	}
@@ -55,25 +57,9 @@ func (s *Server) ListSecrets(ctx context.Context, req ListSecretsRequestObject) 
 	return out, nil
 }
 
-// CreateSecret stores a new secret.
-func (s *Server) CreateSecret(ctx context.Context, req CreateSecretRequestObject) (CreateSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := s.owners.Secrets.Create(ctx, ws.ID, req.Body.Name, req.Body.Value)
-	if err != nil {
-		return nil, err
-	}
-	return CreateSecret201JSONResponse(secretOut(secret)), nil
-}
-
 // GetSecret returns a secret's metadata.
-func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetSecret(ctx context.Context, req GetSecretRequestObject) (GetSecretResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	secret, err := s.owners.Secrets.Get(ctx, ws.ID, req.Secret)
 	if err != nil {
 		return nil, err
@@ -81,38 +67,27 @@ func (s *Server) GetSecret(ctx context.Context, req GetSecretRequestObject) (Get
 	return GetSecret200JSONResponse(secretOut(secret)), nil
 }
 
-// SetSecret creates the secret or replaces its value.
-func (s *Server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
+// SetSecret stores a secret's value: If-None-Match: * only creates it and
+// If-Match: * only replaces an existing one.
+func (s *server) SetSecret(ctx context.Context, req SetSecretRequestObject) (SetSecretResponseObject, error) {
+	ws := workspaceFrom(ctx)
+	store := s.owners.Secrets.Set
+	switch {
+	case req.Params.IfNoneMatch != nil:
+		store = s.owners.Secrets.Create
+	case req.Params.IfMatch != nil:
+		store = s.owners.Secrets.Update
 	}
-	secret, err := s.owners.Secrets.Set(ctx, ws.ID, req.Secret, req.Body.Value)
+	secret, err := store(ctx, ws.ID, req.Secret, req.Body.Value)
 	if err != nil {
 		return nil, err
 	}
 	return SetSecret200JSONResponse(secretOut(secret)), nil
 }
 
-// UpdateSecret replaces an existing secret's value.
-func (s *Server) UpdateSecret(ctx context.Context, req UpdateSecretRequestObject) (UpdateSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := s.owners.Secrets.Update(ctx, ws.ID, req.Secret, req.Body.Value)
-	if err != nil {
-		return nil, err
-	}
-	return UpdateSecret200JSONResponse(secretOut(secret)), nil
-}
-
 // DeleteSecret removes a secret.
-func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject) (DeleteSecretResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject) (DeleteSecretResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	if err := s.owners.Secrets.Delete(ctx, ws.ID, req.Secret); err != nil {
 		return nil, err
 	}
@@ -121,11 +96,8 @@ func (s *Server) DeleteSecret(ctx context.Context, req DeleteSecretRequestObject
 
 // GetSecretValue reveals a secret's value to every principal that reaches
 // the workspace; tokens carry no narrower scope.
-func (s *Server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
+func (s *server) GetSecretValue(ctx context.Context, req GetSecretValueRequestObject) (GetSecretValueResponseObject, error) {
+	ws := workspaceFrom(ctx)
 	secret, value, err := s.owners.Secrets.Reveal(ctx, ws.ID, req.Secret)
 	if err != nil {
 		return nil, err

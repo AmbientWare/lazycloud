@@ -189,7 +189,9 @@ def test_observability_end_to_end(
     graph = get(api, f"{ws}/tasks/{task_id}/call-graph")
     assert [n["status"] for n in graph["nodes"]] == ["succeeded"]
     container = graph["nodes"][0]["container_id"]
-    lifecycle = get(api, f"{ws}/containers/{container}/lifecycle")
+    lifecycles = api.post(f"{ws}/containers/lifecycles", json={"container_ids": [container]})
+    assert lifecycles.status_code == 200, lifecycles.text
+    lifecycle = lifecycles.json()["lifecycles"][0]
     stages = [s["stage"] for s in lifecycle["stages"]]
     assert stages[:5] == ["placement", "image", "source", "create", "runtime"], stages
     print("start stages (ms):", {s["stage"]: s.get("duration_ms") for s in lifecycle["stages"]})

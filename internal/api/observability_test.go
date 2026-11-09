@@ -177,7 +177,6 @@ func TestObservabilityRoutesAuthorizeAndValidate(t *testing.T) {
 		"/v1/workspaces/acme/metrics/tasks?function=summarize_sales":                               400,
 		"/v1/workspaces/acme/metrics/activity?window_seconds=60&start=2026-01-01T00:00:00Z":        400,
 		"/v1/workspaces/acme/containers/" + unknown + "/metrics":                                   404,
-		"/v1/workspaces/acme/containers/" + unknown + "/lifecycle":                                 404,
 		"/v1/workspaces/acme/tasks/" + unknown + "/call-graph":                                     404,
 		"/v1/workspaces/acme/apps/reports/workloads/function/unknown/performance":                  404,
 		"/v1/workspaces/acme/metrics/tasks?start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z":    400,
