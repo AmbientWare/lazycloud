@@ -30,7 +30,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
-import { webhookEventValues } from "@/lib/api/generated/openapi";
 import { appsQueryOptions } from "@/lib/queries/apps";
 import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
@@ -59,9 +58,11 @@ const EVENTS: Record<WebhookEvent, { group: "Tasks" | "Deploys"; label: string }
   "workload.failed": { group: "Deploys", label: "Version stopped starting" },
 };
 
+const EVENT_NAMES = Object.keys(EVENTS) as WebhookEvent[];
+
 const EVENT_GROUPS = (["Tasks", "Deploys"] as const).map((group) => ({
   group,
-  events: webhookEventValues.filter((event) => EVENTS[event].group === group),
+  events: EVENT_NAMES.filter((event) => EVENTS[event].group === group),
 }));
 
 function eventLabel(event: string): string {
@@ -162,7 +163,7 @@ function CreateWebhookForm({ workspace, onDone }: { workspace: string; onDone: (
     mutationFn: () =>
       createWebhook(workspace, {
         url: url.trim(),
-        events: webhookEventValues.filter((event) => events.has(event)),
+        events: EVENT_NAMES.filter((event) => events.has(event)),
         apps: [...apps],
         description: description.trim() || undefined,
       }),

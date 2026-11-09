@@ -2,7 +2,6 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { activityStart } from "@/lib/activity-window";
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
-import { workloadKindValues } from "@/lib/api/generated/openapi";
 
 import {
   allPages,
@@ -52,9 +51,17 @@ export function workloadRunning(workload: Schemas["Workload"]): boolean {
   return workload.state === "active" && workload.app_state !== "paused";
 }
 
+const WORKLOAD_KINDS = {
+  function: true,
+  endpoint: true,
+  asgi: true,
+  pod: true,
+  sandbox: true,
+} satisfies Record<Schemas["WorkloadKind"], true>;
+
 /** Whether a route's kind segment names a workload kind the API addresses. */
 export function isWorkloadKind(kind: string): kind is Schemas["WorkloadKind"] {
-  return (workloadKindValues as readonly string[]).includes(kind);
+  return Object.hasOwn(WORKLOAD_KINDS, kind);
 }
 
 /** Whether the app deploys no live workload of that kind and name. */
