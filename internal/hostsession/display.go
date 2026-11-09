@@ -42,7 +42,7 @@ func resultDisplay(raw []byte) (json.RawMessage, error) {
 	if r := d.Rich; r != nil {
 		switch r.Kind {
 		case apitypes.RichDisplayKindImage:
-			if r.MediaType == nil || *r.MediaType != apitypes.Imagepng || r.ValueBase64 == nil || r.Html != nil {
+			if r.ValueBase64 == nil || r.Html != nil {
 				return nil, errors.New("an image display needs a PNG and nothing else")
 			}
 			image, err := base64.StdEncoding.DecodeString(*r.ValueBase64)
@@ -50,7 +50,7 @@ func resultDisplay(raw []byte) (json.RawMessage, error) {
 				return nil, errors.New("display image is not a PNG of at most 1 MiB")
 			}
 		case apitypes.RichDisplayKindHtml:
-			if r.Html == nil || *r.Html == "" || r.MediaType != nil || r.ValueBase64 != nil {
+			if r.Html == nil || *r.Html == "" || r.ValueBase64 != nil {
 				return nil, errors.New("an HTML display needs HTML and nothing else")
 			}
 			if !utf8.ValidString(*r.Html) || utf8.RuneCountInString(*r.Html) > maxDisplayHTML {

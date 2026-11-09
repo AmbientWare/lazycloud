@@ -1957,21 +1957,6 @@ func (e RichDisplayKind) Valid() bool {
 	}
 }
 
-// Defines values for RichDisplayMediaType.
-const (
-	Imagepng RichDisplayMediaType = "image/png"
-)
-
-// Valid indicates whether the value is a known member of the RichDisplayMediaType enum.
-func (e RichDisplayMediaType) Valid() bool {
-	switch e {
-	case Imagepng:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SandboxStatus.
 const (
 	SandboxStatusFailed   SandboxStatus = "failed"
@@ -4921,17 +4906,13 @@ type RetryPolicyRetryOn string
 
 // RichDisplay `image` carries a PNG of at most 1 MiB as `value_base64`; `html` an HTML fragment of at most 262144 characters, which the dashboard shows in a sandboxed frame without scripts or network access.
 type RichDisplay struct {
-	Html        *string               `json:"html,omitempty"`
-	Kind        RichDisplayKind       `json:"kind"`
-	MediaType   *RichDisplayMediaType `json:"media_type,omitempty"`
-	ValueBase64 *string               `json:"value_base64,omitempty"`
+	Html        *string         `json:"html,omitempty"`
+	Kind        RichDisplayKind `json:"kind"`
+	ValueBase64 *string         `json:"value_base64,omitempty"`
 }
 
 // RichDisplayKind defines model for RichDisplay.Kind.
 type RichDisplayKind string
-
-// RichDisplayMediaType defines model for RichDisplay.MediaType.
-type RichDisplayMediaType string
 
 // RunTaskRequest defines model for RunTaskRequest.
 type RunTaskRequest struct {

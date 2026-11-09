@@ -331,7 +331,6 @@ class Kind(str, Enum):
 
 class RichDisplay(APIModel):
     kind: Kind
-    media_type: Literal["image/png"] | None = None
     value_base64: Annotated[str | None, Field(max_length=1398104)] = None
     html: Annotated[str | None, Field(max_length=262144)] = None
 

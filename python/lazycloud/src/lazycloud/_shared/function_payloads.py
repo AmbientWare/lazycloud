@@ -33,7 +33,6 @@ class FunctionResultHtmlDisplay(ContractModel):
 
 class FunctionResultImageDisplay(EncodedBytesBody):
     kind: Literal[FunctionResultDisplayKind.Image] = FunctionResultDisplayKind.Image
-    media_type: Literal["image/png"] = "image/png"
     value_base64: str = Field(default="", max_length=FUNCTION_RESULT_DISPLAY_IMAGE_BASE64_MAX_CHARS)
     size_bytes: int = Field(ge=1, le=FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES)
 

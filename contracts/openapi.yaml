@@ -4781,7 +4781,6 @@ components:
       required: [kind]
       properties:
         kind: { type: string, enum: [image, html] }
-        media_type: { type: string, enum: [image/png] }
         value_base64: { type: string, maxLength: 1398104 }
         html: { type: string, maxLength: 262144 }
 

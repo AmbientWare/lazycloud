@@ -3864,8 +3864,6 @@ export interface components {
         RichDisplay: {
             /** @enum {string} */
             kind: "image" | "html";
-            /** @enum {string} */
-            media_type?: "image/png";
             value_base64?: string;
             html?: string;
         };
@@ -11710,7 +11708,6 @@ export const retryPolicyBackoffValues: ReadonlyArray<FlattenedDeepRequired<compo
 export const retryPolicyRetry_onValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RetryPolicy"]["retry_on"]> = ["user_error", "timeout", "lost"];
 export const payloadEncodingValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Payload"]["encoding"]> = ["json", "cloudpickle"];
 export const richDisplayKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["kind"]> = ["image", "html"];
-export const richDisplayMedia_typeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RichDisplay"]["media_type"]> = ["image/png"];
 export const taskStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskStatus"]> = ["queued", "running", "succeeded", "failed", "cancelled"];
 export const taskPendingReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["TaskPendingReason"]> = ["queued", "dependencies", "retry", "capacity_busy", "capacity_unavailable", "capacity_limit", "provisioning_compute", "starting_container"];
 export const failureKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["FailureKind"]> = ["user_error", "load_error", "timeout", "lost", "preempted", "start_failed", "system", "dependency_failed"];

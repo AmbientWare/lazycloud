@@ -182,7 +182,7 @@ def test_pickled_results_carry_the_text_and_rendering_the_value_defines(
     chart.load("handlers:chart")
     header, _ = chart.invoke(no_arguments, encoding="cloudpickle")
     rich = header["display"]["rich"]
-    assert (rich["kind"], rich["media_type"]) == ("image", "image/png")
+    assert rich["kind"] == "image"
     assert base64.b64decode(rich["value_base64"]) == b"\x89PNG\r\n\x1a\nchart"
 
 
