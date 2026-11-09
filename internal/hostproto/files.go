@@ -13,7 +13,7 @@ import (
 // at path with place and syncs the directory. os.Rename replaces path;
 // os.Link keeps a file already there and fails with fs.ErrExist.
 func PlaceFile(path string, r io.Reader, mode os.FileMode, place func(tmp, path string) error) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".lazycloud-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
 	}

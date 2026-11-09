@@ -3050,7 +3050,7 @@ type StartContainer struct {
 	VolumeTrace *VolumeTrace `protobuf:"bytes,122,opt,name=volume_trace,json=volumeTrace,proto3" json:"volume_trace,omitempty"`
 	// Peer addresses of the region's hosts that hold the workspace's grant,
 	// whose volume caches a frame is asked of before the store.
-	VolumePeers []string `protobuf:"bytes,123,rep,name=volume_peers,json=volumePeers,proto3" json:"volume_peers,omitempty"`
+	VolumePeers []string `protobuf:"bytes,124,rep,name=volume_peers,json=volumePeers,proto3" json:"volume_peers,omitempty"`
 	// The W3C traceparent of the server's span that sent the start, when it
 	// was sampled. The host's spans of the start are its children.
 	Traceparent   string `protobuf:"bytes,130,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
@@ -7413,7 +7413,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\x12\x12\n" +
 	"\x04gpus\x18\x05 \x01(\x05R\x04gpus\x12\x18\n" +
 	"\arefused\x18\x06 \x01(\tR\arefused\x12\x1a\n" +
-	"\bupdating\x18\a \x01(\bR\bupdating\"\xee\n" +
+	"\bupdating\x18\a \x01(\bR\bupdating\"\xf4\n" +
 	"\n" +
 	"\x0eStartContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x14\n" +
@@ -7441,14 +7441,14 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\bprefetch\x18x \x01(\v2\x1d.lazycloud.host.v1.ImageTraceR\bprefetch\x12!\n" +
 	"\frecord_trace\x18y \x01(\bR\vrecordTrace\x12A\n" +
 	"\fvolume_trace\x18z \x01(\v2\x1e.lazycloud.host.v1.VolumeTraceR\vvolumeTrace\x12!\n" +
-	"\fvolume_peers\x18{ \x03(\tR\vvolumePeers\x12!\n" +
+	"\fvolume_peers\x18| \x03(\tR\vvolumePeers\x12!\n" +
 	"\vtraceparent\x18\x82\x01 \x01(\tR\vtraceparent\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
 	"\fSecretsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b{\x10|\"G\n" +
 	"\vLayerGrants\x128\n" +
 	"\x06layers\x18\x01 \x03(\v2 .lazycloud.imagefs.v1.LayerGrantR\x06layers\"J\n" +
 	"\x0ePlatformImages\x128\n" +

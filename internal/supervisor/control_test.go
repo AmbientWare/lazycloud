@@ -232,35 +232,6 @@ func TestProcessOutputIsCappedAndLateOutputMarksTruncated(t *testing.T) {
 	t.Logf("exit to result with a descendant holding the pipes: %s", time.Since(started))
 }
 
-// A descendant still holding a process's pipes once its result is
-// recorded finds them closed: nothing keeps reading for it.
-func TestProcessPipesCloseAfterTheDrainGrace(t *testing.T) {
-	h := startControl(t, nil)
-	dir := t.TempDir()
-	proceed, result := filepath.Join(dir, "proceed"), filepath.Join(dir, "result")
-	script := "(while [ ! -e " + proceed + " ]; do sleep 0.05; done; trap '' PIPE; echo late; echo $? > " + result + ".tmp; mv " + result + ".tmp " + result + ") & echo leader"
-	if p := h.wait(h.start([]string{"sh", "-c", script}, nil).ProcessId); !p.StdoutTruncated {
-		t.Fatalf("result %+v", p)
-	}
-	if err := os.WriteFile(proceed, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		code, err := os.ReadFile(result) //nolint:gosec // A test path.
-		if err == nil {
-			if strings.TrimSpace(string(code)) == "0" {
-				t.Fatal("the descendant wrote to a pipe the supervisor still reads")
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the descendant did not write")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
 func TestFilesUploadDownloadStatAndList(t *testing.T) {
 	h := startControl(t, nil)
 	content := []byte("hello\nworld\n")

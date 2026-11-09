@@ -516,7 +516,8 @@ message StartContainer {
   VolumeTrace volume_trace = 122;
   // Peer addresses of the region's hosts that hold the workspace's grant,
   // whose volume caches a frame is asked of before the store.
-  repeated string volume_peers = 123;
+  repeated string volume_peers = 124;
+  reserved 123;
   // The W3C traceparent of the server's span that sent the start, when it
   // was sampled. The host's spans of the start are its children.
   string traceparent = 130;

@@ -217,15 +217,27 @@ func (t *processTable) capture(p *process, pipe *os.File, buf *outputBuffer) {
 }
 
 // await records the exit once the output has ended, or outputDrainGrace
-// after the exit when a descendant still holds the pipes; those are closed
-// and the output marked truncated.
+// after the exit when a descendant still holds the pipes; that output is
+// marked truncated and read away.
 func (t *processTable) await(p *process, cmd *exec.Cmd, readers *sync.WaitGroup) {
 	err := t.children.wait(cmd, func() {
 		p.mu.Lock()
 		p.alive = false
 		p.mu.Unlock()
 	})
-	incomplete := !drainReaders(readers, p.pipes)
+	drained := make(chan struct{})
+	go func() {
+		readers.Wait()
+		close(drained)
+	}()
+	incomplete := false
+	grace := time.NewTimer(outputDrainGrace)
+	select {
+	case <-drained:
+	case <-grace.C:
+		incomplete = true
+	}
+	grace.Stop()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p.mu.Lock()
@@ -297,8 +309,8 @@ func (p *process) view() apitypes.Process {
 	return v
 }
 
-// close kills every process group still running and waits for the table's
-// goroutines.
+// close kills every process group still running, unblocks output a
+// descendant holds open and waits for the table's goroutines.
 func (t *processTable) close() {
 	t.mu.Lock()
 	t.closed = true
@@ -309,6 +321,15 @@ func (t *processTable) close() {
 	t.mu.Unlock()
 	for _, p := range procs {
 		_ = p.signal(unix.SIGKILL)
+	}
+	for _, p := range procs {
+		select {
+		case <-p.exited:
+		case <-time.After(outputDrainGrace):
+		}
+		for _, pipe := range p.pipes {
+			_ = pipe.Close()
+		}
 	}
 	t.work.Wait()
 }
