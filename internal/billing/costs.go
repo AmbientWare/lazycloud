@@ -17,7 +17,6 @@ const (
 	// the payer index.
 	maxCostWindow    = 400 * 24 * time.Hour
 	maxCostIntervals = 400
-	appDeleted       = "deleted"
 )
 
 // CostQuery selects the account's usage cost over [Start, End).
@@ -111,93 +110,23 @@ func (b *Billing) Costs(ctx context.Context, user uuid.UUID, q CostQuery) (apity
 		page.NextCursor = &next
 		rows = rows[:q.Limit]
 	}
-	names, err := b.costNames(ctx, rows)
-	if err != nil {
-		return apitypes.UsageCostPage{}, err
-	}
 	for _, r := range rows {
-		page.Rows = append(page.Rows, names.row(r))
+		page.Rows = append(page.Rows, costRow(r))
 	}
 	return page, nil
 }
 
-type costNames struct {
-	workspaces map[uuid.UUID]string
-	apps       map[uuid.UUID]string
-	workloads  map[uuid.UUID][2]string
-	disks      map[uuid.UUID]string
-}
-
-// costNames resolves the names a page shows. A deleted app or workspace
-// keeps its cost and loses its name.
-func (b *Billing) costNames(ctx context.Context, rows []CostRowsRow) (costNames, error) {
-	var workspaces, apps, workloads, disks []uuid.UUID
-	for _, r := range rows {
-		if r.DiskKey != uuid.Nil {
-			disks = append(disks, r.DiskKey)
-		}
-		workspaces = append(workspaces, r.WorkspaceID)
-		if r.AppKey != uuid.Nil {
-			apps = append(apps, r.AppKey)
-		}
-		if r.WorkloadKey != uuid.Nil {
-			workloads = append(workloads, r.WorkloadKey)
-		}
-	}
-	out := costNames{
-		workspaces: map[uuid.UUID]string{}, apps: map[uuid.UUID]string{}, workloads: map[uuid.UUID][2]string{},
-		disks: map[uuid.UUID]string{},
-	}
-	ds, err := b.queries.DiskNames(ctx, disks)
-	if err != nil {
-		return costNames{}, fmt.Errorf("read disk names: %w", err)
-	}
-	for _, d := range ds {
-		out.disks[d.ID] = d.Name
-	}
-	ws, err := b.queries.WorkspaceNames(ctx, workspaces)
-	if err != nil {
-		return costNames{}, fmt.Errorf("read workspace names: %w", err)
-	}
-	for _, w := range ws {
-		out.workspaces[w.ID] = w.Name
-	}
-	as, err := b.queries.AppNames(ctx, apps)
-	if err != nil {
-		return costNames{}, fmt.Errorf("read app names: %w", err)
-	}
-	for _, a := range as {
-		if a.State != appDeleted {
-			out.apps[a.ID] = a.Name
-		}
-	}
-	wls, err := b.queries.WorkloadNames(ctx, workloads)
-	if err != nil {
-		return costNames{}, fmt.Errorf("read workload names: %w", err)
-	}
-	for _, w := range wls {
-		out.workloads[w.ID] = [2]string{w.Name, w.Kind}
-	}
-	return out, nil
-}
-
-func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
-	out := apitypes.UsageCostRow{WorkspaceId: r.WorkspaceID, CostNanos: r.CostNanos}
-	if name, ok := n.workspaces[r.WorkspaceID]; ok {
-		out.WorkspaceName = &name
-	}
+func costRow(r CostRowsRow) apitypes.UsageCostRow {
+	out := apitypes.UsageCostRow{WorkspaceId: r.WorkspaceID, CostNanos: r.CostNanos, WorkspaceName: r.WorkspaceName}
 	if r.AppKey != uuid.Nil {
 		id := r.AppKey
-		out.AppId = &id
-		if name, ok := n.apps[id]; ok {
-			out.AppName = &name
-		}
+		out.AppId, out.AppName = &id, r.AppName
 	}
 	if r.WorkloadKey != uuid.Nil {
 		id := r.WorkloadKey
 		out.WorkloadId = &id
-		if names, ok := n.workloads[id]; ok && out.AppName != nil {
-			out.WorkloadName, out.WorkloadKind = &names[0], &names[1]
+		if out.AppName != nil {
+			out.WorkloadName, out.WorkloadKind = r.WorkloadName, r.WorkloadKind
 		}
 	}
 	if r.TaskKey != uuid.Nil {
@@ -212,10 +141,7 @@ func (n costNames) row(r CostRowsRow) apitypes.UsageCostRow {
 		c := apitypes.UsageCostCategoryDisk
 		out.Category = &c
 		id := r.DiskKey
-		out.DiskId = &id
-		if name, ok := n.disks[id]; ok {
-			out.DiskName = &name
-		}
+		out.DiskId, out.DiskName = &id, r.DiskName
 	case kindArtifacts:
 		name, kind := "Artifacts", kindArtifacts
 		out.WorkloadName, out.WorkloadKind = &name, &kind

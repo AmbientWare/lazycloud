@@ -12,36 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const appNames = `-- name: AppNames :many
-select id, name, state from apps where id = any($1::uuid[])
-`
-
-type AppNamesRow struct {
-	ID    uuid.UUID
-	Name  string
-	State string
-}
-
-func (q *Queries) AppNames(ctx context.Context, ids []uuid.UUID) ([]AppNamesRow, error) {
-	rows, err := q.db.Query(ctx, appNames, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []AppNamesRow
-	for rows.Next() {
-		var i AppNamesRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.State); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const costBuckets = `-- name: CostBuckets :many
 select floor(extract(epoch from e.started_at - $1::timestamptz) / $2::float8)::int as bucket,
        (case e.source_kind when 'container' then 'compute_runtime' when 'disk' then 'disk'
@@ -98,14 +68,14 @@ const costRows = `-- name: CostRows :many
 with entries as (
     select e.id, e.source_kind, e.source_id, e.started_at, e.ended_at, e.user_id, e.workspace_id, e.app_id, e.workload_id, e.category, e.billing_owner, e.rate_class, e.gpu_type, e.gpu_count, e.cpu_millis, e.memory_bytes, e.pricing_version, e.container_nanos, e.cpu_nanos, e.memory_nanos, e.gpu_nanos, e.stored_bytes, e.attached_bytes, e.storage_nanos, e.attached_nanos, e.egress_bytes, e.egress_nanos, e.cost_nanos
     from ledger_entries e
-    where e.user_id = $11 and e.started_at >= $12 and e.started_at < $13
-      and ($14::uuid is null or e.workspace_id = $14::uuid)
-      and ($15::uuid is null or e.app_id = $15::uuid)
-      and ($16::uuid is null or e.workload_id = $16::uuid)
-      and ($17::text = ''
-           or ($17::text = 'image-build' and e.category = 'image-build')
-           or ($17::text = 'disk' and e.category = 'disk')
-           or ($17::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
+    where e.user_id = $1 and e.started_at >= $2 and e.started_at < $3
+      and ($4::uuid is null or e.workspace_id = $4::uuid)
+      and ($5::uuid is null or e.app_id = $5::uuid)
+      and ($6::uuid is null or e.workload_id = $6::uuid)
+      and ($7::text = ''
+           or ($7::text = 'image-build' and e.category = 'image-build')
+           or ($7::text = 'disk' and e.category = 'disk')
+           or ($7::text = 'unattributed' and e.app_id is null and coalesce(e.category, '') not in ('image-build', 'disk')))
 ), attempt_spans as (
     -- Each entry reads its own container's attempts: finished ones through
     -- (container_id, finished_at) from the entry's start, running ones
@@ -120,7 +90,7 @@ with entries as (
         select r.task_id, r.started_at, r.finished_at from attempts r
         where r.container_id = e.source_id and r.state = 'running' and r.finished_at is null and r.started_at < e.ended_at
     ) a
-    where $18::bool and e.source_kind = 'container' and e.category is null
+    where $8::bool and e.source_kind = 'container' and e.category is null
 ), runs as (
     select o.id, o.task_id,
            sum(o.seconds) / greatest(max(extract(epoch from e.ended_at - e.started_at))::float8, max(t.seconds)) as share
@@ -134,7 +104,7 @@ with entries as (
     select e.id, null::uuid, 1 - coalesce(r.share, 0)
     from entries e
     left join (select id, sum(share) as share from runs group by id) r on r.id = e.id
-)
+), page as (
 select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workload_key, g.task_key::uuid as task_key,
        g.category::text as category, g.disk_key::uuid as disk_key,
        round(sum(g.cost_nanos))::bigint as cost_nanos,
@@ -155,11 +125,11 @@ select g.workspace_id, g.app_key::uuid as app_key, g.workload_key::uuid as workl
 from (
     select e.workspace_id,
            coalesce(e.app_id, '00000000-0000-0000-0000-000000000000'::uuid) as app_key,
-           (case when $1::bool then coalesce(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid)
+           (case when $9::bool then coalesce(e.workload_id, '00000000-0000-0000-0000-000000000000'::uuid)
                  else '00000000-0000-0000-0000-000000000000'::uuid end) as workload_key,
            coalesce(p.task_id, '00000000-0000-0000-0000-000000000000'::uuid) as task_key,
            (case when e.category in ('image-build', 'disk') then e.category
-                 when e.category = 'artifacts' and $1::bool then 'artifacts'
+                 when e.category = 'artifacts' and $9::bool then 'artifacts'
                  else '' end)::text as category,
            (case when e.category = 'disk' then e.source_id
                  else '00000000-0000-0000-0000-000000000000'::uuid end) as disk_key,
@@ -181,16 +151,33 @@ from (
     where p.share > 1e-9
 ) g
 group by 1, 2, 3, 4, 5, 6
-having not $2::bool
-    or round(sum(g.cost_nanos)) < $3::bigint
-    or (round(sum(g.cost_nanos)) = $3::bigint
+having not $10::bool
+    or round(sum(g.cost_nanos)) < $11::bigint
+    or (round(sum(g.cost_nanos)) = $11::bigint
         and (g.workspace_id, g.app_key, g.workload_key, g.task_key, g.category, g.disk_key)
-            > ($4::uuid, $5::uuid, $6::uuid, $7::uuid, $8::text, $9::uuid))
+            > ($12::uuid, $13::uuid, $14::uuid, $15::uuid, $16::text, $17::uuid))
 order by 7 desc, 1, 2, 3, 4, 5, 6
-limit $10
+limit $18
+)
+select pg.workspace_id, pg.app_key, pg.workload_key, pg.task_key, pg.category, pg.disk_key, pg.cost_nanos, pg.container_nanos, pg.cpu_nanos, pg.memory_nanos, pg.gpu_nanos, pg.volume_nanos, pg.disk_nanos, pg.egress_nanos, pg.egress_gib, pg.seconds, pg.core_seconds, pg.gib_seconds, pg.card_seconds, pg.volume_gib_seconds, pg.disk_gib_seconds, w.name as workspace_name, a.name as app_name, wl.name as workload_name, wl.kind as workload_kind,
+       d.name as disk_name
+from page pg
+left join workspaces w on w.id = pg.workspace_id
+left join apps a on a.id = pg.app_key and a.state <> 'deleted'
+left join workloads wl on wl.id = pg.workload_key
+left join disks d on d.id = pg.disk_key and d.state = 'active'
+order by pg.cost_nanos desc, pg.workspace_id, pg.app_key, pg.workload_key, pg.task_key, pg.category, pg.disk_key
 `
 
 type CostRowsParams struct {
+	UserID         uuid.UUID
+	StartAt        time.Time
+	EndAt          time.Time
+	WorkspaceID    *uuid.UUID
+	AppID          *uuid.UUID
+	WorkloadID     *uuid.UUID
+	Category       string
+	ByTask         bool
 	ByWorkload     bool
 	HasCursor      bool
 	AfterCost      int64
@@ -201,14 +188,6 @@ type CostRowsParams struct {
 	AfterCategory  string
 	AfterDisk      uuid.UUID
 	RowLimit       int32
-	UserID         uuid.UUID
-	StartAt        time.Time
-	EndAt          time.Time
-	WorkspaceID    *uuid.UUID
-	AppID          *uuid.UUID
-	WorkloadID     *uuid.UUID
-	Category       string
-	ByTask         bool
 }
 
 type CostRowsRow struct {
@@ -233,6 +212,11 @@ type CostRowsRow struct {
 	CardSeconds      float64
 	VolumeGibSeconds float64
 	DiskGibSeconds   float64
+	WorkspaceName    *string
+	AppName          *string
+	WorkloadName     *string
+	WorkloadKind     *string
+	DiskName         *string
 }
 
 // Cost queries read only the ledger, through ledger_entries_payer, and place
@@ -244,8 +228,17 @@ type CostRowsRow struct {
 // in it, each by the time it overlapped an entry; time no attempt used
 // (starting, keeping warm) stays with the workload, and attempts running at
 // once share by their overlap. Components sum in the same pass.
+// A deleted app, workspace or disk shows no name.
 func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsRow, error) {
 	rows, err := q.db.Query(ctx, costRows,
+		arg.UserID,
+		arg.StartAt,
+		arg.EndAt,
+		arg.WorkspaceID,
+		arg.AppID,
+		arg.WorkloadID,
+		arg.Category,
+		arg.ByTask,
 		arg.ByWorkload,
 		arg.HasCursor,
 		arg.AfterCost,
@@ -256,14 +249,6 @@ func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsR
 		arg.AfterCategory,
 		arg.AfterDisk,
 		arg.RowLimit,
-		arg.UserID,
-		arg.StartAt,
-		arg.EndAt,
-		arg.WorkspaceID,
-		arg.AppID,
-		arg.WorkloadID,
-		arg.Category,
-		arg.ByTask,
 	)
 	if err != nil {
 		return nil, err
@@ -294,36 +279,12 @@ func (q *Queries) CostRows(ctx context.Context, arg CostRowsParams) ([]CostRowsR
 			&i.CardSeconds,
 			&i.VolumeGibSeconds,
 			&i.DiskGibSeconds,
+			&i.WorkspaceName,
+			&i.AppName,
+			&i.WorkloadName,
+			&i.WorkloadKind,
+			&i.DiskName,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const diskNames = `-- name: DiskNames :many
-select id, name from disks where id = any($1::uuid[]) and state = 'active'
-`
-
-type DiskNamesRow struct {
-	ID   uuid.UUID
-	Name string
-}
-
-func (q *Queries) DiskNames(ctx context.Context, ids []uuid.UUID) ([]DiskNamesRow, error) {
-	rows, err := q.db.Query(ctx, diskNames, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DiskNamesRow
-	for rows.Next() {
-		var i DiskNamesRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -391,36 +352,6 @@ func (q *Queries) WindowCost(ctx context.Context, arg WindowCostParams) (int64, 
 	return column_1, err
 }
 
-const workloadNames = `-- name: WorkloadNames :many
-select id, name, kind from workloads where id = any($1::uuid[])
-`
-
-type WorkloadNamesRow struct {
-	ID   uuid.UUID
-	Name string
-	Kind string
-}
-
-func (q *Queries) WorkloadNames(ctx context.Context, ids []uuid.UUID) ([]WorkloadNamesRow, error) {
-	rows, err := q.db.Query(ctx, workloadNames, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkloadNamesRow
-	for rows.Next() {
-		var i WorkloadNamesRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.Kind); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const workspaceArtifactCost = `-- name: WorkspaceArtifactCost :one
 select coalesce(sum(l.cost_nanos), 0)::bigint
 from (
@@ -444,33 +375,4 @@ func (q *Queries) WorkspaceArtifactCost(ctx context.Context, arg WorkspaceArtifa
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const workspaceNames = `-- name: WorkspaceNames :many
-select id, name from workspaces where id = any($1::uuid[])
-`
-
-type WorkspaceNamesRow struct {
-	ID   uuid.UUID
-	Name string
-}
-
-func (q *Queries) WorkspaceNames(ctx context.Context, ids []uuid.UUID) ([]WorkspaceNamesRow, error) {
-	rows, err := q.db.Query(ctx, workspaceNames, ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkspaceNamesRow
-	for rows.Next() {
-		var i WorkspaceNamesRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
