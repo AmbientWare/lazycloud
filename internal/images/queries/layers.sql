@@ -167,21 +167,21 @@ where image_reference_uses.used_at < now() - interval '1 minute';
 -- name: PurgeUses :exec
 delete from image_reference_uses where used_at < now() - make_interval(secs => @grace_seconds::float8);
 
--- name: UnreferencedLayers :many
-select id from image_layers
-where unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
-order by unreferenced_since
-limit @batch_size;
-
--- name: RetireLayer :exec
--- Moves a pair unused through the grace period to image_layer_uploads for
--- deletion, and unconverts every reference that used it, dropping their
--- startup traces: a reference is converted as a whole or not at all. A
--- reference recorded with it meanwhile fails the statement's foreign key
--- check, and a publish that touched it ends the grace period first.
+-- name: RetireLayers :exec
+-- Moves a batch of pairs unused through the grace period to
+-- image_layer_uploads for deletion, and unconverts every reference that used
+-- one, dropping their startup traces: a reference is converted as a whole or
+-- not at all. A reference recorded with a pair meanwhile fails the
+-- statement's foreign key check, and a publish that touched one ends its
+-- grace period first, so the next pass retires the rest.
 with gone as (
     delete from image_layers
-    where image_layers.id = @id and unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
+    where image_layers.id = any(array(
+        select u.id from image_layers u
+        where u.unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
+        order by u.unreferenced_since
+        limit @batch_size))
+      and unreferenced_since < now() - make_interval(secs => @grace_seconds::float8)
     returning image_layers.id, image_layers.blob_digest
 ), refs as (
     delete from image_reference_layers

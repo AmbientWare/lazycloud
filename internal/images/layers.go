@@ -450,14 +450,8 @@ func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) error {
 	if err := i.queries.MarkUnreferencedLayers(ctx, grace); err != nil {
 		return fmt.Errorf("mark unreferenced layers: %w", err)
 	}
-	ids, err := i.queries.UnreferencedLayers(ctx, UnreferencedLayersParams{GraceSeconds: grace, BatchSize: layerSweepBatch})
-	if err != nil {
-		return fmt.Errorf("read unreferenced layers: %w", err)
-	}
-	for _, id := range ids {
-		if err := i.queries.RetireLayer(ctx, RetireLayerParams{ID: id, GraceSeconds: grace}); err != nil {
-			logger.WarnContext(ctx, "retiring an unreferenced layer failed", "layer", id.String(), "error", err)
-		}
+	if err := i.queries.RetireLayers(ctx, RetireLayersParams{GraceSeconds: grace, BatchSize: layerSweepBatch}); err != nil {
+		logger.WarnContext(ctx, "retiring unreferenced layers failed", "error", err)
 	}
 	rows, err := i.queries.ExpiredUploads(ctx, layerSweepBatch)
 	if err != nil {
