@@ -489,22 +489,6 @@ func (i *Images) SweepLayers(ctx context.Context, logger *slog.Logger) error {
 	return nil
 }
 
-// traceparent is the trace of ctx's span, stored with a build or a
-// conversion; nil when it was not sampled.
-func traceparent(ctx context.Context) *string {
-	if tp := telemetry.TraceParentOf(ctx); tp != "" {
-		return &tp
-	}
-	return nil
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 // traceBuild records a finished build as a span from its creation in the
 // trace that asked for it.
 func traceBuild(ctx context.Context, build LockBuildRow, failure string) {

@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -128,8 +128,7 @@ func (e *Edge) RegisterDomain(ctx context.Context, user identity.UserID, value s
 		UserID: uuid.UUID(user), Hostname: hostname, Phase: string(state.Phase), ProviderHostnameID: &state.ID,
 		RequiredRecords: records, ErrorCode: (*string)(state.ErrorCode), ErrorMessage: state.ErrorMessage,
 	})
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+	if database.IsUniqueViolation(err) {
 		// Another account won the name; the provider hostname just made is
 		// this call's to clean up.
 		if derr := provider.DeleteHostname(context.WithoutCancel(ctx), state.ID); derr != nil {

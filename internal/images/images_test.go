@@ -477,7 +477,7 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 		t.Fatalf("a context the workspace did not upload is rejected: %v", err)
 	}
 	for _, model := range []string{"A100", "any"} {
-		gpu := apitypes.ImageDefinition{PythonVersion: "3.12", Gpu: ptr(model)}
+		gpu := apitypes.ImageDefinition{PythonVersion: "3.12", Gpu: new(model)}
 		if _, err := f.images.Resolve(t.Context(), ws, gpu); !errors.As(err, &invalid) {
 			t.Fatalf("a GPU build names one model, not %q: %v", model, err)
 		}
@@ -486,13 +486,11 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 	if _, err := f.images.Resolve(t.Context(), ws, secret); !errors.As(err, &invalid) {
 		t.Fatalf("a secret the workspace does not have is rejected: %v", err)
 	}
-	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr("registry.invalid/python:3.12")}
+	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: new("registry.invalid/python:3.12")}
 	if _, err := f.images.Resolve(t.Context(), ws, unreachable); !errors.Is(err, images.ErrRegistryUnavailable) {
 		t.Fatalf("an unreachable registry is unavailable, not invalid: %v", err)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // withSecret is a definition with a build step whose RUN reads TOKEN.
 func withSecret() apitypes.ImageDefinition {
@@ -620,7 +618,7 @@ update billing_balances set balance_nanos = 1000000000000`); err != nil {
 	}
 	build := func(model, command string) error {
 		def := numpy()
-		def.Gpu, def.Commands = ptr(model), &[]string{command}
+		def.Gpu, def.Commands = new(model), &[]string{command}
 		_, err := f.images.Build(ctx, ws, def, false)
 		return err
 	}
@@ -692,7 +690,7 @@ func TestGPUBuildsArePlacedOnlyOnTheirModel(t *testing.T) {
 	ctx := t.Context()
 	ws := f.workspace(t, "a")
 	def := numpy()
-	def.Gpu = ptr("L4")
+	def.Gpu = new("L4")
 	r, err := f.images.Build(ctx, ws, def, false)
 	if err != nil {
 		t.Fatal(err)

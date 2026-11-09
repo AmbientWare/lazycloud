@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -86,7 +87,7 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 		}
 		inviterName := inviter.DisplayName
 		if inviterName == "" {
-			inviterName = deref(inviter.Email)
+			inviterName = database.Value(inviter.Email)
 		}
 		token, digest, err := newSecret(invitationPrefix)
 		if err != nil {
@@ -318,7 +319,7 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 			return fmt.Errorf("read member: %w", err)
 		}
 		ws = Workspace{ID: WorkspaceID(active.ID), Name: active.Name, State: WorkspaceActive, Role: role, CreatedAt: active.CreatedAt}
-		member = Member{User: p.User, DisplayName: profile.DisplayName, Email: deref(profile.Email), Role: role, CreatedAt: since}
+		member = Member{User: p.User, DisplayName: profile.DisplayName, Email: database.Value(profile.Email), Role: role, CreatedAt: since}
 		return nil
 	})
 	if err != nil {

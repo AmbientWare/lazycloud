@@ -107,7 +107,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		t.Fatalf("versions: %d %+v", status, versions)
 	}
 	var started apitypes.Workload
-	if status := e.do("POST", deployment+"/start", e.owner, apitypes.StartWorkloadRequest{Version: ptr(3)}, &apiErr); status != http.StatusNotFound {
+	if status := e.do("POST", deployment+"/start", e.owner, apitypes.StartWorkloadRequest{Version: new(3)}, &apiErr); status != http.StatusNotFound {
 		t.Fatalf("start on a missing version: %d %+v", status, apiErr)
 	}
 	if status := e.do("POST", deployment+"/start", e.owner, nil, &started); status != 200 || started.State != apitypes.WorkloadStateActive {
@@ -203,5 +203,3 @@ func TestRefusedDeploysAnswerWithTheirGatesCode(t *testing.T) {
 		t.Fatalf("the plan of that deploy: %d %+v, want its refusals %v", status, plan, want)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

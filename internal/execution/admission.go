@@ -229,7 +229,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 			ParentTaskID: parent,
 			RootTaskID:   root,
 			ScheduledFor: req.ScheduledFor,
-			Traceparent:  traceparent(ctx),
+			Traceparent:  telemetry.StoredTraceParent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert tasks: %w", err)

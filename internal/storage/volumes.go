@@ -17,6 +17,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -554,7 +555,7 @@ func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 	paths := map[string]bool{}
 	for _, spec := range specs {
 		if b := spec.CloudBucket; b != nil {
-			if p := deref(b.Prefix); p != "" && (!strings.HasSuffix(p, "/") || slices.ContainsFunc(strings.Split(strings.TrimSuffix(p, "/"), "/"),
+			if p := database.Value(b.Prefix); p != "" && (!strings.HasSuffix(p, "/") || slices.ContainsFunc(strings.Split(strings.TrimSuffix(p, "/"), "/"),
 				func(segment string) bool { return segment == "" || segment == "." || segment == ".." })) {
 				return invalid("cloud bucket %s: prefix %q must be key segments each ending in /, none empty, . or ..", spec.Name, p)
 			}

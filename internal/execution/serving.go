@@ -93,7 +93,7 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 		if row.Version != nil {
 			out = append(out, EndpointContainer{
 				Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ID), Host: *row.HostID,
-				Traceparent: deref(row.Traceparent),
+				Traceparent: database.Value(row.Traceparent),
 			})
 		}
 	}

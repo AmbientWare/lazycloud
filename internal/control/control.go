@@ -163,7 +163,7 @@ func resolveFunction(spec apitypes.WorkloadSpec) (resolvedFunction, error) {
 func addRelease(ctx context.Context, q *Queries, workload uuid.UUID, f resolvedFunction, version *int32, preview bool) (InsertReleaseRow, error) {
 	row, err := q.InsertRelease(ctx, InsertReleaseParams{
 		WorkloadID: workload, Preview: preview, Version: version,
-		Spec: f.spec, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: traceparent(ctx),
+		Spec: f.spec, SpecDigest: f.digest, SourceSha256: f.source[:], Traceparent: telemetry.StoredTraceParent(ctx),
 	})
 	if err != nil {
 		return row, fmt.Errorf("insert release of %s: %w", f.spec.Name, err)
@@ -356,13 +356,4 @@ func versionOf(v *int32) *int {
 	}
 	n := int(*v)
 	return &n
-}
-
-// traceparent is the trace of ctx's span, stored with a release; nil when
-// it was not sampled.
-func traceparent(ctx context.Context) *string {
-	if tp := telemetry.TraceParentOf(ctx); tp != "" {
-		return &tp
-	}
-	return nil
 }

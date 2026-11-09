@@ -116,7 +116,7 @@ func (c *Compute) settle(ctx context.Context, conn Connection, o outcome) error 
 			return o.done(ctx, tx, q)
 		case errors.As(o.err, &refused):
 			step := *o.action
-			step.Label = truncate(refused.label)
+			step.Label = database.Truncate(refused.label, maxMessage)
 			return setPhase(ctx, q, conn.ID, ConnActionRequire, nil, attempts, &step)
 		case o.until != nil:
 			next := time.Now().Add(time.Minute)
@@ -234,7 +234,7 @@ func (c *Compute) revoke(ctx context.Context, conn Connection) outcome {
 	}
 	var last, waiting *connectionStack
 	for _, row := range stacks {
-		s := connectionStack{authorization: row.ID, region: row.Region, name: row.StackName, id: deref(row.StackID)}
+		s := connectionStack{authorization: row.ID, region: row.Region, name: row.StackName, id: database.Value(row.StackID)}
 		if row.ID == access.ID {
 			last = &s
 			continue

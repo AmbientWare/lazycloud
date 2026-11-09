@@ -16,6 +16,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // AgentRelease is a published agent version with its archive digest per
@@ -37,7 +39,7 @@ type AgentRelease struct {
 const updateWindow = 5 * time.Minute
 
 func releaseOf(version string, amd64, arm64 *string, rollout int32, build *string) AgentRelease {
-	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: deref(build)}
+	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout), Build: database.Value(build)}
 	if amd64 != nil {
 		r.SHA256["amd64"] = *amd64
 	}

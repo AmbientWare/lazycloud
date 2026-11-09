@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -115,11 +114,6 @@ func NewCompute(pool *pgxpool.Pool, containers Containers, config Config) *Compu
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		sts:  awsClients{base: fleet.AWS, endpoints: fleet.Endpoints}.sts(awsScope{}, ""),
 	}
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // CheckFleet refuses a configuration that would launch instances unable to

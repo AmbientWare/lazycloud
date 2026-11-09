@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -41,7 +42,7 @@ func (c *Compute) WorkspaceSummary(ctx context.Context, workspace identity.Works
 	}
 	if row.AwsAccountID != nil {
 		s.AWSAccountID = *row.AwsAccountID
-		s.ConnectionPhase = ConnectionPhase(deref(row.ConnectionPhase))
+		s.ConnectionPhase = ConnectionPhase(database.Value(row.ConnectionPhase))
 		s.HourlyMicros = new(row.HourlyMicros)
 	}
 	return s, nil
@@ -141,7 +142,7 @@ func (c *Compute) Instances(ctx context.Context, account identity.UserID, before
 	out := make([]Instance, 0, len(rows))
 	for _, row := range rows {
 		i := Instance{
-			ID: HostID(row.ID), Region: row.Region, Zone: row.AvailabilityZone, InstanceID: deref(row.InstanceID),
+			ID: HostID(row.ID), Region: row.Region, Zone: row.AvailabilityZone, InstanceID: database.Value(row.InstanceID),
 			InstanceType: row.InstanceType, Market: marketOf(row.Market), Phase: Phase(row.Phase),
 			PhaseMessage: row.PhaseMessage, PhaseAt: row.PhaseAt, Connected: connected(row.State, row.LastSeenAt),
 			CapacityState: CapacityState(row.CapacityState), CapacityReason: row.CapacityReason,

@@ -14,6 +14,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // An image build runs in containers that execution owns like any other:
@@ -68,7 +69,7 @@ func (e *Execution) createBuildContainer(ctx context.Context, tx pgx.Tx, workspa
 	id, err := e.queries.WithTx(tx).CreateBuildContainer(ctx, CreateBuildContainerParams{
 		WorkspaceID: uuid.UUID(workspace), ImageBuildID: &build, CpuMillis: cpuMillis, MemoryBytes: memoryBytes,
 		GpuCount:    int32(gpus), //nolint:gosec // At most one GPU.
-		Traceparent: traceparent(ctx),
+		Traceparent: telemetry.StoredTraceParent(ctx),
 	})
 	if err != nil {
 		return ContainerID{}, fmt.Errorf("create build container: %w", err)
@@ -144,7 +145,7 @@ func (e *Execution) BuildStarts(ctx context.Context, host compute.HostID) ([]Bui
 	for n, row := range rows {
 		out[n] = BuildStart{
 			Container: ContainerID(row.ID), Build: row.ImageBuildID, Attempt: int(row.Attempt),
-			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, Traceparent: deref(row.Traceparent),
+			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes, Traceparent: database.Value(row.Traceparent),
 		}
 	}
 	return out, nil

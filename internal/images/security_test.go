@@ -63,8 +63,8 @@ func TestDefinitionValuesCannotInjectInstructions(t *testing.T) {
 	injected := "\nFROM docker.io/acme/private:1\nCOPY . /"
 	for name, def := range map[string]apitypes.ImageDefinition{
 		"package":    {PythonVersion: "3.12", PythonPackages: &[]string{"six" + injected}},
-		"step arg":   {PythonVersion: "3.12", Micromamba: ptr(true), Steps: &[]apitypes.ImageStep{{Kind: apitypes.Micromamba, Args: &[]string{"numpy" + injected}}}},
-		"base image": {PythonVersion: "3.12", BaseImage: ptr("docker.io/library/python:3.12" + injected)},
+		"step arg":   {PythonVersion: "3.12", Micromamba: new(true), Steps: &[]apitypes.ImageStep{{Kind: apitypes.Micromamba, Args: &[]string{"numpy" + injected}}}},
+		"base image": {PythonVersion: "3.12", BaseImage: new("docker.io/library/python:3.12" + injected)},
 	} {
 		var invalid *images.InvalidError
 		if _, err := f.images.Resolve(t.Context(), ws, def); !errors.As(err, &invalid) {
@@ -111,7 +111,7 @@ func TestBaseImagesMustBePublicRegistries(t *testing.T) {
 		"localhost:5000/python:3.12",
 	} {
 		var invalid *images.InvalidError
-		def := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr(base)}
+		def := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: new(base)}
 		if _, err := f.images.Resolve(t.Context(), ws, def); !errors.As(err, &invalid) {
 			t.Errorf("base %s: want the definition refused, got %v", base, err)
 		}

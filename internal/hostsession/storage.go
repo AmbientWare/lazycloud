@@ -13,6 +13,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -109,20 +110,13 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand,
 				return nil, refusal("cloud bucket at "+m.MountPath, err)
 			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
-				Bucket: loc.Bucket, Prefix: deref(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
+				Bucket: loc.Bucket, Prefix: database.Value(b.Prefix), Region: loc.Region, Endpoint: loc.Endpoint,
 				ForcePathStyle: loc.PathStyle, AccessKeyId: secrets[b.AccessKeySecret], SecretAccessKey: secrets[b.SecretKeySecret],
 			}}
 		}
 		out[n] = mount
 	}
 	return out, nil
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // usesWorkspaceBucket reports whether a start mounts platform volumes or

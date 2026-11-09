@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // Member is one membership of a workspace.
@@ -32,7 +34,7 @@ func (i *Identity) ListMembers(ctx context.Context, p Principal, workspace strin
 	out := make([]Member, len(rows))
 	for n, row := range rows {
 		out[n] = Member{
-			User: UserID(row.UserID), DisplayName: row.DisplayName, Email: deref(row.Email),
+			User: UserID(row.UserID), DisplayName: row.DisplayName, Email: database.Value(row.Email),
 			Role: Role(row.Role), CreatedAt: row.CreatedAt,
 		}
 	}
@@ -55,7 +57,7 @@ func (i *Identity) SetMemberRole(ctx context.Context, p Principal, workspace str
 			return &ConflictError{Message: "the workspace owner's role cannot be changed"}
 		}
 		member = Member{
-			User: user, DisplayName: current.DisplayName, Email: deref(current.Email), Role: role, CreatedAt: current.CreatedAt,
+			User: user, DisplayName: current.DisplayName, Email: database.Value(current.Email), Role: role, CreatedAt: current.CreatedAt,
 		}
 		if Role(current.Role) == role {
 			return nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -127,17 +128,6 @@ const logBatch = 500
 // whose transaction may still have older lines in flight.
 const unsettledRetry = 50 * time.Millisecond
 
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
 // logPosition is a position in (writer, id) order. Writers commit identity
 // values out of order, but a transaction that commits after a read has a
 // writer at or above the oldest one that was running, so it sorts after
@@ -203,7 +193,7 @@ func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener,
 			if !page.unsettled || time.Now().After(settleBy) {
 				return nil
 			}
-			if !sleepCtx(ctx, unsettledRetry) {
+			if !hostproto.Sleep(ctx, unsettledRetry) {
 				return nil
 			}
 			continue

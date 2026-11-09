@@ -14,6 +14,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -285,7 +286,7 @@ func (i *Images) buildOrWait(ctx context.Context, workspace identity.WorkspaceID
 	case err != nil:
 		return Image{}, fmt.Errorf("read latest build: %w", err)
 	case BuildStatus(latest.State) == BuildBuilding:
-		return Image{}, &BuildWaitError{Build: latest.ID, Traceparent: deref(latest.Traceparent)}
+		return Image{}, &BuildWaitError{Build: latest.ID, Traceparent: database.Value(latest.Traceparent)}
 	case BuildStatus(latest.State) == BuildFailed && !latest.FailureTransient &&
 		latest.FinishedAt != nil && time.Since(*latest.FinishedAt) < conversionRetry:
 		reason := "its build failed"

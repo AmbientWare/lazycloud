@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // account is an AWS account the fleet runs hosts in: the platform's own,
@@ -69,7 +71,7 @@ func (c *Compute) connectionAccount(row ConnectionAccountsRow) account {
 	return account{
 		connection: &row.ID, authorization: &row.AuthorizationID, awsAccount: accountOfRole(row.RoleArn),
 		scope:    c.aws().assume(row.RoleArn, row.ExternalID, "lazycloud-fleet-"+row.ID.String()[:8], row.ID.String()),
-		nodeRole: deref(row.NodeRoleArn), instanceProfile: deref(row.NodeInstanceProfile),
+		nodeRole: database.Value(row.NodeRoleArn), instanceProfile: database.Value(row.NodeInstanceProfile),
 		pays: true, hosting: row.Hosting, managed: row.Managed, inUse: row.InUse,
 	}
 }
@@ -208,7 +210,7 @@ func (c *Compute) ensureAccountNetwork(ctx context.Context, a account, region st
 	network, err := c.ensureNetwork(ctx, now.scope, region)
 	if err != nil {
 		if rerr := c.queries.FailFleetNetwork(context.WithoutCancel(ctx), FailFleetNetworkParams{
-			Owner: a.key(), Region: region, Error: new(truncate(err.Error())),
+			Owner: a.key(), Region: region, Error: new(database.Truncate(err.Error(), maxMessage)),
 		}); rerr != nil {
 			return errors.Join(err, fmt.Errorf("record the failure: %w", rerr))
 		}

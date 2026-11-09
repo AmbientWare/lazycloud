@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // ErrNoRegion refuses an AWS S3 bucket that names no region, since its
@@ -37,12 +38,5 @@ func locate(endpoint, region, bucket string, pathStyle bool) (Location, error) {
 // CloudBucketLocation is the address of a user's bucket, path-style as its
 // spec forces.
 func CloudBucketLocation(b apitypes.CloudBucketSpec) (Location, error) {
-	return locate(deref(b.Endpoint), deref(b.Region), b.Bucket, b.ForcePathStyle != nil && *b.ForcePathStyle)
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
+	return locate(database.Value(b.Endpoint), database.Value(b.Region), b.Bucket, b.ForcePathStyle != nil && *b.ForcePathStyle)
 }

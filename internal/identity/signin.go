@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -357,7 +358,7 @@ func (i *Identity) AuthenticateSession(ctx context.Context, token string) (Princ
 		return Principal{}, fmt.Errorf("authenticate session: %w", err)
 	}
 	id := SessionID(row.ID)
-	return Principal{User: UserID(row.UserID), Email: deref(row.Email), IsAdmin: row.IsAdmin, Session: &id}, nil
+	return Principal{User: UserID(row.UserID), Email: database.Value(row.Email), IsAdmin: row.IsAdmin, Session: &id}, nil
 }
 
 // SignOut ends the browser session that made the request and no other.

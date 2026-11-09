@@ -127,7 +127,7 @@ func (c *Compute) CreateMachineJoin(ctx context.Context, req MachineJoin) (JoinC
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			host, err = q.InsertMachine(ctx, InsertMachineParams{Name: req.Name, AccountID: &account, GpuType: gpu})
-			if isUniqueViolation(err) {
+			if database.IsUniqueViolation(err) {
 				return &ConflictError{Message: fmt.Sprintf("machine %q is already joined", req.Name)}
 			}
 			if err != nil {

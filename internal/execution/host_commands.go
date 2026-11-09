@@ -12,6 +12,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/cpu"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -101,7 +102,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
 			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
 			Command: row.Command, Network: NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList},
-			Traceparent: deref(row.Traceparent), AssignedAt: row.AssignedAt,
+			Traceparent: database.Value(row.Traceparent), AssignedAt: row.AssignedAt,
 		})
 	}
 	idle, err := e.queries.IdleDrainingContainersOnHost(ctx, hostUUID(host))

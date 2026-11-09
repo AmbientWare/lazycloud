@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stripe/stripe-go/v87"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -78,7 +78,7 @@ func (b *Billing) ChangePlan(ctx context.Context, user uuid.UUID, req apitypes.P
 			}
 		}
 		row, err := q.InsertPlanChange(ctx, InsertPlanChangeParams{UserID: user, FromTerms: account.TermsVersion, ToTerms: string(target.Terms)})
-		if isUniqueViolation(err) {
+		if database.IsUniqueViolation(err) {
 			return &ConflictError{Message: "a plan change for this account is already being settled"}
 		}
 		if err != nil {
@@ -145,7 +145,7 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 		if message == "" {
 			message = "Stripe refused the change"
 		}
-		if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: truncate(message)}); ferr != nil {
+		if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: database.Truncate(message, maxError)}); ferr != nil {
 			return fmt.Errorf("record refused plan change: %w", ferr)
 		}
 		if se.Type == stripe.ErrorTypeCard {
@@ -155,7 +155,7 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 	}
 	if err != nil {
 		if time.Since(change.createdAt) > planChangeWindow {
-			if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: truncate(err.Error())}); ferr != nil {
+			if ferr := b.queries.FinishPlanChange(ctx, FinishPlanChangeParams{ID: change.id, State: changeFailed, Error: database.Truncate(err.Error(), maxError)}); ferr != nil {
 				return fmt.Errorf("abandon plan change: %w", ferr)
 			}
 			b.logger.ErrorContext(ctx, "plan change abandoned", "plan_change_id", change.id, "user_id", change.user, "error", err)
@@ -163,7 +163,7 @@ func (b *Billing) settlePlanChange(ctx context.Context, change planChange) error
 		}
 		b.logger.WarnContext(ctx, "plan change undecided", "plan_change_id", change.id, "attempt", change.attempts, "error", err)
 		next := time.Now().Add(min(30*time.Second<<min(change.attempts, 6), 30*time.Minute))
-		if rerr := b.queries.RetryPlanChange(ctx, RetryPlanChangeParams{ID: change.id, NextAttemptAt: next, Error: truncate(err.Error())}); rerr != nil {
+		if rerr := b.queries.RetryPlanChange(ctx, RetryPlanChangeParams{ID: change.id, NextAttemptAt: next, Error: database.Truncate(err.Error(), maxError)}); rerr != nil {
 			return fmt.Errorf("defer plan change: %w", rerr)
 		}
 		return nil
@@ -414,9 +414,4 @@ func includedCredit(inv invoice, start, end time.Time) (int64, time.Time, bool) 
 		return 0, time.Time{}, false
 	}
 	return amount.Int64(), effective, true
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

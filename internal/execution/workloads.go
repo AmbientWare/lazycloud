@@ -18,6 +18,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Pods, devboxes and sandboxes are workloads whose release runs a command.
@@ -161,7 +162,7 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		if grant.Start == 0 {
 			return &ConflictError{Reason: "the account's plan allows no more containers now"}
 		}
-		params.Traceparent = traceparent(ctx)
+		params.Traceparent = telemetry.StoredTraceParent(ctx)
 		inserted, err := q.InsertInstance(ctx, params)
 		if err != nil {
 			return fmt.Errorf("insert instance: %w", err)

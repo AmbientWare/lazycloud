@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -25,6 +26,9 @@ const (
 	// settledRecheck is when a succeeded purchase is read again for refunds
 	// and disputes if no delivery reports them first.
 	settledRecheck = 30 * 24 * time.Hour
+	// maxError bounds the errors stored with purchases, plan changes and
+	// webhook events.
+	maxError = 500
 )
 
 // ownURL refuses to send anyone anywhere but back to the dashboard: Stripe
@@ -352,7 +356,7 @@ func (b *Billing) SweepPurchases(ctx context.Context) (int, error) {
 	for _, id := range due {
 		if err := b.settlePurchase(ctx, id); err != nil {
 			b.logger.WarnContext(ctx, "settle credit purchase", "purchase_id", id, "error", err)
-			if err := b.queries.RetryPurchase(ctx, RetryPurchaseParams{ID: id, LastError: truncate(err.Error()), NextAttemptAt: time.Now().Add(5 * time.Minute)}); err != nil {
+			if err := b.queries.RetryPurchase(ctx, RetryPurchaseParams{ID: id, LastError: database.Truncate(err.Error(), maxError), NextAttemptAt: time.Now().Add(5 * time.Minute)}); err != nil {
 				return 0, fmt.Errorf("retry purchase: %w", err)
 			}
 		}
@@ -423,12 +427,4 @@ func (b *Billing) startReload(ctx context.Context, user uuid.UUID) (uuid.UUID, b
 		return uuid.UUID{}, false, fmt.Errorf("start automatic reload: %w", err)
 	}
 	return id, started, nil
-}
-
-func truncate(s string) string {
-	const limit = 500
-	if len(s) > limit {
-		return s[:limit]
-	}
-	return s
 }

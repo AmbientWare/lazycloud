@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -331,7 +332,7 @@ func (e *Execution) start(ctx context.Context, tx pgx.Tx, plan *releasePlan, sha
 		return err
 	}
 	defer span.End()
-	create.Count, create.Replaces, create.Traceparent = int32(grant.Start), replaces, traceparent(ctx) //nolint:gosec // Bounded by max_containers.
+	create.Count, create.Replaces, create.Traceparent = int32(grant.Start), replaces, telemetry.StoredTraceParent(ctx) //nolint:gosec // Bounded by max_containers.
 	created, err := q.CreatePendingContainers(ctx, create)
 	if err != nil {
 		return fmt.Errorf("create containers: %w", err)

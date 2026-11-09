@@ -54,8 +54,6 @@ func newTestEdgeFlushing(t *testing.T, pool *pgxpool.Pool, flush time.Duration) 
 	return e
 }
 
-func version(n int) *int { return &n }
-
 // After a rollback the active release is older than one that still has
 // containers; latest waits for the active release rather than serve the one
 // it rolled back from, while a forward deploy keeps the older one serving.
@@ -63,8 +61,8 @@ func TestLatestFallsBackOnlyToAnOlderRelease(t *testing.T) {
 	t.Parallel()
 	e := newTestEdge(t, nil)
 	v1, v2 := uuid.New(), uuid.New()
-	e.releases[v1] = &release{id: v1, version: version(1), capacity: 1}
-	e.releases[v2] = &release{id: v2, version: version(2), capacity: 1}
+	e.releases[v1] = &release{id: v1, version: new(1), capacity: 1}
+	e.releases[v2] = &release{id: v2, version: new(2), capacity: 1}
 	ws := &workloadState{containers: map[uuid.UUID]*slot{}}
 	only := func(rel uuid.UUID, v int) {
 		ws.containers = map[uuid.UUID]*slot{uuid.New(): {id: uuid.New(), release: rel, version: v}}

@@ -114,7 +114,7 @@ func (i *Identity) RenameWorkspace(ctx context.Context, p Principal, name, newNa
 		return ws, nil
 	}
 	row, err := i.queries.RenameWorkspace(ctx, RenameWorkspaceParams{Name: newName, ID: uuid.UUID(ws.ID)})
-	if isUniqueViolation(err) {
+	if database.IsUniqueViolation(err) {
 		return Workspace{}, &ConflictError{Message: fmt.Sprintf("workspace name %s is already in use", newName)}
 	}
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -11,6 +11,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 const (
@@ -163,7 +165,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, acct
 		case phase == PhaseTerminating && gone:
 			// The termination the fleet asked for, with the failure that
 			// asked for it when one did.
-			err = c.hostGone(ctx, h.ID, phase, Failure(deref(h.Failure)), h.PhaseMessage)
+			err = c.hostGone(ctx, h.ID, phase, Failure(database.Value(h.Failure)), h.PhaseMessage)
 		case phase == PhaseTerminating:
 			// The actuator terminates it.
 		case gone && h.InterruptionAt != nil:

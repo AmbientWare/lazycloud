@@ -159,14 +159,6 @@ func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUI
 	return database.Notify(ctx, tx, owner, id)
 }
 
-// deref is *s, or "" for nil.
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 func int32Of(v *int) *int32 {
 	if v == nil {
 		return nil

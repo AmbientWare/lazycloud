@@ -345,7 +345,7 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 		item := apitypes.DeploymentPlanItem{Kind: w.Kind, Name: w.Name, Action: action, Versions: versions}
 		for _, r := range refused {
 			if r.Kind == w.Kind && r.Name == w.Name {
-				item.Refusals = new(append(deref(item.Refusals), r))
+				item.Refusals = new(append(database.Value(item.Refusals), r))
 			}
 		}
 		items = append(items, item)
@@ -369,11 +369,4 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 		})
 	}
 	return apitypes.DeploymentPlan{App: app, Prune: prune, Items: items}, nil
-}
-
-func deref[T any](v *[]T) []T {
-	if v == nil {
-		return nil
-	}
-	return *v
 }

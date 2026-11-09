@@ -503,7 +503,7 @@ func (i *Images) activeBuild(ctx context.Context, q *Queries, image Image, works
 		return nil, fmt.Errorf("read active build: %w", err)
 	}
 	b, err := i.buildOut(ctx, q, row.ID, image.ID, row.State, row.Failure, row.CreatedAt, row.FinishedAt)
-	b.traceparent = deref(row.Traceparent)
+	b.traceparent = database.Value(row.Traceparent)
 	return &b, err
 }
 
@@ -548,7 +548,7 @@ func (i *Images) build(ctx context.Context, workspace identity.WorkspaceID, p pr
 		// build can start between the check and the insert.
 		row, err := q.InsertBuild(ctx, InsertBuildParams{
 			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: alone, Mirror: kind == buildSharedMirror, ContextSha256: p.spec.context,
-			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(), Traceparent: traceparent(ctx),
+			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(), Traceparent: telemetry.StoredTraceParent(ctx),
 		})
 		if err != nil {
 			return fmt.Errorf("insert build: %w", err)
@@ -686,7 +686,7 @@ func (i *Images) pull(ctx context.Context, reference, architecture string, windo
 }
 
 func (i *Images) buildOut(ctx context.Context, q *Queries, id uuid.UUID, imageID, state string, failure *string, created time.Time, finished *time.Time) (Build, error) {
-	b := Build{ID: id, ImageID: imageID, Status: BuildStatus(state), Failure: deref(failure), CreatedAt: created, FinishedAt: finished}
+	b := Build{ID: id, ImageID: imageID, Status: BuildStatus(state), Failure: database.Value(failure), CreatedAt: created, FinishedAt: finished}
 	phase, err := q.BuildPhase(ctx, &id)
 	if err != nil {
 		return Build{}, fmt.Errorf("read build phase: %w", err)
@@ -1065,7 +1065,7 @@ func (i *Images) endBuild(ctx context.Context, build uuid.UUID, digest []byte, f
 		if end.failure == "" {
 			err = q.SucceedBuild(ctx, build)
 		} else {
-			err = q.FailBuild(ctx, FailBuildParams{ID: build, Failure: truncate(end.failure), Transient: end.transient})
+			err = q.FailBuild(ctx, FailBuildParams{ID: build, Failure: database.TruncateTail(end.failure, maxFailureBytes), Transient: end.transient})
 		}
 		if err != nil {
 			return fmt.Errorf("end build: %w", err)
@@ -1213,7 +1213,7 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return nil, fmt.Errorf("reset build log count: %w", err)
 		}
 		// The next attempt's container joins the build's trace.
-		ctx := telemetry.WithTraceParent(ctx, deref(build.Traceparent))
+		ctx := telemetry.WithTraceParent(ctx, database.Value(build.Traceparent))
 		if build.Mirror {
 			_, err = i.execution.CreatePlatformBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, i.config.BuildCPU, buildMemoryBytes)
 			return nil, err
@@ -1231,11 +1231,4 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		}
 		return nil, err
 	})
-}
-
-func truncate(s string) string {
-	if len(s) <= maxFailureBytes {
-		return s
-	}
-	return "…" + s[len(s)-maxFailureBytes:]
 }

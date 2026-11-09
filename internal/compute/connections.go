@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -494,7 +495,7 @@ func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {
 	}
 	for _, a := range auths {
 		auth := authorizationOf(a)
-		switch authorizationSlot(deref(a.Slot)) {
+		switch authorizationSlot(database.Value(a.Slot)) {
 		case slotActive:
 			conn.Active = &auth
 		case slotPending:
@@ -516,11 +517,11 @@ func roleName(arn string) string {
 func authorizationOf(a CloudAuthorization) Authorization {
 	auth := Authorization{
 		ID: a.ID, Generation: int(a.Generation), Mode: AuthorizationMode(a.Mode), Phase: AuthorizationPhase(a.Phase),
-		RoleARN: a.RoleArn, Region: a.Region, StackName: deref(a.StackName), StackID: deref(a.StackID),
-		TemplateVersion: deref(a.TemplateVersion), TemplateSHA256: deref(a.TemplateSha256),
-		ErrorMessage: deref(a.ErrorMessage), ValidationStarted: a.LastValidationStartedAt, LastValidated: a.LastValidatedAt,
+		RoleARN: a.RoleArn, Region: a.Region, StackName: database.Value(a.StackName), StackID: database.Value(a.StackID),
+		TemplateVersion: database.Value(a.TemplateVersion), TemplateSHA256: database.Value(a.TemplateSha256),
+		ErrorMessage: database.Value(a.ErrorMessage), ValidationStarted: a.LastValidationStartedAt, LastValidated: a.LastValidatedAt,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
-		externalID: a.ExternalID, nodeRoleARN: deref(a.NodeRoleArn), nodeInstanceProfle: deref(a.NodeInstanceProfile),
+		externalID: a.ExternalID, nodeRoleARN: database.Value(a.NodeRoleArn), nodeInstanceProfle: database.Value(a.NodeInstanceProfile),
 		expiresAt: a.ExpiresAt, deleteRequested: a.StackDeleteRequestedAt,
 	}
 	if a.SetupStep != nil {
@@ -859,8 +860,8 @@ func (c *Compute) Forget(ctx context.Context, account identity.UserID) ([]Leftov
 		}
 		for _, s := range stacks {
 			left = append(left, Leftover{
-				Kind: LeftoverStack, ID: cmp.Or(deref(s.StackID), s.StackName), Region: s.Region,
-				ConsoleURL: stackURL(s.Region, deref(s.StackID), s.StackName),
+				Kind: LeftoverStack, ID: cmp.Or(database.Value(s.StackID), s.StackName), Region: s.Region,
+				ConsoleURL: stackURL(s.Region, database.Value(s.StackID), s.StackName),
 			})
 		}
 		instances, err := q.LiveConnectionInstances(ctx, &row.ID)
@@ -981,8 +982,8 @@ func (c *Compute) ConnectedAccount(ctx context.Context, connection uuid.UUID) (C
 	if err != nil {
 		return ConnectedAccount{}, fmt.Errorf("read connection access: %w", err)
 	}
-	if AuthorizationPhase(row.Phase) == AuthDegraded && deref(row.ErrorCode) == string(ErrAssumeRoleDenied) {
-		return ConnectedAccount{}, &ConflictError{Message: "the connected AWS account refuses LazyCloud its role: " + deref(row.ErrorMessage)}
+	if AuthorizationPhase(row.Phase) == AuthDegraded && database.Value(row.ErrorCode) == string(ErrAssumeRoleDenied) {
+		return ConnectedAccount{}, &ConflictError{Message: "the connected AWS account refuses LazyCloud its role: " + database.Value(row.ErrorMessage)}
 	}
 	return ConnectedAccount{AWSAccountID: row.AwsAccountID, Region: row.Region, role: row.RoleArn, externalID: row.ExternalID}, nil
 }

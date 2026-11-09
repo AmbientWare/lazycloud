@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // FeedbackKind is what a piece of feedback is about.
@@ -161,7 +163,7 @@ func (i *Identity) ListFeedback(ctx context.Context, p Principal, f FeedbackFilt
 		page.Feedback = append(page.Feedback, Feedback{
 			ID: FeedbackID(row.ID), Kind: FeedbackKind(row.Kind), Message: row.Message, CreatedAt: row.CreatedAt,
 			Author: User{
-				ID: UserID(row.UserID), Email: deref(row.Email), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl,
+				ID: UserID(row.UserID), Email: database.Value(row.Email), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl,
 				GitHubLogin: row.GithubLogin, IsAdmin: row.IsAdmin, Status: UserStatus(row.Status), CreatedAt: row.UserCreatedAt,
 			},
 		})

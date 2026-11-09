@@ -364,7 +364,7 @@ func TestFirstSessionOfALaunchedHost(t *testing.T) {
 		want string
 	}{
 		{"serving", nil, "ready"},
-		{"bought for the reserve", ptr("hibernate"), "preparing"},
+		{"bought for the reserve", new("hibernate"), "preparing"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			host, ctx := h.enroll()
@@ -485,5 +485,3 @@ func TestReserveWaitsOutAnAgentUpdate(t *testing.T) {
 	answer(t, updated, ready)
 	h.waitPhase(host, "stopping")
 }
-
-func ptr[T any](v T) *T { return &v }

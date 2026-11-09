@@ -10,6 +10,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // administrator returns a token of a platform administrator.
@@ -72,7 +73,7 @@ func TestFleetReturnsThePublishedPlanUntilItExpires(t *testing.T) {
 	e := newEnv(t)
 	admin := e.administrator()
 	e.fleetHost(fleetHost{instance: "i-0serving", phase: "ready", online: true})
-	e.fleetHost(fleetHost{instance: "i-0saved", phase: "stopped", reserve: ptr("hibernate"), evidence: "saved"})
+	e.fleetHost(fleetHost{instance: "i-0saved", phase: "stopped", reserve: new("hibernate"), evidence: "saved"})
 
 	// A pending container too large for the serving host is Spot load but
 	// allocated nowhere.
@@ -172,8 +173,8 @@ func TestFleetNodesListLiveHostsInTheirStates(t *testing.T) {
 		state apitypes.FleetState
 		ready bool
 	}
-	hibernate, stop := ptr("hibernate"), ptr("stop")
-	current, old := ptr("2.0.0"), ptr("1.0.0")
+	hibernate, stop := new("hibernate"), new("stop")
+	current, old := new("2.0.0"), new("1.0.0")
 	wants := map[uuid.UUID]want{
 		e.fleetHost(fleetHost{instance: "i-0serving", phase: "ready", online: true, agent: "2.0.0"}):           {apitypes.FleetServing, true},
 		e.fleetHost(fleetHost{instance: "i-0outdated", phase: "ready", online: true, agent: "1.0.0"}):          {apitypes.FleetServing, false},
@@ -249,14 +250,7 @@ returning id`).Scan(&machine); err != nil {
 		case !ok:
 			t.Errorf("host %s missing", id)
 		case n.State != w.state || n.Ready != w.ready || n.InstanceId == nil || *n.InstanceId == "":
-			t.Errorf("node %v: state %s ready %v, want %s ready %v", deref(n.InstanceId), n.State, n.Ready, w.state, w.ready)
+			t.Errorf("node %v: state %s ready %v, want %s ready %v", database.Value(n.InstanceId), n.State, n.Ready, w.state, w.ready)
 		}
 	}
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

@@ -221,7 +221,7 @@ func (e *Execution) ReadyPodContainers(ctx context.Context, workload uuid.UUID) 
 	}
 	out := make([]PodContainer, len(rows))
 	for n, r := range rows {
-		out[n] = PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: deref(r.Traceparent)}
+		out[n] = PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: database.Value(r.Traceparent)}
 	}
 	return out, nil
 }

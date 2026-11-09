@@ -87,8 +87,6 @@ func (f fixture) scheduledTasks(t *testing.T) int {
 	return n
 }
 
-func new(s string) *string { return &s }
-
 func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

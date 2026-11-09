@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -40,18 +41,11 @@ func setupFailure(step SetupStep, code AuthorizationError, format string, args .
 func (f *validationFailure) Error() string { return f.message }
 
 func fail(code AuthorizationError, format string, args ...any) *validationFailure {
-	return &validationFailure{code: code, message: truncate(fmt.Sprintf(format, args...))}
+	return &validationFailure{code: code, message: database.Truncate(fmt.Sprintf(format, args...), maxMessage)}
 }
 
 // maxMessage bounds the error and phase messages stored for users.
 const maxMessage = 512
-
-func truncate(s string) string {
-	if len(s) <= maxMessage {
-		return s
-	}
-	return s[:maxMessage]
-}
 
 // validated is what a passing check learned.
 type validated struct {

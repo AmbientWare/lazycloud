@@ -97,7 +97,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 	if err != nil {
 		return nil, fmt.Errorf("read platform images: %w", err)
 	}
-	architecture := deref(rows[0].HostArchitecture)
+	architecture := database.Value(rows[0].HostArchitecture)
 	if architecture == "" {
 		return nil, fmt.Errorf("read platform images: host %s does not exist", uuid.UUID(host))
 	}
@@ -115,7 +115,7 @@ func (i *Images) PlatformPulls(ctx context.Context, host compute.HostID, referen
 			continue
 		}
 		row := byReference[reference]
-		out[n].Traceparent = deref(row.Traceparent)
+		out[n].Traceparent = database.Value(row.Traceparent)
 		switch {
 		case row.Converted:
 			pull, err := i.pull(ctx, *row.Mirror, architecture, platformPullWindow)
@@ -209,7 +209,7 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 	claimed, err := i.queries.ClaimPlatformImage(ctx, ClaimPlatformImageParams{
 		Reference: reference, Architecture: architecture, Token: c.token, LeaseSeconds: lease.Seconds(),
 		TransientRetrySeconds: platformTransientRetry.Seconds(), FailureRetrySeconds: platformFailureRetry.Seconds(),
-		Traceparent: traceparent(ctx),
+		Traceparent: telemetry.StoredTraceParent(ctx),
 	})
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("lazycloud.claimed", err == nil))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -238,7 +238,7 @@ func (i *Images) convertPlatformImage(ctx context.Context, reference, architectu
 	record := context.WithoutCancel(ctx)
 	failed := pgx.BeginFunc(record, i.pool, func(tx pgx.Tx) error {
 		if err := i.queries.WithTx(tx).FailPlatformImage(record, FailPlatformImageParams{
-			Reference: reference, Architecture: architecture, Token: c.token, Failure: truncate(err.Error()), Transient: transient,
+			Reference: reference, Architecture: architecture, Token: c.token, Failure: database.TruncateTail(err.Error(), maxFailureBytes), Transient: transient,
 		}); err != nil {
 			return fmt.Errorf("record platform image failure: %w", err)
 		}

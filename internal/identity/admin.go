@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 // PlatformRole is an account's standing on the platform.
@@ -151,7 +153,7 @@ func requireAccountAdmin(p Principal) error {
 
 func userFrom(row UserProfileRow) User {
 	return User{
-		ID: UserID(row.ID), Email: deref(row.Email), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl,
+		ID: UserID(row.ID), Email: database.Value(row.Email), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl,
 		GitHubLogin: row.GithubLogin, IsAdmin: row.IsAdmin, Status: UserStatus(row.Status), CreatedAt: row.CreatedAt,
 	}
 }

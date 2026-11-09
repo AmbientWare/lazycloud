@@ -17,10 +17,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
 var (
@@ -227,7 +227,7 @@ func (i *Identity) Authenticate(ctx context.Context, token string) (Principal, e
 	}
 	id := TokenID(row.ID)
 	i.recordTokenUse(id, time.Now())
-	p := Principal{User: UserID(row.UserID), Email: deref(row.Email), IsAdmin: row.IsAdmin, Token: &id}
+	p := Principal{User: UserID(row.UserID), Email: database.Value(row.Email), IsAdmin: row.IsAdmin, Token: &id}
 	if row.WorkspaceID != nil {
 		ws := WorkspaceID(*row.WorkspaceID)
 		p.TokenWorkspace = &ws
@@ -302,7 +302,7 @@ func (i *Identity) Workspaces(ctx context.Context, p Principal) ([]Workspace, er
 // CreateUser adds a user. Administrators reach every workspace.
 func (i *Identity) CreateUser(ctx context.Context, email string, admin bool) (UserID, error) {
 	id, err := i.queries.InsertUser(ctx, InsertUserParams{Email: &email, IsAdmin: admin})
-	if isUniqueViolation(err) {
+	if database.IsUniqueViolation(err) {
 		return UserID{}, fmt.Errorf("user %s: %w", email, ErrExists)
 	}
 	if err != nil {
@@ -341,7 +341,7 @@ func addWorkspace(ctx context.Context, tx pgx.Tx, name string, owner UserID) (Wo
 	}
 	q := New(tx)
 	row, err := q.InsertWorkspace(ctx, name)
-	if isUniqueViolation(err) {
+	if database.IsUniqueViolation(err) {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", name, ErrExists)
 	}
 	if err != nil {
@@ -422,16 +422,4 @@ func (i *Identity) Housekeeping(ctx context.Context, logger *slog.Logger) error 
 		logger.InfoContext(ctx, "identity housekeeping", "sessions", sessions, "device_codes", codes, "feedback", feedback)
 	}
 	return nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

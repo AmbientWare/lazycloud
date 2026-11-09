@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -66,7 +67,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 	if row.InstanceID == nil {
 		return HostID{}, "", &IdentityError{Message: "the host has no instance yet"}
 	}
-	account, role := row.AwsAccountID, deref(row.NodeRoleArn)
+	account, role := row.AwsAccountID, database.Value(row.NodeRoleArn)
 	caller, err := c.verifyProof(ctx, host, proof)
 	if err != nil {
 		return HostID{}, "", err
@@ -90,7 +91,7 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 			return HostID{}, "", err
 		}
 		if _, err := c.queries.EndHost(ctx, EndHostParams{
-			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: new(string(FailurePreflight)), Message: truncate(message),
+			ID: uuid.UUID(host), FromPhase: row.Phase, Failure: new(string(FailurePreflight)), Message: database.Truncate(message, maxMessage),
 		}); err != nil {
 			return HostID{}, "", fmt.Errorf("fail host: %w", err)
 		}
@@ -220,11 +221,4 @@ func containsFold(list []string, s string) bool {
 		}
 	}
 	return false
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

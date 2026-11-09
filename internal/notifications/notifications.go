@@ -198,6 +198,9 @@ func (n *Notifications) Deliver(ctx context.Context) (DeliverResult, error) {
 	return result, errors.Join(errs...)
 }
 
+// maxError bounds the errors and details stored with messages.
+const maxError = 500
+
 type verdict int
 
 const (
@@ -227,7 +230,7 @@ func (n *Notifications) deliverOne(ctx context.Context, row ClaimDueRow) outcome
 		return outcome{verdict: verdictSent}
 	case errors.As(sendErr, &refused) && refused.Permanent, row.Attempts >= MaxAttempts:
 		n.logger.ErrorContext(ctx, "email abandoned", "message_id", id.String(), "attempts", row.Attempts, "error", sendErr)
-		_, err := n.queries.MarkFailed(settleCtx, MarkFailedParams{LastError: truncate(sendErr.Error()), ID: row.ID, Attempts: row.Attempts})
+		_, err := n.queries.MarkFailed(settleCtx, MarkFailedParams{LastError: database.Truncate(sendErr.Error(), maxError), ID: row.ID, Attempts: row.Attempts})
 		if err != nil {
 			return outcome{verdict: verdictFailed, err: fmt.Errorf("record failed email %s: %w", id, err)}
 		}
@@ -235,7 +238,7 @@ func (n *Notifications) deliverOne(ctx context.Context, row ClaimDueRow) outcome
 	default:
 		n.logger.WarnContext(ctx, "email delivery will retry", "message_id", id.String(), "attempts", row.Attempts, "error", sendErr)
 		_, err := n.queries.MarkRetry(settleCtx, MarkRetryParams{
-			DelaySeconds: retryDelay(int(row.Attempts)).Seconds(), LastError: truncate(sendErr.Error()),
+			DelaySeconds: retryDelay(int(row.Attempts)).Seconds(), LastError: database.Truncate(sendErr.Error(), maxError),
 			ID: row.ID, Attempts: row.Attempts,
 		})
 		if err != nil {
@@ -256,14 +259,6 @@ func retryDelay(attempts int) time.Duration {
 		}
 	}
 	return delay
-}
-
-func truncate(s string) string {
-	const limit = 500
-	if len(s) > limit {
-		return s[:limit]
-	}
-	return s
 }
 
 // Purge empties the bodies of messages settled more than BodyRetention ago
@@ -290,7 +285,7 @@ type DeliveryEvent struct {
 func (n *Notifications) RecordDelivery(ctx context.Context, event DeliveryEvent) (bool, error) {
 	at := event.OccurredAt
 	updated, err := n.queries.RecordDelivery(ctx, RecordDeliveryParams{
-		State: string(event.State), OccurredAt: &at, Detail: truncate(event.Detail),
+		State: string(event.State), OccurredAt: &at, Detail: database.Truncate(event.Detail, maxError),
 		ProviderMessageID: &event.ProviderMessageID,
 	})
 	if err != nil {
