@@ -267,7 +267,7 @@ func TestRecurringScansReadOnlyLiveRows(t *testing.T) {
 		{"idle instances", drainIdleInstances, []any{int32(100)}},
 		{"unserved instances", drainUnservedInstances, nil},
 		{"unserved pending instances", stopUnservedPendingInstances, nil},
-		{"snapshot candidates", automaticSnapshotCandidates, nil},
+		{"automatic snapshots", takeAutomaticSnapshots, []any{nil}},
 		{"stale snapshots", failStaleSnapshots, []any{SnapshotDeadline.Seconds()}},
 		{"stale filesystem images", failStaleFilesystemImages, []any{PublishDeadline.Seconds()}},
 		{"overdue attempts", overdueAttempts, []any{time.Time{}, uuid.Nil, recoveryBatch}},
