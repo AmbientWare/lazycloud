@@ -2519,6 +2519,18 @@ type ActivitySeriesKind string
 // ActivityUnit defines model for ActivityUnit.
 type ActivityUnit string
 
+// AdminAlerts A limit left out alerts on nothing.
+type AdminAlerts struct {
+	// DailyLimitMicros Alert when the fleet costs more than this over 24 hours, in USD micros.
+	DailyLimitMicros *int64 `json:"daily_limit_micros,omitempty"`
+
+	// Email Where alerts go; empty sends none.
+	Email string `json:"email"`
+
+	// HourlyLimitMicros Alert when the fleet costs more than this an hour, in USD micros.
+	HourlyLimitMicros *int64 `json:"hourly_limit_micros,omitempty"`
+}
+
 // App defines model for App.
 type App struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -3807,6 +3819,28 @@ type FleetNodePage struct {
 	NextCursor *string     `json:"next_cursor,omitempty"`
 	Nodes      []FleetNode `json:"nodes"`
 	ObservedAt time.Time   `json:"observed_at"`
+}
+
+// FleetSpend defines model for FleetSpend.
+type FleetSpend struct {
+	// HourlyMicros The fleet's cost an hour now
+	HourlyMicros int64 `json:"hourly_micros"`
+
+	// LastDayMicros The fleet's cost over the last 24 hours
+	LastDayMicros int64           `json:"last_day_micros"`
+	ObservedAt    time.Time       `json:"observed_at"`
+	Running       FleetSpendShare `json:"running"`
+
+	// Stopped Stopped reserves, which cost their volumes.
+	Stopped FleetSpendShare `json:"stopped"`
+}
+
+// FleetSpendShare defines model for FleetSpendShare.
+type FleetSpendShare struct {
+	Hosts int `json:"hosts"`
+
+	// HourlyMicros USD micros an hour
+	HourlyMicros int64 `json:"hourly_micros"`
 }
 
 // FleetState A host's place in the fleet. preparing is a host becoming a stopped reserve; stopping is on its way there. stopped, hibernate_unverified and image_saved are stopped reserves: a plain stop, a hibernation whose saved memory is not yet proven, and one proven saved. starting covers a launch and a resume to serve.
@@ -6569,6 +6603,9 @@ type ListWorkloadsParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
+
+// SetAdminAlertsJSONRequestBody defines body for SetAdminAlerts for application/json ContentType.
+type SetAdminAlertsJSONRequestBody = AdminAlerts
 
 // ConnectAwsJSONRequestBody defines body for ConnectAws for application/json ContentType.
 type ConnectAwsJSONRequestBody = AwsConnectionRequest

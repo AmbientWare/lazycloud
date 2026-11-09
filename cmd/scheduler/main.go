@@ -89,6 +89,9 @@ type ticks struct {
 	quotas time.Duration
 	// reconcile paces comparing cloud hosts with the provider.
 	reconcile time.Duration
+	// spendAlerts paces checking the platform fleet's spend against the
+	// administrators' alert limits.
+	spendAlerts time.Duration
 	// rollup paces folding container metric samples into minute
 	// points; a pass that is behind reruns at once.
 	rollup time.Duration
@@ -112,7 +115,7 @@ func productionTicks() ticks {
 	return ticks{
 		tick: time.Second, safety: 30 * time.Second, leaderCheck: 10 * time.Second, contendedRetry: 100 * time.Millisecond,
 		hostLoss: 5 * time.Second, buildRecovery: 10 * time.Second, sweep: 30 * time.Second, layerSweep: 10 * time.Minute,
-		purge: time.Minute, fleet: 5 * time.Second, connections: time.Second, networks: 15 * time.Second, quotas: 15 * time.Second, reconcile: time.Minute, rollup: 30 * time.Second,
+		purge: time.Minute, fleet: 5 * time.Second, connections: time.Second, networks: 15 * time.Second, quotas: 15 * time.Second, reconcile: time.Minute, spendAlerts: time.Minute, rollup: 30 * time.Second,
 		email: 5 * time.Second, housekeeping: time.Minute, deletion: 2 * time.Second,
 		metering: 15 * time.Second, payments: 5 * time.Second, retention: time.Minute,
 	}
@@ -125,7 +128,7 @@ func (t ticks) validate() error {
 	}{
 		{"tick", t.tick}, {"safety", t.safety}, {"leader check", t.leaderCheck}, {"contended retry", t.contendedRetry},
 		{"host loss", t.hostLoss}, {"build recovery", t.buildRecovery}, {"sweep", t.sweep}, {"layer sweep", t.layerSweep},
-		{"purge", t.purge}, {"fleet", t.fleet}, {"connections", t.connections}, {"networks", t.networks}, {"quotas", t.quotas}, {"reconcile", t.reconcile}, {"rollup", t.rollup},
+		{"purge", t.purge}, {"fleet", t.fleet}, {"connections", t.connections}, {"networks", t.networks}, {"quotas", t.quotas}, {"reconcile", t.reconcile}, {"spend alerts", t.spendAlerts}, {"rollup", t.rollup},
 		{"email", t.email}, {"housekeeping", t.housekeeping}, {"deletion", t.deletion},
 		{"metering", t.metering}, {"payments", t.payments}, {"retention", t.retention},
 	} {
@@ -509,6 +512,18 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 			}
 			return false
 		})
+	})
+	group.Go(func() error {
+		return p.loop(ctx, cadence{every: t.spendAlerts}, nil, nil, every("spend_alerts", t.spendAlerts, func(ctx context.Context) bool {
+			spend, err := comp.FleetSpend(ctx)
+			if err == nil {
+				err = accounts.notifications.AlertSpend(ctx, spend.HourlyMicros(), spend.WindowMicros)
+			}
+			if err != nil && ctx.Err() == nil {
+				logger.ErrorContext(ctx, "spend alert pass", "error", err)
+			}
+			return false
+		}))
 	})
 	group.Go(func() error {
 		return p.loop(ctx, cadence{every: t.sweep}, nil, nil, every("storage_sweep", t.sweep, func(ctx context.Context) bool {

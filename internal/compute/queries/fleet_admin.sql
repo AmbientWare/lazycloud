@@ -40,3 +40,34 @@ from hosts h
 where h.kind = 'platform' and h.phase not in ('deleted', 'failed')
 group by 1
 order by 1;
+
+-- name: PlatformHostSpend :many
+-- Each platform cloud host live now or since @since: what prices it, its
+-- phase now, and the seconds since @since it ran (a billed phase, as in
+-- AtLossSpentToday) and lay stopped. Reads each host's changes since @since
+-- and the last one before it, so the cost follows live hosts, not history.
+with platform as (
+    select id from hosts
+    where kind = 'platform' and provider = 'aws' and (phase not in ('deleted', 'failed') or phase_at > @since::timestamptz)
+), changes as (
+    select c.host_id, c.at, c.phase
+    from platform p join host_phase_changes c on c.host_id = p.id and c.at >= @since::timestamptz
+    union all
+    select p.id, b.at, b.phase
+    from platform p
+    cross join lateral (select at, phase from host_phase_changes
+                        where host_id = p.id and at < @since::timestamptz order by at desc limit 1) b
+), spans as (
+    select host_id, phase, greatest(at, @since::timestamptz) as began,
+           lead(at, 1, now()) over (partition by host_id order by at) as until
+    from changes
+)
+select h.id, h.instance_type, h.region, h.hibernation_configured, h.phase,
+       coalesce(h.hourly_micros, 0)::bigint as hourly_micros,
+       coalesce(sum(extract(epoch from s.until - s.began)) filter (where s.phase in
+           ('provisioning', 'booting', 'joining', 'ready', 'draining', 'preparing', 'stopping', 'resuming')), 0)::float8 as running_seconds,
+       coalesce(sum(extract(epoch from s.until - s.began)) filter (where s.phase = 'stopped'), 0)::float8 as stopped_seconds
+from hosts h
+join spans s on s.host_id = h.id
+group by h.id
+order by h.id;

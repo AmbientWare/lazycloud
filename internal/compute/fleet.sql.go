@@ -689,10 +689,14 @@ func (q *Queries) PlatformInUse(ctx context.Context) (bool, error) {
 }
 
 const purgeHostPhaseChanges = `-- name: PurgeHostPhaseChanges :execrows
-delete from host_phase_changes where at < now() - make_interval(secs => $1::float8)
+delete from host_phase_changes c
+where c.at < now() - make_interval(secs => $1::float8)
+  and exists (select 1 from host_phase_changes n
+              where n.host_id = c.host_id and n.at > c.at and n.at < now() - make_interval(secs => $1::float8))
 `
 
-// Host phase history older than the retention.
+// Host phase history older than the retention, but for each host's last
+// change before it: the phase it was in when the retained history begins.
 func (q *Queries) PurgeHostPhaseChanges(ctx context.Context, seconds float64) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeHostPhaseChanges, seconds)
 	if err != nil {

@@ -270,6 +270,8 @@ export const accountQueryKeys = {
       summary: () => [...accountRoot, "admin", "fleet", "summary"] as const,
       nodes: () => [...accountRoot, "admin", "fleet", "nodes"] as const,
     },
+    spend: () => [...accountRoot, "admin", "spend"] as const,
+    alerts: () => [...accountRoot, "admin", "alerts"] as const,
     // Keyed on the narrowing, like accounts.
     feedback: Object.assign(
       (scope: FeedbackScope) => [...accountRoot, "admin", "feedback", scope] as const,

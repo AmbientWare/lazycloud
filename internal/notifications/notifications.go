@@ -1,6 +1,8 @@
 // Package notifications owns transactional email: an outbox written in the
 // transaction of the change a message announces, delivery through Resend
-// with retries, and the delivery reports Resend sends back.
+// with retries, and the delivery reports Resend sends back. It also owns
+// administrator alerts: the address they go to and the fleet spend limits
+// that raise them.
 package notifications
 
 import (
@@ -124,6 +126,7 @@ func uuids(ids []MessageID) []uuid.UUID {
 
 // Notifications delivers the outbox.
 type Notifications struct {
+	pool    *pgxpool.Pool
 	queries *Queries
 	sender  *Resend
 	logger  *slog.Logger
@@ -133,7 +136,7 @@ type Notifications struct {
 // deployment without Resend credentials passes nil and its messages stay
 // queued.
 func NewNotifications(pool *pgxpool.Pool, sender *Resend, logger *slog.Logger) *Notifications {
-	return &Notifications{queries: New(pool), sender: sender, logger: logger}
+	return &Notifications{pool: pool, queries: New(pool), sender: sender, logger: logger}
 }
 
 // DeliverResult counts one pass's outcomes. More means the pass claimed a

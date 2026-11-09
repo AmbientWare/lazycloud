@@ -231,8 +231,12 @@ on conflict (owner, region) do update set checked_at = excluded.checked_at, erro
 
 
 -- name: PurgeHostPhaseChanges :execrows
--- Host phase history older than the retention.
-delete from host_phase_changes where at < now() - make_interval(secs => @seconds::float8);
+-- Host phase history older than the retention, but for each host's last
+-- change before it: the phase it was in when the retained history begins.
+delete from host_phase_changes c
+where c.at < now() - make_interval(secs => @seconds::float8)
+  and exists (select 1 from host_phase_changes n
+              where n.host_id = c.host_id and n.at > c.at and n.at < now() - make_interval(secs => @seconds::float8));
 
 -- name: AtLossSpentToday :one
 -- What the platform's hosts bought at a loss cost to run since midnight

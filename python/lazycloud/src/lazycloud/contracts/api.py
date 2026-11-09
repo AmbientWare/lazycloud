@@ -2067,6 +2067,45 @@ class FleetNode(APIModel):
     ]
 
 
+class FleetSpendShare(APIModel):
+    hosts: int
+    hourly_micros: Annotated[int, Field(description="USD micros an hour")]
+
+
+class FleetSpend(APIModel):
+    observed_at: AwareDatetime
+    hourly_micros: Annotated[int, Field(description="The fleet's cost an hour now")]
+    running: FleetSpendShare
+    stopped: Annotated[
+        FleetSpendShare, Field(description="Stopped reserves, which cost their volumes.")
+    ]
+    last_day_micros: Annotated[int, Field(description="The fleet's cost over the last 24 hours")]
+
+
+class AdminAlerts(APIModel):
+    email: Annotated[
+        str,
+        Field(
+            description="Where alerts go; empty sends none.",
+            max_length=254,
+            pattern="^$|^[^@\\s]+@[^@\\s]+$",
+        ),
+    ]
+    hourly_limit_micros: Annotated[
+        int | None,
+        Field(
+            description="Alert when the fleet costs more than this an hour, in USD micros.", ge=1
+        ),
+    ] = None
+    daily_limit_micros: Annotated[
+        int | None,
+        Field(
+            description="Alert when the fleet costs more than this over 24 hours, in USD micros.",
+            ge=1,
+        ),
+    ] = None
+
+
 class FleetNodePage(APIModel):
     nodes: list[FleetNode]
     next_cursor: str | None = None
