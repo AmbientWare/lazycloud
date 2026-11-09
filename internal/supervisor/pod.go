@@ -144,19 +144,11 @@ func (s *Supervisor) podStartFailed(err error) error {
 // finishPodOutput lets output a descendant still writes drain briefly, then
 // closes the pipes and emits what remains.
 func (s *Supervisor) finishPodOutput(out *slot, pipes []*outputPipe, readers *sync.WaitGroup) {
-	drained := make(chan struct{})
-	go func() {
-		readers.Wait()
-		close(drained)
-	}()
-	select {
-	case <-drained:
-	case <-time.After(outputDrainGrace):
-		for _, p := range pipes {
-			_ = p.file.Close()
-		}
-		<-drained
+	files := make([]*os.File, len(pipes))
+	for i, p := range pipes {
+		files[i] = p.file
 	}
+	drainReaders(readers, files)
 	out.outMu.Lock()
 	for _, p := range pipes {
 		out.emitLocked(p, nil, true)
@@ -164,6 +156,27 @@ func (s *Supervisor) finishPodOutput(out *slot, pipes []*outputPipe, readers *sy
 	out.outMu.Unlock()
 	for _, p := range pipes {
 		_ = p.file.Close()
+	}
+}
+
+// drainReaders waits for readers to end, or for outputDrainGrace and then
+// closes their pipes, which a descendant may hold open, so they do. It
+// reports whether the output ended on its own.
+func drainReaders(readers *sync.WaitGroup, pipes []*os.File) bool {
+	drained := make(chan struct{})
+	go func() {
+		readers.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return true
+	case <-time.After(outputDrainGrace):
+		for _, p := range pipes {
+			_ = p.Close()
+		}
+		<-drained
+		return false
 	}
 }
 
