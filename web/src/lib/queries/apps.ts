@@ -3,8 +3,9 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { activityStart } from "@/lib/activity-window";
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { allPages, listWorkloads, newestFirst } from "./deployments";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { listWorkloads, newestFirst } from "./deployments";
+import { allPages } from "./infinite-list";
+import { criticalLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 function listApps(workspace: string): Promise<Schemas["App"][]> {
   return allPages(async (cursor) => {
@@ -22,7 +23,7 @@ export function appsQueryOptions(workspace: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.apps.list(workspace),
     queryFn: () => listApps(workspace),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -35,7 +36,7 @@ export function appQueryOptions(workspace: string, app: string) {
           params: { path: { workspace, app } },
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -55,7 +56,7 @@ export function appActivityQueryOptions(workspace: string, app: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.apps.activity(workspace, app),
     queryFn: () => taskActivity(workspace, app),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -86,7 +87,7 @@ export function appSummariesQueryOptions(workspace: string) {
         activity: series.get(app.name),
       }));
     },
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

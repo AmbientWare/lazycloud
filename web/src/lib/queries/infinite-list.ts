@@ -50,3 +50,17 @@ export function selectInfiniteList<TItem>(
     nextCursor: hasNextPage ? data?.pages.at(-1)?.next || undefined : undefined,
   };
 }
+
+/** Every item of a cursor collection, reading pages until the last. */
+export async function allPages<T>(
+  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
+): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await read(cursor);
+    items.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return items;
+}

@@ -2,7 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
+import { accountQueryKeys, criticalLiveQueryMeta } from "./workspace-keys";
 
 /**
  * What this account is holding right now, by live container status.
@@ -16,7 +16,7 @@ export function accountMetricsQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.metrics.summary(),
     queryFn: () => ok(api.GET("/v1/me/metrics")),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -72,6 +72,6 @@ export function accountActivityQueryOptions(options: {
         }),
       ),
     staleTime: 30_000,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }

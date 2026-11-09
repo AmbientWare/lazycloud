@@ -2,22 +2,10 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { allPages } from "./infinite-list";
+import { criticalLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /** Every page of a collection; the storage tabs list all of it. */
-export async function allPages<T>(
-  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
-): Promise<T[]> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await read(cursor);
-    items.push(...page.items);
-    cursor = page.next;
-  } while (cursor);
-  return items;
-}
-
 // --- Secrets (collection reads carry no value; cleartext is fetched only on demand) ---
 
 export function secretsQueryOptions(workspace: string) {
@@ -32,7 +20,7 @@ export function secretsQueryOptions(workspace: string) {
         );
         return { items: page.secrets, next: page.next_cursor };
       }),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -87,7 +75,7 @@ export function disksQueryOptions(workspace: string) {
         }),
       ),
     getNextPageParam: (page) => page.next_cursor,
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 
@@ -117,7 +105,7 @@ export function volumesQueryOptions(workspace: string) {
         );
         return { items: page.volumes, next: page.next_cursor };
       }),
-    meta: workspaceLiveQueryMeta(true),
+    meta: criticalLiveQueryMeta,
   });
 }
 

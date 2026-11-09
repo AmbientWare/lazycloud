@@ -304,3 +304,6 @@ export function workspaceLiveQueryMeta(
     workspaceLiveRecoverErrors: recoverErrors,
   };
 }
+
+/** Meta of a query the workspace stream keeps fresh and must recover. */
+export const criticalLiveQueryMeta = workspaceLiveQueryMeta(true);
