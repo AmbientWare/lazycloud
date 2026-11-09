@@ -196,7 +196,7 @@ type Agent struct {
 	// diskEngine attaches durable disks; diskErr says why it cannot here.
 	diskEngine *diskengine.Engine
 	diskErr    error
-	diskLocks diskLocks
+	diskLocks  diskLocks
 	// releaseNow wakes the disk release loop.
 	releaseNow chan struct{}
 	// netfilters, snapshots and publishes bound network policy helpers,
