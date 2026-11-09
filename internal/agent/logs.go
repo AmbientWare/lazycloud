@@ -200,7 +200,7 @@ func (b *logBatcher[L]) flush(ctx context.Context) bool {
 			b.log.Error("dropping log batch", "lines", len(batch), "error", err)
 			break
 		}
-		if !sleep(ctx, delay) {
+		if !hostproto.Sleep(ctx, delay) {
 			return false
 		}
 		delay = min(2*delay, 5*time.Second)

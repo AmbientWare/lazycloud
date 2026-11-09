@@ -385,7 +385,7 @@ func (c *container) waitReady(ctx context.Context, probe *hostproto.ReadinessPro
 			err = fmt.Errorf("HTTP %d", response.StatusCode)
 		}
 		last = err
-		if !sleep(ctx, interval) {
+		if !hostproto.Sleep(ctx, interval) {
 			return fmt.Errorf("the container was not ready within %v: %w", timeout, last)
 		}
 	}

@@ -33,9 +33,15 @@ const (
 
 // hopHeaders are connection-scoped and never forwarded. Authorization is
 // dropped too: the container's identity comes from its socket.
-var hopHeaders = map[string]bool{ //nolint:gochecknoglobals // constant set
-	"Connection": true, "Keep-Alive": true, "Proxy-Connection": true, "Transfer-Encoding": true,
-	"Te": true, "Trailer": true, "Upgrade": true, "Proxy-Authorization": true, "Authorization": true,
+var hopHeaders = []string{ //nolint:gochecknoglobals // constant set
+	"Connection", "Keep-Alive", "Proxy-Connection", "Transfer-Encoding",
+	"Te", "Trailer", "Upgrade", "Proxy-Authorization", "Authorization",
+}
+
+func dropHopHeaders(h http.Header) {
+	for _, name := range hopHeaders {
+		h.Del(name)
+	}
 }
 
 // serveAPI serves the container API on a Unix socket at path until ctx
@@ -92,15 +98,8 @@ func (p *apiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeStatusError(w, err)
 		return
 	}
-	head := &hostproto.APIRequestHead{Method: r.Method, Target: r.URL.RequestURI()}
-	for name, values := range r.Header {
-		if hopHeaders[name] {
-			continue
-		}
-		for _, value := range values {
-			head.Headers = append(head.Headers, &hostproto.APIHeader{Name: name, Value: value})
-		}
-	}
+	dropHopHeaders(r.Header)
+	head := &hostproto.APIRequestHead{Method: r.Method, Target: r.URL.RequestURI(), Headers: hostproto.HeadersOut(r.Header)}
 	if err := sendBody(stream, head, r.Body); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -120,11 +119,8 @@ func (p *apiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeStatusError(w, err)
 		return
 	}
-	for _, h := range first.GetHead().GetHeaders() {
-		if !hopHeaders[http.CanonicalHeaderKey(h.GetName())] {
-			w.Header().Add(h.GetName(), h.GetValue())
-		}
-	}
+	hostproto.HeadersIn(w.Header(), first.GetHead().GetHeaders())
+	dropHopHeaders(w.Header())
 	w.WriteHeader(int(first.GetHead().GetStatus()))
 	flush := http.NewResponseController(w)
 	for msg := first; ; {

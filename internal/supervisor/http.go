@@ -58,7 +58,7 @@ func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.
 		return false, fmt.Errorf("serve requests: %w", ctx.Err())
 	case <-p.done:
 		sl.http.stopAccepting()
-		if !sleepCtx(ctx, time.Second-time.Since(loaded)) {
+		if !hostproto.Sleep(ctx, time.Second-time.Since(loaded)) {
 			return false, fmt.Errorf("restart runner: %w", ctx.Err())
 		}
 		return true, nil
@@ -77,13 +77,7 @@ func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.
 // which arrives as output frames, one line per message under the request's
 // id, until the runner closes its socket.
 func (sl *slot) readHTTPOutput(ctx context.Context, p *runnerProcess) {
-	// held is output per request and stream that may begin a secret value
-	// continued in the next frame. Only this goroutine touches it.
-	type heldKey struct {
-		request string
-		stream  hostproto.LogStream
-	}
-	held := map[heldKey]string{}
+	held := heldOutput{}
 	for {
 		frame, err := p.read()
 		if err != nil {
@@ -96,25 +90,48 @@ func (sl *slot) readHTTPOutput(ctx context.Context, p *runnerProcess) {
 		if err := frame.Decode(&out); err != nil || out.RequestId == nil {
 			continue
 		}
-		stream := hostproto.LogStream_LOG_STREAM_STDOUT
-		if out.Stream == runnerproto.Stderr {
-			stream = hostproto.LogStream_LOG_STREAM_STDERR
-		}
-		key := heldKey{*out.RequestId, stream}
-		pending := held[key]
-		text := sl.sup.redact.stream(&pending, strings.ToValidUTF8(string(frame.Payload), "\uFFFD"), false)
-		if pending == "" {
-			delete(held, key)
-		} else {
-			held[key] = pending
-		}
-		sl.sup.pushOutputLines("", key.request, stream, text)
+		sl.sup.pushOutputFrame(held, heldKey{request: *out.RequestId}, out.Stream, frame.Payload)
 		if sl.sup.out.waitOutputSpace(ctx) != nil {
 			return
 		}
 	}
+	sl.sup.flushHeld(held, func(heldKey) bool { return true })
+}
+
+// heldOutput is output per attempt or request and stream that may begin a
+// secret value continued in the next frame. Only the goroutine reading the
+// frames touches it.
+type heldOutput map[heldKey]string
+
+type heldKey struct {
+	attempt, request string
+	stream           hostproto.LogStream
+}
+
+// pushOutputFrame redacts an output frame's text and queues its lines under
+// key's attempt or request, holding back a possible secret's start.
+func (s *Supervisor) pushOutputFrame(held heldOutput, key heldKey, stream runnerproto.OutputStream, payload []byte) {
+	key.stream = hostproto.LogStream_LOG_STREAM_STDOUT
+	if stream == runnerproto.Stderr {
+		key.stream = hostproto.LogStream_LOG_STREAM_STDERR
+	}
+	pending := held[key]
+	text := s.redact.stream(&pending, strings.ToValidUTF8(string(payload), "\uFFFD"), false)
+	if pending == "" {
+		delete(held, key)
+	} else {
+		held[key] = pending
+	}
+	s.pushOutputLines(key.attempt, key.request, key.stream, text)
+}
+
+// flushHeld queues and forgets the held output of the keys match selects.
+func (s *Supervisor) flushHeld(held heldOutput, match func(heldKey) bool) {
 	for key, text := range held {
-		sl.sup.pushOutputLines("", key.request, key.stream, text)
+		if match(key) {
+			s.pushOutputLines(key.attempt, key.request, key.stream, text)
+			delete(held, key)
+		}
 	}
 }
 

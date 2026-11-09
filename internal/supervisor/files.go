@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 const (
@@ -278,46 +279,27 @@ func (c *control) uploadFile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(path, r.Body, fileMode(bits)); err != nil {
+	if err := writeUpload(path, r.Body, fileMode(bits)); err != nil {
 		return fileError(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 
-// writeFileAtomic writes body to a temporary file beside path and renames it
-// over path, creating the parent directories.
-func writeFileAtomic(path string, body io.Reader, mode os.FileMode) error {
+// writeUpload replaces path with body, creating the parent directories.
+func writeUpload(path string, body io.Reader, mode os.FileMode) error {
 	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // see above
 		return apiErr(http.StatusConflict, apitypes.Conflict, "%s is a directory", path)
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // directories in the container are world-readable as with mkdir -p
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // directories in the container are world-readable as with mkdir -p
 		return fmt.Errorf("create parent directories: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".lazycloud-upload-*")
-	if err != nil {
-		return fmt.Errorf("create upload file: %w", err)
+	err := hostproto.PlaceFile(path, body, mode, os.Rename)
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return apiErr(http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "%s", tooLarge.Error())
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // see above
-	defer func() { _ = tmp.Close() }()
-	if _, err := io.Copy(tmp, body); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return apiErr(http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "%s", err.Error())
-		}
-		return fmt.Errorf("write upload: %w", err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		return fmt.Errorf("set upload mode: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close upload: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil { //nolint:gosec // see above
-		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	return nil
+	return err
 }
 
 // eachTextFile calls fn with every regular UTF-8 file under root that could

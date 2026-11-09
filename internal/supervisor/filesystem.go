@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"archive/tar"
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -10,55 +9,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
-
-// mountPoint is one line of /proc/self/mountinfo.
-type mountPoint struct {
-	path string
-	// options are the per-mount options, such as ro and nosuid.
-	options []string
-}
-
-// readMounts lists the mount points of the supervisor's mount namespace
-// below its root, in mount order.
-func readMounts() ([]mountPoint, error) {
-	file, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		return nil, fmt.Errorf("read mounts: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	var mounts []mountPoint
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 6 {
-			return nil, errors.New("invalid mountinfo record")
-		}
-		// Spaces and other bytes are octal escapes, as in Go strings.
-		path, err := strconv.Unquote(`"` + fields[4] + `"`)
-		if err != nil {
-			return nil, fmt.Errorf("decode mount point %q: %w", fields[4], err)
-		}
-		mounts = append(mounts, mountPoint{path: path, options: strings.Split(fields[5], ",")})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read mounts: %w", err)
-	}
-	return mounts, nil
-}
 
 // mountSet is the mount points other than /, which an archive or a seed of
 // the root filesystem leaves out.
-func mountSet(mounts []mountPoint) map[string]bool {
+func mountSet(mounts []hostproto.Mount) map[string]bool {
 	set := make(map[string]bool, len(mounts))
 	for _, m := range mounts {
-		if m.path != "/" {
-			set[m.path] = true
+		if m.Path != "/" {
+			set[m.Path] = true
 		}
 	}
 	return set
@@ -66,7 +31,7 @@ func mountSet(mounts []mountPoint) map[string]bool {
 
 // archiveFilesystem streams a tar of / without its mounts as it walks.
 func (c *control) archiveFilesystem(w http.ResponseWriter, _ *http.Request) error {
-	mounts, err := readMounts()
+	mounts, err := hostproto.ReadMounts()
 	if err != nil {
 		return err
 	}

@@ -119,7 +119,7 @@ func (sl *slot) serve(ctx context.Context, p *runnerProcess, cfg *hostproto.Conf
 		case <-p.done:
 			// A runner that dies on its own right after loading restarts at
 			// most once a second.
-			if !sleepCtx(ctx, time.Second-time.Since(loaded)) {
+			if !hostproto.Sleep(ctx, time.Second-time.Since(loaded)) {
 				return false, fmt.Errorf("restart runner: %w", ctx.Err())
 			}
 			return true, nil
@@ -572,19 +572,4 @@ func describeExit(err error) string {
 		return "exit status 0"
 	}
 	return err.Error()
-}
-
-// sleepCtx waits for d and reports whether ctx is still live.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return ctx.Err() == nil
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }

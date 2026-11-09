@@ -79,11 +79,41 @@ func (a *Agent) diskMount(container, disk string) string {
 	return filepath.Join(a.cfg.StateDir, "disks", "mounts", container, disk)
 }
 
-// diskLock serializes the work on one disk between a container's publish
-// loop and the release loop.
-func (a *Agent) diskLock(disk string) *sync.Mutex {
-	lock, _ := a.diskLocks.LoadOrStore(disk, &sync.Mutex{})
-	return lock.(*sync.Mutex) //nolint:forcetypeassert // The map holds only mutexes.
+// diskLocks serializes the work on each disk between a container's publish
+// loop and the release loop. A disk's entry lives while a caller holds or
+// waits for it.
+type diskLocks struct {
+	mu    sync.Mutex
+	locks map[string]*diskLock
+}
+
+type diskLock struct {
+	sync.Mutex
+	users int
+}
+
+// lock locks disk and returns its unlock.
+func (l *diskLocks) lock(disk string) (unlock func()) {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = map[string]*diskLock{}
+	}
+	d := l.locks[disk]
+	if d == nil {
+		d = &diskLock{}
+		l.locks[disk] = d
+	}
+	d.users++
+	l.mu.Unlock()
+	d.Lock()
+	return func() {
+		d.Unlock()
+		l.mu.Lock()
+		if d.users--; d.users == 0 {
+			delete(l.locks, disk)
+		}
+		l.mu.Unlock()
+	}
 }
 
 func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
@@ -210,7 +240,7 @@ func (c *container) acquire(ctx context.Context, name string) (*hostproto.Acquir
 			return nil, fmt.Errorf("acquire disk %s: %w", name, err)
 		}
 		c.log.Info("disk is held elsewhere; waiting", "disk", name, "error", err)
-		if !sleep(ctx, delay) {
+		if !hostproto.Sleep(ctx, delay) {
 			return nil, fmt.Errorf("acquire disk %s: %w", name, ctx.Err())
 		}
 		delay = min(2*delay, 15*time.Second)
@@ -233,7 +263,7 @@ func (a *Agent) saveLeases(container string, disks []*heldDisk) error {
 	if err := os.MkdirAll(a.leaseDir(), 0o700); err != nil {
 		return fmt.Errorf("create lease directory: %w", err)
 	}
-	if err := writeFileAtomic(a.leaseFile(container), data, 0o600); err != nil {
+	if err := hostproto.WriteFile(a.leaseFile(container), data, 0o600); err != nil {
 		return fmt.Errorf("record disk leases: %w", err)
 	}
 	return nil
@@ -336,9 +366,7 @@ func (c *container) tendDisk(ctx context.Context, d *heldDisk, now bool) bool {
 // A disk whose attachment was lost publishes what reached it and returns
 // the diskengine.ErrAttachmentLost.
 func (a *Agent) publish(ctx context.Context, container string, d *heldDisk, final bool) error {
-	lock := a.diskLock(d.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	defer a.diskLocks.lock(d.ID)()
 	store, err := a.diskStore(d.Workspace)
 	if err != nil {
 		return err

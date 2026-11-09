@@ -127,9 +127,6 @@ func TestReserveStopsOnlyOnTheAgentsProof(t *testing.T) {
 
 	h.exec("update hosts set phase = 'preparing', phase_at = now(), reserve_mode = 'hibernate' where id = $1", uuid.UUID(host))
 	refused := prepareReserve(t, stream)
-	if refused.GetMode() != hostproto.ReserveMode_RESERVE_MODE_HIBERNATE {
-		t.Fatalf("prepare %v", refused)
-	}
 	ready := readyFor(refused)
 	ready.Refused = "a volume is mounted"
 	answer(t, stream, ready)

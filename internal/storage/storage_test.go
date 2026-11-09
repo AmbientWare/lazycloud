@@ -88,7 +88,7 @@ func TestSourceRegistration(t *testing.T) {
 		t.Fatalf("after upload: present=%v err=%v, want present", registered.Present, err)
 	}
 
-	url, _, err := s.SourceURL(ctx, ws, digest)
+	url, err := s.SourceURL(ctx, ws, digest)
 	if err != nil {
 		t.Fatal(err)
 	}

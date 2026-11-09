@@ -27,7 +27,7 @@ func TestContainerAPICallsRunUnderTheirAttempt(t *testing.T) {
 	defer span.End()
 	c := &container{traces: map[string]attemptTrace{"attempt-1": {task: "task-1", span: span}}}
 	head := func(task string) *hostproto.APIRequestHead {
-		return &hostproto.APIRequestHead{Headers: []*hostproto.APIHeader{{Name: "lazycloud-task", Value: task}}}
+		return &hostproto.APIRequestHead{Headers: []*hostproto.Header{{Name: "lazycloud-task", Value: task}}}
 	}
 	if got := trace.SpanContextFromContext(c.taskContext(t.Context(), taskOf(head("task-1")))); !got.Equal(span.SpanContext()) {
 		t.Fatalf("the call of task-1 runs under %v, want the attempt's %v", got, span.SpanContext())

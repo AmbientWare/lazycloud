@@ -417,7 +417,7 @@ func stopCommand(container string, grace int32) *hostproto.ServerMessage {
 
 func cancelCommand(container, attempt string) *hostproto.ServerMessage {
 	return &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Cancel{Cancel: &hostproto.CancelAttempt{
-		ContainerId: container, AttemptId: attempt, Reason: hostproto.CancelReason_CANCEL_REASON_CANCELLED,
+		ContainerId: container, AttemptId: attempt,
 	}}}
 }
 

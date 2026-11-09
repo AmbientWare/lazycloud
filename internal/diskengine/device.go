@@ -1,7 +1,6 @@
 package diskengine
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -179,41 +178,17 @@ func mountsOf(device string) ([]string, error) {
 		return nil, fmt.Errorf("stat %s: %w", device, err)
 	}
 	want := fmt.Sprintf("%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev))
-	file, err := os.Open("/proc/self/mountinfo")
+	mounts, err := hostproto.ReadMounts()
 	if err != nil {
-		return nil, fmt.Errorf("open mountinfo: %w", err)
+		return nil, err
 	}
-	defer func() { _ = file.Close() }() // Read only.
 	var points []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) > 4 && fields[2] == want {
-			points = append(points, unescapeMountPath(fields[4]))
+	for _, m := range mounts {
+		if m.Device == want {
+			points = append(points, m.Path)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read mountinfo: %w", err)
 	}
 	return points, nil
-}
-
-func unescapeMountPath(path string) string {
-	if !strings.Contains(path, `\`) {
-		return path
-	}
-	var out strings.Builder
-	for i := 0; i < len(path); i++ {
-		if path[i] == '\\' && i+3 < len(path) {
-			if value, err := strconv.ParseUint(path[i+1:i+4], 8, 8); err == nil {
-				out.WriteByte(byte(value))
-				i += 3
-				continue
-			}
-		}
-		out.WriteByte(path[i])
-	}
-	return out.String()
 }
 
 func formatExt4(ctx context.Context, device string) error {

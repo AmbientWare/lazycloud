@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/rootdisk"
 )
 
@@ -33,7 +34,7 @@ func enterRoot(root string) error {
 	if !filepath.IsAbs(root) || root == "/" {
 		return fmt.Errorf("the devbox root %q must be an absolute directory other than /", root)
 	}
-	mounts, err := readMounts()
+	mounts, err := hostproto.ReadMounts()
 	if err != nil {
 		return err
 	}
@@ -108,25 +109,25 @@ func dropMountPrivilege() error {
 
 // rootMounts are the mount points to bind into root: the top-level ones,
 // whose submounts a recursive bind carries, and rootBinds, outside root.
-func rootMounts(mounts []mountPoint, root string) []mountPoint {
+func rootMounts(mounts []hostproto.Mount, root string) []hostproto.Mount {
 	under := func(path, dir string) bool { return path != dir && strings.HasPrefix(path, dir+"/") }
 	candidates := slices.Clone(mounts)
 	for _, path := range rootBinds {
-		if !slices.ContainsFunc(candidates, func(m mountPoint) bool { return m.path == path }) {
+		if !slices.ContainsFunc(candidates, func(m hostproto.Mount) bool { return m.Path == path }) {
 			if _, err := os.Lstat(path); err == nil {
-				candidates = append(candidates, mountPoint{path: path})
+				candidates = append(candidates, hostproto.Mount{Path: path})
 			}
 		}
 	}
-	var out []mountPoint
+	var out []hostproto.Mount
 	for _, m := range candidates {
-		if m.path == "/" || m.path == root || under(m.path, root) || under(root, m.path) {
+		if m.Path == "/" || m.Path == root || under(m.Path, root) || under(root, m.Path) {
 			continue
 		}
-		nested := slices.ContainsFunc(candidates, func(parent mountPoint) bool {
-			return parent.path != "/" && under(m.path, parent.path)
+		nested := slices.ContainsFunc(candidates, func(parent hostproto.Mount) bool {
+			return parent.Path != "/" && under(m.Path, parent.Path)
 		})
-		if !nested && !slices.ContainsFunc(out, func(o mountPoint) bool { return o.path == m.path }) {
+		if !nested && !slices.ContainsFunc(out, func(o hostproto.Mount) bool { return o.Path == m.Path }) {
 			out = append(out, m)
 		}
 	}
@@ -135,11 +136,11 @@ func rootMounts(mounts []mountPoint, root string) []mountPoint {
 
 // bindInto binds m recursively at the same path under root, with its
 // read-only and nosuid, nodev and noexec flags.
-func bindInto(root string, m mountPoint) error {
-	target := filepath.Join(root, m.path)
-	info, err := os.Stat(m.path)
+func bindInto(root string, m hostproto.Mount) error {
+	target := filepath.Join(root, m.Path)
+	info, err := os.Stat(m.Path)
 	if err != nil {
-		return fmt.Errorf("stat mount %s: %w", m.path, err)
+		return fmt.Errorf("stat mount %s: %w", m.Path, err)
 	}
 	if info.IsDir() {
 		err = os.MkdirAll(target, 0o755) //nolint:gosec // a mount point
@@ -152,11 +153,11 @@ func bindInto(root string, m mountPoint) error {
 	if err != nil {
 		return fmt.Errorf("create mount point %s: %w", target, err)
 	}
-	if err := unix.Mount(m.path, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
-		return fmt.Errorf("bind %s into the devbox root: %w", m.path, err)
+	if err := unix.Mount(m.Path, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind %s into the devbox root: %w", m.Path, err)
 	}
 	var flags uintptr
-	for _, option := range m.options {
+	for _, option := range m.Options {
 		switch option {
 		case "ro":
 			flags |= unix.MS_RDONLY
@@ -170,7 +171,7 @@ func bindInto(root string, m mountPoint) error {
 	}
 	if flags != 0 {
 		if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|flags, ""); err != nil {
-			return fmt.Errorf("remount %s in the devbox root: %w", m.path, err)
+			return fmt.Errorf("remount %s in the devbox root: %w", m.Path, err)
 		}
 	}
 	return nil

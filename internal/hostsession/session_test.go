@@ -417,7 +417,7 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancel := receive(t, stream).GetCancel()
-	if cancel.GetAttemptId() != other.GetAttemptId() || cancel.GetReason() != hostproto.CancelReason_CANCEL_REASON_CANCELLED {
+	if cancel.GetAttemptId() != other.GetAttemptId() {
 		t.Fatalf("cancel command %v", cancel)
 	}
 	if err := complete(other.GetAttemptId()); status.Code(err) != codes.FailedPrecondition {

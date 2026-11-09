@@ -54,9 +54,7 @@ func (s *Server) ContainerAPI(stream grpc.BidiStreamingServer[hostproto.APIReque
 		return err
 	}
 	header := http.Header{}
-	for _, h := range head.GetHeaders() {
-		header.Add(h.GetName(), h.GetValue())
-	}
+	hostproto.HeadersIn(header, head.GetHeaders())
 	var task *execution.TaskID
 	if value := header.Get(TaskHeader); value != "" {
 		id, err := uuid.Parse(value)
@@ -160,13 +158,7 @@ func (w *apiResponseWriter) FlushError() error {
 	w.WriteHeader(http.StatusOK)
 	msg := &hostproto.APIResponse{}
 	if !w.sent {
-		head := &hostproto.APIResponseHead{Status: int32(w.status)} //nolint:gosec // HTTP status codes fit
-		for name, values := range w.header {
-			for _, value := range values {
-				head.Headers = append(head.Headers, &hostproto.APIHeader{Name: name, Value: value})
-			}
-		}
-		msg.Head = head
+		msg.Head = &hostproto.ResponseHead{Status: int32(w.status), Headers: hostproto.HeadersOut(w.header)} //nolint:gosec // HTTP status codes fit
 	}
 	for w.buf.Len() > 0 || msg.Head != nil {
 		msg.Body = w.buf.Next(apiChunk)

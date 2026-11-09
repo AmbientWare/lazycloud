@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -79,9 +80,14 @@ func installService(args []string) error {
 	if err := os.WriteFile(unit, []byte(renderUnit(root, state, wrapper, joinArgs)), 0o644); err != nil { //nolint:gosec // units are world-readable
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
-	for _, command := range [][]string{{"daemon-reload"}, {"enable", *name + ".service"}, {"restart", *name + ".service"}} {
-		cmd := exec.CommandContext(context.Background(), "systemctl", command...) //nolint:gosec // fixed subcommands and a checked unit name
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	return systemctl(os.Stderr, []string{"daemon-reload"}, []string{"enable", *name + ".service"}, []string{"restart", *name + ".service"})
+}
+
+// systemctl runs each command in turn, writing its output to out.
+func systemctl(out io.Writer, commands ...[]string) error {
+	for _, command := range commands {
+		cmd := exec.CommandContext(context.Background(), "systemctl", command...) //nolint:gosec // fixed subcommands and checked unit names
+		cmd.Stdout, cmd.Stderr = out, out
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(command, " "), err)
 		}

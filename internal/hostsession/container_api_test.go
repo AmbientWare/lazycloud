@@ -32,10 +32,10 @@ func call(ctx context.Context, client hostproto.HostServiceClient, container exe
 	}
 	head := &hostproto.APIRequestHead{ContainerId: container.String(), Method: method, Target: target}
 	for name, value := range headers {
-		head.Headers = append(head.Headers, &hostproto.APIHeader{Name: name, Value: value})
+		head.Headers = append(head.Headers, &hostproto.Header{Name: name, Value: value})
 	}
 	if body != nil {
-		head.Headers = append(head.Headers, &hostproto.APIHeader{Name: "Content-Type", Value: "application/json"})
+		head.Headers = append(head.Headers, &hostproto.Header{Name: "Content-Type", Value: "application/json"})
 	}
 	msg := &hostproto.APIRequest{Head: head}
 	for {

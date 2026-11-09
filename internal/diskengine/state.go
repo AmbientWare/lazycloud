@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 // maxSocketPath is sun_path's capacity less the terminating NUL.
@@ -216,42 +218,7 @@ func saveState(p diskPaths, state *diskState) error {
 	if err != nil {
 		return fmt.Errorf("encode disk state: %w", err)
 	}
-	return writeFileAtomic(p.statePath(), data)
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // A state path under the root.
-	if err != nil {
-		return fmt.Errorf("create %s: %w", tmp, err)
-	}
-	if _, err := file.Write(data); err != nil {
-		return errors.Join(fmt.Errorf("write %s: %w", tmp, err), file.Close())
-	}
-	if err := file.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("sync %s: %w", tmp, err), file.Close())
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	return syncDir(filepath.Dir(path))
-}
-
-func syncDir(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // A directory under the root.
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	if err := dir.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("sync %s: %w", path, err), dir.Close())
-	}
-	if err := dir.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", path, err)
-	}
-	return nil
+	return hostproto.WriteFile(p.statePath(), data, 0o600)
 }
 
 // lockPoll is how often a waiting caller retries a held lock.

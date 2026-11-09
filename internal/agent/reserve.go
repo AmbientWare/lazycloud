@@ -80,7 +80,7 @@ func (a *Agent) prepareReserve(request *hostproto.PrepareReserve) {
 		if ready.GetRefused() != "" {
 			a.log.Info("refusing to stop into the reserve", "attempt_id", request.GetAttemptId(), "reason", ready.GetRefused())
 		} else {
-			a.log.Info("ready to stop into the reserve", "attempt_id", request.GetAttemptId(), "mode", request.GetMode().String())
+			a.log.Info("ready to stop into the reserve", "attempt_id", request.GetAttemptId())
 		}
 		a.report(&hostproto.HostMessage{Body: &hostproto.HostMessage_ReserveReady{ReserveReady: ready}})
 	})
@@ -111,7 +111,7 @@ func (a *Agent) readyForReserve(ctx context.Context, request *hostproto.PrepareR
 	attempt := sleepAttempt{ID: request.GetAttemptId(), BootID: a.bootID, Gap: a.clock.gap()}
 	data, err := json.Marshal(attempt)
 	if err == nil {
-		err = writeFileAtomic(filepath.Join(a.cfg.StateDir, sleepAttemptFile), data, 0o600)
+		err = hostproto.WriteFile(filepath.Join(a.cfg.StateDir, sleepAttemptFile), data, 0o600)
 	}
 	if err != nil {
 		ready.Refused = "recording the sleep attempt failed: " + err.Error()

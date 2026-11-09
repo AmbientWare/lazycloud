@@ -85,7 +85,7 @@ func TestPodIsReadyOnceItsPortAnswersAndDrainStopsIt(t *testing.T) {
 		Ports: []int32{int32(port)}, //nolint:gosec // a port
 	}, "")
 	ready, output := c.until(t, isReady)
-	if elapsed := time.Since(started); ready.GetReady().GetSlots() != 1 || elapsed < 500*time.Millisecond {
+	if elapsed := time.Since(started); elapsed < 500*time.Millisecond {
 		t.Fatalf("ready %v after %s", ready, elapsed)
 	}
 	t.Logf("configure to ready for a command listening after 0.5 s: %s (output %q)", time.Since(started), output[""])

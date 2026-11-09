@@ -95,7 +95,7 @@ func loadOrEnroll(ctx context.Context, cfg Config, offered offer, metadata *imds
 			return identity{}, fmt.Errorf("enroll: %w", err)
 		}
 		cfg.Logger.Warn("server unavailable for enrollment", "error", err)
-		if !sleep(ctx, delay) {
+		if !hostproto.Sleep(ctx, delay) {
 			return identity{}, fmt.Errorf("enroll: %w", ctx.Err())
 		}
 		delay = min(2*delay, 10*time.Second)
@@ -108,7 +108,7 @@ func loadOrEnroll(ctx context.Context, cfg Config, offered offer, metadata *imds
 	if err != nil {
 		return identity{}, fmt.Errorf("encode host identity: %w", err)
 	}
-	if err := writeFileAtomic(identityPath(cfg.StateDir), data, 0o600); err != nil {
+	if err := hostproto.WriteFile(identityPath(cfg.StateDir), data, 0o600); err != nil {
 		return identity{}, fmt.Errorf("save host identity: %w", err)
 	}
 	removeJoinToken(cfg)
@@ -133,46 +133,6 @@ func removeJoinToken(cfg Config) {
 func forgetIdentity(stateDir string) error {
 	if err := os.Remove(identityPath(stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove revoked host identity: %w", err)
-	}
-	return nil
-}
-
-// writeFileAtomic writes data beside path and renames it into place.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	return writeFileVia(path, data, mode, os.Rename)
-}
-
-// writeFileExclusive writes path as writeFileAtomic does, unless a file is
-// there already: then the error is fs.ErrExist and the file stays.
-func writeFileExclusive(path string, data []byte, mode os.FileMode) error {
-	return writeFileVia(path, data, mode, os.Link)
-}
-
-// writeFileVia writes data to a temporary file beside path and places it
-// at path with place.
-func writeFileVia(path string, data []byte, mode os.FileMode, place func(tmp, path string) error) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
-	}
-	if err := place(tmp.Name(), path); err != nil {
-		return fmt.Errorf("place: %w", err)
 	}
 	return nil
 }

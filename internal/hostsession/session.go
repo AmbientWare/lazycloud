@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -348,7 +347,7 @@ type syncCache struct {
 	// volumeTraces holds the volume traces read, by workload, and
 	// volumePeers the hosts read, by workspace.
 	volumeTraces map[uuid.UUID]*hostproto.VolumeTrace
-	volumePeers  map[identity.WorkspaceID][]*hostproto.VolumePeer
+	volumePeers  map[identity.WorkspaceID][]string
 	started      []string
 	waits        map[string]bool
 }
@@ -367,7 +366,7 @@ func (sess *session) syncCommands(ctx context.Context) error {
 	derived := map[string]bool{}
 	cache := &syncCache{
 		pulls: map[pullKey]pulled{}, layers: map[string]issuedLayers{}, traces: map[traceKey]startTrace{},
-		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, volumePeers: map[identity.WorkspaceID][]*hostproto.VolumePeer{},
+		volumeTraces: map[uuid.UUID]*hostproto.VolumeTrace{}, volumePeers: map[identity.WorkspaceID][]string{},
 		waits: map[string]bool{},
 	}
 	// Builds, volume mounts and network holders run the platform images,
@@ -588,7 +587,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 	if err != nil {
 		return nil, layerGrant{}, err
 	}
-	url, expires, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
+	url, err := s.storage.SourceURL(ctx, start.Workspace, start.Source)
 	if err != nil {
 		return nil, layerGrant{}, err
 	}
@@ -647,7 +646,7 @@ func (sess *session) startMessage(ctx context.Context, cache *syncCache, id stri
 		ImageAuth:     registryAuthOut(image.Auth),
 		ImagePlatform: image.Platform,
 		PythonVersion: version,
-		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
+		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url},
 		Resources: &hostproto.Resources{
 			CpuMillis: int64(start.CPUMillis), MemoryBytes: start.MemoryBytes, MountReserveBytes: start.MountReserveBytes,
 			CpuLimitMillis: int64(start.CPULimitMillis), MemoryLimitBytes: start.MemoryLimitBytes,
@@ -723,12 +722,8 @@ func httpServing(spec apitypes.WorkloadSpec) *hostproto.HttpServing {
 }
 
 func cancelMessage(id string, cancel execution.CancelCommand) *hostproto.ServerMessage {
-	reason := hostproto.CancelReason_CANCEL_REASON_CANCELLED
-	if cancel.Reason == execution.AttemptTimedOut {
-		reason = hostproto.CancelReason_CANCEL_REASON_TIMED_OUT
-	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Cancel{Cancel: &hostproto.CancelAttempt{
-		ContainerId: cancel.Container.String(), AttemptId: cancel.Attempt.String(), Reason: reason,
+		ContainerId: cancel.Container.String(), AttemptId: cancel.Attempt.String(),
 	}}}
 }
 
