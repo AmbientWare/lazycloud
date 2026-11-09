@@ -6,7 +6,7 @@ from uuid import UUID
 import typer
 
 from lazycloud._terminal.streams import console
-from lazycloud.cli.components.output import json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.control import api_session
 from lazycloud.clients.endpoints import http_request_logs, list_http_requests
 
@@ -23,9 +23,6 @@ def requests_list(
     client, selected = api_session(workspace=workspace)
     app_name, _, name = app.partition(":")
     requests = list_http_requests(client, selected, app_name, name=name or None, limit=limit)
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in requests])
-        return
     rows: list[list[Any]] = [
         [
             str(item.id),
@@ -38,7 +35,11 @@ def requests_list(
         ]
         for item in requests
     ]
-    console.print(table("Requests", ["id", "name", "method", "path", "status", "took", "at"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in requests],
+        view=table("Requests", ["id", "name", "method", "path", "status", "took", "at"], rows),
+    )
 
 
 @requests_app.command("logs", help="Print what the workload wrote while serving a request.")

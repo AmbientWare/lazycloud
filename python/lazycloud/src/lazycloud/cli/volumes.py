@@ -33,13 +33,14 @@ def volume_list(
         for page in pages(lambda cursor: client.list_volumes(cursor=cursor))
         for item in page.volumes
     ]
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in volumes])
-        return
     rows = [
         [item.name, humanize_bytes(item.size_bytes), timestamp(item.created_at)] for item in volumes
     ]
-    console.print(table("Volumes", ["name", "size", "created"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in volumes],
+        view=table("Volumes", ["name", "size", "created"], rows),
+    )
 
 
 @volume_app.command("create", help="Create a volume.")

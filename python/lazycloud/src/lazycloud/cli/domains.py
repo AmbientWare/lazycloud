@@ -10,7 +10,6 @@ from lazycloud.cli.components.output import (
     emit,
     json_default,
     json_output_enabled,
-    print_payload,
     table,
 )
 from lazycloud.clients.api import ApiClient
@@ -113,11 +112,12 @@ def domain_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     domains = list_domains(_client(workspace))
-    if json_output_enabled(ctx):
-        print_payload(ctx, [_payload(item) for item in domains])
-        return
     rows = [[item.hostname, item.phase.value] for item in domains]
-    console.print(table("Domains", ["hostname", "status"], rows))
+    emit(
+        ctx,
+        payload=[_payload(item) for item in domains],
+        view=table("Domains", ["hostname", "status"], rows),
+    )
 
 
 @domain_app.command("status")

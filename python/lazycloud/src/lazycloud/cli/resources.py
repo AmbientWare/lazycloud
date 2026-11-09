@@ -130,11 +130,12 @@ def compute_workloads(
 ) -> None:
     compute, selected = _workspace_compute(workspace)
     workloads = compute.workloads(selected)
-    if json_output_enabled(ctx):
-        print_payload(ctx, ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"))
-        return
     rows = [[item.name, item.kind.value, item.machine] for item in workloads]
-    console.print(table("Compute workloads", ["name", "kind", "machine"], rows))
+    emit(
+        ctx,
+        payload=ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"),
+        view=table("Compute workloads", ["name", "kind", "machine"], rows),
+    )
 
 
 @cloud_connect_app.command("aws")
@@ -511,9 +512,6 @@ def container_list(
         for item in page.containers
     )
     containers = list(islice(found, limit))
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in containers])
-        return
     rows: list[list[Any]] = [
         [
             item.function,
@@ -523,7 +521,11 @@ def container_list(
         ]
         for item in containers
     ]
-    console.print(table("Containers", ["name", "status", "exit", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in containers],
+        view=table("Containers", ["name", "status", "exit", "id"], rows),
+    )
 
 
 @container_app.command("attach", help="Attach to a container's output until it exits.")
@@ -629,14 +631,15 @@ def machine_list(
     """List the machines this account has joined."""
     compute, selected = _workspace_compute(workspace)
     machines = compute.machines(selected)
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in machines])
-        return
     rows: list[list[str]] = [
         [item.name, ", ".join(item.workspaces), item.lifecycle.value, item.gpu, str(item.id)]
         for item in machines
     ]
-    console.print(table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in machines],
+        view=table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows),
+    )
 
 
 @machine_app.command("update", help="Change the workspaces a joined machine serves.")

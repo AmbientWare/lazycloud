@@ -55,14 +55,15 @@ def task_list(
         for item in page.tasks
     )
     tasks = list(islice(found, limit))
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in tasks])
-        return
     rows: list[list[object]] = [
         [item.function, item.status.value, timestamp(item.created_at), str(item.id)]
         for item in tasks
     ]
-    console.print(table("Tasks", ["workload", "status", "requested", "id"], rows))
+    emit(
+        ctx,
+        payload=[item.model_dump(mode="json") for item in tasks],
+        view=table("Tasks", ["workload", "status", "requested", "id"], rows),
+    )
 
 
 @task_app.command("stop", help="Stop one or more tasks.")

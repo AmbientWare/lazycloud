@@ -8,9 +8,8 @@ from pydantic import JsonValue
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
-from lazycloud._terminal.streams import console
 from lazycloud.cli.app_export import app_export
-from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
+from lazycloud.cli.components.output import emit, table
 from lazycloud.cli.control import api_session
 from lazycloud.clients.api import ApiClient, pages
 from lazycloud.contracts.api import App, AppPage, LiveAppState
@@ -40,13 +39,14 @@ def app_list(
         )
         for item in page.apps
     ]
-    if json_output_enabled(ctx):
-        print_payload(ctx, AppPage(apps=apps).model_dump(mode="json"))
-        return
     rows: list[list[object]] = [
         [item.name, item.state.value, item.workloads, timestamp(item.created_at)] for item in apps
     ]
-    console.print(table("Apps", ["name", "state", "workloads", "created"], rows))
+    emit(
+        ctx,
+        payload=AppPage(apps=apps).model_dump(mode="json"),
+        view=table("Apps", ["name", "state", "workloads", "created"], rows),
+    )
 
 
 @app_app.command("show", help="Show one deployed application.")
