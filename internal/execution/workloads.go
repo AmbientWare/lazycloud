@@ -607,7 +607,8 @@ func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute
 }
 
 // StopIdle drains idle instances and shell containers, and forgets leases
-// no window needs any more. Hosts stop the drained containers.
+// no window needs any more and edge demand long expired. Hosts stop the
+// drained containers.
 func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, error) {
 	var drained []drainedContainer
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
@@ -642,6 +643,9 @@ func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, err
 	}
 	if err := e.queries.DeleteOldContainerLeases(ctx); err != nil {
 		return len(drained), fmt.Errorf("delete old leases: %w", err)
+	}
+	if err := e.queries.DeleteExpiredEndpointLoads(ctx); err != nil {
+		return len(drained), fmt.Errorf("delete expired endpoint loads: %w", err)
 	}
 	return len(drained), nil
 }

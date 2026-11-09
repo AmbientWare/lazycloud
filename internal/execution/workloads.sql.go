@@ -111,64 +111,6 @@ func (q *Queries) ContainerRoute(ctx context.Context, id uuid.UUID) (ContainerRo
 	return i, err
 }
 
-const createPendingPodContainers = `-- name: CreatePendingPodContainers :many
-insert into containers (
-    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    keep_warm_seconds, block_network, allow_list, traceparent
-)
-select $1, r.id, r.workload_id, 'pending', 1, $2, $3, $4, $5,
-       $6, $7, $8::text[], $9::text
-from releases r, generate_series(1, $10::int)
-where r.id = $11
-returning id
-`
-
-type CreatePendingPodContainersParams struct {
-	WorkspaceID     uuid.UUID
-	CpuMillis       cpu.Millis
-	MemoryBytes     int64
-	GpuCount        int32
-	RateClass       string
-	KeepWarmSeconds *int32
-	BlockNetwork    bool
-	AllowList       []string
-	Traceparent     *string
-	Count           int32
-	ReleaseID       uuid.UUID
-}
-
-func (q *Queries) CreatePendingPodContainers(ctx context.Context, arg CreatePendingPodContainersParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, createPendingPodContainers,
-		arg.WorkspaceID,
-		arg.CpuMillis,
-		arg.MemoryBytes,
-		arg.GpuCount,
-		arg.RateClass,
-		arg.KeepWarmSeconds,
-		arg.BlockNetwork,
-		arg.AllowList,
-		arg.Traceparent,
-		arg.Count,
-		arg.ReleaseID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const deleteOldContainerLeases = `-- name: DeleteOldContainerLeases :exec
 delete from container_leases l
 using containers c
@@ -180,6 +122,59 @@ where c.id = l.container_id
 func (q *Queries) DeleteOldContainerLeases(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteOldContainerLeases)
 	return err
+}
+
+const drainExcessContainers = `-- name: DrainExcessContainers :many
+update containers
+set state = 'draining', drain_started_at = now()
+where id in (
+    select d.id from containers d
+    where d.release_id = $1::uuid and d.purpose = 'serve' and d.state in ('starting', 'ready')
+    order by (d.state = 'ready' and d.keep_warm_seconds is not null and d.active_until < now()
+              and not exists (
+                  select 1 from container_leases l
+                  where l.container_id = d.id and l.expires_at + make_interval(secs => d.keep_warm_seconds) > now()
+              )) desc,
+             d.created_at desc, d.id desc
+    limit $2
+    for update skip locked
+)
+  and state in ('starting', 'ready')
+returning id, host_id
+`
+
+type DrainExcessContainersParams struct {
+	ReleaseID uuid.UUID
+	Count     int32
+}
+
+type DrainExcessContainersRow struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+// Idle ready containers first, then the newest: the oldest active ones are
+// the warmest and hold connections. Supervisors finish requests in flight
+// before they exit, and the edge stops routing to a container once it sees
+// the drain.
+func (q *Queries) DrainExcessContainers(ctx context.Context, arg DrainExcessContainersParams) ([]DrainExcessContainersRow, error) {
+	rows, err := q.db.Query(ctx, drainExcessContainers, arg.ReleaseID, arg.Count)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DrainExcessContainersRow
+	for rows.Next() {
+		var i DrainExcessContainersRow
+		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const drainIdleInstances = `-- name: DrainIdleInstances :many
@@ -217,57 +212,6 @@ func (q *Queries) DrainIdleInstances(ctx context.Context, batchSize int32) ([]Dr
 	var items []DrainIdleInstancesRow
 	for rows.Next() {
 		var i DrainIdleInstancesRow
-		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const drainPodContainers = `-- name: DrainPodContainers :many
-update containers
-set state = 'draining', drain_started_at = now()
-where id in (
-    select d.id from containers d
-    where d.release_id = $1::uuid and d.purpose = 'serve' and d.state in ('starting', 'ready')
-    order by (d.state = 'ready' and d.keep_warm_seconds is not null and d.active_until < now()
-              and not exists (
-                  select 1 from container_leases l
-                  where l.container_id = d.id and l.expires_at + make_interval(secs => d.keep_warm_seconds) > now()
-              )) desc,
-             d.created_at desc, d.id desc
-    limit $2
-    for update skip locked
-)
-  and state in ('starting', 'ready')
-returning id, host_id
-`
-
-type DrainPodContainersParams struct {
-	ReleaseID uuid.UUID
-	Count     int32
-}
-
-type DrainPodContainersRow struct {
-	ID     uuid.UUID
-	HostID *uuid.UUID
-}
-
-// Idle ready containers first, then the newest; the oldest active ones are
-// the ones holding connections.
-func (q *Queries) DrainPodContainers(ctx context.Context, arg DrainPodContainersParams) ([]DrainPodContainersRow, error) {
-	rows, err := q.db.Query(ctx, drainPodContainers, arg.ReleaseID, arg.Count)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DrainPodContainersRow
-	for rows.Next() {
-		var i DrainPodContainersRow
 		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
 			return nil, err
 		}
@@ -788,9 +732,7 @@ with candidates as (
 batch as (
     select release_id from candidates order by release_id limit $3
 )
-select r.id as release_id,
-       a.workspace_id,
-       w.id as workload_id,
+select a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
         and ws.state = 'active')::bool as active,
        (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')::bool as stopping,
@@ -802,17 +744,7 @@ select r.id as release_id,
        coalesce(nullif((r.spec ->> 'keep_warm_seconds')::int, -1), 600)::int as keep_warm_seconds,
        (jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb)) > 0)::bool as has_disks,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
-       (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       release_mounters(r.spec) as mounters,
-       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
-                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
-           as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
-        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
-       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
+       shape.id, shape.cpu_millis, shape.memory_bytes, shape.mounters, shape.gpu_count, shape.gpu_models, shape.preemptible, shape.pinned, shape.machine, shape.start_failures, shape.last_stopped_at,
        coalesce((r.spec -> 'pod' ->> 'block_network')::boolean, false)::bool as block_network,
        coalesce(array(select jsonb_array_elements_text(r.spec -> 'pod' -> 'allow_list')), '{}')::text[] as allow_list,
        exists (
@@ -823,20 +755,14 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       c.warm::int as warm,
-       r.start_failures,
-       last_stop.stopped_at as last_stopped_at
+       c.warm::int as warm
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join pod_states s on s.workload_id = w.id
-left join lateral (
-    select lc.stopped_at from containers lc
-    where lc.release_id = r.id and lc.purpose = 'serve'
-    order by lc.id desc limit 1
-) last_stop on r.start_failures > 0
+join release_shapes shape on shape.id = r.id
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -862,9 +788,7 @@ type PodReleasesParams struct {
 }
 
 type PodReleasesRow struct {
-	ReleaseID       uuid.UUID
 	WorkspaceID     uuid.UUID
-	WorkloadID      uuid.UUID
 	Active          bool
 	Stopping        bool
 	Failed          bool
@@ -875,14 +799,7 @@ type PodReleasesRow struct {
 	KeepWarmSeconds int32
 	HasDisks        bool
 	MaxContainers   int32
-	CpuMillis       int64
-	MemoryBytes     int64
-	Mounters        int32
-	GpuCount        int32
-	GpuModels       []string
-	Preemptible     bool
-	Pinned          bool
-	Machine         bool
+	ReleaseShape    ReleaseShape
 	BlockNetwork    bool
 	AllowList       []string
 	ActiveReady     bool
@@ -891,14 +808,11 @@ type PodReleasesRow struct {
 	Ready           int32
 	Draining        int32
 	Warm            int32
-	StartFailures   int32
-	LastStoppedAt   *time.Time
 }
 
 // Pod releases after @after_id that need a decision: live serve
 // containers, a wake or a count, or an always-on active release. Each source
 // reads live rows only.
-// The newest serve container's stop paces the next start after failed ones.
 func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]PodReleasesRow, error) {
 	rows, err := q.db.Query(ctx, podReleases, arg.StartFailureLimit, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -909,9 +823,7 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 	for rows.Next() {
 		var i PodReleasesRow
 		if err := rows.Scan(
-			&i.ReleaseID,
 			&i.WorkspaceID,
-			&i.WorkloadID,
 			&i.Active,
 			&i.Stopping,
 			&i.Failed,
@@ -922,14 +834,17 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 			&i.KeepWarmSeconds,
 			&i.HasDisks,
 			&i.MaxContainers,
-			&i.CpuMillis,
-			&i.MemoryBytes,
-			&i.Mounters,
-			&i.GpuCount,
-			&i.GpuModels,
-			&i.Preemptible,
-			&i.Pinned,
-			&i.Machine,
+			&i.ReleaseShape.ID,
+			&i.ReleaseShape.CpuMillis,
+			&i.ReleaseShape.MemoryBytes,
+			&i.ReleaseShape.Mounters,
+			&i.ReleaseShape.GpuCount,
+			&i.ReleaseShape.GpuModels,
+			&i.ReleaseShape.Preemptible,
+			&i.ReleaseShape.Pinned,
+			&i.ReleaseShape.Machine,
+			&i.ReleaseShape.StartFailures,
+			&i.ReleaseShape.LastStoppedAt,
 			&i.BlockNetwork,
 			&i.AllowList,
 			&i.ActiveReady,
@@ -938,8 +853,6 @@ func (q *Queries) PodReleases(ctx context.Context, arg PodReleasesParams) ([]Pod
 			&i.Ready,
 			&i.Draining,
 			&i.Warm,
-			&i.StartFailures,
-			&i.LastStoppedAt,
 		); err != nil {
 			return nil, err
 		}

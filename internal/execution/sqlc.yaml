@@ -19,6 +19,10 @@ sql:
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
           - column: "ledger_entries.cpu_millis"
             go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "release_shapes.cpu_millis"
+            go_type: github.com/AmbientWare/lazycloud/internal/cpu.Millis
+          - column: "release_shapes.last_stopped_at"
+            go_type: { type: time.Time, pointer: true }
           - db_type: uuid
             go_type: github.com/google/uuid.UUID
           - db_type: uuid

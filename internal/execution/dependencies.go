@@ -104,26 +104,35 @@ func (e *Execution) resolveDependents(ctx context.Context, tx pgx.Tx, upstream [
 }
 
 // failQueued fails queued tasks with failure and wakes their waiters and
-// planning. With cascade their own dependents fail too.
+// the planning of releases. With cascade their own dependents fail too.
 func (e *Execution) failQueued(ctx context.Context, tx pgx.Tx, ids, releases []uuid.UUID, failure Failure, cascade bool) error {
 	encoded, err := json.Marshal(failure)
 	if err != nil {
 		return fmt.Errorf("encode failure: %w", err)
 	}
-	q := e.queries.WithTx(tx)
-	if err := q.FailTasks(ctx, FailTasksParams{Ids: ids, Failure: encoded}); err != nil {
+	if err := e.queries.WithTx(tx).FailTasks(ctx, FailTasksParams{Ids: ids, Failure: encoded}); err != nil {
 		return fmt.Errorf("fail tasks: %w", err)
 	}
-	if err := recordCallbacks(ctx, q, CallbackFailed, ids, nil); err != nil {
+	if err := database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases)); err != nil {
+		return err
+	}
+	return e.finishTasks(ctx, tx, CallbackFailed, ids, cascade)
+}
+
+// finishTasks records event's callback for each of ids, tasks that failed
+// or were cancelled in tx, and wakes their waiters. With cascade the queued
+// tasks that depend on them fail.
+func (e *Execution) finishTasks(ctx context.Context, tx pgx.Tx, event CallbackEvent, ids []uuid.UUID, cascade bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := recordCallbacks(ctx, e.queries.WithTx(tx), event, ids, nil); err != nil {
 		return err
 	}
 	if err := database.NotifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {
 		return err
 	}
 	if err := notifyFinished(ctx, tx, ids); err != nil {
-		return err
-	}
-	if err := database.NotifyAll(ctx, tx, database.ChannelExecution, uuidStrings(releases)); err != nil {
 		return err
 	}
 	if !cascade {

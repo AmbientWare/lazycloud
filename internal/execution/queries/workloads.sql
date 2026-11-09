@@ -117,9 +117,7 @@ with candidates as (
 batch as (
     select release_id from candidates order by release_id limit @batch_size
 )
-select r.id as release_id,
-       a.workspace_id,
-       w.id as workload_id,
+select a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
         and ws.state = 'active')::bool as active,
        (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')::bool as stopping,
@@ -131,17 +129,7 @@ select r.id as release_id,
        coalesce(nullif((r.spec ->> 'keep_warm_seconds')::int, -1), 600)::int as keep_warm_seconds,
        (jsonb_array_length(coalesce(r.spec -> 'disks', '[]'::jsonb)) > 0)::bool as has_disks,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
-       (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       release_mounters(r.spec) as mounters,
-       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
-                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
-           as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
-        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
-       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
+       sqlc.embed(shape),
        coalesce((r.spec -> 'pod' ->> 'block_network')::boolean, false)::bool as block_network,
        coalesce(array(select jsonb_array_elements_text(r.spec -> 'pod' -> 'allow_list')), '{}')::text[] as allow_list,
        exists (
@@ -152,21 +140,14 @@ select r.id as release_id,
        c.starting::int as starting,
        c.ready::int as ready,
        c.draining::int as draining,
-       c.warm::int as warm,
-       r.start_failures,
-       last_stop.stopped_at as last_stopped_at
+       c.warm::int as warm
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join pod_states s on s.workload_id = w.id
--- The newest serve container's stop paces the next start after failed ones.
-left join lateral (
-    select lc.stopped_at from containers lc
-    where lc.release_id = r.id and lc.purpose = 'serve'
-    order by lc.id desc limit 1
-) last_stop on r.start_failures > 0
+join release_shapes shape on shape.id = r.id
 cross join lateral (
     select count(*) filter (where c.state = 'pending') as pending,
            count(*) filter (where c.state = 'starting') as starting,
@@ -184,20 +165,11 @@ cross join lateral (
 ) c
 order by r.id;
 
--- name: CreatePendingPodContainers :many
-insert into containers (
-    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    keep_warm_seconds, block_network, allow_list, traceparent
-)
-select @workspace_id, r.id, r.workload_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
-       sqlc.narg('keep_warm_seconds'), @block_network, @allow_list::text[], sqlc.narg('traceparent')::text
-from releases r, generate_series(1, @count::int)
-where r.id = @release_id
-returning id;
-
--- name: DrainPodContainers :many
--- Idle ready containers first, then the newest; the oldest active ones are
--- the ones holding connections.
+-- name: DrainExcessContainers :many
+-- Idle ready containers first, then the newest: the oldest active ones are
+-- the warmest and hold connections. Supervisors finish requests in flight
+-- before they exit, and the edge stops routing to a container once it sees
+-- the drain.
 update containers
 set state = 'draining', drain_started_at = now()
 where id in (

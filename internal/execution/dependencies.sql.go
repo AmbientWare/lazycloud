@@ -54,7 +54,7 @@ func (q *Queries) DependencyResults(ctx context.Context, taskIds []uuid.UUID) ([
 
 const failTasks = `-- name: FailTasks :exec
 update tasks
-set status = 'failed', failure = $1, finished_at = now(), current_attempt_id = null
+set status = 'failed', failure = $1, finished_at = now()
 where id = any($2::uuid[])
 `
 
@@ -63,8 +63,9 @@ type FailTasksParams struct {
 	Ids     []uuid.UUID
 }
 
-// The ids are queued tasks the caller locked or inserted, read by key alone
-// as FailQueuedTasksOfRelease reads them.
+// The ids are queued tasks the caller locked or inserted. They are read by
+// key alone: a status test would let a generic plan scan the whole queue
+// through a queued partial index.
 func (q *Queries) FailTasks(ctx context.Context, arg FailTasksParams) error {
 	_, err := q.db.Exec(ctx, failTasks, arg.Failure, arg.Ids)
 	return err

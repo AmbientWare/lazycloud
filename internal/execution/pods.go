@@ -12,7 +12,6 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/cpu"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -29,151 +28,29 @@ import (
 //
 // Containers above the count drain, idle ones first.
 func (e *Execution) PlanPods(ctx context.Context, logger *slog.Logger) (PlanResult, error) {
-	var result PlanResult
-	after := uuid.Nil
-	for {
-		var plans []releasePlan
-		var releases int
-		var last uuid.UUID
-		skipped := false
-		err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-			plans, releases, skipped = nil, 0, false
-			q := e.queries.WithTx(tx)
-			locked, err := q.TryPlanningLock(ctx)
-			if err != nil {
-				return fmt.Errorf("try planning lock: %w", err)
-			}
-			if !locked {
-				skipped = true
-				return nil
-			}
-			rows, err := q.PodReleases(ctx, PodReleasesParams{AfterID: after, BatchSize: planningBatch, StartFailureLimit: startFailureLimit})
-			if err != nil {
-				return fmt.Errorf("list pod releases: %w", err)
-			}
-			releases = len(rows)
-			for _, row := range rows {
-				last = row.ReleaseID
-				plan, err := e.planPodIsolated(ctx, tx, row)
-				if err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					logger.ErrorContext(ctx, "plan pod release", "release_id", row.ReleaseID, "error", err)
-					continue
-				}
-				plans = append(plans, plan)
-			}
-			return nil
-		})
-		if err != nil {
-			return result, fmt.Errorf("pod planning batch: %w", err)
-		}
-		if skipped {
-			result.Skipped = true
-			return result, nil
-		}
-		for _, plan := range plans {
-			result.add(plan)
-			logPlan(ctx, logger, plan)
-		}
-		if releases < planningBatch {
-			return result, nil
-		}
-		after = last
-	}
-}
-
-func (e *Execution) planPodIsolated(ctx context.Context, tx pgx.Tx, row PodReleasesRow) (releasePlan, error) {
-	savepoint, err := tx.Begin(ctx)
-	if err != nil {
-		return releasePlan{}, fmt.Errorf("begin savepoint: %w", err)
-	}
-	plan := releasePlan{release: PlanningReleasesRow{ReleaseID: row.ReleaseID}}
-	if err := e.planPod(ctx, savepoint, row, &plan); err != nil {
-		return releasePlan{}, errors.Join(err, savepoint.Rollback(ctx))
-	}
-	if err := savepoint.Commit(ctx); err != nil {
-		return releasePlan{}, fmt.Errorf("release savepoint: %w", err)
-	}
-	return plan, nil
+	return planReleases(ctx, e, logger,
+		func(ctx context.Context, q *Queries, after uuid.UUID) ([]PodReleasesRow, error) {
+			return q.PodReleases(ctx, PodReleasesParams{AfterID: after, BatchSize: planningBatch, StartFailureLimit: startFailureLimit})
+		},
+		func(r PodReleasesRow) ReleaseShape { return r.ReleaseShape }, e.planPod)
 }
 
 func (e *Execution) planPod(ctx context.Context, tx pgx.Tx, row PodReleasesRow, plan *releasePlan) error {
-	if row.CpuMillis <= 0 || row.MemoryBytes <= 0 {
+	shape := row.ReleaseShape
+	if shape.CpuMillis <= 0 || shape.MemoryBytes <= 0 {
 		return errors.New("release spec has no resources")
 	}
-	q := e.queries.WithTx(tx)
 	active := int(row.Pending + row.Starting + row.Ready)
 	desired := podDesired(row, active)
-	switch {
-	case active < desired:
-		if plan.holdStart(row.StartFailures, row.LastStoppedAt) {
-			return nil
-		}
-		count := desired - active
-		grant, err := billing.Admit(ctx, tx, billing.Request{
-			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount),
-			GPUModels: billingModels(row.GpuModels), Pinned: row.Pinned, Machine: row.Machine,
-		})
-		if refusedToWait(err) {
-			// Connections wait and time out.
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("admit containers: %w", err)
-		}
-		if count = grant.Start; count == 0 {
-			return nil
-		}
-		ctx, span, err := e.scaleUp(ctx, q, row.ReleaseID, count, active+int(row.Draining) == 0)
-		if err != nil {
-			return err
-		}
-		defer span.End()
-		var keepWarm *int32
+	if active < desired {
+		create := shape.create(row.WorkspaceID, 1)
 		if !row.AlwaysOn {
-			keepWarm = ptr(row.KeepWarmSeconds)
+			create.KeepWarmSeconds = new(row.KeepWarmSeconds)
 		}
-		created, err := q.CreatePendingPodContainers(ctx, CreatePendingPodContainersParams{
-			WorkspaceID: row.WorkspaceID, ReleaseID: row.ReleaseID,
-			CpuMillis: cpu.Millis(row.CpuMillis), MemoryBytes: row.MemoryBytes + mountReserve(row.Mounters), GpuCount: row.GpuCount,
-			RateClass:       string(billing.RateClassFor(row.Pinned, row.Preemptible)),
-			KeepWarmSeconds: keepWarm, BlockNetwork: row.BlockNetwork, AllowList: row.AllowList,
-			Count:       int32(count), //nolint:gosec // Bounded by the pod's count.
-			Traceparent: traceparent(ctx),
-		})
-		if err != nil {
-			return fmt.Errorf("create containers: %w", err)
-		}
-		plan.created = created
-	case active > desired:
-		excess := active - desired
-		if pending := min(excess, int(row.Pending)); pending > 0 {
-			stopped, err := q.StopPendingContainers(ctx, StopPendingContainersParams{
-				ReleaseID: row.ReleaseID, Count: int32(pending), //nolint:gosec // Bounded by live containers.
-			})
-			if err != nil {
-				return fmt.Errorf("stop pending containers: %w", err)
-			}
-			plan.stopped = stopped
-			excess -= len(stopped)
-		}
-		if excess <= 0 {
-			return nil
-		}
-		drained, err := q.DrainPodContainers(ctx, DrainPodContainersParams{
-			ReleaseID: row.ReleaseID, Count: int32(excess), //nolint:gosec // Bounded by live containers.
-		})
-		if err != nil {
-			return fmt.Errorf("drain containers: %w", err)
-		}
-		for _, d := range drained {
-			plan.drained = append(plan.drained, drainedContainer{id: d.ID, host: d.HostID})
-		}
-		return notifyHosts(ctx, tx, plan.drained)
+		create.BlockNetwork, create.AllowList = row.BlockNetwork, row.AllowList
+		return e.start(ctx, tx, plan, row.WorkspaceID, shape, create, nil, desired-active, active+int(row.Draining) == 0)
 	}
-	return nil
+	return e.trim(ctx, tx, plan, active-desired, row.Pending, e.drainExcess(ctx, tx, plan))
 }
 
 // podDesired is how many active serve containers the pod release should

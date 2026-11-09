@@ -52,10 +52,11 @@ select l.id, l.release_id from (
 where l.status = 'queued';
 
 -- name: FailTasks :exec
--- The ids are queued tasks the caller locked or inserted, read by key alone
--- as FailQueuedTasksOfRelease reads them.
+-- The ids are queued tasks the caller locked or inserted. They are read by
+-- key alone: a status test would let a generic plan scan the whole queue
+-- through a queued partial index.
 update tasks
-set status = 'failed', failure = @failure, finished_at = now(), current_attempt_id = null
+set status = 'failed', failure = @failure, finished_at = now()
 where id = any(@ids::uuid[]);
 
 -- name: DependencyResults :many

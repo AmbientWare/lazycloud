@@ -10,22 +10,11 @@ where id = @id;
 -- name: RunningAttemptsOnContainer :many
 select id from attempts where container_id = @container_id and state = 'running' order by id;
 
--- name: FailQueuedTasksOfRelease :many
--- The ids are queued tasks the caller locked with LockQueuedWithDependents.
--- They are read by key alone: a status test would let a generic plan scan
--- the whole queue through a queued partial index.
-update tasks
-set status = 'failed', failure = @failure, finished_at = now()
-where id = any(@ids::uuid[])
-returning id;
-
--- name: RecordFirstLoadError :execrows
--- Records the load error of a release that had none, which is when it stops
--- starting; a concurrent first record waits on the row and then finds one.
-update releases set load_error = @load_error where id = @id and load_error is null;
-
--- name: RecordLoadError :exec
-update releases set load_error = @load_error where id = @id;
+-- name: RecordLoadError :one
+-- Records the release's load error and whether it had none, which is when
+-- it stops starting; a concurrent first record waits on the row and then
+-- finds one.
+update releases set load_error = @load_error where id = @id returning (old.load_error is null)::bool as first;
 
 -- name: ReleaseHasPlacedContainer :one
 -- Whether a container of the release other than this one holds a host, and

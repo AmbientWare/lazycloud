@@ -29,7 +29,7 @@ with recursive queued (release_id) as (
       and a.state = 'active'
       and ws.state = 'active'
       and w.active_release_id > @after_id
-      and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
+      and (r.spec -> 'autoscaler' ->> 'min_containers')::int > 0
 ),
 batch as (
     -- HTTP workloads and previews follow traffic instead; ServingReleases
@@ -42,8 +42,7 @@ batch as (
     order by c.release_id
     limit @batch_size
 )
-select r.id as release_id,
-       a.workspace_id,
+select a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
         and ws.state = 'active')::bool as active,
        -- A deleted app or workload and a deleting workspace wind down; a
@@ -53,25 +52,12 @@ select r.id as release_id,
         or (r.version is not null and (a.state <> 'active' or w.desired_state = 'stopped')))::bool as stopping,
        -- Deletion also cancels running tasks.
        (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
+       sqlc.embed(shape),
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
        coalesce((r.spec ->> 'concurrency')::int, 1)::int as slots,
        coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
-       (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
-       ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
-       release_mounters(r.spec) as mounters,
-       -- What billing prices and admits: the cards each container holds (a
-       -- GPU list without a count holds one), and whether placement is
-       -- preemptible and pinned to a region, zone or machine.
-       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
-                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
-           as gpu_count,
-       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
-       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
-       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
-        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
-       (coalesce(r.spec -> 'placement' ->> 'machine', '') <> '')::bool as machine,
        q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,
@@ -79,20 +65,13 @@ select r.id as release_id,
        c.ready::int as ready,
        c.draining::int as draining,
        coalesce(c.leaving, false)::bool as leaving,
-       (r.load_error is not null)::bool as load_failed,
-       r.start_failures,
-       last_stop.stopped_at as last_stopped_at
+       (r.load_error is not null)::bool as load_failed
 from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
--- The newest serve container's stop paces the next start after failed ones.
-left join lateral (
-    select lc.stopped_at from containers lc
-    where lc.release_id = r.id and lc.purpose = 'serve'
-    order by lc.id desc limit 1
-) last_stop on r.start_failures > 0
+join release_shapes shape on shape.id = r.id
 -- Demand past max_containers * tasks_per_container changes no decision, so
 -- the count stops there and a deep backlog reads a bounded prefix.
 cross join lateral (
@@ -128,8 +107,12 @@ order by r.id;
 -- name: CreatePendingContainers :many
 -- Placement records the GPU model and whose machine a container got. The
 -- first containers replace those @replaces names, one each.
-insert into containers (workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class, traceparent, replaces)
-select @workspace_id, r.id, r.workload_id, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class, sqlc.narg('traceparent')::text,
+insert into containers (
+    workspace_id, release_id, workload_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
+    keep_warm_seconds, block_network, allow_list, traceparent, replaces
+)
+select @workspace_id, r.id, r.workload_id, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
+       sqlc.narg('keep_warm_seconds'), @block_network, @allow_list::text[], sqlc.narg('traceparent')::text,
        (@replaces::uuid[])[n]
 from releases r, generate_series(1, @count::int) n
 where r.id = @release_id
@@ -244,11 +227,20 @@ set status = 'cancelled', finished_at = now()
 where id = any(@ids::uuid[]) and status = 'queued'
 returning id;
 
--- name: RunningTasksOfRelease :many
-select id from tasks
-where release_id = @release_id and status = 'running'
-order by id
-limit @batch_size;
+-- name: CancelRunningTasksOfRelease :many
+-- Up to batch_size running tasks of the release, locked in id order and
+-- cancelled, with their current attempts and the hosts that run them.
+update tasks t
+set status = 'cancelled', finished_at = now()
+where t.id in (
+    select r.id from tasks r
+    where r.release_id = @release_id and r.status = 'running'
+    order by r.id
+    limit @batch_size
+    for update
+)
+returning t.id, t.current_attempt_id,
+          (select c.host_id from attempts a join containers c on c.id = a.container_id where a.id = t.current_attempt_id) as host_id;
 
 -- name: TryPlanningLock :one
 -- Serializes planners for the rest of the transaction, so container creation
