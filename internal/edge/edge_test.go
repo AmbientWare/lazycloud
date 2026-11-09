@@ -46,7 +46,7 @@ func newTestEdgeFlushing(t *testing.T, pool *pgxpool.Pool, flush time.Duration) 
 	logger := slog.New(slog.DiscardHandler)
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
 		execution.NewExecution(pool), database.NewListener(pool, logger), Config{
-			URL: "http://lazycloud.localhost:8082", FailureCheckInterval: testFailureCheck, RequestFlush: flush,
+			URL: "http://lazycloud.localhost:8082", SessionPool: pool, FailureCheckInterval: testFailureCheck, RequestFlush: flush,
 		}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +632,7 @@ func TestDomainRegistrationFollowsThePlan(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingProvider{}
 	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
-		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", SessionPool: pool, Domains: provider, FailureCheckInterval: FailureCheckInterval, RequestFlush: RequestFlush}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

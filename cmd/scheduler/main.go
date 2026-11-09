@@ -206,7 +206,7 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	if err != nil {
 		return err
 	}
-	objectStore, err := objectStoreFromEnv(fleet)
+	objectStore, err := storage.ConfigFromEnv(fleet)
 	if err != nil {
 		return err
 	}
@@ -573,30 +573,4 @@ func run(ctx context.Context, logger *slog.Logger, t ticks) error {
 	}
 	logger.Info("scheduler stopped")
 	return nil
-}
-
-// objectStoreFromEnv reads the object store the server uses; the sweeper
-// deletes bytes there. Workspace buckets are named as the fleet says.
-func objectStoreFromEnv(fleet compute.Fleet) (storage.Config, error) {
-	cfg := storage.Config{
-		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
-		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
-		Bucket:          os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"),
-		LayerBucket:     os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
-		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
-		DeleteChunk:     storage.DefaultDeleteChunk,
-		Workspaces: storage.WorkspaceBuckets{
-			Provider:         storage.BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
-			Prefix:           fleet.BucketPrefix,
-			AccountID:        fleet.AccountID,
-			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
-			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
-			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
-		},
-	}
-	if err := cfg.Validate(); err != nil {
-		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
-	}
-	return cfg, nil
 }

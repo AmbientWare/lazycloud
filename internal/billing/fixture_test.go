@@ -23,7 +23,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	pool := dbtest.New(t)
-	f := &fixture{t: t, pool: pool, billing: NewBilling(pool, Config{PublicURL: "https://lazycloud.test"}, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	f := &fixture{t: t, pool: pool, billing: NewBilling(pool, Config{PublicURL: "https://lazycloud.test", SessionPool: pool}, slog.New(slog.NewTextHandler(io.Discard, nil)))}
 	// Containers' measured use is complete through tomorrow unless a test
 	// holds the rollup watermark back.
 	f.exec("update container_metric_rollup set rolled_through = now() + interval '1 day'")

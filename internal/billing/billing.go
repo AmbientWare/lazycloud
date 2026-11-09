@@ -5,10 +5,10 @@
 package billing
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,8 +68,16 @@ type Config struct {
 	PublicURL string
 	Stripe    StripeConfig
 	// SessionPool holds the metering lock, a session advisory lock
-	// (database.OpenSession); nil uses the pool.
+	// (database.OpenSession); Meter needs it.
 	SessionPool *pgxpool.Pool
+}
+
+// ConfigFromEnv reads the Stripe credentials from the environment, so they
+// stay out of the process arguments.
+func ConfigFromEnv(publicURL string, session *pgxpool.Pool) Config {
+	return Config{PublicURL: publicURL, SessionPool: session, Stripe: StripeConfig{
+		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_API_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
+	}}
 }
 
 // Billing is the billing owner.
@@ -88,7 +96,7 @@ type Billing struct {
 // answers ErrPaymentsUnavailable.
 func NewBilling(pool *pgxpool.Pool, cfg Config, logger *slog.Logger) *Billing {
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
-	b := &Billing{pool: pool, session: cmp.Or(cfg.SessionPool, pool), queries: New(pool), rates: newRates(), cfg: cfg, logger: logger}
+	b := &Billing{pool: pool, session: cfg.SessionPool, queries: New(pool), rates: newRates(), cfg: cfg, logger: logger}
 	if cfg.Stripe.SecretKey != "" {
 		b.stripe = newStripeProvider(cfg.Stripe)
 	}

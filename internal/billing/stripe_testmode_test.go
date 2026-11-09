@@ -37,7 +37,7 @@ func TestStripeTestMode(t *testing.T) {
 		t.Fatal("LAZYCLOUD_TEST_STRIPE_API_KEY is not a test-mode key")
 	}
 	f := newFixture(t)
-	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test",
+	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", SessionPool: f.pool,
 		Stripe: StripeConfig{SecretKey: key, WebhookSecret: testModeWebhookSecret}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := t.Context()
 	client := f.billing.stripe.client

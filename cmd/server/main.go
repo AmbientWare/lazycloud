@@ -14,7 +14,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -105,14 +104,6 @@ func env(name, fallback string) string {
 	return fallback
 }
 
-// billingConfig reads the Stripe credentials from the environment, so they
-// stay out of the process arguments.
-func billingConfig(publicURL string) billing.Config {
-	return billing.Config{PublicURL: publicURL, Stripe: billing.StripeConfig{
-		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_API_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
-	}}
-}
-
 // credential is a flag value whose default comes from the environment and
 // never prints: -help shows each flag's default, and these hold passwords.
 type credential struct{ value *string }
@@ -161,14 +152,12 @@ type serveConfig struct {
 	healthAddr    string
 	sessionURL    *string
 	objectStore   storage.Config
-	layerReplicas string
 	imageTemplate string
 	secretsKey    string
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
 	buildCPU      string
-	billing       billing.Config
 	compute       compute.Config
 	grpcCert      string
 	grpcKey       string
@@ -192,15 +181,6 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
 	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
-	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL; empty is AWS S3 (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
-	fs.StringVar(&cfg.objectStore.Region, "object-store-region", env("LAZYCLOUD_OBJECT_STORE_REGION", ""), "object store region (LAZYCLOUD_OBJECT_STORE_REGION)")
-	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
-	fs.StringVar(&cfg.objectStore.LayerBucket, "object-store-layer-bucket", env("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET", ""), "bucket for converted image layers (LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET)")
-	fs.StringVar(&cfg.layerReplicas, "object-store-layer-replicas", env("LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS", ""), "JSON object of region to bucket: the layer bucket's copies hosts in those regions read (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS)")
-	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id; empty uses the AWS default credential chain (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
-	fs.StringVar((*string)(&cfg.objectStore.Workspaces.Provider), "workspace-bucket-provider", env("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER", ""), "garage or aws: creates the per-workspace buckets of volumes and disks (LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER)")
-	fs.StringVar(&cfg.objectStore.Workspaces.GarageAdminURL, "garage-admin-url", env("LAZYCLOUD_GARAGE_ADMIN_URL", ""), "Garage admin API URL (LAZYCLOUD_GARAGE_ADMIN_URL)")
-	fs.StringVar(&cfg.objectStore.Workspaces.RoleARN, "workspace-bucket-role-arn", env("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN", ""), "role STS issues host credentials for (LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN)")
 	fs.StringVar(&cfg.buildCPU, "build-cpu", env("LAZYCLOUD_BUILD_CPU", "4"), "CPUs a build container reserves (LAZYCLOUD_BUILD_CPU)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", ""), "the platform's Python base image, {version} replaced with a minor version (LAZYCLOUD_IMAGE_TEMPLATE)")
 	fs.StringVar(&cfg.secretsKey, "secrets-key-file", env("LAZYCLOUD_SECRETS_KEY_FILE", ""), "32-byte master key file that wraps secret data keys (LAZYCLOUD_SECRETS_KEY_FILE)")
@@ -252,8 +232,9 @@ func serve(ctx context.Context, args []string) error {
 		return errors.New("AWS account connections need LAZYCLOUD_AWS_TEMPLATE_BUCKET, the bucket the connection template is published to")
 	}
 	cfg.compute.Fleet = fleet
-	cfg.objectStore.Workspaces.Prefix, cfg.objectStore.Workspaces.AccountID = fleet.BucketPrefix, fleet.AccountID
-	cfg.objectStore.DeleteChunk = storage.DefaultDeleteChunk
+	if cfg.objectStore, err = storage.ConfigFromEnv(fleet); err != nil {
+		return err
+	}
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
@@ -288,18 +269,7 @@ func serve(ctx context.Context, args []string) error {
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	cfg.api.ResendWebhookSecret = os.Getenv("LAZYCLOUD_RESEND_WEBHOOK_SECRET")
 	cfg.api.PublicURL = cfg.identity.PublicURL
-	cfg.billing = billingConfig(cfg.identity.PublicURL)
-	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
-	cfg.objectStore.Workspaces.GarageAdminToken = os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN")
 	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
-	if cfg.layerReplicas != "" {
-		if err := json.Unmarshal([]byte(cfg.layerReplicas), &cfg.objectStore.LayerReplicas); err != nil {
-			return fmt.Errorf("layer replicas (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS): %w", err)
-		}
-	}
-	if err := cfg.objectStore.Validate(); err != nil {
-		return fmt.Errorf("object store: %w", err)
-	}
 	if cfg.secretsKey == "" {
 		return errors.New("the secrets key file is required: set LAZYCLOUD_SECRETS_KEY_FILE or -secrets-key-file")
 	}
@@ -397,8 +367,9 @@ func serveWith(ctx context.Context, pool, session *pgxpool.Pool, cfg serveConfig
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
-	bill := billing.NewBilling(pool, cfg.billing, logger)
-	if cfg.billing.Stripe.SecretKey == "" {
+	billingConfig := billing.ConfigFromEnv(cfg.identity.PublicURL, session)
+	bill := billing.NewBilling(pool, billingConfig, logger)
+	if billingConfig.Stripe.SecretKey == "" {
 		logger.WarnContext(ctx, "payments are unavailable: set LAZYCLOUD_STRIPE_API_KEY and LAZYCLOUD_STRIPE_WEBHOOK_SECRET")
 	}
 	relayURL := cfg.relayURL

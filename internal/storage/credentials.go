@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sync"
 	"time"
@@ -11,7 +13,40 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+
+	"github.com/AmbientWare/lazycloud/internal/compute"
 )
+
+// ConfigFromEnv reads and validates the object store from LAZYCLOUD_OBJECT_STORE_*
+// and the workspace bucket settings, which fleet's prefix and account name.
+func ConfigFromEnv(fleet compute.Fleet) (Config, error) {
+	cfg := Config{
+		Endpoint:        os.Getenv("LAZYCLOUD_OBJECT_STORE_ENDPOINT"),
+		Region:          os.Getenv("LAZYCLOUD_OBJECT_STORE_REGION"),
+		Bucket:          os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"),
+		LayerBucket:     os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_BUCKET"),
+		AccessKeyID:     os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
+		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
+		DeleteChunk:     DefaultDeleteChunk,
+		Workspaces: WorkspaceBuckets{
+			Provider:         BucketProvider(os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER")),
+			Prefix:           fleet.BucketPrefix,
+			AccountID:        fleet.AccountID,
+			GarageAdminURL:   os.Getenv("LAZYCLOUD_GARAGE_ADMIN_URL"),
+			GarageAdminToken: os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN"),
+			RoleARN:          os.Getenv("LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN"),
+		},
+	}
+	if replicas := os.Getenv("LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS"); replicas != "" {
+		if err := json.Unmarshal([]byte(replicas), &cfg.LayerReplicas); err != nil {
+			return cfg, fmt.Errorf("layer replicas (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS): %w", err)
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
+	}
+	return cfg, nil
+}
 
 // Validate checks that cfg names an object store the server can use. The
 // static key pair is optional: without it the AWS default credential chain

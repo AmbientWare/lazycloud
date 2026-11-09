@@ -39,7 +39,7 @@ func stripeMock(t *testing.T) StripeConfig {
 func newStripeFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := newFixture(t)
-	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", Stripe: stripeMock(t)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test", SessionPool: f.pool, Stripe: stripeMock(t)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return f
 }
 

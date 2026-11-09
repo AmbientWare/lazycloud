@@ -600,7 +600,7 @@ update billing_balances set balance_nanos = 0`); err != nil {
 	}
 
 	container := placeAndStart(t, f, host)
-	if _, err := billing.NewBilling(f.pool, billing.Config{}, slog.New(slog.DiscardHandler)).Meter(ctx); err != nil {
+	if _, err := billing.NewBilling(f.pool, billing.Config{SessionPool: f.pool}, slog.New(slog.DiscardHandler)).Meter(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count(t, "select coalesce(sum(live_containers), 0)::int from billing_balances"); n != 0 {
