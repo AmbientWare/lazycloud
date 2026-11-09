@@ -59,22 +59,29 @@ func (q *Queries) FleetRollout(ctx context.Context, liveAfter time.Time) ([]Flee
 }
 
 const platformHostSpend = `-- name: PlatformHostSpend :many
-with spans as (
-    select c.host_id, c.phase, c.at,
-           lead(c.at, 1, now()) over (partition by c.host_id order by c.at) as until
-    from host_phase_changes c
-    join hosts h on h.id = c.host_id
-    where h.kind = 'platform' and h.provider = 'aws'
-      and (h.phase not in ('deleted', 'failed') or h.phase_at > $1::timestamptz)
+with platform as (
+    select id from hosts
+    where kind = 'platform' and provider = 'aws' and (phase not in ('deleted', 'failed') or phase_at > $1::timestamptz)
+), changes as (
+    select c.host_id, c.at, c.phase
+    from platform p join host_phase_changes c on c.host_id = p.id and c.at >= $1::timestamptz
+    union all
+    select p.id, b.at, b.phase
+    from platform p
+    cross join lateral (select at, phase from host_phase_changes
+                        where host_id = p.id and at < $1::timestamptz order by at desc limit 1) b
+), spans as (
+    select host_id, phase, greatest(at, $1::timestamptz) as began,
+           lead(at, 1, now()) over (partition by host_id order by at) as until
+    from changes
 )
 select h.id, h.instance_type, h.region, h.hibernation_configured, h.phase,
        coalesce(h.hourly_micros, 0)::bigint as hourly_micros,
-       coalesce(sum(extract(epoch from s.until - greatest(s.at, $1::timestamptz))) filter (where s.phase in
+       coalesce(sum(extract(epoch from s.until - s.began)) filter (where s.phase in
            ('provisioning', 'booting', 'joining', 'ready', 'draining', 'preparing', 'stopping', 'resuming')), 0)::float8 as running_seconds,
-       coalesce(sum(extract(epoch from s.until - greatest(s.at, $1::timestamptz))) filter (where s.phase = 'stopped'), 0)::float8 as stopped_seconds
+       coalesce(sum(extract(epoch from s.until - s.began)) filter (where s.phase = 'stopped'), 0)::float8 as stopped_seconds
 from hosts h
 join spans s on s.host_id = h.id
-where s.until > $1::timestamptz
 group by h.id
 order by h.id
 `
@@ -92,7 +99,8 @@ type PlatformHostSpendRow struct {
 
 // Each platform cloud host live now or since @since: what prices it, its
 // phase now, and the seconds since @since it ran (a billed phase, as in
-// AtLossSpentToday) and lay stopped, from its phase history.
+// AtLossSpentToday) and lay stopped. Reads each host's changes since @since
+// and the last one before it, so the cost follows live hosts, not history.
 func (q *Queries) PlatformHostSpend(ctx context.Context, since time.Time) ([]PlatformHostSpendRow, error) {
 	rows, err := q.db.Query(ctx, platformHostSpend, since)
 	if err != nil {

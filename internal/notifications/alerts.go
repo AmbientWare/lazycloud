@@ -105,7 +105,8 @@ func (n *Notifications) AlertSpend(ctx context.Context, hourlyMicros, dailyMicro
 		if err != nil {
 			return err
 		}
-		over := func(limit *int64, spent int64) bool { return limit != nil && spent > *limit }
+		// Without an address nothing is sent, so nothing counts as over.
+		over := func(limit *int64, spent int64) bool { return row.Email != "" && limit != nil && spent > *limit }
 		hourly, daily := over(row.HourlyLimitMicros, hourlyMicros), over(row.DailyLimitMicros, dailyMicros)
 		for _, c := range []struct {
 			crossed bool
@@ -115,7 +116,7 @@ func (n *Notifications) AlertSpend(ctx context.Context, hourlyMicros, dailyMicro
 			{hourly && !row.HourlyOver, "hourly", row.HourlyLimitMicros},
 			{daily && !row.DailyOver, "daily", row.DailyLimitMicros},
 		} {
-			if !c.crossed || row.Email == "" {
+			if !c.crossed {
 				continue
 			}
 			if err := enqueueAlert(ctx, tx, row.Email, Alert{

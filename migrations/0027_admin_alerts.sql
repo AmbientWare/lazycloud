@@ -14,3 +14,11 @@ create table admin_alerts (
     daily_over boolean not null default false,
     updated_at timestamptz not null default now()
 );
+
+-- Host phase history once dropped every change older than its retention;
+-- a host left with none gets its current phase from when it began.
+insert into host_phase_changes (host_id, at, phase, capacity_state)
+select h.id, h.phase_at, h.phase, h.capacity_state
+from hosts h
+where h.phase not in ('deleted', 'failed') and not exists (select 1 from host_phase_changes c where c.host_id = h.id)
+on conflict do nothing;

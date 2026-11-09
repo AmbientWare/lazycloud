@@ -20,11 +20,11 @@ import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 const usd = (micros: number) => formatCostNanos(micros * 1000, "USD", 2);
 
-/** A limit field's dollars as micros: undefined when blank, null when not a positive number. */
+/** A limit field's dollars as micros: undefined when blank, null when under a micro or not a number. */
 function limitMicros(text: string): number | undefined | null {
   if (!text.trim()) return undefined;
-  const dollars = Number(text);
-  return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 1e6) : null;
+  const micros = Math.round(Number(text) * 1e6);
+  return Number.isFinite(micros) && micros >= 1 ? micros : null;
 }
 
 export function SpendSettings() {

@@ -9,12 +9,19 @@ import (
 
 // Spend over a limit emails the administrators once per crossing: staying
 // over sends nothing more, falling back under re-arms it, and so does
-// changing the limit.
+// changing the limit. Spend over a limit before an address is set alerts
+// once one is.
 func TestSpendAlertsSendOncePerCrossing(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)
 	n := NewNotifications(pool, nil, slog.New(slog.DiscardHandler))
 	limit := int64(10_000_000)
+	if err := n.SetAdminAlerts(t.Context(), AdminAlerts{HourlyLimitMicros: &limit}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.AlertSpend(t.Context(), 12_000_000, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := n.SetAdminAlerts(t.Context(), AdminAlerts{Email: "ops@example.com", HourlyLimitMicros: &limit}); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +36,7 @@ func TestSpendAlertsSendOncePerCrossing(t *testing.T) {
 	for _, step := range []struct {
 		hourly int64
 		want   int
-	}{{9_000_000, 0}, {12_000_000, 1}, {15_000_000, 1}, {8_000_000, 1}, {11_000_000, 2}} {
+	}{{12_000_000, 1}, {15_000_000, 1}, {8_000_000, 1}, {11_000_000, 2}} {
 		if err := n.AlertSpend(t.Context(), step.hourly, 0); err != nil {
 			t.Fatal(err)
 		}
