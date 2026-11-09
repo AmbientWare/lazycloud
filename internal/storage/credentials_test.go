@@ -94,7 +94,7 @@ func TestConfigValidation(t *testing.T) {
 			Workspaces: WorkspaceBuckets{Provider: ProviderGarage, Prefix: "lazycloud-ws", AccountID: "000000000000"}},
 	}
 	for _, c := range ok {
-		if err := c.Validate(); err != nil {
+		if err := c.validate(); err != nil {
 			t.Errorf("%+v: %v", c, err)
 		}
 	}
@@ -110,7 +110,7 @@ func TestConfigValidation(t *testing.T) {
 		{Region: "us-east-2", Bucket: "b", LayerBucket: "l", Workspaces: WorkspaceBuckets{Prefix: "lazycloud-production-workspace"}},
 	}
 	for _, c := range bad {
-		if err := c.Validate(); err == nil {
+		if err := c.validate(); err == nil {
 			t.Errorf("%+v passed validation", c)
 		}
 	}

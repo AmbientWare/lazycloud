@@ -115,8 +115,8 @@ type Config struct {
 // PlatformTransferBackoff is Config.PlatformTransferBackoff in production.
 const PlatformTransferBackoff = time.Second
 
-// Validate refuses settings the owner cannot run with.
-func (c Config) Validate() error {
+// validate refuses settings the owner cannot run with.
+func (c Config) validate() error {
 	if c.PlatformTransferBackoff <= 0 {
 		return fmt.Errorf("images: the platform transfer backoff must be positive, not %s", c.PlatformTransferBackoff)
 	}
@@ -205,7 +205,7 @@ type Images struct {
 // NewImages returns the images owner, or the error of a config it cannot
 // run with.
 func NewImages(pool *pgxpool.Pool, exec *execution.Execution, vault *secrets.Secrets, store *storage.Storage, config Config) (*Images, error) {
-	if err := config.Validate(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 	return &Images{

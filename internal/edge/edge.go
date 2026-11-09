@@ -49,8 +49,8 @@ const FailureCheckInterval = time.Second
 // RequestFlush is Config.RequestFlush in production.
 const RequestFlush = time.Second
 
-// Validate refuses settings the edge cannot run with.
-func (c Config) Validate() error {
+// validate refuses settings the edge cannot run with.
+func (c Config) validate() error {
 	if c.FailureCheckInterval <= 0 {
 		return fmt.Errorf("edge: the failure check interval must be positive, not %s", c.FailureCheckInterval)
 	}
@@ -118,7 +118,7 @@ type versionKey struct {
 // NewEdge returns the edge. listener must listen on database.ChannelTask
 // for function invocations.
 func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Execution, listener *database.Listener, cfg Config, logger *slog.Logger) (*Edge, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	urls, err := ParseURLs(cfg.URL)

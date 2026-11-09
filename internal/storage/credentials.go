@@ -42,18 +42,18 @@ func ConfigFromEnv(fleet compute.Fleet) (Config, error) {
 			return cfg, fmt.Errorf("layer replicas (LAZYCLOUD_OBJECT_STORE_LAYER_REPLICAS): %w", err)
 		}
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return cfg, fmt.Errorf("object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
 	}
 	return cfg, nil
 }
 
-// Validate checks that cfg names an object store the server can use. The
+// validate checks that cfg names an object store the server can use. The
 // static key pair is optional: without it the AWS default credential chain
 // supplies credentials, such as EKS Pod Identity or IRSA. Garage has no
 // such chain and needs the pair, which is also the key its workspace
 // buckets are opened to.
-func (c Config) Validate() error {
+func (c Config) validate() error {
 	if c.Region == "" || c.Bucket == "" || c.LayerBucket == "" {
 		return errors.New("the object store region, bucket and layer bucket are required")
 	}
