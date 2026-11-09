@@ -61,7 +61,7 @@ func (s *Server) previewOut(ctx context.Context, p control.Preview) (apitypes.Pr
 // CreatePreview starts a preview of one workload definition.
 func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObject) (CreatePreviewResponseObject, error) {
 	ws := workspaceFrom(ctx)
-	user, err := s.user(ctx)
+	caller, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObje
 	if err := s.pinImage(ctx, ws.ID, &req.Body.Spec); err != nil {
 		return nil, err
 	}
-	p, err := s.owners.Control.CreatePreview(ctx, ws.ID, user, req.App, req.Body.Spec, timeout)
+	p, err := s.owners.Control.CreatePreview(ctx, ws.ID, caller.User, req.App, req.Body.Spec, timeout)
 	if err != nil {
 		return nil, err
 	}

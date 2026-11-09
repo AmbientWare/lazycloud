@@ -17,8 +17,9 @@ import (
 // login.
 const ActivatePath = "/activate"
 
+// principal is the calling user; a container acts for its workspace, not
+// for a user.
 func (s *Server) principal(ctx context.Context) (identity.Principal, error) {
-	// A container acts for its workspace, not for a user or account.
 	if _, ok := containerFrom(ctx); ok {
 		return identity.Principal{}, identity.ErrForbidden
 	}
@@ -27,6 +28,25 @@ func (s *Server) principal(ctx context.Context) (identity.Principal, error) {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 	return p, nil
+}
+
+// account is the calling user with a credential not restricted to one
+// workspace, as action needs.
+func (s *Server) account(ctx context.Context, action string) (identity.Principal, error) {
+	p, err := s.principal(ctx)
+	if err == nil && p.TokenWorkspace != nil {
+		err = &identity.AccountError{Action: action}
+	}
+	return p, err
+}
+
+// admin admits platform administrators with an account credential.
+func (s *Server) admin(ctx context.Context) error {
+	p, err := s.account(ctx, "administer the platform")
+	if err == nil && !p.IsAdmin {
+		err = identity.ErrAdminRequired
+	}
+	return err
 }
 
 // GetMe returns the caller and the workspaces they are a member of.

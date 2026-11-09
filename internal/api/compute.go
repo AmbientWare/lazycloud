@@ -17,19 +17,6 @@ import (
 
 var errInvalidCursor = errors.New("the cursor is not from a previous page")
 
-// account returns the caller's account for account-level compute: a user
-// credential that is not restricted to one workspace.
-func (s *Server) account(ctx context.Context, action string) (identity.Principal, error) {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return identity.Principal{}, identity.ErrUnauthenticated
-	}
-	if p.TokenWorkspace != nil {
-		return identity.Principal{}, &identity.AccountError{Action: action}
-	}
-	return p, nil
-}
-
 func encodeCursor(v any) *string {
 	data, err := json.Marshal(v)
 	if err != nil {

@@ -69,17 +69,9 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 	return InvokeFunction200JSONResponse(out), nil
 }
 
-func (s *Server) user(ctx context.Context) (identity.UserID, error) {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return identity.UserID{}, identity.ErrUnauthenticated
-	}
-	return p.User, nil
-}
-
 // ListDomains lists the caller's custom domains.
 func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) (ListDomainsResponseObject, error) {
-	user, err := s.user(ctx)
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +82,7 @@ func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) 
 	if req.Params.Limit != nil {
 		limit = *req.Params.Limit
 	}
-	domains, next, err := s.owners.Edge.ListDomains(ctx, user, after, limit)
+	domains, next, err := s.owners.Edge.ListDomains(ctx, p.User, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +95,11 @@ func (s *Server) ListDomains(ctx context.Context, req ListDomainsRequestObject) 
 
 // RegisterDomain registers a custom domain for the caller.
 func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestObject) (RegisterDomainResponseObject, error) {
-	user, err := s.user(ctx)
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	domain, err := s.owners.Edge.RegisterDomain(ctx, user, req.Body.Hostname)
+	domain, err := s.owners.Edge.RegisterDomain(ctx, p.User, req.Body.Hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +108,11 @@ func (s *Server) RegisterDomain(ctx context.Context, req RegisterDomainRequestOb
 
 // GetDomain reads one custom domain.
 func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (GetDomainResponseObject, error) {
-	user, err := s.user(ctx)
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	domain, err := s.owners.Edge.GetDomain(ctx, user, req.Hostname)
+	domain, err := s.owners.Edge.GetDomain(ctx, p.User, req.Hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -129,11 +121,11 @@ func (s *Server) GetDomain(ctx context.Context, req GetDomainRequestObject) (Get
 
 // RemoveDomain retires a custom domain.
 func (s *Server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject) (RemoveDomainResponseObject, error) {
-	user, err := s.user(ctx)
+	p, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.owners.Edge.RemoveDomain(ctx, user, req.Hostname); err != nil {
+	if err := s.owners.Edge.RemoveDomain(ctx, p.User, req.Hostname); err != nil {
 		return nil, err
 	}
 	return RemoveDomain204Response{}, nil

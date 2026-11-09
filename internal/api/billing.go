@@ -11,36 +11,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
-
-// payer is the account a billing operation acts for: the caller's own,
-// reached only with an account credential.
-func (s *Server) payer(ctx context.Context) (uuid.UUID, error) {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return uuid.UUID{}, err
-	}
-	if p.TokenWorkspace != nil {
-		return uuid.UUID{}, &identity.AccountError{Action: "manage billing"}
-	}
-	return uuid.UUID(p.User), nil
-}
-
-// billingAdmin admits platform administrators with an account credential.
-func (s *Server) billingAdmin(ctx context.Context) error {
-	p, err := s.principal(ctx)
-	if err != nil {
-		return err
-	}
-	if p.TokenWorkspace != nil {
-		return &identity.AccountError{Action: "administer billing"}
-	}
-	if !p.IsAdmin {
-		return identity.ErrAdminRequired
-	}
-	return nil
-}
 
 // GetPricing returns the public pricing catalog.
 func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (GetPricingResponseObject, error) {
@@ -58,11 +29,11 @@ func (s *Server) GetPricing(_ context.Context, req GetPricingRequestObject) (Get
 
 // GetBilling returns the caller's billing account.
 func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (GetBillingResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.Account(ctx, user)
+	account, err := s.owners.Billing.Account(ctx, uuid.UUID(p.User))
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +42,11 @@ func (s *Server) GetBilling(ctx context.Context, _ GetBillingRequestObject) (Get
 
 // SetBillingPreferences sets the monthly usage limit and automatic reload.
 func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPreferencesRequestObject) (SetBillingPreferencesResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.SetPreferences(ctx, user, *req.Body)
+	account, err := s.owners.Billing.SetPreferences(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -84,11 +55,11 @@ func (s *Server) SetBillingPreferences(ctx context.Context, req SetBillingPrefer
 
 // ResumeAutomaticReload resumes reload after a failed payment.
 func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticReloadRequestObject) (ResumeAutomaticReloadResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.ResumeReload(ctx, user)
+	account, err := s.owners.Billing.ResumeReload(ctx, uuid.UUID(p.User))
 	if err != nil {
 		return nil, err
 	}
@@ -97,11 +68,11 @@ func (s *Server) ResumeAutomaticReload(ctx context.Context, _ ResumeAutomaticRel
 
 // ChangePlan moves the account onto published plan terms.
 func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (ChangePlanResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	account, err := s.owners.Billing.ChangePlan(ctx, user, *req.Body)
+	account, err := s.owners.Billing.ChangePlan(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +81,11 @@ func (s *Server) ChangePlan(ctx context.Context, req ChangePlanRequestObject) (C
 
 // StartPaymentMethodSetup opens Stripe's card page.
 func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMethodSetupRequestObject) (StartPaymentMethodSetupResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	url, err := s.owners.Billing.PaymentMethodSession(ctx, user, *req.Body)
+	url, err := s.owners.Billing.PaymentMethodSession(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -123,11 +94,11 @@ func (s *Server) StartPaymentMethodSetup(ctx context.Context, req StartPaymentMe
 
 // StartBillingPortal opens Stripe's invoices page.
 func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalRequestObject) (StartBillingPortalResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	url, err := s.owners.Billing.PortalSession(ctx, user, *req.Body)
+	url, err := s.owners.Billing.PortalSession(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -136,11 +107,11 @@ func (s *Server) StartBillingPortal(ctx context.Context, req StartBillingPortalR
 
 // CreateCreditPurchase starts a credit purchase through Checkout.
 func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurchaseRequestObject) (CreateCreditPurchaseResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
-	purchase, err := s.owners.Billing.BuyCredit(ctx, user, *req.Body)
+	purchase, err := s.owners.Billing.BuyCredit(ctx, uuid.UUID(p.User), *req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +120,7 @@ func (s *Server) CreateCreditPurchase(ctx context.Context, req CreateCreditPurch
 
 // ListCosts pages through the account's usage cost.
 func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (ListCostsResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +137,7 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 	if req.Params.Limit != nil {
 		q.Limit = *req.Params.Limit
 	}
-	page, err := s.owners.Billing.Costs(ctx, user, q)
+	page, err := s.owners.Billing.Costs(ctx, uuid.UUID(p.User), q)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +146,7 @@ func (s *Server) ListCosts(ctx context.Context, req ListCostsRequestObject) (Lis
 
 // GetCostSeries returns the account's spend interval by interval.
 func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObject) (GetCostSeriesResponseObject, error) {
-	user, err := s.payer(ctx)
+	p, err := s.account(ctx, "manage billing")
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +154,7 @@ func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObje
 	if req.Params.Bucket != nil {
 		bucket = *req.Params.Bucket
 	}
-	series, err := s.owners.Billing.CostSeries(ctx, user, req.Params.Start, req.Params.End, bucket)
+	series, err := s.owners.Billing.CostSeries(ctx, uuid.UUID(p.User), req.Params.Start, req.Params.End, bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +164,7 @@ func (s *Server) GetCostSeries(ctx context.Context, req GetCostSeriesRequestObje
 // ListBillingAccounts lists every user's billing standing for
 // administrators.
 func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccountsRequestObject) (ListBillingAccountsResponseObject, error) {
-	if err := s.billingAdmin(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	f := billing.AccountFilter{Status: req.Params.Status, Limit: 50}
@@ -219,7 +190,7 @@ func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccount
 
 // SetComplimentary waives a user's usage charges or stops waiving them.
 func (s *Server) SetComplimentary(ctx context.Context, req SetComplimentaryRequestObject) (SetComplimentaryResponseObject, error) {
-	if err := s.billingAdmin(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	account, err := s.owners.Billing.SetComplimentary(ctx, req.User, req.Body.Complimentary)

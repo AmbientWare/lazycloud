@@ -83,7 +83,7 @@ func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestOb
 // GetAdminAlerts returns where administrator alerts go and the spend
 // limits that raise them.
 func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	a, err := s.owners.Notifications.AdminAlerts(ctx)
@@ -95,7 +95,7 @@ func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObje
 
 // SetAdminAlerts replaces the alert settings.
 func (s *Server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	a := notifications.AdminAlerts{

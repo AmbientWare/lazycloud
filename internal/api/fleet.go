@@ -8,19 +8,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
-
-func (s *Server) administrator(ctx context.Context) error {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return identity.ErrUnauthenticated
-	}
-	if !p.IsAdmin || p.TokenWorkspace != nil {
-		return identity.ErrAdminRequired
-	}
-	return nil
-}
 
 func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 	return apitypes.FleetCapacity{CpuMillicores: int64(c.CPUMillis), MemoryMib: c.MemoryBytes >> 20, GpuCount: c.GPUs}
@@ -29,7 +17,7 @@ func fleetCapacityOut(c compute.FleetCapacity) apitypes.FleetCapacity {
 // GetFleet returns the platform fleet's published plan and agent rollout
 // for administrators. The plan is absent while none is current.
 func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFleetResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	fleet, err := s.owners.Compute.Fleet(ctx)
@@ -79,7 +67,7 @@ func (s *Server) GetFleet(ctx context.Context, _ GetFleetRequestObject) (GetFlee
 // ListFleetNodes lists the platform's hosts with an instance for
 // administrators.
 func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestObject) (ListFleetNodesResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	var after uuid.UUID
@@ -115,7 +103,7 @@ func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestOb
 // GetFleetSpend returns what the platform's cloud hosts cost for
 // administrators.
 func (s *Server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
-	if err := s.administrator(ctx); err != nil {
+	if err := s.admin(ctx); err != nil {
 		return nil, err
 	}
 	spend, err := s.owners.Compute.FleetSpend(ctx)
