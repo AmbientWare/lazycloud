@@ -111,3 +111,20 @@ func (s *Server) ListFleetNodes(ctx context.Context, req ListFleetNodesRequestOb
 	}
 	return out, nil
 }
+
+// GetFleetSpend returns what the platform's cloud hosts cost for
+// administrators.
+func (s *Server) GetFleetSpend(ctx context.Context, _ GetFleetSpendRequestObject) (GetFleetSpendResponseObject, error) {
+	if err := s.administrator(ctx); err != nil {
+		return nil, err
+	}
+	spend, err := s.owners.Compute.FleetSpend(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return GetFleetSpend200JSONResponse{
+		ObservedAt: spend.ObservedAt, HourlyMicros: spend.HourlyMicros(), LastDayMicros: spend.WindowMicros,
+		Running: apitypes.FleetSpendShare{Hosts: spend.Running.Hosts, HourlyMicros: spend.Running.HourlyMicros},
+		Stopped: apitypes.FleetSpendShare{Hosts: spend.Stopped.Hosts, HourlyMicros: spend.Stopped.HourlyMicros},
+	}, nil
+}

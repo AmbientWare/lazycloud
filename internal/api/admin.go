@@ -7,6 +7,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
 // SetUserRole grants or withdraws platform administration.
@@ -84,4 +85,35 @@ func (s *Server) SubmitFeedback(ctx context.Context, req SubmitFeedbackRequestOb
 		return nil, err
 	}
 	return SubmitFeedback204Response{}, nil
+}
+
+// GetAdminAlerts returns where administrator alerts go and the spend
+// limits that raise them.
+func (s *Server) GetAdminAlerts(ctx context.Context, _ GetAdminAlertsRequestObject) (GetAdminAlertsResponseObject, error) {
+	if err := s.administrator(ctx); err != nil {
+		return nil, err
+	}
+	a, err := s.owners.Notifications.AdminAlerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return GetAdminAlerts200JSONResponse(adminAlertsOut(a)), nil
+}
+
+// SetAdminAlerts replaces the alert settings.
+func (s *Server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestObject) (SetAdminAlertsResponseObject, error) {
+	if err := s.administrator(ctx); err != nil {
+		return nil, err
+	}
+	a := notifications.AdminAlerts{
+		Email: req.Body.Email, HourlyLimitMicros: req.Body.HourlyLimitMicros, DailyLimitMicros: req.Body.DailyLimitMicros,
+	}
+	if err := s.owners.Notifications.SetAdminAlerts(ctx, a); err != nil {
+		return nil, err
+	}
+	return SetAdminAlerts200JSONResponse(adminAlertsOut(a)), nil
+}
+
+func adminAlertsOut(a notifications.AdminAlerts) apitypes.AdminAlerts {
+	return apitypes.AdminAlerts{Email: a.Email, HourlyLimitMicros: a.HourlyLimitMicros, DailyLimitMicros: a.DailyLimitMicros}
 }

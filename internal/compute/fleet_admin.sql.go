@@ -58,6 +58,70 @@ func (q *Queries) FleetRollout(ctx context.Context, liveAfter time.Time) ([]Flee
 	return items, nil
 }
 
+const platformHostSpend = `-- name: PlatformHostSpend :many
+with spans as (
+    select c.host_id, c.phase, c.at,
+           lead(c.at, 1, now()) over (partition by c.host_id order by c.at) as until
+    from host_phase_changes c
+    join hosts h on h.id = c.host_id
+    where h.kind = 'platform' and h.provider = 'aws'
+      and (h.phase not in ('deleted', 'failed') or h.phase_at > $1::timestamptz)
+)
+select h.id, h.instance_type, h.region, h.hibernation_configured, h.phase,
+       coalesce(h.hourly_micros, 0)::bigint as hourly_micros,
+       coalesce(sum(extract(epoch from s.until - greatest(s.at, $1::timestamptz))) filter (where s.phase in
+           ('provisioning', 'booting', 'joining', 'ready', 'draining', 'preparing', 'stopping', 'resuming')), 0)::float8 as running_seconds,
+       coalesce(sum(extract(epoch from s.until - greatest(s.at, $1::timestamptz))) filter (where s.phase = 'stopped'), 0)::float8 as stopped_seconds
+from hosts h
+join spans s on s.host_id = h.id
+where s.until > $1::timestamptz
+group by h.id
+order by h.id
+`
+
+type PlatformHostSpendRow struct {
+	ID                    uuid.UUID
+	InstanceType          string
+	Region                string
+	HibernationConfigured bool
+	Phase                 string
+	HourlyMicros          int64
+	RunningSeconds        float64
+	StoppedSeconds        float64
+}
+
+// Each platform cloud host live now or since @since: what prices it, its
+// phase now, and the seconds since @since it ran (a billed phase, as in
+// AtLossSpentToday) and lay stopped, from its phase history.
+func (q *Queries) PlatformHostSpend(ctx context.Context, since time.Time) ([]PlatformHostSpendRow, error) {
+	rows, err := q.db.Query(ctx, platformHostSpend, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformHostSpendRow
+	for rows.Next() {
+		var i PlatformHostSpendRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.InstanceType,
+			&i.Region,
+			&i.HibernationConfigured,
+			&i.Phase,
+			&i.HourlyMicros,
+			&i.RunningSeconds,
+			&i.StoppedSeconds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const platformHosts = `-- name: PlatformHosts :many
 select h.id, h.provider, h.phase, h.state, h.capacity_state, h.last_seen_at,
        (h.token_hash is not null)::bool as enrolled, h.instance_id::text as instance_id, h.region, h.instance_type,

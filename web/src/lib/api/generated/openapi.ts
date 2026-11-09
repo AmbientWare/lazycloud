@@ -2926,6 +2926,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fleet/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the platform's cloud hosts cost now and over the last 24 hours
+         * @description Platform administrators only. Counts hosts the scheduler runs in the platform's AWS account, not connected accounts or joined machines.
+         */
+        get: operations["getFleetSpend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin-alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where administrator alerts go and the fleet spend that raises them
+         * @description Platform administrators only.
+         */
+        get: operations["getAdminAlerts"];
+        /**
+         * Replace the alert settings
+         * @description Platform administrators only. Sign-ups and each crossing of a spend limit email `email`; an empty one sends nothing.
+         */
+        put: operations["setAdminAlerts"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/machines": {
         parameters: {
             query?: never;
@@ -5824,6 +5868,46 @@ export interface components {
             containers: number;
             /** @description Serving on its agent release, or a stopped reserve prepared for it. */
             ready: boolean;
+        };
+        FleetSpendShare: {
+            hosts: number;
+            /**
+             * Format: int64
+             * @description USD micros an hour
+             */
+            hourly_micros: number;
+        };
+        FleetSpend: {
+            /** Format: date-time */
+            observed_at: string;
+            /**
+             * Format: int64
+             * @description The fleet's cost an hour now
+             */
+            hourly_micros: number;
+            running: components["schemas"]["FleetSpendShare"];
+            /** @description Stopped reserves, which cost their volumes. */
+            stopped: components["schemas"]["FleetSpendShare"];
+            /**
+             * Format: int64
+             * @description The fleet's cost over the last 24 hours
+             */
+            last_day_micros: number;
+        };
+        /** @description A limit left out alerts on nothing. */
+        AdminAlerts: {
+            /** @description Where alerts go; empty sends none. */
+            email: string;
+            /**
+             * Format: int64
+             * @description Alert when the fleet costs more than this an hour, in USD micros.
+             */
+            hourly_limit_micros?: number;
+            /**
+             * Format: int64
+             * @description Alert when the fleet costs more than this over 24 hours, in USD micros.
+             */
+            daily_limit_micros?: number;
         };
         FleetNodePage: {
             nodes: components["schemas"]["FleetNode"][];
@@ -11148,6 +11232,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetNodePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFleetSpend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fleet's spend */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetSpend"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAdminAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The alert settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlerts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setAdminAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAlerts"];
+            };
+        };
+        responses: {
+            /** @description The saved settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlerts"];
                 };
             };
             default: components["responses"]["Error"];

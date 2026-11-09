@@ -3283,6 +3283,55 @@ paths:
               schema: { $ref: "#/components/schemas/FleetNodePage" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/fleet/spend:
+    get:
+      operationId: getFleetSpend
+      tags: [compute]
+      summary: What the platform's cloud hosts cost now and over the last 24 hours
+      description: >-
+        Platform administrators only. Counts hosts the scheduler runs in the
+        platform's AWS account, not connected accounts or joined machines.
+      responses:
+        "200":
+          description: The fleet's spend
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetSpend" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/admin-alerts:
+    get:
+      operationId: getAdminAlerts
+      tags: [admin]
+      summary: Where administrator alerts go and the fleet spend that raises them
+      description: Platform administrators only.
+      responses:
+        "200":
+          description: The alert settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAlerts" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setAdminAlerts
+      tags: [admin]
+      summary: Replace the alert settings
+      description: >-
+        Platform administrators only. Sign-ups and each crossing of a spend
+        limit email `email`; an empty one sends nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminAlerts" }
+      responses:
+        "200":
+          description: The saved settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAlerts" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/machines:
     get:
       operationId: listMachines
@@ -7703,6 +7752,46 @@ components:
         ready:
           description: Serving on its agent release, or a stopped reserve prepared for it.
           type: boolean
+
+    FleetSpendShare:
+      type: object
+      required: [hosts, hourly_micros]
+      properties:
+        hosts: { type: integer }
+        hourly_micros: { type: integer, format: int64, description: USD micros an hour }
+
+    FleetSpend:
+      type: object
+      required: [observed_at, hourly_micros, running, stopped, last_day_micros]
+      properties:
+        observed_at: { type: string, format: date-time }
+        hourly_micros: { type: integer, format: int64, description: The fleet's cost an hour now, in USD micros. }
+        running: { $ref: "#/components/schemas/FleetSpendShare" }
+        stopped:
+          allOf: [{ $ref: "#/components/schemas/FleetSpendShare" }]
+          description: Stopped reserves, which cost their volumes.
+        last_day_micros: { type: integer, format: int64, description: The fleet's cost over the last 24 hours, in USD micros. }
+
+    AdminAlerts:
+      type: object
+      description: A limit left out alerts on nothing.
+      required: [email]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          pattern: '^$|^[^@\s]+@[^@\s]+$'
+          description: Where alerts go; empty sends none.
+        hourly_limit_micros:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Alert when the fleet costs more than this an hour, in USD micros.
+        daily_limit_micros:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Alert when the fleet costs more than this over 24 hours, in USD micros.
 
     FleetNodePage:
       type: object

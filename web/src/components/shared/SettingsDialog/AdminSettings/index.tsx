@@ -1,15 +1,17 @@
-import { MessageSquare, Server, Users } from "lucide-react";
+import { DollarSign, MessageSquare, Server, Users } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { FeedbackSettings } from "./FeedbackSettings";
 import { FleetSettings } from "./FleetSettings";
+import { SpendSettings } from "./SpendSettings";
 import { UsersSettings } from "./UsersSettings";
 
 const sections = [
   { value: "users", label: "Users", icon: Users },
   { value: "fleet", label: "Fleet", icon: Server },
+  { value: "spend", label: "Spend", icon: DollarSign },
   { value: "feedback", label: "Feedback", icon: MessageSquare },
 ] as const;
 
@@ -53,6 +55,9 @@ export function AdminSettings() {
       </TabsContent>
       <TabsContent value="fleet" className="flex min-h-0 min-w-0 flex-1 flex-col">
         <FleetSettings />
+      </TabsContent>
+      <TabsContent value="spend" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <SpendSettings />
       </TabsContent>
       <TabsContent value="feedback" className="flex min-h-0 min-w-0 flex-1 flex-col">
         <FeedbackSettings />

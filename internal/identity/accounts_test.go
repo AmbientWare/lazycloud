@@ -462,3 +462,33 @@ func TestASessionRollsWithUseUpToItsMaxAge(t *testing.T) {
 		t.Fatalf("a session near its max age expires in %s, want at most an hour", left())
 	}
 }
+
+// A new account emails the administrators' alert address; signing in again
+// and linking an account the admin command made send nothing.
+func TestSignUpAlertsAdministrators(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.exec("insert into admin_alerts (email) values ('ops@example.com')")
+	if _, err := f.id.CreateUser(t.Context(), "made@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	octo := gitHubAccount{ID: 201, Login: "newcomer", Email: "newcomer@example.com", Verified: true}
+	f.signIn(octo)
+	f.signIn(octo)
+	f.signIn(gitHubAccount{ID: 202, Login: "made", Email: "made@example.com", Verified: true})
+	var subjects []string
+	rows, err := f.pool.Query(t.Context(), "select subject from email_outbox where recipient = 'ops@example.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		subjects = append(subjects, s)
+	}
+	if rows.Err() != nil || len(subjects) != 1 || subjects[0] != "New sign-up: newcomer" {
+		t.Fatalf("alerts %q %v, want one for newcomer", subjects, rows.Err())
+	}
+}

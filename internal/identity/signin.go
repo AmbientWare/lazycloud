@@ -18,6 +18,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
 // Sign-in timing. A browser session expires SessionIdle after its last
@@ -185,9 +187,14 @@ func (i *Identity) CompleteSignIn(ctx context.Context, cookie, state, code strin
 	var session Session
 	err = pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
-		user, err := resolveAccount(ctx, q, profile)
+		user, created, err := resolveAccount(ctx, q, profile)
 		if err != nil {
 			return err
+		}
+		if created {
+			if err := notifications.EnqueueAdminAlert(ctx, tx, signUpAlert(profile)); err != nil {
+				return err
+			}
 		}
 		if _, err := q.OwnedWorkspace(ctx, uuid.UUID(user)); errors.Is(err, pgx.ErrNoRows) {
 			name, err := availableWorkspaceName(ctx, q, profile.Login, user)
@@ -211,10 +218,11 @@ func (i *Identity) CompleteSignIn(ctx context.Context, cookie, state, code strin
 }
 
 // resolveAccount finds the account a GitHub identity reaches, linking an
-// unlinked account with the same verified email, or creates one.
-func resolveAccount(ctx context.Context, q *Queries, profile gitHubProfile) (UserID, error) {
+// unlinked account with the same verified email, or creates one and
+// reports it created.
+func resolveAccount(ctx context.Context, q *Queries, profile gitHubProfile) (UserID, bool, error) {
 	if err := q.LockGitHubSubject(ctx, profile.ID); err != nil {
-		return UserID{}, fmt.Errorf("lock github identity: %w", err)
+		return UserID{}, false, fmt.Errorf("lock github identity: %w", err)
 	}
 	var email *string
 	if profile.Email != "" {
@@ -234,18 +242,20 @@ func resolveAccount(ctx context.Context, q *Queries, profile gitHubProfile) (Use
 	}
 	existing, err := q.UserByGitHubID(ctx, &profile.ID)
 	if err == nil {
-		return update(existing.ID, existing.Status)
+		id, err := update(existing.ID, existing.Status)
+		return id, false, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return UserID{}, fmt.Errorf("read account: %w", err)
+		return UserID{}, false, fmt.Errorf("read account: %w", err)
 	}
 	if email != nil {
 		unlinked, err := q.UnlinkedUserByEmail(ctx, *email)
 		if err == nil {
-			return update(unlinked.ID, unlinked.Status)
+			id, err := update(unlinked.ID, unlinked.Status)
+			return id, false, err
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return UserID{}, fmt.Errorf("read account by email: %w", err)
+			return UserID{}, false, fmt.Errorf("read account by email: %w", err)
 		}
 	}
 	id, err := q.InsertGitHubUser(ctx, InsertGitHubUserParams{
@@ -253,9 +263,24 @@ func resolveAccount(ctx context.Context, q *Queries, profile gitHubProfile) (Use
 		GithubUserID: &profile.ID, GithubLogin: profile.Login,
 	})
 	if err != nil {
-		return UserID{}, fmt.Errorf("insert account: %w", err)
+		return UserID{}, false, fmt.Errorf("insert account: %w", err)
 	}
-	return UserID(id), nil
+	return UserID(id), true, nil
+}
+
+func signUpAlert(p gitHubProfile) notifications.Alert {
+	email := p.Email
+	if email == "" {
+		email = "None verified"
+	}
+	facts := []notifications.Fact{{Label: "GitHub", Value: p.Login, Link: "https://github.com/" + p.Login}}
+	if p.DisplayName != "" {
+		facts = append(facts, notifications.Fact{Label: "Name", Value: p.DisplayName})
+	}
+	return notifications.Alert{
+		Subject: "New sign-up: " + p.Login,
+		Facts:   append(facts, notifications.Fact{Label: "Email", Value: email}),
+	}
 }
 
 // availableWorkspaceName derives a workspace name from a GitHub login,
