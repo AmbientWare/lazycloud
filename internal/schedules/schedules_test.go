@@ -87,13 +87,13 @@ func (f fixture) scheduledTasks(t *testing.T) int {
 	return n
 }
 
-func ptr(s string) *string { return &s }
+func new(s string) *string { return &s }
 
 func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	deployed := time.Now()
-	f.deploy(t, ptr("Every 5m"), 10)
+	f.deploy(t, new("Every 5m"), 10)
 	first := f.schedule(t)
 	// The next occurrence follows the deploy; comparing with a later clock
 	// reading fails when the deploy lands just before a boundary.
@@ -112,7 +112,7 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 		t.Fatalf("a scheduled function keeps containers warm for %d s", *release.Spec.KeepWarmSeconds)
 	}
 
-	f.deploy(t, ptr("@hourly"), 10)
+	f.deploy(t, new("@hourly"), 10)
 	if s := f.schedule(t); s.Expression != "@hourly" || s.NextRunAt.Minute() != 0 {
 		t.Fatalf("replaced schedule: %+v", s)
 	}
@@ -126,7 +126,7 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{{
 		Kind: apitypes.WorkloadKindFunction, Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
 		Image: apitypes.ImageSpec{PythonVersion: apitypes.N312}, Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
-		Cron: ptr("every 60m"),
+		Cron: new("every 60m"),
 	}}})
 	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "unsupported cron interval: every 60m") {
 		t.Fatalf("invalid cron deploy = %v", err)
@@ -136,7 +136,7 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 10)
+	f.deploy(t, new("every 1m"), 10)
 	missed := f.due(t, 10*time.Minute)
 
 	fired := time.Now()
@@ -165,7 +165,7 @@ func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 func TestConcurrentSchedulersAdmitAnOccurrenceOnce(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 100)
+	f.deploy(t, new("every 1m"), 100)
 	f.due(t, time.Minute)
 
 	var wg sync.WaitGroup
@@ -185,7 +185,7 @@ func TestConcurrentSchedulersAdmitAnOccurrenceOnce(t *testing.T) {
 func TestRejectedOccurrencesAdvanceWithTheirReason(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.deploy(t, ptr("every 1m"), 1)
+	f.deploy(t, new("every 1m"), 1)
 	// One queued task fills max_pending_tasks.
 	f.due(t, 2*time.Minute)
 	if err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler)); err != nil || f.scheduledTasks(t) != 1 {

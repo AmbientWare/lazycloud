@@ -271,7 +271,7 @@ func pendingGroups(rows []PendingDemandRow) ([]pendingGroup, error) {
 		for n, id := range r.Ids {
 			c := PendingContainer{ID: id, Since: r.Created[n]}
 			if r.Bought[n] != uuid.Nil {
-				c.Host = ptr(HostID(r.Bought[n]))
+				c.Host = new(HostID(r.Bought[n]))
 			}
 			g.group.Containers = append(g.group.Containers, c)
 		}

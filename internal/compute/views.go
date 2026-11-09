@@ -42,7 +42,7 @@ func (c *Compute) WorkspaceSummary(ctx context.Context, workspace identity.Works
 	if row.AwsAccountID != nil {
 		s.AWSAccountID = *row.AwsAccountID
 		s.ConnectionPhase = ConnectionPhase(deref(row.ConnectionPhase))
-		s.HourlyMicros = ptr(row.HourlyMicros)
+		s.HourlyMicros = new(row.HourlyMicros)
 	}
 	return s, nil
 }

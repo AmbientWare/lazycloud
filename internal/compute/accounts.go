@@ -106,7 +106,7 @@ func (c *Compute) accountOf(ctx context.Context, q *Queries, connection *uuid.UU
 		}
 		a = c.connectionAccount(rows[0])
 	}
-	accounts, err := c.withNetworks(ctx, q, []account{a}, ptr(a.key()))
+	accounts, err := c.withNetworks(ctx, q, []account{a}, new(a.key()))
 	if err != nil {
 		return account{}, err
 	}
@@ -208,7 +208,7 @@ func (c *Compute) ensureAccountNetwork(ctx context.Context, a account, region st
 	network, err := c.ensureNetwork(ctx, now.scope, region)
 	if err != nil {
 		if rerr := c.queries.FailFleetNetwork(context.WithoutCancel(ctx), FailFleetNetworkParams{
-			Owner: a.key(), Region: region, Error: ptr(truncate(err.Error())),
+			Owner: a.key(), Region: region, Error: new(truncate(err.Error())),
 		}); rerr != nil {
 			return errors.Join(err, fmt.Errorf("record the failure: %w", rerr))
 		}

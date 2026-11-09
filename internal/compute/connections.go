@@ -401,15 +401,15 @@ func (c *Compute) insertAuthorization(ctx context.Context, q *Queries, conn Clou
 	}
 	if req.RoleARN != "" {
 		params.Mode, params.RoleArn = string(ModeExistingRole), req.RoleARN
-		params.NodeInstanceProfile = ptr(existingRoleNodeProfile)
+		params.NodeInstanceProfile = new(existingRoleNodeProfile)
 	} else {
 		suffix := connectionSuffix(conn)
 		stack := fmt.Sprintf("%s-g%d", stackPrefix(suffix), gen)
 		params.Mode, params.StackName = string(ModeManagedStack), &stack
 		params.RoleArn = fmt.Sprintf("arn:aws:iam::%s:role/%s", conn.AwsAccountID, stack)
-		params.TemplateVersion, params.TemplateSha256 = ptr(TemplateVersion), ptr(TemplateSHA256())
+		params.TemplateVersion, params.TemplateSha256 = new(TemplateVersion), new(TemplateSHA256())
 		node := fmt.Sprintf("lazycloud-node-%s-g%d", suffix, gen)
-		params.NodeRoleArn = ptr(fmt.Sprintf("arn:aws:iam::%s:role/%s", conn.AwsAccountID, node))
+		params.NodeRoleArn = new(fmt.Sprintf("arn:aws:iam::%s:role/%s", conn.AwsAccountID, node))
 		params.NodeInstanceProfile = &node
 	}
 	if _, err := q.InsertAuthorization(ctx, params); err != nil {
@@ -540,7 +540,7 @@ func (a Authorization) ExternalID() string { return a.externalID }
 // View returns the connection as its account sees it.
 func (c *Compute) View(conn Connection) Connection {
 	if conn.awaitsStack() {
-		conn.ConsoleURL = ptr(c.quickCreateURL(conn.AWSAccountID, *conn.Pending))
+		conn.ConsoleURL = new(c.quickCreateURL(conn.AWSAccountID, *conn.Pending))
 		if p := conn.Pending; p.SetupStep != nil && *p.SetupStep == SetupStackFailed {
 			conn.Customer = &CustomerStep{URL: stackURL(p.Region, "", p.StackName), Label: "Delete the failed stack in AWS"}
 		}

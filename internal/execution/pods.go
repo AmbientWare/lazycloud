@@ -124,7 +124,7 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 		case containers == 0 && row.AlwaysOn:
 			return &InvalidError{Reason: "always-on pod deployments cannot be scaled to zero"}
 		}
-		if err := q.SetPodReplicas(ctx, SetPodReplicasParams{WorkloadID: workload, Replicas: ptr(int32(containers))}); err != nil { //nolint:gosec // The schema bounds containers.
+		if err := q.SetPodReplicas(ctx, SetPodReplicasParams{WorkloadID: workload, Replicas: new(int32(containers))}); err != nil { //nolint:gosec // The schema bounds containers.
 			return fmt.Errorf("set replicas: %w", err)
 		}
 		if row.ActiveReleaseID == nil {

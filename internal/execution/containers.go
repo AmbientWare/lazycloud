@@ -48,7 +48,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	}
 	message := exit.Message
 	if err := q.StopContainer(ctx, StopContainerParams{
-		ID: row.ID, StopReason: ptr(string(exit.Reason)), ExitMessage: &message, ExitCode: int32Of(exit.ExitCode),
+		ID: row.ID, StopReason: new(string(exit.Reason)), ExitMessage: &message, ExitCode: int32Of(exit.ExitCode),
 	}); err != nil {
 		return fmt.Errorf("stop container: %w", err)
 	}
@@ -158,8 +158,6 @@ func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUI
 	}
 	return database.Notify(ctx, tx, owner, id)
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // deref is *s, or "" for nil.
 func deref(s *string) string {

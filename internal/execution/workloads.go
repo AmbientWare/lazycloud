@@ -202,7 +202,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	}
 	if req.Shell {
 		params.Purpose = string(PurposeShell)
-		params.KeepWarmSeconds = ptr(int32(shellKeepWarm.Seconds()))
+		params.KeepWarmSeconds = new(int32(shellKeepWarm.Seconds()))
 		return params, nil
 	}
 	keepWarm := 600
@@ -213,7 +213,7 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 		keepWarm = *req.Timeout
 	}
 	if keepWarm > 0 {
-		params.KeepWarmSeconds = ptr(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
+		params.KeepWarmSeconds = new(int32(keepWarm)) //nolint:gosec // The schema caps timeouts at a week.
 	}
 	if p := spec.Pod; p != nil {
 		params.BlockNetwork = p.BlockNetwork != nil && *p.BlockNetwork
@@ -353,7 +353,7 @@ type TTL struct {
 func (e *Execution) SetTTL(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, ttl int) (TTL, error) {
 	var keepWarm *int32
 	if ttl > 0 {
-		keepWarm = ptr(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
+		keepWarm = new(int32(ttl)) //nolint:gosec // The schema caps ttl at a week.
 	}
 	row, err := e.queries.SetContainerTTL(ctx, SetContainerTTLParams{
 		KeepWarmSeconds: keepWarm, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),

@@ -263,7 +263,7 @@ func (c *Compute) endHost(ctx context.Context, host uuid.UUID, from Phase, failu
 		return err
 	}
 	return inTx(ctx, c, func(tx pgx.Tx) error {
-		n, err := c.queries.WithTx(tx).EndHost(ctx, EndHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+		n, err := c.queries.WithTx(tx).EndHost(ctx, EndHostParams{ID: host, FromPhase: string(from), Failure: new(string(failure)), Message: message})
 		if err != nil {
 			return fmt.Errorf("end host: %w", err)
 		}
@@ -296,7 +296,7 @@ func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, from Phase, fail
 		if failure == "" {
 			n, err = q.MarkHostDeleted(ctx, MarkHostDeletedParams{ID: host, FromPhase: string(from)})
 		} else {
-			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: ptr(string(failure)), Message: message})
+			n, err = q.FailHost(ctx, FailHostParams{ID: host, FromPhase: string(from), Failure: new(string(failure)), Message: message})
 		}
 		if err != nil {
 			return fmt.Errorf("mark host gone: %w", err)

@@ -124,7 +124,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		}
 		updated, err := q.SetConnectionPhase(ctx, SetConnectionPhaseParams{
 			ID: id, Phase: string(phase), StepAttempts: row.StepAttempts,
-			NextStepAt: ptr(time.Now().Add(5 * time.Minute)),
+			NextStepAt: new(time.Now().Add(5 * time.Minute)),
 		})
 		if err != nil {
 			return fmt.Errorf("set connection phase: %w", err)
@@ -157,7 +157,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 		attempts := int(row.StepAttempts) + 1
 		if failure != nil {
 			if err := q.AuthorizationFailed(ctx, AuthorizationFailedParams{
-				ID: target.ID, ErrorCode: ptr(string(failure.code)), ErrorMessage: &failure.message, SetupStep: (*string)(failure.step),
+				ID: target.ID, ErrorCode: new(string(failure.code)), ErrorMessage: &failure.message, SetupStep: (*string)(failure.step),
 			}); err != nil {
 				return fmt.Errorf("record failure: %w", err)
 			}
@@ -168,7 +168,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			case conn.Active == nil && (failure.step != nil || failure.code == ErrAssumeRoleDenied || failure.code == ErrUpstreamUnavailabl):
 				phase = ConnAwaiting
 			}
-			return setPhase(ctx, q, id, phase, ptr(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
+			return setPhase(ctx, q, id, phase, new(time.Now().Add(nextCheck(target, failure, attempts))), attempts, nil)
 		}
 		if err := q.AuthorizationValidated(ctx, AuthorizationValidatedParams{
 			ID: target.ID, StackID: nilIfEmpty(result.stackID),
@@ -180,11 +180,11 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			return setPhase(ctx, q, id, ConnReady, nil, 0, nil)
 		}
 		if conn.Active != nil {
-			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: ptr(string(slotRetiring))}); err != nil {
+			if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: conn.Active.ID, Phase: string(AuthRetiring), Slot: new(string(slotRetiring))}); err != nil {
 				return fmt.Errorf("retire active authorization: %w", err)
 			}
 		}
-		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: ptr(string(slotActive))}); err != nil {
+		if err := q.SetAuthorizationPhase(ctx, SetAuthorizationPhaseParams{ID: target.ID, Phase: string(AuthReady), Slot: new(string(slotActive))}); err != nil {
 			return fmt.Errorf("activate authorization: %w", err)
 		}
 		if conn.Active != nil {

@@ -488,9 +488,9 @@ func requested(id uuid.UUID, acct account, o FleetOffer, a FleetAction) requeste
 	}
 	switch a.Kind {
 	case ActionBuyReserve:
-		h.ReserveMode, h.HoldsDisks = a.Mode, ptr(o.Type.DiskSlots())
+		h.ReserveMode, h.HoldsDisks = a.Mode, new(o.Type.DiskSlots())
 	case ActionRightsize:
-		h.Replaces = ptr(uuid.UUID(*a.Host))
+		h.Replaces = new(uuid.UUID(*a.Host))
 	case ActionBuy, ActionResume, ActionReturnToReserve, ActionDrain, ActionRetireReserve, ActionCancel, ActionHandBack, ActionLend:
 	}
 	return h

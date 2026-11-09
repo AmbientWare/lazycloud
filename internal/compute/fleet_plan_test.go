@@ -42,10 +42,10 @@ func planHost(id byte, typ CatalogType, state FleetState) FleetHost {
 	h := FleetHost{
 		ID: HostID{id}, InstanceType: typ.Name, Region: "us-east-2", Zone: "us-east-2a", ZoneID: "use2-az1",
 		Market: MarketOnDemand, Usable: typ.Usable(0), State: state, Stoppable: true,
-		HourlyMicros: ptr(price + rootDiskMicros("us-east-2", rootVolumeGiB, baselineMiBps) + 5000),
+		HourlyMicros: new(price + rootDiskMicros("us-east-2", rootVolumeGiB, baselineMiBps) + 5000),
 	}
 	if h.reserve() {
-		h.ReserveMode = ptr(ReserveStop)
+		h.ReserveMode = new(ReserveStop)
 	}
 	return h
 }
@@ -187,10 +187,10 @@ func TestPlanRetiresAPendingReserveBeforeTheReadyOneItWouldReplace(t *testing.T)
 func TestPlanAResumedReserveCannotCoverRetiringTheLastReadyOne(t *testing.T) {
 	t.Parallel()
 	cheap := planHost(1, planSmall, FleetStopped)
-	cheap.HourlyMicros = ptr(int64(10))
+	cheap.HourlyMicros = new(int64(10))
 	preparing := planHost(2, planSmall, FleetPreparing)
 	keep := planHost(3, planSmall, FleetStopped)
-	keep.HourlyMicros = ptr(int64(20))
+	keep.HourlyMicros = new(int64(20))
 	plan := PlanFleet(planPolicy(small, small), planSnapshot(t, cheap, preparing, keep))
 	mp := marketPlan(t, plan, onDemand)
 	if got := hostsOf(actionsOf(plan, ActionResume)); !slices.Equal(got, []HostID{{1}}) {
@@ -303,7 +303,7 @@ func TestPlanPlacesDemandOnReadyRoomThenStartingHostsThenReservesThenPurchases(t
 	}
 
 	s = planSnapshot(t, planHost(1, planSmall, FleetStarting), planHost(2, planSmall, FleetStarting))
-	g, id = pendingOne(need, ptr(HostID{2}))
+	g, id = pendingOne(need, new(HostID{2}))
 	s.Pending = []DemandGroup{g}
 	if w := waitOf(t, PlanFleet(p, s), id); *w.Wait != WaitProvisioning || *w.Host != (HostID{2}) {
 		t.Fatalf("the host bought for it: %+v", w)
@@ -509,7 +509,7 @@ func TestPlanWarmFloorConvergesOnTheCheapestHost(t *testing.T) {
 		t.Fatalf("a serving host was replaced: %+v", plan.Actions)
 	}
 	refused := big
-	refused.RightsizeRefusedAt = ptr(offerNow.Add(-p.CostHorizon + time.Minute))
+	refused.RightsizeRefusedAt = new(offerNow.Add(-p.CostHorizon + time.Minute))
 	if plan := PlanFleet(p, snapshot(refused)); len(plan.Actions) > 0 {
 		t.Fatalf("a host whose replacement EC2 refused within the cost horizon: %+v", plan.Actions)
 	}
@@ -577,7 +577,7 @@ func TestHeadroomBuysASmallHostRatherThanResumeTheLargeReserve(t *testing.T) {
 	p := DefaultPolicy()
 	p.Spot, p.GPU = MarketReserve{}, nil
 	reserve := planHost(1, mustType(t, "c6a.4xlarge"), FleetStopped)
-	reserve.ReserveMode, reserve.HibernationConfigured = ptr(ReserveHibernate), true
+	reserve.ReserveMode, reserve.HibernationConfigured = new(ReserveHibernate), true
 	s := planSnapshot(t, reserve)
 	s.Offers.Catalog = FleetCatalog()
 	plan := PlanFleet(p, s)
@@ -680,7 +680,7 @@ func TestALargeWarmHostDoesNotStandInForTheReserve(t *testing.T) {
 	big := mustType(t, "c6a.8xlarge")
 	p.OnDemand = MarketReserve{Warm: HeadroomTarget{Floor: cpuGiB(1000, 4)}, Stopped: HeadroomTarget{Floor: cpuGiB(1000, 4)}, FitLargest: true}
 	warm := idle(planHost(1, big, FleetServing))
-	warm.RightsizeRefusedAt = ptr(offerNow)
+	warm.RightsizeRefusedAt = new(offerNow)
 	s := planSnapshot(t, warm)
 	s.Offers.Catalog = FleetCatalog()
 	s.Recent = map[ReserveMarket]FleetCapacity{onDemand: cpuGiB(12000, 24)}
@@ -722,7 +722,7 @@ func TestARightsizeReplacementKeepsTheSlotWhenWorkLandsOnTheReplacedHost(t *test
 	busy := planHost(1, mustType(t, "c6a.2xlarge"), FleetServing)
 	busy.Load, busy.Containers = cpuGiB(1000, 1), 1
 	replacement := idle(planHost(2, mustType(t, "m7i.large"), FleetServing))
-	replacement.Replaces = ptr(busy.ID)
+	replacement.Replaces = new(busy.ID)
 	if plan := PlanFleet(p, snapshot(busy, replacement)); len(plan.Actions) > 0 {
 		t.Fatalf("while the replaced host works: %+v", plan.Actions)
 	}
@@ -1223,7 +1223,7 @@ func TestWorkResumesAReserveOnlyWhenItServesSoonerThanAPurchase(t *testing.T) {
 			h = gpuReserve(t, 1, MarketSpot)
 			h.State, need = c.state, l4Job
 		}
-		h.Market, h.StoppedAt = MarketSpot, ptr(offerNow.Add(-c.stopped))
+		h.Market, h.StoppedAt = MarketSpot, new(offerNow.Add(-c.stopped))
 		s := spotQuoted(gpuPlanSnapshot(t, h), 200_000, "m.small")
 		s.Offers.Catalog = append(s.Offers.Catalog, planSmall)
 		g, _ := pendingOne(need, nil)
