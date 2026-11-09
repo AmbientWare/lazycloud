@@ -952,6 +952,9 @@ func TestARevokedRoleDuringTheDrainEndsInForget(t *testing.T) {
 	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseFailed) {
 		t.Fatalf("the forgotten connection's host is %s, want failed", phase)
 	}
+	if enrolled := scan[bool](t, o.pool, "select token_hash is not null from hosts where id = $1", uuid.UUID(host)); enrolled {
+		t.Fatal("the forgotten connection's host keeps its agent token")
+	}
 }
 
 // Disconnecting mid-reconnect deletes the replacement's stack, which the
