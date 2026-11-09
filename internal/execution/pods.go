@@ -222,15 +222,13 @@ type PodContainer struct {
 // ReadyPodContainers lists the pod's ready serve containers, the active
 // release's first.
 func (e *Execution) ReadyPodContainers(ctx context.Context, workload uuid.UUID) ([]PodContainer, error) {
-	rows, err := e.queries.ReadyPodContainers(ctx, workload)
+	rows, err := e.queries.ReadyContainers(ctx, workload)
 	if err != nil {
 		return nil, fmt.Errorf("list pod containers: %w", err)
 	}
-	out := make([]PodContainer, 0, len(rows))
-	for _, r := range rows {
-		if r.HostID != nil {
-			out = append(out, PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: deref(r.Traceparent)})
-		}
+	out := make([]PodContainer, len(rows))
+	for n, r := range rows {
+		out[n] = PodContainer{Container: ContainerID(r.ID), Host: *r.HostID, Release: r.ReleaseID, Traceparent: deref(r.Traceparent)}
 	}
 	return out, nil
 }

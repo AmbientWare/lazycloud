@@ -224,12 +224,10 @@ func (q *Queries) DrainIdleInstances(ctx context.Context, batchSize int32) ([]Dr
 }
 
 const drainServeContainersOfWorkload = `-- name: DrainServeContainersOfWorkload :many
-update containers c
+update containers
 set state = 'draining', drain_started_at = now()
-from releases r
-where r.id = c.release_id and r.workload_id = $1
-  and c.purpose = 'serve' and c.state in ('starting', 'ready')
-returning c.id, c.host_id
+where workload_id = $1::uuid and purpose = 'serve' and state in ('starting', 'ready')
+returning id, host_id
 `
 
 type DrainServeContainersOfWorkloadRow struct {
@@ -881,48 +879,6 @@ func (q *Queries) PodState(ctx context.Context, workloadID uuid.UUID) (PodStateR
 	return i, err
 }
 
-const readyPodContainers = `-- name: ReadyPodContainers :many
-select c.id, c.host_id, c.release_id::uuid as release_id, c.traceparent
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = $1 and c.purpose = 'serve' and c.state = 'ready' and c.host_id is not null
-order by r.version desc nulls last, c.ready_at, c.id
-`
-
-type ReadyPodContainersRow struct {
-	ID          uuid.UUID
-	HostID      *uuid.UUID
-	ReleaseID   uuid.UUID
-	Traceparent *string
-}
-
-// Ready serve containers of a pod's releases with their hosts, newest
-// version first and then the oldest container.
-func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) ([]ReadyPodContainersRow, error) {
-	rows, err := q.db.Query(ctx, readyPodContainers, workloadID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ReadyPodContainersRow
-	for rows.Next() {
-		var i ReadyPodContainersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.HostID,
-			&i.ReleaseID,
-			&i.Traceparent,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const recordNetworkApplied = `-- name: RecordNetworkApplied :one
 update containers set network_applied_version = $1, network_error = $2
 where id = $3 and host_id = $4 and network_applied_version < $1
@@ -952,8 +908,7 @@ func (q *Queries) RecordNetworkApplied(ctx context.Context, arg RecordNetworkApp
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many
 select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
+join workloads w on w.id = c.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = $1 and c.purpose = 'instance' and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
   and ($2::text is null or a.name = $2)
@@ -1001,8 +956,7 @@ select count(*) filter (where c.state in ('pending', 'starting', 'ready', 'drain
        count(*) filter (where c.state = 'stopped' and c.stop_reason in ('stopped', 'exited'))::int as stopped,
        count(*) filter (where c.state = 'stopped' and c.stop_reason not in ('stopped', 'exited'))::int as failed
 from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
+join workloads w on w.id = c.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = $1 and c.purpose = 'instance' and w.kind = 'sandbox'
   and ($2::text is null or a.name = $2)
@@ -1122,12 +1076,10 @@ func (q *Queries) SetPodReplicas(ctx context.Context, arg SetPodReplicasParams) 
 }
 
 const stopPendingServeContainersOfWorkload = `-- name: StopPendingServeContainersOfWorkload :many
-update containers c
+update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'stopped by request', stopped_at = now()
-from releases r
-where r.id = c.release_id and r.workload_id = $1
-  and c.purpose = 'serve' and c.state = 'pending'
-returning c.id
+where workload_id = $1::uuid and purpose = 'serve' and state = 'pending'
+returning id
 `
 
 func (q *Queries) StopPendingServeContainersOfWorkload(ctx context.Context, workloadID uuid.UUID) ([]uuid.UUID, error) {

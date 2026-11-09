@@ -20,39 +20,39 @@ func (q *Queries) DeleteExpiredEndpointLoads(ctx context.Context) error {
 	return err
 }
 
-const endpointContainers = `-- name: EndpointContainers :many
-select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state, c.traceparent
-from releases r
-join containers c on c.release_id = r.id
-where r.workload_id = $1 and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
-order by r.version desc, c.ready_at, c.id
+const readyContainers = `-- name: ReadyContainers :many
+select c.id, c.host_id, c.release_id::uuid as release_id, r.version, c.traceparent
+from containers c
+join releases r on r.id = c.release_id
+where c.workload_id = $1::uuid and c.state = 'ready' and c.purpose = 'serve' and c.host_id is not null
+order by r.version desc nulls last, c.ready_at, c.id
 `
 
-type EndpointContainersRow struct {
+type ReadyContainersRow struct {
+	ID          uuid.UUID
+	HostID      *uuid.UUID
 	ReleaseID   uuid.UUID
 	Version     *int32
-	ContainerID uuid.UUID
-	HostID      *uuid.UUID
-	State       string
 	Traceparent *string
 }
 
-// Ready containers of every release of the workload, newest version first.
-func (q *Queries) EndpointContainers(ctx context.Context, workloadID uuid.UUID) ([]EndpointContainersRow, error) {
-	rows, err := q.db.Query(ctx, endpointContainers, workloadID)
+// Ready serve containers of the workload's releases with their hosts,
+// newest version first and then the oldest container. Reads the
+// containers_workload_live partial index.
+func (q *Queries) ReadyContainers(ctx context.Context, workloadID uuid.UUID) ([]ReadyContainersRow, error) {
+	rows, err := q.db.Query(ctx, readyContainers, workloadID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []EndpointContainersRow
+	var items []ReadyContainersRow
 	for rows.Next() {
-		var i EndpointContainersRow
+		var i ReadyContainersRow
 		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
 			&i.ReleaseID,
 			&i.Version,
-			&i.ContainerID,
-			&i.HostID,
-			&i.State,
 			&i.Traceparent,
 		); err != nil {
 			return nil, err

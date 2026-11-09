@@ -82,10 +82,12 @@ set in_flight = excluded.in_flight, waiting = excluded.waiting, window_peak = ex
 -- name: DeleteExpiredEndpointLoads :exec
 delete from endpoint_loads where expires_at < now() - interval '1 hour';
 
--- name: EndpointContainers :many
--- Ready containers of every release of the workload, newest version first.
-select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state, c.traceparent
-from releases r
-join containers c on c.release_id = r.id
-where r.workload_id = @workload_id and c.state = 'ready' and c.purpose = 'serve' and r.version is not null
-order by r.version desc, c.ready_at, c.id;
+-- name: ReadyContainers :many
+-- Ready serve containers of the workload's releases with their hosts,
+-- newest version first and then the oldest container. Reads the
+-- containers_workload_live partial index.
+select c.id, c.host_id, c.release_id::uuid as release_id, r.version, c.traceparent
+from containers c
+join releases r on r.id = c.release_id
+where c.workload_id = @workload_id::uuid and c.state = 'ready' and c.purpose = 'serve' and c.host_id is not null
+order by r.version desc nulls last, c.ready_at, c.id;

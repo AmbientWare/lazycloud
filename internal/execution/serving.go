@@ -84,19 +84,18 @@ type EndpointContainer struct {
 // EndpointContainers lists the ready containers of every release of
 // workload, newest version first.
 func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) ([]EndpointContainer, error) {
-	rows, err := e.queries.EndpointContainers(ctx, workload)
+	rows, err := e.queries.ReadyContainers(ctx, workload)
 	if err != nil {
 		return nil, fmt.Errorf("list endpoint containers: %w", err)
 	}
 	out := make([]EndpointContainer, 0, len(rows))
 	for _, row := range rows {
-		if row.HostID == nil || row.Version == nil {
-			continue
+		if row.Version != nil {
+			out = append(out, EndpointContainer{
+				Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ID), Host: *row.HostID,
+				Traceparent: deref(row.Traceparent),
+			})
 		}
-		out = append(out, EndpointContainer{
-			Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID,
-			Traceparent: deref(row.Traceparent),
-		})
 	}
 	return out, nil
 }

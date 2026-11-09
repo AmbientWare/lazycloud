@@ -215,29 +215,16 @@ on conflict (workload_id) do update set woken_at = null, parked = true, replicas
 select replicas, woken_at, parked from pod_states where workload_id = @workload_id;
 
 -- name: DrainServeContainersOfWorkload :many
-update containers c
+update containers
 set state = 'draining', drain_started_at = now()
-from releases r
-where r.id = c.release_id and r.workload_id = @workload_id
-  and c.purpose = 'serve' and c.state in ('starting', 'ready')
-returning c.id, c.host_id;
+where workload_id = @workload_id::uuid and purpose = 'serve' and state in ('starting', 'ready')
+returning id, host_id;
 
 -- name: StopPendingServeContainersOfWorkload :many
-update containers c
+update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'stopped by request', stopped_at = now()
-from releases r
-where r.id = c.release_id and r.workload_id = @workload_id
-  and c.purpose = 'serve' and c.state = 'pending'
-returning c.id;
-
--- name: ReadyPodContainers :many
--- Ready serve containers of a pod's releases with their hosts, newest
--- version first and then the oldest container.
-select c.id, c.host_id, c.release_id::uuid as release_id, c.traceparent
-from containers c
-join releases r on r.id = c.release_id
-where r.workload_id = @workload_id and c.purpose = 'serve' and c.state = 'ready' and c.host_id is not null
-order by r.version desc nulls last, c.ready_at, c.id;
+where workload_id = @workload_id::uuid and purpose = 'serve' and state = 'pending'
+returning id;
 
 -- name: ContainerRoute :one
 -- A live container with what routing to it needs.
@@ -318,8 +305,7 @@ select count(*) filter (where c.state in ('pending', 'starting', 'ready', 'drain
        count(*) filter (where c.state = 'stopped' and c.stop_reason in ('stopped', 'exited'))::int as stopped,
        count(*) filter (where c.state = 'stopped' and c.stop_reason not in ('stopped', 'exited'))::int as failed
 from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
+join workloads w on w.id = c.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sandbox'
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'));
@@ -327,8 +313,7 @@ where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sa
 -- name: SandboxCreatedDays :many
 select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
-join releases r on r.id = c.release_id
-join workloads w on w.id = r.workload_id
+join workloads w on w.id = c.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id and c.purpose = 'instance' and w.kind = 'sandbox' and c.created_at > now() - interval '30 days'
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'))
