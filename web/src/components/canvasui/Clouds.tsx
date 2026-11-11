@@ -286,7 +286,9 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
   let fieldW = 0;
   let fieldH = 0;
 
-  function syncCanvasSize() {
+  // Resizing the canvas clears it, so the caller redraws before the next paint.
+  function syncCanvasSize(): boolean {
+    let cleared = false;
     const cw = content.clientWidth;
     const ch = content.clientHeight;
     if (cw > 0 && ch > 0) {
@@ -301,6 +303,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
     if (output.width !== width || output.height !== height) {
       output.width = width;
       output.height = height;
+      cleared = true;
     }
     const quality = Math.min(Math.max(config.quality, 0.2), 1);
     const cap = 1440 / Math.max(output.clientWidth, 1);
@@ -338,6 +341,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
         );
       }
     }
+    return cleared;
   }
 
   syncCanvasSize();
@@ -462,7 +466,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
   motionQuery.addEventListener("change", onMotionChange);
 
   const observer = new ResizeObserver(() => {
-    syncCanvasSize();
+    if (syncCanvasSize()) render(0);
     start();
   });
   observer.observe(output);
@@ -511,7 +515,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
       )
         return;
       Object.assign(config, next);
-      syncCanvasSize();
+      if (syncCanvasSize()) render(0);
       start();
     },
     destroy() {
