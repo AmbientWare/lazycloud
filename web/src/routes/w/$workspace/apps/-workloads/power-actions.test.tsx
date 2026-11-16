@@ -6,7 +6,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { Schemas } from "@/lib/api/client";
 import { testQueryClient } from "@/test/query-client";
 
-import { DevboxActions } from "./DevboxDetail";
+import { DevboxActions, DevboxConnect } from "./DevboxDetail";
 import { PodActions } from "./PodActions";
 
 const workload: Schemas["Workload"] = {
@@ -83,6 +83,21 @@ it("offers Stop beside Start once a devbox start failed, since it retries", asyn
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop" })));
 
   expect(posts).toEqual(["/v1/workspaces/dev/apps/tools/workloads/pod/box/devbox/stop"]);
+});
+
+it("says why a devbox start failed and opens the failed container's logs", async () => {
+  serve({
+    ...devbox("stopped", "failed"),
+    phase_reason: "image pull refused",
+    failed_container_id: "22222222-2222-4222-8222-222222222222",
+  });
+  renderWith(<DevboxConnect workspace="dev" workload={workload} />);
+
+  const status = await screen.findByRole("button", { name: "Start failed" });
+  expect(status).toHaveAccessibleDescription("image pull refused");
+  await act(async () => fireEvent.click(status));
+
+  expect(await screen.findByRole("dialog", { name: "Start logs" })).toBeVisible();
 });
 
 it("stops a pod deployment from its header", async () => {

@@ -202,7 +202,12 @@ export function scaleWorkloadMutationOptions(workspace: string, workload: Worklo
   };
 }
 
-const SETTLED_DEVBOX_PHASES = new Set<Schemas["DevboxPhase"]>(["running", "stopped", "failed"]);
+/** The phases a devbox rests in; in every other one it is on its way to one of these. */
+export const SETTLED_DEVBOX_PHASES = new Set<Schemas["DevboxPhase"]>([
+  "running",
+  "stopped",
+  "failed",
+]);
 const SETTLED_DEVBOX_REFRESH_MS = 15_000;
 const CHANGING_DEVBOX_REFRESH_MS = 3_000;
 
