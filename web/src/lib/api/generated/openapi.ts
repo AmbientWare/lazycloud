@@ -2775,6 +2775,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's accounts and activity now and over a range
+         * @description Platform administrators only. The last 24 hours are read per hour and longer ranges per UTC day; the range ends with the hour or day in progress.
+         */
+        get: operations["getAdminMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/machines": {
         parameters: {
             query?: never;
@@ -5689,6 +5709,68 @@ export interface components {
              * @description The fleet's cost over the last 24 hours
              */
             last_day_micros: number;
+        };
+        /**
+         * @default 7d
+         * @enum {string}
+         */
+        AdminMetricsRange: "24h" | "7d" | "30d";
+        AdminMetrics: {
+            /** Format: date-time */
+            observed_at: string;
+            /** @description Accounts that can sign in. */
+            users: number;
+            workspaces: number;
+            /** @description Apps not deleted. */
+            apps: number;
+            /** @description Containers not stopped. */
+            live_containers: number;
+            /** @description People who signed in to the dashboard over the range. */
+            signed_in: number;
+            /** @description The width of each bucket. */
+            window_seconds: number;
+            /** @description One entry per hour or day, oldest first. */
+            buckets: components["schemas"]["AdminMetricsBucket"][];
+        };
+        AdminMetricsBucket: {
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            timestamp: string;
+            /** @description Accounts created. */
+            sign_ups: number;
+            /** @description People who signed in to the dashboard. */
+            sign_ins: number;
+            /** @description Workspaces that ran a task or answered a request. */
+            active_workspaces: number;
+            /** @description Releases deployed */
+            deployments: number;
+            /** @description Function calls created. */
+            tasks: number;
+            failed_tasks: number;
+            /** @description HTTP requests endpoints and ASGI apps answered. */
+            requests: number;
+            /** @description Requests answered with a 5xx status. */
+            failed_requests: number;
+            /** @description Containers created. */
+            container_starts: number;
+            /** @description Containers that stopped without becoming ready. */
+            failed_starts: number;
+            /**
+             * Format: double
+             * @description Median time from creation to ready; absent when none became ready.
+             */
+            start_p50_ms?: number;
+            /** Format: double */
+            start_p95_ms?: number;
+            /**
+             * Format: double
+             * @description Median wait of unscheduled calls that started on their first attempt.
+             */
+            queue_p50_ms?: number;
+            /** Format: double */
+            queue_p95_ms?: number;
         };
         /** @description A limit left out alerts on nothing. */
         AdminAlerts: {
@@ -10719,6 +10801,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAlerts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAdminMetrics: {
+        parameters: {
+            query?: {
+                range?: components["schemas"]["AdminMetricsRange"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The platform's metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMetrics"];
                 };
             };
             default: components["responses"]["Error"];

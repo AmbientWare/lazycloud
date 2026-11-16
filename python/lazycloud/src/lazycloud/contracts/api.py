@@ -2059,6 +2059,40 @@ class FleetSpend(APIModel):
     last_day_micros: Annotated[int, Field(description="The fleet's cost over the last 24 hours")]
 
 
+class AdminMetricsRange(str, Enum):
+    field_24h = "24h"
+    field_7d = "7d"
+    field_30d = "30d"
+
+
+class AdminMetricsBucket(APIModel):
+    timestamp: Annotated[AwareDatetime, Field(description="The bucket's start.")]
+    sign_ups: Annotated[int, Field(description="Accounts created.")]
+    sign_ins: Annotated[int, Field(description="People who signed in to the dashboard.")]
+    active_workspaces: Annotated[
+        int, Field(description="Workspaces that ran a task or answered a request.")
+    ]
+    deployments: Annotated[int, Field(description="Releases deployed")]
+    tasks: Annotated[int, Field(description="Function calls created.")]
+    failed_tasks: int
+    requests: Annotated[int, Field(description="HTTP requests endpoints and ASGI apps answered.")]
+    failed_requests: Annotated[int, Field(description="Requests answered with a 5xx status.")]
+    container_starts: Annotated[int, Field(description="Containers created.")]
+    failed_starts: Annotated[
+        int, Field(description="Containers that stopped without becoming ready.")
+    ]
+    start_p50_ms: Annotated[
+        float | None,
+        Field(description="Median time from creation to ready; absent when none became ready."),
+    ] = None
+    start_p95_ms: float | None = None
+    queue_p50_ms: Annotated[
+        float | None,
+        Field(description="Median wait of unscheduled calls that started on their first attempt."),
+    ] = None
+    queue_p95_ms: float | None = None
+
+
 class AdminAlerts(APIModel):
     email: Annotated[
         str,
@@ -3262,6 +3296,21 @@ class FleetSummary(APIModel):
     release: Annotated[
         FleetRelease | None, Field(description="The agent release platform hosts move to.")
     ] = None
+
+
+class AdminMetrics(APIModel):
+    observed_at: AwareDatetime
+    users: Annotated[int, Field(description="Accounts that can sign in.")]
+    workspaces: int
+    apps: Annotated[int, Field(description="Apps not deleted.")]
+    live_containers: Annotated[int, Field(description="Containers not stopped.")]
+    signed_in: Annotated[
+        int, Field(description="People who signed in to the dashboard over the range.")
+    ]
+    window_seconds: Annotated[int, Field(description="The width of each bucket.")]
+    buckets: Annotated[
+        list[AdminMetricsBucket], Field(description="One entry per hour or day, oldest first.")
+    ]
 
 
 class GpuRate(APIModel):

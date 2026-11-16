@@ -4,14 +4,19 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { Panel } from "@/components/shared/Panel";
+import { RangeControl } from "@/components/shared/RangeControl";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { accountCostSeriesQueryOptions } from "@/lib/queries/usage";
 
 import { UsageCostBreakdown } from "./-components/UsageCostBreakdown";
-import { usageRange, usageRangeKeys, type UsageRangeKey } from "./-components/ranges";
+import {
+  usageRange,
+  usageRangeKeys,
+  usageRangeOptions,
+  type UsageRangeKey,
+} from "./-components/ranges";
 import { SpendChart } from "./-components/SpendChart";
 import { SpendTotals } from "./-components/SpendTotals";
-import { UsageRangeControl } from "./-components/UsageRangeControl";
 
 type UsageSearch = {
   range: UsageRangeKey;
@@ -38,7 +43,8 @@ function UsagePage() {
     <WorkspacePage
       title="Usage"
       actions={
-        <UsageRangeControl
+        <RangeControl
+          options={usageRangeOptions}
           value={range.key}
           onChange={(next) => void navigate({ search: { range: next }, replace: true })}
         />

@@ -3110,6 +3110,27 @@ paths:
               schema: { $ref: "#/components/schemas/AdminAlerts" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/admin-metrics:
+    get:
+      operationId: getAdminMetrics
+      tags: [admin]
+      summary: The platform's accounts and activity now and over a range
+      description: >-
+        Platform administrators only. The last 24 hours are read per hour and
+        longer ranges per UTC day; the range ends with the hour or day in
+        progress.
+      parameters:
+        - name: range
+          in: query
+          schema: { $ref: "#/components/schemas/AdminMetricsRange" }
+      responses:
+        "200":
+          description: The platform's metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminMetrics" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/machines:
     get:
       operationId: listMachines
@@ -7535,6 +7556,61 @@ components:
           allOf: [{ $ref: "#/components/schemas/FleetSpendShare" }]
           description: Stopped reserves, which cost their volumes.
         last_day_micros: { type: integer, format: int64, description: The fleet's cost over the last 24 hours, in USD micros. }
+
+    AdminMetricsRange:
+      type: string
+      enum: [24h, 7d, 30d]
+      default: 7d
+
+    AdminMetrics:
+      type: object
+      required: [observed_at, users, workspaces, apps, live_containers, signed_in, window_seconds, buckets]
+      properties:
+        observed_at: { type: string, format: date-time }
+        users: { type: integer, description: Accounts that can sign in. }
+        workspaces: { type: integer }
+        apps: { type: integer, description: Apps not deleted. }
+        live_containers: { type: integer, description: Containers not stopped. }
+        signed_in: { type: integer, description: People who signed in to the dashboard over the range. }
+        window_seconds: { type: integer, description: The width of each bucket. }
+        buckets:
+          type: array
+          description: One entry per hour or day, oldest first.
+          items: { $ref: "#/components/schemas/AdminMetricsBucket" }
+
+    AdminMetricsBucket:
+      type: object
+      required:
+        - timestamp
+        - sign_ups
+        - sign_ins
+        - active_workspaces
+        - deployments
+        - tasks
+        - failed_tasks
+        - requests
+        - failed_requests
+        - container_starts
+        - failed_starts
+      properties:
+        timestamp: { type: string, format: date-time, description: The bucket's start. }
+        sign_ups: { type: integer, description: Accounts created. }
+        sign_ins: { type: integer, description: People who signed in to the dashboard. }
+        active_workspaces: { type: integer, description: Workspaces that ran a task or answered a request. }
+        deployments: { type: integer, description: Releases deployed, previews left out. }
+        tasks: { type: integer, description: Function calls created. }
+        failed_tasks: { type: integer }
+        requests: { type: integer, description: HTTP requests endpoints and ASGI apps answered. }
+        failed_requests: { type: integer, description: Requests answered with a 5xx status. }
+        container_starts: { type: integer, description: Containers created. }
+        failed_starts: { type: integer, description: Containers that stopped without becoming ready. }
+        start_p50_ms: { type: number, format: double, description: Median time from creation to ready; absent when none became ready. }
+        start_p95_ms: { type: number, format: double }
+        queue_p50_ms:
+          type: number
+          format: double
+          description: Median wait of unscheduled calls that started on their first attempt.
+        queue_p95_ms: { type: number, format: double }
 
     AdminAlerts:
       type: object

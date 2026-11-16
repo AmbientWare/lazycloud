@@ -22,3 +22,12 @@ export function adminAlertsQueryOptions() {
 export function setAdminAlerts(alerts: Schemas["AdminAlerts"]) {
   return ok(api.PUT("/v1/admin-alerts", { body: alerts }));
 }
+
+/** The platform's accounts and activity over a range, per hour or per UTC day. */
+export function adminMetricsQueryOptions(range: Schemas["AdminMetricsRange"]) {
+  return queryOptions({
+    queryKey: accountQueryKeys.admin.metrics(range),
+    queryFn: () => ok(api.GET("/v1/admin-metrics", { params: { query: { range } } })),
+    refetchInterval: 60_000,
+  });
+}

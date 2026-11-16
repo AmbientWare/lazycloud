@@ -272,6 +272,8 @@ export const accountQueryKeys = {
     },
     spend: () => [...accountRoot, "admin", "spend"] as const,
     alerts: () => [...accountRoot, "admin", "alerts"] as const,
+    metrics: (range: Schemas["AdminMetricsRange"]) =>
+      [...accountRoot, "admin", "metrics", range] as const,
     // Keyed on the narrowing, like accounts.
     feedback: Object.assign(
       (scope: FeedbackScope) => [...accountRoot, "admin", "feedback", scope] as const,

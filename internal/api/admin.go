@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -105,4 +106,25 @@ func (s *server) SetAdminAlerts(ctx context.Context, req SetAdminAlertsRequestOb
 
 func adminAlertsOut(a notifications.AdminAlerts) apitypes.AdminAlerts {
 	return apitypes.AdminAlerts{Email: a.Email, HourlyLimitMicros: a.HourlyLimitMicros, DailyLimitMicros: a.DailyLimitMicros}
+}
+
+// GetAdminMetrics returns the platform's accounts and activity over a
+// range for administrators.
+func (s *server) GetAdminMetrics(ctx context.Context, req GetAdminMetricsRequestObject) (GetAdminMetricsResponseObject, error) {
+	if err := s.admin(ctx); err != nil {
+		return nil, err
+	}
+	width, buckets := 24*time.Hour, 7
+	switch valueOr(req.Params.Range, apitypes.N7d) {
+	case apitypes.N24h:
+		width, buckets = time.Hour, 24
+	case apitypes.N7d:
+	case apitypes.N30d:
+		buckets = 30
+	}
+	metrics, err := s.owners.Observability.PlatformMetrics(ctx, width, buckets)
+	if err != nil {
+		return nil, err
+	}
+	return GetAdminMetrics200JSONResponse(metrics), nil
 }
