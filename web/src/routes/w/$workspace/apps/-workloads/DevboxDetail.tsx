@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Play, Square } from "lucide-react";
+import { Loader2, Play, Square, TriangleAlert } from "lucide-react";
 
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
@@ -25,6 +25,7 @@ import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
 import { containerMetricsQueryOptions } from "@/lib/queries/containers";
 import {
+  SETTLED_DEVBOX_PHASES,
   devboxQueryOptions,
   startDevboxMutationOptions,
   stopDevboxMutationOptions,
@@ -47,6 +48,21 @@ const PHASE_LABELS: Record<Schemas["DevboxPhase"], string> = {
   stopping: "Saving disk",
   failed: "Start failed",
 };
+
+/** The phase's name, with a spinner while the devbox is on its way to a settled phase. */
+function PhaseLabel({ phase }: { phase: Schemas["DevboxPhase"] }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {SETTLED_DEVBOX_PHASES.has(phase) ? null : (
+        <Loader2
+          className="size-3.5 shrink-0 animate-spin text-warning motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      )}
+      <span className="truncate">{PHASE_LABELS[phase]}</span>
+    </span>
+  );
+}
 
 type DevboxAction =
   | { kind: "busy"; label: string; reason: string }
@@ -268,11 +284,13 @@ export function DevboxConnect({
         <FactGrid columns={4} className="sm:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(0,1fr))]">
           <Fact
             label="Status"
-            title={PHASE_LABELS[devbox.phase]}
+            title={devbox.phase === "failed" ? undefined : PHASE_LABELS[devbox.phase]}
             value={
-              <span className={devbox.phase === "failed" ? "text-destructive" : undefined}>
-                {PHASE_LABELS[devbox.phase]}
-              </span>
+              devbox.phase === "failed" ? (
+                <FailedStart workspace={workspace} devbox={devbox} />
+              ) : (
+                <PhaseLabel phase={devbox.phase} />
+              )
             }
           />
           <Fact
@@ -286,32 +304,44 @@ export function DevboxConnect({
           />
         </FactGrid>
         {devbox.disk?.failure ? <DiskFailure failure={devbox.disk.failure} /> : null}
-        {devbox.phase === "failed" && (devbox.phase_reason || devbox.failed_container_id) ? (
-          <div className="flex min-w-0 items-start gap-3 text-xs">
-            {devbox.phase_reason ? (
-              <p className="min-w-0 break-words text-destructive">{devbox.phase_reason}</p>
-            ) : null}
-            {devbox.failed_container_id ? (
-              <StartLogs workspace={workspace} containerId={devbox.failed_container_id} />
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </div>
   );
 }
 
-/** What the failed start's container wrote, in a drawer over the page. */
-function StartLogs({ workspace, containerId }: { workspace: string; containerId: string }) {
+/**
+ * The failed status. Hovering it gives the reason, and it opens what the failed
+ * start's container wrote when there is one.
+ */
+function FailedStart({ workspace, devbox }: { workspace: string; devbox: Devbox }) {
   const [open, setOpen] = useState(false);
+  const containerId = devbox.failed_container_id;
+  const label = (
+    <>
+      <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{PHASE_LABELS.failed}</span>
+    </>
+  );
+  if (!containerId) {
+    return (
+      <span
+        className="flex min-w-0 items-center gap-2 text-destructive"
+        title={devbox.phase_reason}
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <>
       <button
         type="button"
-        className="interactive-link shrink-0 text-muted-foreground hover:text-foreground"
+        className="flex min-w-0 max-w-full items-center gap-2 rounded-sm text-destructive outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        aria-haspopup="dialog"
+        title={devbox.phase_reason}
         onClick={() => setOpen(true)}
       >
-        View logs
+        {label}
       </button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent
@@ -412,10 +442,17 @@ export function DevboxWorkspace({
             </PanelErrorBoundary>
           ) : (
             <PanelEmpty
-              message={notRunningMessage(devbox)}
+              message={
+                SETTLED_DEVBOX_PHASES.has(devbox.phase) ? (
+                  notRunningMessage(devbox)
+                ) : (
+                  <span className="flex justify-center" role="status">
+                    <PhaseLabel phase={devbox.phase} />
+                  </span>
+                )
+              }
               detail={
-                workloadRunning(workload) &&
-                (devbox.phase === "stopped" || devbox.phase === "failed") ? (
+                workloadRunning(workload) && devbox.phase === "stopped" ? (
                   <>
                     <code className="mono">{devbox.ssh_command}</code> starts it.
                   </>
@@ -496,7 +533,6 @@ function MetricsUpdated({ workspace, containerId }: { workspace: string; contain
 }
 
 function notRunningMessage(devbox: Devbox): string {
-  if (devbox.state === "starting") return "Files appear once it is running";
-  if (devbox.phase === "failed") return "The last start failed";
+  if (devbox.phase === "failed") return devbox.phase_reason ?? "The last start failed";
   return "Files appear while the devbox runs";
 }
