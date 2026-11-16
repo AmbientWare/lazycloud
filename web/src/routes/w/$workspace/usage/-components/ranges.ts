@@ -21,9 +21,10 @@ const RANGE_TEXT: Record<UsageRangeKey, { label: string; caption: string }> = {
   month: { label: "This month", caption: "this month" },
 };
 
-export function usageRangeLabel(key: UsageRangeKey): string {
-  return RANGE_TEXT[key].label;
-}
+export const usageRangeOptions = usageRangeKeys.map((key) => ({
+  key,
+  label: RANGE_TEXT[key].label,
+}));
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;

@@ -99,6 +99,7 @@ func (q *Queries) InsertGitHubUser(ctx context.Context, arg InsertGitHubUserPara
 }
 
 const insertSession = `-- name: InsertSession :one
+with signed_in as (insert into sign_ins (user_id) values ($1))
 insert into sessions (user_id, token_hash, expires_at)
 values ($1, $2, $3)
 returning id
@@ -110,6 +111,7 @@ type InsertSessionParams struct {
 	ExpiresAt time.Time
 }
 
+// A session and the record of its sign-in, which outlasts it.
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, insertSession, arg.UserID, arg.TokenHash, arg.ExpiresAt)
 	var id uuid.UUID

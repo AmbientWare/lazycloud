@@ -47,6 +47,8 @@ select id, email, display_name, avatar_url, github_login, is_admin, status, crea
 from users where id = @id;
 
 -- name: InsertSession :one
+-- A session and the record of its sign-in, which outlasts it.
+with signed_in as (insert into sign_ins (user_id) values (@user_id))
 insert into sessions (user_id, token_hash, expires_at)
 values (@user_id, @token_hash, @expires_at)
 returning id;

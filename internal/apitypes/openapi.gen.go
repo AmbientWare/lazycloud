@@ -82,6 +82,27 @@ func (e ActivityUnit) Valid() bool {
 	}
 }
 
+// Defines values for AdminMetricsRange.
+const (
+	N24h AdminMetricsRange = "24h"
+	N30d AdminMetricsRange = "30d"
+	N7d  AdminMetricsRange = "7d"
+)
+
+// Valid indicates whether the value is a known member of the AdminMetricsRange enum.
+func (e AdminMetricsRange) Valid() bool {
+	switch e {
+	case N24h:
+		return true
+	case N30d:
+		return true
+	case N7d:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AppState.
 const (
 	AppStateActive  AppState = "active"
@@ -2545,6 +2566,74 @@ type AdminAlerts struct {
 	// HourlyLimitMicros Alert when the fleet costs more than this an hour, in USD micros.
 	HourlyLimitMicros *int64 `json:"hourly_limit_micros,omitempty"`
 }
+
+// AdminMetrics defines model for AdminMetrics.
+type AdminMetrics struct {
+	// Apps Apps not deleted.
+	Apps int `json:"apps"`
+
+	// Buckets One entry per hour or day, oldest first.
+	Buckets []AdminMetricsBucket `json:"buckets"`
+
+	// LiveContainers Containers not stopped.
+	LiveContainers int       `json:"live_containers"`
+	ObservedAt     time.Time `json:"observed_at"`
+
+	// SignedIn People who signed in to the dashboard over the range.
+	SignedIn int `json:"signed_in"`
+
+	// Users Accounts that can sign in.
+	Users int `json:"users"`
+
+	// WindowSeconds The width of each bucket.
+	WindowSeconds int `json:"window_seconds"`
+	Workspaces    int `json:"workspaces"`
+}
+
+// AdminMetricsBucket defines model for AdminMetricsBucket.
+type AdminMetricsBucket struct {
+	// ActiveWorkspaces Workspaces that ran a task or answered a request.
+	ActiveWorkspaces int `json:"active_workspaces"`
+
+	// ContainerStarts Containers created.
+	ContainerStarts int `json:"container_starts"`
+
+	// Deployments Releases deployed
+	Deployments int `json:"deployments"`
+
+	// FailedRequests Requests answered with a 5xx status.
+	FailedRequests int `json:"failed_requests"`
+
+	// FailedStarts Containers that stopped without becoming ready.
+	FailedStarts int `json:"failed_starts"`
+	FailedTasks  int `json:"failed_tasks"`
+
+	// QueueP50Ms Median wait of unscheduled calls that started on their first attempt.
+	QueueP50Ms *float64 `json:"queue_p50_ms,omitempty"`
+	QueueP95Ms *float64 `json:"queue_p95_ms,omitempty"`
+
+	// Requests HTTP requests endpoints and ASGI apps answered.
+	Requests int `json:"requests"`
+
+	// SignIns People who signed in to the dashboard.
+	SignIns int `json:"sign_ins"`
+
+	// SignUps Accounts created.
+	SignUps int `json:"sign_ups"`
+
+	// StartP50Ms Median time from creation to ready; absent when none became ready.
+	StartP50Ms *float64 `json:"start_p50_ms,omitempty"`
+	StartP95Ms *float64 `json:"start_p95_ms,omitempty"`
+
+	// Tasks Function calls created.
+	Tasks int `json:"tasks"`
+
+	// Timestamp The bucket's start.
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// AdminMetricsRange defines model for AdminMetricsRange.
+type AdminMetricsRange string
 
 // App defines model for App.
 type App struct {
@@ -6006,6 +6095,11 @@ type WorkloadPath = WorkloadName
 
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
+
+// GetAdminMetricsParams defines parameters for GetAdminMetrics.
+type GetAdminMetricsParams struct {
+	Range *AdminMetricsRange `form:"range,omitempty" json:"range,omitempty"`
+}
 
 // ListBillingAccountsParams defines parameters for ListBillingAccounts.
 type ListBillingAccountsParams struct {

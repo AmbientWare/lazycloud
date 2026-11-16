@@ -1,14 +1,16 @@
-import { DollarSign, MessageSquare, Server, Users } from "lucide-react";
+import { Activity, DollarSign, MessageSquare, Server, Users } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { FeedbackSettings } from "./FeedbackSettings";
 import { FleetSettings } from "./FleetSettings";
+import { MetricsSettings } from "./MetricsSettings";
 import { SpendSettings } from "./SpendSettings";
 import { UsersSettings } from "./UsersSettings";
 
 const sections = [
+  { value: "metrics", label: "Metrics", icon: Activity },
   { value: "users", label: "Users", icon: Users },
   { value: "fleet", label: "Fleet", icon: Server },
   { value: "spend", label: "Spend", icon: DollarSign },
@@ -31,7 +33,7 @@ export function AdminSettings() {
   const desktop = useSyncExternalStore(subscribeViewport, isDesktop, () => false);
   return (
     <Tabs
-      defaultValue="users"
+      defaultValue="metrics"
       orientation={desktop ? "vertical" : "horizontal"}
       className="flex min-h-0 flex-1 flex-col gap-3 sm:flex-row"
     >
@@ -50,6 +52,9 @@ export function AdminSettings() {
           </TabsTrigger>
         ))}
       </TabsList>
+      <TabsContent value="metrics" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <MetricsSettings />
+      </TabsContent>
       <TabsContent value="users" className="flex min-h-0 min-w-0 flex-1 flex-col">
         <UsersSettings />
       </TabsContent>
